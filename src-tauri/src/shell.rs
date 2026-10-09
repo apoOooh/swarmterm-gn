@@ -266,7 +266,9 @@ fn probe_wsl() -> ShellEntry {
 fn decode_utf16_lossy(bytes: &[u8]) -> String {
     if bytes.len() >= 2 && bytes.len().is_multiple_of(2) {
         let words: Vec<u16> = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
         return String::from_utf16_lossy(&words);

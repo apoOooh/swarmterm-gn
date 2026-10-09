@@ -375,10 +375,7 @@ mod tests {
         );
         assert!(tab.ends_with('}'), "{tab}");
         let fresh = written(None, Some(OURS));
-        assert_eq!(
-            fresh,
-            serde_json::to_string_pretty(&parse(&fresh)).unwrap()
-        );
+        assert_eq!(fresh, serde_json::to_string_pretty(&parse(&fresh)).unwrap());
     }
 
     #[test]
