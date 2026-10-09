@@ -13,6 +13,11 @@ describe('explorer rows', () => {
     expect(gitBadge('/p/src', { '/p/src/a': 'M', '/p/src/b': '?' })).toBe('M')
     expect(fileKind('icon.svg')).toBe('text'); expect(fileKind('clip.webm')).toBe('video')
   })
+  it('bounds directory-link cycles without dropping adjacent files', () => {
+    const loop = { ...entry('/p/loop', true), isSymlink: true }
+    const rows = treeRows('/p', { '/p': { entries: [loop, entry('/p/a')] }, '/p/loop': { entries: [loop, entry('/p/loop/b')] } }, new Set(['/p/loop']))
+    expect(rows.map((r) => r.entry.path)).toEqual(['/p/loop', '/p/loop/b', '/p/a'])
+  })
 })
 describe('file runners', () => {
   it('selects Astera runners and quotes paths for the pane shell', () => {
