@@ -3,13 +3,18 @@ export interface Directory { entries?: FileEntry[]; loading?: boolean; error?: s
 export interface TreeRow { entry: FileEntry; depth: number; parent: string; expanded: boolean }
 export function treeRows(root: string, dirs: Record<string, Directory>, expanded: ReadonlySet<string>, filter = ''): TreeRow[] {
   const out: TreeRow[] = []
+  const ancestors = new Set<string>()
   function walk(path: string, depth: number): void {
+    ancestors.add(path)
     for (const entry of dirs[path]?.entries ?? []) {
+      // Canonical listings of in-root directory links can point back to an ancestor.
+      if (entry.isDir && ancestors.has(entry.path)) continue
       if (filter && !entry.isDir && !entry.name.toLowerCase().includes(filter.toLowerCase())) continue
       const open = expanded.has(entry.path)
       out.push({ entry, depth, parent: path, expanded: open })
       if (entry.isDir && open) walk(entry.path, depth + 1)
     }
+    ancestors.delete(path)
   }
   walk(root, 0)
   return out
