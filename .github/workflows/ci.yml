@@ -65,7 +65,8 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: Compile desktop application
-        run: npx tauri build --locked --no-bundle
+        run: npx tauri build --no-bundle -- --locked
+        shell: bash
         working-directory: .
 
   secrets:
