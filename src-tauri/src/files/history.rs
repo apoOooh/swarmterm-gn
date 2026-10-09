@@ -147,12 +147,18 @@ pub fn copy_tree(src: &Path, dest: &Path, progress: &mut dyn FnMut(u64)) -> Resu
 pub fn remove_entry(path: &Path) -> Result<(), String> {
     let meta = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     // On Windows directory symlinks/junctions are removed with remove_dir, without recursion.
-    if meta.file_type().is_symlink() {
-        if meta.is_dir() {
-            fs::remove_dir(path)
-        } else {
-            fs::remove_file(path)
+    #[cfg(windows)]
+    {
+        // is_dir() and is_symlink() are mutually exclusive. Use the Windows extension
+        // to distinguish directory links without following their targets.
+        // https://doc.rust-lang.org/std/os/windows/fs/trait.FileTypeExt.html
+        use std::os::windows::fs::FileTypeExt;
+        if meta.file_type().is_symlink_dir() {
+            return fs::remove_dir(path).map_err(|e| e.to_string());
         }
+    }
+    if meta.file_type().is_symlink() {
+        fs::remove_file(path)
     } else if meta.is_dir() {
         fs::remove_dir_all(path)
     } else {

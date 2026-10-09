@@ -738,4 +738,47 @@ mod tests {
         assert!(outside.exists());
         assert!(!link.exists());
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn outside_directory_junctions_are_unlinked_without_deleting_the_target() {
+        use std::os::windows::process::CommandExt;
+        let (t, service, c) = fixture();
+        let target = t.path().join("outside folder");
+        fs::create_dir(&target).unwrap();
+        let content = target.join("keep.txt");
+        fs::write(&content, "keep the target").unwrap();
+        let link = Path::new(&c.root).join("directory link");
+        // Junctions require no symlink privilege. Keep cmd hidden and all paths
+        // inside this test-owned TempDir; no recursive shell deletion is used.
+        let created = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .creation_flags(0x0800_0000)
+            .output()
+            .unwrap();
+        assert!(
+            created.status.success(),
+            "{}",
+            String::from_utf8_lossy(&created.stderr)
+        );
+        assert!(service
+            .read(&c.id, &display(&link.join("keep.txt")))
+            .is_err());
+        let result = service
+            .request(
+                FileRequest::Remove {
+                    context_id: c.id,
+                    paths: vec![display(&link)],
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(result["removed"], json!([display(&link)]));
+        assert_eq!(result["snapshots"], json!([]));
+        assert!(!result["warnings"].as_array().unwrap().is_empty());
+        assert!(!link.exists());
+        assert_eq!(fs::read_to_string(content).unwrap(), "keep the target");
+    }
 }
