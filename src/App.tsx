@@ -45,6 +45,13 @@ import { startWarRoomDelivery } from '@/lib/war-room-delivery'
 import { resolvePaneTitle } from '@/lib/pane-title'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { FileDropListener } from '@/components/FileDropListener'
+import { FileDialog } from '@/components/Files/FileDialog'
+import { collectEditorCache } from '@/lib/files/editor-cache'
+import { useDocumentStore } from '@/store/document-store'
+import { useExplorerStore } from '@/store/explorer-store'
+import { onFileChange } from '@/tauri/files'
+import { registerCloseGuard } from '@/lib/close-guard'
+import { confirmQuit, onQuitRequested } from '@/tauri/app'
 import { RightPanel } from '@/components/RightPanel/RightPanel'
 import { Navbar } from '@/components/Navbar/Navbar'
 import { SettingsView } from '@/components/Settings/SettingsView'
@@ -98,6 +105,22 @@ function liveTerminalIds(workspaces: WorkspaceModel[]): Set<string> {
 }
 
 export default function App(): ReactElement {
+  useEffect(() => {
+    const guard = registerCloseGuard((ids) => useDocumentStore.getState().guardPanes(ids))
+    const listener = onFileChange((change) => {
+      void useExplorerStore.getState().changed(change)
+      void useDocumentStore.getState().changed(change)
+    })
+    const quit = onQuitRequested(() => {
+      const ids = useAppStore.getState().workspaces.flatMap((w) => collectLeaves(w.layout).map((l) => l.id))
+      void useDocumentStore.getState().guardPanes(ids).then((allowed) => { if (allowed) void confirmQuit() })
+    })
+    const beforeUnload = (event: BeforeUnloadEvent): void => {
+      if (Object.values(useDocumentStore.getState().documents).some((d) => d.dirty)) { event.preventDefault(); event.returnValue = '' }
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => { guard(); window.removeEventListener('beforeunload', beforeUnload); void listener.then((off) => off()); void quit.then((off) => off()) }
+  }, [])
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const welcomeFocused = useAppStore((s) => s.welcomeFocused)
@@ -309,6 +332,13 @@ export default function App(): ReactElement {
       // Ctrl+Shift+B / Ctrl+F / Ctrl+Shift+J elsewhere. If these bindings
       // change, update src/lib/keybindings.ts.
       const action = matchAppShortcut(e, isMac)
+      if (action === 'focus-explorer') {
+        e.preventDefault()
+        useNavbarVisibilityStore.setState({ visible: true })
+        useExplorerStore.setState({ visible: true })
+        requestAnimationFrame(() => window.dispatchEvent(new Event('swarmterm:focus-explorer')))
+        return
+      }
       if (action === 'toggle-broadcast') {
         e.preventDefault()
         useAppStore.getState().toggleBroadcast()
@@ -373,6 +403,14 @@ export default function App(): ReactElement {
     // the user's keystrokes into the shell while they look at the dialog.
     if (settingsOpenRef.current) return
     if (useAppStore.getState().welcomeFocused) return
+    const appState = useAppStore.getState()
+    const workspace = appState.workspaces.find((w) => w.id === appState.activeWorkspaceId)
+    const pane = workspace ? useDocumentStore.getState().panes[workspace.focusedLeafId] : undefined
+    if (pane?.active && pane.keyboard === 'file') {
+      if (document.activeElement?.closest('[role="dialog"],[role="menu"],[data-keyboard-owner="explorer"]')) return
+      window.dispatchEvent(new Event('swarmterm:focus-editor'))
+      return
+    }
     if (!shouldReturnFocus(describeFocusedElement(document.activeElement))) return
     const terminalId = selectFocusedTerminalId(useAppStore.getState())
     if (terminalId) focusTerminal(terminalId)
@@ -502,6 +540,8 @@ export default function App(): ReactElement {
     () =>
       useAppStore.subscribe((state) => {
         const live = liveTerminalIds(state.workspaces)
+        useDocumentStore.getState().collect(new Set(state.workspaces.flatMap((w) => collectLeaves(w.layout).map((l) => l.id))))
+        collectEditorCache(new Set(Object.keys(useDocumentStore.getState().documents)))
         disposeOrphanTerminals(live)
         const { previews } = useBrowserStore.getState()
         for (const terminalId of Object.keys(previews)) {
@@ -748,6 +788,7 @@ export default function App(): ReactElement {
       className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground"
     >
       <FileDropListener />
+      <FileDialog />
       <TitleBar fullscreen={isFullscreen} />
 
       <div className="relative flex min-h-0 flex-1">

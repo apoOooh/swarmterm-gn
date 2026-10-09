@@ -72,7 +72,10 @@ impl JsonStyle {
         } else {
             ""
         };
-        JsonStyle { indent: detect_indent(text), newline }
+        JsonStyle {
+            indent: detect_indent(text),
+            newline,
+        }
     }
 
     pub fn render(&self, value: &Value) -> Result<String, String> {
@@ -105,7 +108,10 @@ mod tests {
 
     #[test]
     fn detects_tab_indent() {
-        assert_eq!(detect_indent("{\n\t\"a\": {\n\t\t\"b\": 1\n\t}\n}"), Indent::Tab);
+        assert_eq!(
+            detect_indent("{\n\t\"a\": {\n\t\t\"b\": 1\n\t}\n}"),
+            Indent::Tab
+        );
     }
 
     #[test]
@@ -125,7 +131,10 @@ mod tests {
 
     #[test]
     fn renders_in_written_order_with_four_spaces_and_newline() {
-        let style = JsonStyle { indent: Indent::Spaces(4), newline: "\n" };
+        let style = JsonStyle {
+            indent: Indent::Spaces(4),
+            newline: "\n",
+        };
         let out = style.render(&v(r#"{"z":1,"a":{"y":[1]}}"#)).unwrap();
         assert_eq!(
             out,
@@ -135,9 +144,15 @@ mod tests {
 
     #[test]
     fn renders_with_tabs_and_no_newline() {
-        let style = JsonStyle { indent: Indent::Tab, newline: "" };
+        let style = JsonStyle {
+            indent: Indent::Tab,
+            newline: "",
+        };
         let out = style.render(&v(r#"{"z":1,"a":{"y":[1]}}"#)).unwrap();
-        assert_eq!(out, "{\n\t\"z\": 1,\n\t\"a\": {\n\t\t\"y\": [\n\t\t\t1\n\t\t]\n\t}\n}");
+        assert_eq!(
+            out,
+            "{\n\t\"z\": 1,\n\t\"a\": {\n\t\t\"y\": [\n\t\t\t1\n\t\t]\n\t}\n}"
+        );
     }
 
     #[test]
@@ -150,7 +165,10 @@ mod tests {
     #[test]
     fn rendered_text_round_trips() {
         let value = v(r#"{"z":[1,{"q":null}],"a":"s\n\"q\""}"#);
-        let style = JsonStyle { indent: Indent::Spaces(4), newline: "\r\n" };
+        let style = JsonStyle {
+            indent: Indent::Spaces(4),
+            newline: "\r\n",
+        };
         let out = style.render(&value).unwrap();
         assert!(out.ends_with("}\r\n"));
         assert_eq!(v(&out), value);

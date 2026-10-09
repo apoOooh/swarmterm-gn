@@ -189,7 +189,10 @@ pub struct ScreenTail {
 
 impl ScreenTail {
     pub fn new(cap: usize) -> Self {
-        Self { buf: String::new(), cap }
+        Self {
+            buf: String::new(),
+            cap,
+        }
     }
 
     pub fn push(&mut self, s: &str) {

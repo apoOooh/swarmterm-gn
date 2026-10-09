@@ -5,10 +5,10 @@ const base = {
   version: '0.2.0',
   notes: 'notes',
   pubDate: '2026-08-12T00:00:00Z',
-  repo: 'duongducnguyen/swarmterm'
+  repo: 'apoOooh/swarmterm-gn'
 }
-const MAC = 'Swarmterm.app.tar.gz'
-const WIN = 'Swarmterm_0.2.0_x64-setup.exe'
+const MAC = 'Swarmterm GN.app.tar.gz'
+const WIN = 'Swarmterm GN_0.2.0_x64-setup.exe'
 
 describe('buildManifest', () => {
   it('maps a complete asset set onto all three platform keys', () => {
@@ -25,7 +25,7 @@ describe('buildManifest', () => {
     expect(manifest.platforms['darwin-aarch64']).toEqual(manifest.platforms['darwin-x86_64'])
     expect(manifest.platforms['darwin-aarch64']).toEqual({
       signature: 'mac-sig',
-      url: `https://github.com/duongducnguyen/swarmterm/releases/download/v0.2.0/${MAC}`
+      url: `https://github.com/apoOooh/swarmterm-gn/releases/download/v0.2.0/${encodeURIComponent(MAC)}`
     })
     expect(manifest.platforms['windows-x86_64'].signature).toBe('win-sig')
   })

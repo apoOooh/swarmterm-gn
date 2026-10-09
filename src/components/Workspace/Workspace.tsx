@@ -2,7 +2,7 @@ import type { ReactElement } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { LayoutNode, LeafNode } from '@/lib/layout-tree'
 import { useAppStore, type Workspace as WorkspaceModel } from '@/store/app-store'
-import { TerminalPane } from '@/components/TerminalPane/TerminalPane'
+import { PaneWorkbench } from '@/components/Files/PaneWorkbench'
 import { BroadcastBanner } from '@/components/Workspace/BroadcastBanner'
 import { AgentIcon } from '@/components/AgentIcon'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
@@ -19,7 +19,7 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
   function renderNode(node: LayoutNode): ReactElement {
     if (node.type === 'leaf') {
       return (
-        <TerminalPane
+        <PaneWorkbench
           key={node.id}
           leaf={node}
           cwd={workspace.cwd}

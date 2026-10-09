@@ -35,9 +35,13 @@ security find-identity -v -p codesigning | grep -qF "$APPLE_SIGNING_IDENTITY" \
 # createUpdaterArtifacts makes every build emit the updater's .app.tar.gz +
 # minisign signature; without the key the build itself fails halfway, so fail
 # fast and name the fix.
-for v in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
-  [ -n "${!v:-}" ] || die "$v is unset — see .env.release.example (updater signing)"
-done
+UPDATER_ENABLED="$(node -p 'JSON.parse(require("node:fs").readFileSync("src-tauri/tauri.conf.json", "utf8")).bundle.createUpdaterArtifacts === true')"
+PRODUCT_NAME="$(node -p 'JSON.parse(require("node:fs").readFileSync("src-tauri/tauri.conf.json", "utf8")).productName')"
+if [ "$UPDATER_ENABLED" = true ]; then
+  for v in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+    [ -n "${!v:-}" ] || die "$v is unset — see .env.release.example (updater signing)"
+  done
+fi
 
 if [ "$SMOKE" = 1 ]; then
   # Tauri notarizes whenever the notary variables are present, so the smoke
@@ -62,7 +66,7 @@ fi
 echo "==> building ($TARGET, --bundles $BUNDLES)"
 npm run tauri build -- --target "$TARGET" --bundles "$BUNDLES"
 
-APP="src-tauri/target/$TARGET/release/bundle/macos/Swarmterm.app"
+APP="src-tauri/target/$TARGET/release/bundle/macos/$PRODUCT_NAME.app"
 [ -d "$APP" ] || die "app bundle not found: $APP"
 
 echo "==> verifying signature"
@@ -78,10 +82,12 @@ EXPECTED_TEAM="$(sed -n 's/.*(\([A-Z0-9]\{10\}\))[[:space:]]*$/\1/p' <<<"$APPLE_
 grep -q "^TeamIdentifier=$EXPECTED_TEAM" <<<"$SIGINFO" \
   || die "team identifier mismatch: expected $EXPECTED_TEAM"
 
-echo "==> verifying updater artifacts"
-UPDATER_TGZ="$APP.tar.gz"
-[ -f "$UPDATER_TGZ" ]     || die "updater artifact missing: $UPDATER_TGZ"
-[ -f "$UPDATER_TGZ.sig" ] || die "updater signature missing: $UPDATER_TGZ.sig"
+if [ "$UPDATER_ENABLED" = true ]; then
+  echo "==> verifying updater artifacts"
+  UPDATER_TGZ="$APP.tar.gz"
+  [ -f "$UPDATER_TGZ" ]     || die "updater artifact missing: $UPDATER_TGZ"
+  [ -f "$UPDATER_TGZ.sig" ] || die "updater signature missing: $UPDATER_TGZ.sig"
+fi
 
 if [ "$SMOKE" = 1 ]; then
   echo "==> smoke build OK (signed, not notarized): $REPO_ROOT/$APP"

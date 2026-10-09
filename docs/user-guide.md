@@ -1,4 +1,4 @@
-# Swarmterm user guide
+# Swarmterm GN user guide
 
 Everything the [README](../README.md) summarises, in detail: workspaces and panes,
 running several agents at once, worktree isolation, the web preview, the War Room,
@@ -16,6 +16,81 @@ Agent detection re-runs every time the composer opens, so installing a CLI needs
 - Closing a pane closes the gap; closing the last pane closes the workspace.
 - The left navbar lists workspaces (add, rename, reorder) and the current workspace's terminals — click one to jump to it. `⌘/Ctrl + B` hides the sidebar.
 - A pane can switch to a different agent, shell or folder from its header menu — note this restarts the shell.
+
+## Files and editing
+
+The left sidebar has three resizable sections: **Workspaces**, **Terminals** and
+**Files**. Click a terminal to show its files, or press `⌘/Ctrl + Shift + E` to
+focus the tree. Drag the section separators or sidebar edge to resize them.
+The root is the terminal's configured starting folder, including isolated
+worktrees. Running `cd` in its shell does not change the explorer root.
+Expanded folders are remembered separately for each root during this launch.
+
+Click a folder to expand it; click a file to open an editor tab in that pane.
+The tree loads directories on demand and renders only visible rows. Its filter
+searches loaded entries. Git badges indicate modified, added, deleted, renamed,
+untracked and conflicted files, including changes inside folders.
+
+Use the toolbar or context menu to create files/folders, rename, duplicate,
+cut/copy/paste, delete, copy paths, reveal files in your OS file manager and undo.
+`⌘/Ctrl + click` toggles selection; `Shift + click` selects a range. Arrow keys,
+Home/End and typing a name navigate; `F2` renames and Delete asks before deleting.
+`⌘/Ctrl + A/C/X/V/Z` select all, copy, cut, paste and undo while the tree has focus.
+Drag selected entries onto a folder to move them; hold `⌘/Ctrl` to copy.
+Copies and restores choose a new name on collision; renaming cannot overwrite
+an existing entry. Errors and copy progress appear in the Files section.
+
+Copy also exports native file references to the system clipboard. **Paste from
+system clipboard** imports files copied in your file manager after showing the
+destination and asking for confirmation. Internal cut/paste works between
+project roots without relying on an OS cut protocol. Symbolic links can be
+removed or renamed, but recursive copies containing links are refused.
+
+Text files open in CodeMirror with language highlighting and find/replace.
+`⌘/Ctrl + S` saves; text buffers preserve their original CRLF/LF and UTF-8 BOM.
+Opening the same file in two panes shares its buffer. Drag file tabs between
+panes, or use **Split terminal and editor** to keep both visible. Returning to
+the Terminal tab restores its running session and scrollback. File edits,
+shortcuts and explorer navigation stay with the focused UI.
+
+External agent changes reload a clean buffer automatically. A dirty buffer
+instead shows **changed on disk** with **Reload disk** and **Keep my buffer**
+choices; it is never silently replaced. Closing the last tab for a dirty file,
+closing its pane/workspace or quitting from the tray offers Save/Discard/Cancel.
+The embedded editor supports UTF-8 files up to 1 MiB. Binary, non-UTF-8 and larger
+files are read only; use an external editor for those.
+
+### Markdown and media
+
+Markdown supports Editor, Split and Preview modes (`⌘/Ctrl + Shift + V` cycles
+them). Split scrolling follows source lines in both directions. The preview
+supports GFM tables/tasks, heading anchors, project links and images, highlighted
+code blocks with Copy, and text search. HTML is sanitized and script URLs are
+removed. Relative files/images must resolve inside the configured project root.
+Remote HTTP(S) images may be loaded by the preview.
+
+PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos open in a media viewer.
+Video playback depends on the platform's codecs. Generated media reloads after
+two matching file-stat samples, preserving video position and active playback.
+Inactive workspaces pause video. **Open in default app** and **Reveal file** are
+explicit buttons available for media; previewing a file does not execute it.
+
+**Run** on a supported file starts a separate plain-shell pane in its folder:
+Python files, pytest naming conventions, JavaScript/Node files, Docker Compose
+YAML, .NET projects and solutions. Dirty files must be saved first. The required
+interpreter/tool must already be installed in that shell. Astera's saved run
+configuration system is not included.
+
+### Local deletion history
+
+Explorer deletions attempt a snapshot before removal. **Local deletion history**
+lists snapshots for the current root and restores them with a collision-safe
+name. `⌘/Ctrl + Z` in the tree undoes the latest explorer operation in this launch.
+Snapshots persist in this fork's application-data directory for 30 days, with a
+200 MiB budget per root and a maximum 50 MiB / 5,000 entries per snapshot.
+Skipped or failed snapshots are shown; a confirmed deletion still proceeds.
+Symbolic links and unsupported filesystem entries cannot be snapshotted.
+Deletes performed by shell commands or other programs are not captured.
 
 ## Running several agents at once
 
@@ -100,7 +175,7 @@ The pane header mirrors the percentage as a small `ctx 63%` chip (same amber / r
 - **Real PTYs with 24-bit truecolor** — agent CLIs, emoji and box drawing render exactly as in your normal terminal, and IMEs (Vietnamese Telex, CJK) work without dropped characters.
 - `⌘/Ctrl + C` copies when text is selected and otherwise interrupts; `⌘/Ctrl + V` pastes — like VS Code.
 - **Programs can copy to your clipboard** — nvim `"+y`, tmux `set -s set-clipboard on`, yazi and `gh` copy through OSC 52, exactly as in VS Code's terminal. Only writes are honoured: a program can never read your clipboard.
-- **Click a URL** to open it in your browser; `⌘/Ctrl + click` a file path (`src/foo.ts:42:9`, `src/foo.ts(42,9)`, `File "x.py", line 42`) to open it in your editor at that line. Nothing is ever opened with the OS default app, so a mis-click on a `.sh` or `.exe` can never run it.
+- **Click a URL** to open it in your browser; `⌘/Ctrl + click` a file path (`src/foo.ts:42:9`, `src/foo.ts(42,9)`, `File "x.py", line 42`) to open project files in the integrated editor at that line. Paths outside the configured project retain the external-editor behavior.
 - **Drop a file or folder** onto a pane to insert its path, quoted for that pane's shell.
 - **Choose your shell** — PowerShell, cmd, PowerShell 7, Git Bash on Windows; zsh, bash, fish on macOS/Linux — per pane, or as a default in Settings.
 
@@ -171,7 +246,9 @@ The marks are `A` (prompt drawn), `C` (command started) and `D;<exit>` (command 
 
 ## Updates
 
-Swarmterm quietly checks GitHub Releases for a newer version shortly after launch, then every few hours while it stays open. When one exists, an **Update to vX.Y.Z** button appears at the bottom of the navbar, under Settings — nothing downloads until you click it. The button shows download progress, then turns into **Restart to update** (on Windows the installer takes over and relaunches the app itself). No update, no button — that's the whole notification. To check on demand, use tray → **Check for Updates…** — that one also tells you when you're already up to date, in a native dialog. Offline or flaky network? The automatic check stays silent; it never nags.
+Swarmterm GN disables the upstream updater, including its tray entry, endpoint
+and update artifacts. Update this fork from its `dev` branch and rebuild it.
+Upstream Swarmterm releases do not contain the GN additions.
 
 ## Telemetry
 
@@ -206,13 +283,16 @@ War Room abilities only work for panes you dragged into a room, worktree abiliti
 | Shortcut | Action |
 |---|---|
 | `⌘/Ctrl + B` | Show or hide the sidebar |
+| `⌘/Ctrl + Shift + E` | Open and focus the Files tree |
+| `⌘/Ctrl + S` | Save the focused file |
+| `⌘/Ctrl + Shift + V` | Cycle Markdown Editor / Split / Preview |
 | `⌘/Ctrl + Shift + B` | Toggle broadcast input |
 | `Alt + Click` | Add or remove a pane from the broadcast group |
 | `Esc` | Leave broadcast mode · close Settings |
 | `⌘/Ctrl + Enter` | Create the workspace from the composer |
 | `⌘/Ctrl + C` · `⌘/Ctrl + V` | Copy (when text is selected) · paste |
 | `⌘/Ctrl + Click` | Open a file path in your editor, at that line |
-| `⌘/Ctrl + F` | Find in the focused terminal · press again to re-select the query · `Esc` closes it |
+| `⌘/Ctrl + F` | Find in the focused editor/Markdown preview or terminal |
 | `⌘/Ctrl + Shift + J` | Jump to the next pane needing attention (longest-waiting blocked → done → working → idle) |
 
 On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the terminal for tmux.
@@ -230,7 +310,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 ## Known limits
 
 - **Nothing is saved between launches** — workspaces, layouts and previews start fresh. Intentional for now.
-- **One visual style** — VS Code Dark Modern; a light theme is on the list.
+- **Eight visual styles** — VS Code Dark Modern plus all seven Astera themes; terminal fonts remain a separate preference.
 - **War Room membership doesn't survive a pane restart** — re-drag the pane.
 - **The preview column has no devtools, zoom, tabs, or per-terminal cookie isolation**, and a failed page shows the platform's own error view.
 - **Terminal search covers the visible scrollback only** — matches beyond xterm's own buffer, and search-and-replace, aren't available.
@@ -241,7 +321,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **Find widget with regex on shows "Invalid regex" while you type** — a pattern that does not parse yet (for example `foo(`) reads **Invalid regex** in the counter and clears the previous highlights until the pattern is valid again. Toggle regex off to search it as literal text.
 - **Any program in any pane can overwrite the clipboard via OSC 52** — like VS Code, there is no per-pane gate. Reads are refused and empty writes never clear it; copies larger than 1 MiB are ignored.
 - **Shell integration is opt-in** — a hand-typed command in a plain Terminal pane is only noticed if that shell emits OSC 133 marks (§Shell integration). Nothing is injected, `cmd.exe` cannot do it, and an interrupted command that redraws the prompt without a `D` mark is simply forgotten.
-# Swarmterm GN additions
+## Astera themes
 
 Settings → Appearance includes Vega, Orion, Umbra, Aurora, Antares, Quasar and
 Sirius from Astera, alongside the original VS Code Dark default. Each preview

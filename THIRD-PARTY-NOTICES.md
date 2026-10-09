@@ -23,7 +23,7 @@ point in time, not a live mirror of herdr. Future re-syncs must diff against
 the current herdr repository (rules, priorities, region semantics) rather
 than assuming this port is still current — herdr's manifests can change
 upstream without any signal reaching this repo.
-# Astera port
+## Astera port (Apache License 2.0)
 
 The theme definitions and pure file-management/editor rules adapted in this fork
 come from [parsingk/Astera](https://github.com/parsingk/Astera), commit

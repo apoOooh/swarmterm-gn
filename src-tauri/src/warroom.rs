@@ -876,7 +876,10 @@ mod tests {
             "crlf\r\n",
             "café 🚀 ─┼─ 日本語",
         ] {
-            assert!(control_byte_refusal(ok).is_none(), "{ok:?} must be accepted");
+            assert!(
+                control_byte_refusal(ok).is_none(),
+                "{ok:?} must be accepted"
+            );
         }
     }
 
@@ -895,7 +898,13 @@ mod tests {
     fn send_refuses_control_bytes_on_both_modes() {
         let mut r = room_with_two();
         let err = r
-            .send("t1", Some("t2"), "ok\x1b[201~rm -rf /", MessageMode::Execute, 12)
+            .send(
+                "t1",
+                Some("t2"),
+                "ok\x1b[201~rm -rf /",
+                MessageMode::Execute,
+                12,
+            )
             .unwrap_err();
         assert!(err.contains("control"), "{err}");
         let err = r

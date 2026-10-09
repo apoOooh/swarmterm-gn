@@ -13,6 +13,7 @@ import {
   type LeafNode
 } from '@/lib/layout-tree'
 import type { ShellId } from '@/lib/terminal-pref'
+import { withCloseGuard } from '@/lib/close-guard'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { clearWorktree } from '@/tauri/git'
 import { isTransientLock } from '@/lib/worktree-cleanup'
@@ -101,6 +102,7 @@ export interface AppActions {
   setDropTarget: (terminalId: string | null) => void
   splitPane: (leafId: string, direction: Direction) => void
   closePane: (leafId: string) => void
+  runFileInPane: (leafId: string, cwd: string, command: string) => void
   reorderPane: (fromLeafId: string, toLeafId: string) => void
   resizeSplitNode: (splitId: string, sizes: [number, number]) => void
   setPaneAgent: (leafId: string, agentId: string) => void
@@ -177,6 +179,14 @@ function mapActive(state: AppState, fn: (w: Workspace) => Workspace): Pick<AppSt
   return {
     workspaces: state.workspaces.map((w) => (w.id === state.activeWorkspaceId ? fn(w) : w))
   }
+}
+
+function removeWorkspace(s: AppState, id: string): Partial<AppState> {
+  const index = s.workspaces.findIndex((w) => w.id === id)
+  if (index === -1) return {}
+  const remaining = s.workspaces.filter((w) => w.id !== id)
+  if (!remaining.length) return { workspaces: [], activeWorkspaceId: '', welcomeOpen: true, welcomeFocused: true }
+  return { workspaces: remaining, activeWorkspaceId: id === s.activeWorkspaceId ? remaining[Math.min(index, remaining.length - 1)].id : s.activeWorkspaceId }
 }
 
 // --- store ----------------------------------------------------------------
@@ -271,21 +281,11 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       }
     }),
 
-  closeWorkspace: (id) =>
-    set((s) => {
-      const index = s.workspaces.findIndex((w) => w.id === id)
-      if (index === -1) return {}
-      const remaining = s.workspaces.filter((w) => w.id !== id)
-      // Closing the last workspace leaves none — the app reopens the setup wizard.
-      if (remaining.length === 0) {
-        return { workspaces: [], activeWorkspaceId: '', welcomeOpen: true, welcomeFocused: true }
-      }
-      let activeWorkspaceId = s.activeWorkspaceId
-      if (id === s.activeWorkspaceId) {
-        activeWorkspaceId = remaining[Math.min(index, remaining.length - 1)].id
-      }
-      return { workspaces: remaining, activeWorkspaceId }
-    }),
+  closeWorkspace: (id) => {
+    const ws = get().workspaces.find((w) => w.id === id)
+    if (!ws) return
+    withCloseGuard(collectLeaves(ws.layout).map((l) => l.id), () => set((s) => removeWorkspace(s, id)))
+  },
 
   moveWorkspace: (fromId, toId) =>
     set((s) => {
@@ -297,9 +297,11 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
     }),
 
   setFocusedLeaf: (leafId) =>
-    set((s) =>
-      mapActive(s, (w) => (findLeaf(w.layout, leafId) ? { ...w, focusedLeafId: leafId } : w))
-    ),
+    set((s) => {
+      const ws = selectActiveWorkspace(s)
+      if (!ws || ws.focusedLeafId === leafId || !findLeaf(ws.layout, leafId)) return s
+      return mapActive(s, (w) => ({ ...w, focusedLeafId: leafId }))
+    }),
 
   revealTerminal: (terminalId) =>
     set((s) => {
@@ -329,28 +331,30 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       })
     ),
 
+  runFileInPane: (leafId, cwd, command) => set((s) => {
+    const ws = s.workspaces.find((w) => findLeaf(w.layout, leafId))
+    if (!ws) return {}
+    const source = findLeaf(ws.layout, leafId)!
+    const runner: LeafNode = { ...makeLeaf(), cwd, shellId: source.shellId, startupCommand: command }
+    return { activeWorkspaceId: ws.id, workspaces: s.workspaces.map((w) => w.id === ws.id ? { ...w, layout: splitLeaf(w.layout, leafId, 'horizontal', runner, uid()), focusedLeafId: runner.id } : w) }
+  }),
+
   closePane: (leafId) => {
-    const active = selectActiveWorkspace(get())
-    if (!active) return
-    const layout = closeLeaf(active.layout, leafId)
-    // Closing the last pane of a workspace closes the workspace itself.
-    if (layout === null) {
-      get().closeWorkspace(active.id)
-      return
-    }
-    set((s) =>
-      mapActive(s, (w) => {
+    const owner = get().workspaces.find((w) => findLeaf(w.layout, leafId))
+    if (!owner) return
+    withCloseGuard([leafId], () => {
+      const ws = get().workspaces.find((w) => w.id === owner.id)
+      if (!ws || !findLeaf(ws.layout, leafId)) return
+      const layout = closeLeaf(ws.layout, leafId)
+      if (layout === null) { set((s) => removeWorkspace(s, ws.id)); return }
+      set((s) => ({ workspaces: s.workspaces.map((w) => {
+        if (w.id !== ws.id) return w
         const leaves = collectLeaves(layout)
         const ids = new Set(leaves.map((l) => l.id))
-        const focusedLeafId = ids.has(w.focusedLeafId) ? w.focusedLeafId : leaves[0].id
-        return {
-          ...w,
-          layout,
-          focusedLeafId,
-          broadcastLeafIds: w.broadcastLeafIds.filter((id) => ids.has(id))
-        }
-      })
-    )
+        return { ...w, layout, focusedLeafId: ids.has(w.focusedLeafId) ? w.focusedLeafId : leaves[0].id,
+          broadcastLeafIds: w.broadcastLeafIds.filter((id) => ids.has(id)) }
+      }) }))
+    })
   },
 
   // Reorder panes in the active workspace: move `fromLeafId` to `toLeafId`'s

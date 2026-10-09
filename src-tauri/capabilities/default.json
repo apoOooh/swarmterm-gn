@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",
@@ -23,14 +25,17 @@
     "core:webview:allow-create-webview-window",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
-    "updater:default",
     "process:default",
     "notification:default",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
-        { "url": "http://*" },
-        { "url": "https://*" }
+        {
+          "url": "http://*"
+        },
+        {
+          "url": "https://*"
+        }
       ]
     }
   ]

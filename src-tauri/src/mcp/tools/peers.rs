@@ -388,7 +388,8 @@ impl SwarmtermMcpServer {
                 None,
             ));
         }
-        let until = parse_until(args.until).map_err(|m| rmcp::ErrorData::invalid_params(m, None))?;
+        let until =
+            parse_until(args.until).map_err(|m| rmcp::ErrorData::invalid_params(m, None))?;
         let after_change = args.after_change.unwrap_or(false);
         let start = now_ms();
         let deadline = start + clamp_timeout(args.timeout_ms);
@@ -445,7 +446,9 @@ impl SwarmtermMcpServer {
             // "look again", so the result is irrelevant.
             let _ = tokio::time::timeout(wake, notified).await;
         };
-        let peer_state = snapshot.map(|s| s.state).unwrap_or_else(|| "unknown".to_string());
+        let peer_state = snapshot
+            .map(|s| s.state)
+            .unwrap_or_else(|| "unknown".to_string());
         let note = match outcome {
             Outcome::Reached => format!(
                 "peer is {peer_state} — call war_room.read_peer for its screen and \
@@ -676,19 +679,28 @@ mod tests {
 
     #[test]
     fn parse_until_none_is_the_attention_set() {
-        assert_eq!(parse_until(None).unwrap(), until(&["blocked", "idle", "done"]));
+        assert_eq!(
+            parse_until(None).unwrap(),
+            until(&["blocked", "idle", "done"])
+        );
     }
 
     #[test]
     fn parse_until_keeps_known_states() {
-        assert_eq!(parse_until(Some(until(&["done"]))).unwrap(), until(&["done"]));
+        assert_eq!(
+            parse_until(Some(until(&["done"]))).unwrap(),
+            until(&["done"])
+        );
         assert!(parse_until(Some(until(&KNOWN_STATES))).is_ok());
     }
 
     #[test]
     fn parse_until_rejects_unknown_state_by_name() {
         let err = parse_until(Some(until(&["done", "nope"]))).unwrap_err();
-        assert!(err.contains("nope"), "error should name the bad entry: {err}");
+        assert!(
+            err.contains("nope"),
+            "error should name the bad entry: {err}"
+        );
     }
 
     #[test]

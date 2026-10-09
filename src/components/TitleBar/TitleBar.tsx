@@ -94,7 +94,7 @@ export function TitleBar({ fullscreen }: TitleBarProps): ReactElement {
             box collapses, and the mark stops out-weighing the sidebar toggle
             beside it — the button ends up reading as the brand. */}
         <Logo className="h-6 w-6" />
-        <span className="text-xs font-semibold">Swarmterm</span>
+        <span className="text-xs font-semibold">Swarmterm GN</span>
       </div>
 
       <div

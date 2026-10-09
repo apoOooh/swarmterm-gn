@@ -305,7 +305,12 @@ async fn status_handler(
         context_usage::parse_ctx_query(query.as_deref()),
     );
     let token = auth::bearer(bearer_header(&headers));
-    let connected = app.state::<AppState>().mcp_clients.lock().unwrap().has_seen(token);
+    let connected = app
+        .state::<AppState>()
+        .mcp_clients
+        .lock()
+        .unwrap()
+        .has_seen(token);
     (
         StatusCode::OK,
         // The probe reads to EOF rather than implementing keep-alive framing.

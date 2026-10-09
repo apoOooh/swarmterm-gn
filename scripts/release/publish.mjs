@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REQUIRED_PLATFORMS, buildManifest } from './manifest.mjs'
 
-const REPO = 'duongducnguyen/swarmterm'
+const REPO = 'apoOooh/swarmterm-gn'
 const die = (msg) => {
   console.error(`release-publish: ${msg}`)
   process.exit(1)
@@ -25,7 +25,12 @@ const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8'
 const gh = (...args) => run('gh', [...args, '--repo', REPO])
 
 const wantPublish = process.argv.includes('--publish')
-const version = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).version
+const config = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'))
+if (!config.bundle.createUpdaterArtifacts) {
+  die('GN updater publishing is disabled. Build standalone bundles; configure a fork-owned updater before using this helper.')
+}
+const version = config.version
+const product = config.productName
 const tag = `v${version}`
 
 try {
@@ -73,10 +78,10 @@ const candidates =
   process.platform === 'darwin'
     ? [
         ...globDmg(`${mac}/dmg`),
-        `${mac}/macos/Swarmterm.app.tar.gz`,
-        `${mac}/macos/Swarmterm.app.tar.gz.sig`
+        `${mac}/macos/${product}.app.tar.gz`,
+        `${mac}/macos/${product}.app.tar.gz.sig`
       ]
-    : [`${win}/Swarmterm_${version}_x64-setup.exe`, `${win}/Swarmterm_${version}_x64-setup.exe.sig`]
+    : [`${win}/${product}_${version}_x64-setup.exe`, `${win}/${product}_${version}_x64-setup.exe.sig`]
 const local = candidates.filter((p) => existsSync(p))
 if (local.length === 0) {
   console.warn('release-publish: no local artifacts found — refreshing latest.json only')
