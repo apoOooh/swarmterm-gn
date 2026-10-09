@@ -3,6 +3,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
+import { terminalTheme } from '@/lib/theme-adapter'
+import { useAppearanceStore } from '@/store/appearance-store'
 import '@xterm/xterm/css/xterm.css'
 import { createTerminal, killTerminal, resizeTerminal, writeTerminal } from '@/tauri/terminal'
 import { TerminalSession, type TerminalStatus } from '@/lib/terminal-session'
@@ -295,7 +297,7 @@ function getOrCreate(id: string): Entry {
   // content-box size, so cols/rows already exclude this padding.
   host.style.boxSizing = 'border-box'
   host.style.padding = '6px 8px'
-  host.style.background = VSCODE_DARK_THEME.background as string
+  host.style.background = terminalTheme(useAppearanceStore.getState().style).background as string
 
   const text = useTerminalTextStore.getState().text
   host.style.fontFeatureSettings = ligatureFeatureSettings(text.ligatures)
@@ -311,7 +313,7 @@ function getOrCreate(id: string): Entry {
     fontSize: text.fontSize,
     lineHeight: text.lineHeight,
     scrollback: 5000,
-    theme: VSCODE_DARK_THEME
+    theme: { ...VSCODE_DARK_THEME, ...terminalTheme(useAppearanceStore.getState().style) }
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
@@ -1286,3 +1288,14 @@ export function applyTerminalText(pref: TerminalTextPref): void {
 // Push text-preference changes to every live terminal. Subscribing here (rather
 // than the store importing the registry) keeps the dependency one-directional.
 useTerminalTextStore.subscribe((state) => applyTerminalText(state.text))
+
+useAppearanceStore.subscribe((state, previous) => {
+  if (state.style === previous.style) return
+  const palette = terminalTheme(state.style)
+  for (const entry of entries.values()) {
+    entry.term.options.theme = { ...VSCODE_DARK_THEME, ...palette }
+    entry.host.style.background = palette.background as string
+  }
+  // Font loading and density can change pane dimensions after the palette update.
+  void document.fonts.ready.then(() => refitAttachedTerminals())
+})

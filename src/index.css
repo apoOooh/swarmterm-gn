@@ -1,3 +1,4 @@
+@import './theme-fonts.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -57,7 +58,8 @@
     @apply bg-background text-foreground;
     margin: 0;
     overflow: hidden;
-    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-family: var(--sans, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif);
+    letter-spacing: var(--tracking, 0);
     -webkit-font-smoothing: antialiased;
   }
 }
@@ -101,3 +103,9 @@
     background: hsl(var(--sb-thumb) / var(--sb-thumb-active));
   }
 }
+
+.pane-header { height: var(--pane-tabbar-h, 28px); }
+.theme-row { padding-block: var(--row-pad-y, 6px); }
+.theme-row[data-active="true"] { box-shadow: inset var(--marker-w, 2px) 0 rgb(var(--color-primary)); }
+.theme-elevated { box-shadow: var(--shadow-lg); }
+.font-mono { font-family: var(--mono, ui-monospace, monospace); }

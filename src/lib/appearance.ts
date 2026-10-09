@@ -1,5 +1,6 @@
-/** Available visual styles for the app. Extensible — today the only style is the VSCode Dark Modern look. */
-export type Style = 'vscode-dark'
+import { THEMES, type ThemeId } from './theme/themes'
+
+export type Style = 'vscode-dark' | ThemeId
 
 /** The style used when nothing is persisted yet. */
 export const DEFAULT_STYLE: Style = 'vscode-dark'
@@ -14,7 +15,7 @@ export interface AppearanceStorage {
 }
 
 /** All known style ids — used to validate persisted values. */
-const KNOWN_STYLES: readonly Style[] = ['vscode-dark'] as const
+const KNOWN_STYLES: readonly Style[] = ['vscode-dark', ...THEMES.map(t => t.id)]
 
 function isStyle(value: string | null): value is Style {
   return value !== null && (KNOWN_STYLES as readonly string[]).includes(value)

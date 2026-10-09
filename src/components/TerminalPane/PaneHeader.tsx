@@ -125,7 +125,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
       // tab order: it has no keyboard action, and a Tab meant for the shell must
       // never park the focus ring on app chrome (see lib/terminal-focus.ts).
       tabIndex={-1}
-      className="flex h-7 shrink-0 cursor-grab items-center gap-0.5 border-b border-border bg-card px-1.5 active:cursor-grabbing"
+      className="pane-header flex h-7 shrink-0 cursor-grab items-center gap-0.5 border-b border-border bg-card px-1.5 active:cursor-grabbing"
     >
       {/* Agent — pinned far-left identity, never collapses. */}
       <div data-no-dnd>
