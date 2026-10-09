@@ -1,10 +1,10 @@
-# Releasing Swarmterm for Windows
+# Building Swarmterm GN for Windows locally
 
-Swarmterm ships as an NSIS installer (`Swarmterm_<version>_x64-setup.exe`),
-built locally on a Windows machine. The build is **deliberately unsigned** —
+Swarmterm GN ships as an NSIS installer (`Swarmterm GN_<version>_x64-setup.exe`).
+Official fork releases are built by the [Windows release workflow](release-process.md).
+This page describes an optional local build. The build is **unsigned** —
 see the SmartScreen section for what users see and why that is acceptable for
-now. The updater artifact is the installer itself plus a minisign signature;
-auto-update security never depended on Windows code signing.
+now. GN automatic updates are disabled, so no updater signing key is needed.
 
 The overall flow (bump → tag → build → publish) lives in
 [release-process.md](release-process.md).
@@ -15,37 +15,18 @@ The overall flow (bump → tag → build → publish) lives in
    `x86_64-pc-windows-msvc` toolchain.
 2. **Visual Studio Build Tools** with the *Desktop development with C++*
    workload (the linker and Windows SDK Tauri needs).
-3. **Node 20+** and `npm`.
-4. **GitHub CLI:** `winget install GitHub.cli`, then `gh auth login`
-   (the publish step drives `gh`).
-5. **The updater signing key:** copy `swarmterm-updater.key` from the mac's
-   `~/Developer/apple-signing/` over a private channel (USB stick — never the
-   repo, never a chat upload). Keep it outside the repo checkout.
-6. Clone the repo, `npm install`, then:
-
-   ```powershell
-   Copy-Item .env.release.example .env.release   # gitignored
-   ```
-
-   Fill in only the two updater variables (Windows paths):
-
-   ```
-   TAURI_SIGNING_PRIVATE_KEY=C:\Users\<you>\secrets\swarmterm-updater.key
-   TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<from swarmterm-updater.key.password>
-   ```
-
-   The Apple variables stay empty on this machine.
+3. **Node 24** and `npm`.
+4. Clone the `dev` branch of `apoOooh/swarmterm-gn` and run `npm ci`.
 
 ## Releasing
 
 ```powershell
-npm run release:win        # NSIS installer + updater .sig, with assertions
-npm run release:publish    # upload to the shared draft release
+npm run release:win        # standalone NSIS installer, with assertions
 ```
 
-The build script dies early with a named fix if the signing key is missing,
-and asserts afterwards that both the installer and its `.sig` exist and carry
-the version from `tauri.conf.json`. Output lands in
+The build script asserts that the installer exists and carries the version
+from `tauri.conf.json`. If a fork-owned updater is configured in the future,
+it additionally requires that updater's signing key and `.sig`. Output lands in
 `src-tauri\target\release\bundle\nsis\`.
 
 To sanity-check the installer locally: run it (per-user install, no admin

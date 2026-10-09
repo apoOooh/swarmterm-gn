@@ -1,11 +1,12 @@
-# Contributing to Swarmterm
+# Contributing to Swarmterm GN
 
 Thanks for your interest! This page covers everything you need to go from
 `git clone` to a merged pull request.
 
 ## Getting set up
 
-Install the prerequisites from the [README](README.md#requirements), then:
+The GN fork supports Windows x64. Install the prerequisites from the
+[README](README.md#build-from-source), then:
 
 ```bash
 npm install
@@ -42,9 +43,9 @@ lives at boundaries (pty, window manager, tray) that unit tests can't reach.
   stores stay thin (see CLAUDE.md's module-boundaries section).
 - **Comments explain *why*, not *what*.** The codebase leans on dense
   rationale comments for platform/lifecycle decisions — match that bar.
-- **Cross-platform:** macOS, Linux and Windows are all first-class. Gate
-  platform code behind `#[cfg(...)]` (Rust) or runtime checks (TS); never
-  hard-code one platform's behavior.
+- **Windows support:** native CI and releases target Windows x64 only. Keep
+  existing platform guards in inherited code; macOS/Linux code is retained
+  without a support commitment.
 - **Commit messages** follow Conventional Commits (`feat(scope): …`,
   `fix: …`, `docs: …`) — mirror the existing history.
 
