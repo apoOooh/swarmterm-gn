@@ -84,7 +84,7 @@ From here, the **[user guide](docs/user-guide.md)** covers the rest.
 
 ## Status
 
-The Astera port adds light and dark themes, file management and editing to the upstream 1.0.4 baseline. Current limits:
+The Astera port adds seven dark themes, file management and editing to the upstream 1.0.4 baseline. Current limits:
 
 - you want workspaces to **survive a restart** — nothing persists between launches yet, by design;
 - the embedded text editor supports **UTF-8 files up to 1 MiB**; binary and larger files are read only;

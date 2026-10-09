@@ -12,7 +12,7 @@ Do not mark them passed from the in-memory fixture alone.
 ## Astera themes and Files (GN)
 
 - [ ] Select each of Vega, Orion, Umbra, Aurora, Antares, Quasar and Sirius;
-      check light/dark surfaces, font loading, menus, dialogs and preview cards.
+      check palette contrast, font loading, menus, dialogs and preview cards.
       While a shell emits output, switch themes and verify PID/scrollback survive.
 - [ ] Click terminals with different folders/worktrees; Files follows configured
       roots. Run `cd` in one shell; its explorer root stays fixed. Switch back
