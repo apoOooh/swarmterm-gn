@@ -241,3 +241,10 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **Find widget with regex on shows "Invalid regex" while you type** — a pattern that does not parse yet (for example `foo(`) reads **Invalid regex** in the counter and clears the previous highlights until the pattern is valid again. Toggle regex off to search it as literal text.
 - **Any program in any pane can overwrite the clipboard via OSC 52** — like VS Code, there is no per-pane gate. Reads are refused and empty writes never clear it; copies larger than 1 MiB are ignored.
 - **Shell integration is opt-in** — a hand-typed command in a plain Terminal pane is only noticed if that shell emits OSC 133 marks (§Shell integration). Nothing is injected, `cmd.exe` cannot do it, and an interrupted command that redraws the prompt without a `D` mark is simply forgotten.
+# Swarmterm GN additions
+
+Settings → Appearance includes Vega, Orion, Umbra, Aurora, Antares, Quasar and
+Sirius from Astera, alongside the original VS Code Dark default. Each preview
+uses its own palette. A theme also changes UI fonts, density, corners and shadows.
+Switching themes keeps running shells and terminal scrollback intact. Terminal
+font preferences remain separate.

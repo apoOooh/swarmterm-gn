@@ -57,7 +57,7 @@ export function TerminalList(): ReactElement | null {
                 onClick={() => setFocusedLeaf(leaf.id)}
                 title={title}
                 className={cn(
-                  'flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
+                  'theme-row flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
                   focused
                     ? 'bg-accent text-accent-foreground'
                     : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
