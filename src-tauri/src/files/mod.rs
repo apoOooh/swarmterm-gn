@@ -596,7 +596,7 @@ mod tests {
                 .open_for_terminal(&next, Some(&display(&next)))
                 .unwrap()
                 .root,
-            display(&next)
+            display(&canonical(&next).unwrap())
         );
     }
 
