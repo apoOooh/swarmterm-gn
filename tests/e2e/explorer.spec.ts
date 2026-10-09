@@ -17,11 +17,12 @@ test('terminal selection follows worktrees; editor preserves PTYs and CRLF', asy
   await page.getByText('Terminals', { exact: true }).locator('..').locator('li').nth(1).click()
   await expect(page.getByRole('treeitem', { name: 'README.md' })).toBeVisible()
   await page.getByRole('treeitem', { name: 'README.md' }).click()
-  await expect(page.locator('.cm-content').filter({ hasText: 'Isolated worktree' })).toBeVisible()
+  await expect(page.locator('.markdown-preview').filter({ hasText: 'Isolated worktree' })).toBeVisible()
 })
 
 test('dirty buffers detect external changes and require an explicit close choice', async ({ page }) => {
   await page.getByRole('treeitem', { name: 'README.md' }).click()
+  await page.getByRole('button', { name: 'Markdown editor', exact: true }).click()
   const editor = page.locator('.cm-content').first()
   await editor.click(); await page.keyboard.press('Control+End'); await page.keyboard.type('\nmy edits')
   await page.evaluate(() => (window as any).fixture.change('/project/README.md', '# Agent changes\n'))
@@ -59,6 +60,9 @@ test('file create, rename, duplicate, delete and history restore work through IP
 
 test('Markdown preview is themed and safe; large trees remain virtual', async ({ page }) => {
   await page.getByRole('treeitem', { name: 'README.md' }).click()
+  await expect(page.getByRole('button', { name: 'Markdown preview', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Open in MarkText', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.counters.marktext)).toEqual(['/project/README.md'])
   await page.getByRole('button', { name: 'Markdown split', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Welcome' })).toBeVisible()
   await page.getByRole('link', { name: 'Source', exact: true }).click()
@@ -78,6 +82,7 @@ test('Markdown preview is themed and safe; large trees remain virtual', async ({
 
 test('file tabs move between panes without respawning terminals; shared buffers update together', async ({ page }) => {
   await page.getByRole('treeitem', { name: 'README.md' }).click()
+  await page.getByRole('button', { name: 'Markdown editor', exact: true }).click()
   const panes = page.locator('[data-workbench-leaf]')
   const data = await page.evaluate(() => {
     const f = (window as any).fixture; const ws = f.useAppStore.getState().workspaces[0]
@@ -98,6 +103,7 @@ test('file tabs move between panes without respawning terminals; shared buffers 
 
 test('pane and workspace closing protect dirty documents and preserve the tree keyboard owner', async ({ page }) => {
   await page.getByRole('treeitem', { name: 'README.md' }).click()
+  await page.getByRole('button', { name: 'Markdown editor', exact: true }).click()
   await page.locator('.cm-content').click(); await page.keyboard.press('Control+End'); await page.keyboard.type('unsaved')
   await page.getByRole('button', { name: 'Close workspace', exact: true }).click()
   await expect(page.getByRole('dialog')).toContainText('Unsaved changes')

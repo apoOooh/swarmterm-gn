@@ -15,6 +15,13 @@ describe('document lifecycle', () => {
     expect(conflict.content).toBe('mine'); expect(conflict.conflict?.content).toBe('theirs')
     expect(diskChanged(editDocument(doc, 'mine'), disk('old')).conflict).toBeUndefined()
   })
+  it('opens Markdown rendered by default and keeps the mode across a disk reload', () => {
+    expect(newDocument(context, '/p/README.md', disk('# hi')).mode).toBe('preview')
+    expect(newDocument(context, '/p/README.md', disk('# hi'), 'split').mode).toBe('split')
+    expect(newDocument(context, '/p/a.ts', disk(''), 'preview').mode).toBe('editor')
+    const doc = { ...newDocument(context, '/p/README.md', disk('# hi')), mode: 'editor' as const }
+    expect(diskChanged(doc, disk('# changed', 'v2')).mode).toBe('editor')
+  })
   it('makes binary and truncated files read only', () => {
     expect(newDocument(context, '/p/a', { ...disk(''), binary: true }).readOnly).toBe(true)
     expect(newDocument(context, '/p/a', { ...disk(''), truncated: true }).readOnly).toBe(true)

@@ -14,7 +14,7 @@ add('/project/photo.png', 'image fixture')
 for (let i = 0; i < 2000; i++) add(`/project/many/file-${i}.ts`, `export const n = ${i}\n`)
 const contexts = new Map<string, string>()
 const terminals = new Map<string, { cwd: string; channel: unknown }>()
-const counters = { created: 0, killed: 0, writes: [] as string[], unknown: [] as string[], watched: 0, mediaStats: 0, openedMedia: [] as string[] }
+const counters = { created: 0, killed: 0, writes: [] as string[], unknown: [] as string[], watched: 0, mediaStats: 0, openedMedia: [] as string[], marktext: [] as string[] }
 let nativeFiles: string[] = []
 let textClipboard = ''
 const snapshots: { id: string; path: string; created: number; bytes: number; isDir: boolean; content: string }[] = []
@@ -50,6 +50,8 @@ mockIPC(async (command, raw) => {
       await changes(q.contextId, completed.flatMap((c) => [c.source, c.destination])); return { completed, errors: [] }
     }
     if (q.type === 'reveal') return
+    if (q.type === 'openMarkText') { counters.marktext.push(q.path); return }
+    if (q.type === 'locateMarkText') return 'C:/Users/test/AppData/Local/Programs/marktext/marktext.exe'
     throw new Error(`Unexpected file command ${q.type}`)
   }
   if (command === 'plugin:app|version') return '1.0.4-gn'
