@@ -39,3 +39,7 @@ export function mediaUrl(contextId: string, path: string, revision: string | num
   // convertFileSrc encodes the entire path, so use it for the scheme/host only.
   return `${convertFileSrc(contextId, 'swarmterm-media')}?path=${encodeURIComponent(path)}&revision=${revision}`
 }
+/** Hands a Markdown file to the external MarkText app. `executable` empty = auto-detect. */
+export const openInMarkText = (contextId: string, path: string, executable: string): Promise<void> => request('openMarkText', { contextId, path, executable })
+/** Resolved MarkText executable, or null when none is installed where we look. */
+export const locateMarkText = (executable: string): Promise<string | null> => request('locateMarkText', { executable })

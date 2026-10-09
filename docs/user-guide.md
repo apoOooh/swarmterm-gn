@@ -72,6 +72,18 @@ code blocks with Copy, and text search. HTML is sanitized and script URLs are
 removed. Relative files/images must resolve inside the configured project root.
 Remote HTTP(S) images may be loaded by the preview.
 
+Markdown files open rendered by default, in a centred reading column styled
+after MarkText. **Settings → Files → Open Markdown as** switches the default to
+Split or Source; the toolbar still switches each file individually.
+
+**Open in MarkText** (file toolbar, or the explorer context menu on a `.md`
+file) hands the file to the external [MarkText](https://www.marktext.cc/) app.
+Unsaved edits are saved first. Swarmterm looks in the standard install
+locations (`%LOCALAPPDATA%\Programs\marktext`, `Program Files\MarkText`); a
+different install can be set under **Settings → Files → MarkText**. Only a file
+named `marktext.exe` is accepted there, so the setting cannot launch another
+program.
+
 PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos open in a media viewer.
 Video playback depends on the platform's codecs. Generated media reloads after
 two matching file-stat samples, preserving video position and active playback.

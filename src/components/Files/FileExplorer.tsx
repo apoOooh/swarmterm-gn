@@ -11,11 +11,13 @@ import { topLevelOnly, validateName } from '@/lib/files/ops'
 import { messageText } from '@/lib/files/messages'
 import { parentDir } from '@/lib/files/paths'
 import { isMacPlatform } from '@/lib/platform'
-import { copyNativeFiles, createFile, importNativeFiles, listHistory, onFileProgress, readNativeFiles, removeFiles, renameFile, restoreSnapshot, revealFile, transferFiles, type FileContext, type Snapshot, type TransferResult } from '@/tauri/files'
+import { copyNativeFiles, createFile, importNativeFiles, listHistory, onFileProgress, readNativeFiles, removeFiles, renameFile, restoreSnapshot, revealFile, openInMarkText, transferFiles, type FileContext, type Snapshot, type TransferResult } from '@/tauri/files'
 import { writeClipboard as writeClipboardText } from '@/tauri/clipboard'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { ContextMenuSeparator } from '@/components/ui/context-menu-separator'
 import { cn } from '@/lib/utils'
+import { isMarkdownPath } from '@/lib/markdown-pref'
+import { useMarkdownPrefStore } from '@/store/markdown-pref-store'
 
 export const FILE_DRAG_TYPE = 'application/x-swarmterm-files'
 const rowHeight = 26
@@ -289,6 +291,7 @@ export function FileExplorer(): React.ReactElement {
       <ContextMenuItem onSelect={() => void writeClipboardText(selection.join('\n') || context?.root || '').catch((e) => useExplorerStore.setState({ error: String(e) }))}>Copy full path</ContextMenuItem>
       <ContextMenuItem onSelect={() => void writeClipboardText(selection.map((p) => p.slice((context?.root.length ?? 0) + 1)).join('\n')).catch((e) => useExplorerStore.setState({ error: String(e) }))}>Copy relative path</ContextMenuItem>
       <ContextMenuItem onSelect={() => { if (context) void revealFile(context.id, selection[0] ?? context.root).catch((e) => useExplorerStore.setState({ error: String(e) })) }}>Reveal in file manager</ContextMenuItem>
+      <ContextMenuItem disabled={selection.length !== 1 || !isMarkdownPath(selection[0])} onSelect={() => { if (context) void openInMarkText(context.id, selection[0], useMarkdownPrefStore.getState().prefs.marktextPath).catch((e) => useExplorerStore.setState({ error: String(e) })) }}>Open in MarkText</ContextMenuItem>
       <ContextMenuItem onSelect={() => void showHistory()}>Local deletion history</ContextMenuItem>
       <ContextMenuItem disabled={!explorer.undo.length} onSelect={() => void undo()}>Undo file operation</ContextMenuItem>
       <ContextMenuSeparator />

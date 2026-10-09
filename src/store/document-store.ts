@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { readFile, writeFile, type FileContext, type FileChange } from '@/tauri/files'
 import { FileWatchLease } from '@/lib/files/watch-lease'
+import { useMarkdownPrefStore } from './markdown-pref-store'
 import { diskChanged, editDocument, newDocument, serializedDocument, type FileDocument } from '@/lib/files/documents'
 import { detectEol, toLf } from '@/lib/files/edit'
 import { fileKind } from '@/lib/files/tree'
@@ -61,7 +62,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         if (!pending) {
           pending = (async () => {
             const disk = fileKind(path) === 'text' ? await readFile(context.id, path) : undefined
-            const next = { ...newDocument(context, path, disk), key }
+            const next = { ...newDocument(context, path, disk, useMarkdownPrefStore.getState().prefs.defaultMode), key }
             return next
           })()
           opening.set(key, pending)

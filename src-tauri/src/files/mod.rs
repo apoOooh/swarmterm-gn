@@ -1,6 +1,7 @@
 mod clipboard;
 mod git;
 mod history;
+mod marktext;
 mod media;
 pub mod path;
 mod watch;
@@ -124,6 +125,14 @@ pub enum FileRequest {
     Reveal {
         context_id: String,
         path: String,
+    },
+    OpenMarkText {
+        context_id: String,
+        path: String,
+        executable: String,
+    },
+    LocateMarkText {
+        executable: String,
     },
 }
 
@@ -448,6 +457,18 @@ impl FileService {
                 let _ = app;
                 crate::links::reveal_in_file_manager(&display(&target))?;
                 Ok(Value::Null)
+            }
+            FileRequest::OpenMarkText {
+                context_id,
+                path,
+                executable,
+            } => {
+                let target = guarded(&self.root(&context_id)?, &path, false)?;
+                marktext::open(&executable, &target)?;
+                Ok(Value::Null)
+            }
+            FileRequest::LocateMarkText { executable } => {
+                Ok(json!(marktext::locate(&executable).map(|p| display(&p))))
             }
         }
     }
@@ -780,5 +801,27 @@ mod tests {
         assert!(!result["warnings"].as_array().unwrap().is_empty());
         assert!(!link.exists());
         assert_eq!(fs::read_to_string(content).unwrap(), "keep the target");
+    }
+
+    #[test]
+    fn marktext_only_receives_markdown_inside_the_project() {
+        let (t, service, c) = fixture();
+        let txt = Path::new(&c.root).join("notes.txt");
+        fs::write(&txt, "x").unwrap();
+        let outside = t.path().join("outside.md");
+        fs::write(&outside, "# x").unwrap();
+        let open = |path: &Path| FileRequest::OpenMarkText {
+            context_id: c.id.clone(),
+            path: display(path),
+            executable: String::new(),
+        };
+        assert!(service
+            .request(open(&txt), None)
+            .unwrap_err()
+            .contains("Markdown"));
+        assert!(service
+            .request(open(&outside), None)
+            .unwrap_err()
+            .contains("outside"));
     }
 }

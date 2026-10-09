@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Open Markdown files rendered by default in a MarkText-style reading view;
+  the default view is configurable under Settings → Files.
+- Add "Open in MarkText" to the file toolbar and explorer context menu, with
+  auto-detection of the MarkText install and an optional path override.
+
 ## [1.1.0] - 2026-10-10
 
 - Add all seven Astera themes, bundled UI fonts and theme-specific density,

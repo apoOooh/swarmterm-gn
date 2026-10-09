@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeSanitize from 'rehype-sanitize'
 import rehypeRaw from 'rehype-raw'
 import rehypeSlug from 'rehype-slug'
-import { Play, Save, Search } from 'lucide-react'
+import { ExternalLink, Play, Save, Search } from 'lucide-react'
 import { CodeEditor } from './CodeEditor'
 import { MediaView } from './MediaView'
 import { CodeFence } from './CodeFence'
@@ -19,7 +19,9 @@ import { isWindowsPlatform } from '@/lib/platform'
 import { useDocumentStore } from '@/store/document-store'
 import { useAppStore } from '@/store/app-store'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
-import { mediaUrl } from '@/tauri/files'
+import { useMarkdownPrefStore } from '@/store/markdown-pref-store'
+import { isMarkdownPath } from '@/lib/markdown-pref'
+import { mediaUrl, openInMarkText } from '@/tauri/files'
 import { openUrl } from '@/tauri/opener'
 import type { LeafNode } from '@/lib/layout-tree'
 import { cn } from '@/lib/utils'
@@ -36,7 +38,7 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
   const findInput = useRef<HTMLInputElement>(null)
   const shellId = useTerminalPrefStore((s) => s.shellId)
   const runner = fileRun(doc.path, shellFlavor(leaf.shellId ?? shellId, isWindowsPlatform()))
-  const markdown = /\.(md|markdown)$/i.test(doc.path)
+  const markdown = isMarkdownPath(doc.path)
   useEffect(() => {
     const matches = preview.current?.querySelectorAll('[data-file-match]')
     setFindCount(matches?.length ?? 0)
@@ -67,6 +69,13 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
     view.current.dispatch({ effects: EditorView.scrollIntoView(view.current.state.doc.line(line).from, { y: 'start' }) })
     requestAnimationFrame(() => { scrolling.current = false })
   }
+  // MarkText reads the file from disk, so unsaved edits are saved first — the
+  // same contract as Run. A refused save (conflict, read-only) aborts the hand-off.
+  async function openMarkText(): Promise<void> {
+    if (doc.dirty && !await store.save(doc.key)) return
+    await openInMarkText(doc.context.id, doc.path, useMarkdownPrefStore.getState().prefs.marktextPath)
+      .catch((e) => useDocumentStore.setState({ error: String(e) }))
+  }
   const code = <CodeEditor doc={doc} paneId={leaf.id} viewRef={view} onScroll={editorScroll} />
   const markdownComponents = useMemo<Components>(() => ({
       a: ({ href, children, node, ...props }) => <a {...props} href={href} data-source-line={node?.position?.start.line} onClick={(e) => {
@@ -91,11 +100,11 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
       blockquote: ({ node, ...props }) => <blockquote {...props} data-source-line={node?.position?.start.line} />,
       img: ({ node: _node, ...props }) => <img {...props} loading="lazy" onError={(e) => { e.currentTarget.alt = 'Image unavailable or outside this project' }} />
     }), [doc.key, doc.path, doc.context.id, leaf.id])
-  const rendered = <div ref={preview} onScroll={previewScroll} tabIndex={0} data-keyboard-owner="editor" className="markdown-preview h-full overflow-auto p-5 outline-none" aria-label="Markdown preview">
-    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeSlug, [markdownSearch, { query: findQuery, active: findIndex }]]} urlTransform={(url, key) => {
+  const rendered = <div ref={preview} onScroll={previewScroll} tabIndex={0} data-keyboard-owner="editor" className="markdown-preview h-full overflow-auto outline-none" aria-label="Markdown preview">
+    <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeSlug, [markdownSearch, { query: findQuery, active: findIndex }]]} urlTransform={(url, key) => {
       if (key === 'src' && !/^[a-z][a-z\d+.-]*:/i.test(url) && !url.startsWith('//')) return mediaUrl(doc.context.id, resolveRelative(doc.path, decodeUriPath(url.split(/[?#]/)[0])), doc.revision)
       return defaultUrlTransform(url)
-    }} components={markdownComponents}>{doc.content}</ReactMarkdown>
+    }} components={markdownComponents}>{doc.content}</ReactMarkdown></div>
   </div>
   return <div data-keyboard-owner="editor" data-file-active={focused} className="flex h-full min-h-0 flex-col bg-background" onMouseDown={() => useAppStore.getState().setFocusedLeaf(leaf.id)} onKeyDown={(e) => {
     if (e.defaultPrevented) return
@@ -110,6 +119,7 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
         <button title="Find / replace" aria-label="Find / replace" className="rounded p-1 hover:bg-accent" onClick={find}><Search size={13} /></button>
         <button title="Save (Ctrl/Cmd+S)" aria-label="Save file" disabled={!doc.dirty || doc.readOnly || doc.saving || !!doc.conflict || doc.missing} className="flex items-center gap-1 rounded px-2 py-1 hover:bg-accent disabled:opacity-40" onClick={() => void store.save(doc.key)}><Save size={13} />Save</button>
       </>}
+      {markdown && <button title="Open in MarkText" aria-label="Open in MarkText" className="flex items-center gap-1 rounded px-2 py-1 hover:bg-accent" onClick={() => void openMarkText()}><ExternalLink size={12} />MarkText</button>}
       {markdown && (['editor', 'split', 'preview'] as const).map((mode) => <button key={mode} aria-label={`Markdown ${mode}`} aria-pressed={doc.mode === mode} onClick={() => store.mode(doc.key, mode)} className={cn('rounded px-2 py-1 capitalize hover:bg-accent', doc.mode === mode && 'bg-accent')}>{mode}</button>)}
     </div>
     {findOpen && markdown && <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1 text-xs">

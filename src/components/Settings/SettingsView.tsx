@@ -1,13 +1,14 @@
 import { useEffect, useState, type ReactElement } from 'react'
-import { Bell, Keyboard, Palette, Terminal, X } from 'lucide-react'
+import { Bell, FileText, Keyboard, Palette, Terminal, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { AppearancePanel } from './AppearancePanel'
 import { TerminalPanel } from './TerminalPanel'
 import { NotificationsPanel } from './NotificationsPanel'
 import { KeyboardShortcutsPanel } from './KeyboardShortcutsPanel'
+import { FilesPanel } from './FilesPanel'
 
-export type CategoryId = 'appearance' | 'terminal' | 'notifications' | 'shortcuts'
+export type CategoryId = 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts'
 
 interface Category {
   id: CategoryId
@@ -18,6 +19,7 @@ interface Category {
 const CATEGORIES: Category[] = [
   { id: 'appearance', label: 'Appearance', Icon: Palette },
   { id: 'terminal', label: 'Terminal', Icon: Terminal },
+  { id: 'files', label: 'Files', Icon: FileText },
   { id: 'notifications', label: 'Notifications', Icon: Bell },
   { id: 'shortcuts', label: 'Keyboard Shortcuts', Icon: Keyboard },
 ]
@@ -101,6 +103,7 @@ export function SettingsView({ onClose, initialCategory }: SettingsViewProps): R
             <div className="mx-auto max-w-3xl px-8 py-8">
               {activeCategory === 'appearance' && <AppearancePanel />}
               {activeCategory === 'terminal' && <TerminalPanel />}
+              {activeCategory === 'files' && <FilesPanel />}
               {activeCategory === 'notifications' && <NotificationsPanel />}
               {activeCategory === 'shortcuts' && <KeyboardShortcutsPanel />}
             </div>
