@@ -59,7 +59,7 @@ pub fn reveal_in_file_manager(path: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut cmd = {
         let mut c = std::process::Command::new("open");
-        c.arg("-R").arg(&path);
+        c.arg("-R").arg(path);
         c
     };
     #[cfg(target_os = "windows")]
@@ -71,7 +71,7 @@ pub fn reveal_in_file_manager(path: &str) -> Result<(), String> {
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     let mut cmd = {
         // No portable "reveal" on Linux; open the containing directory instead.
-        let parent = std::path::Path::new(&path)
+        let parent = std::path::Path::new(path)
             .parent()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| ".".to_string());
