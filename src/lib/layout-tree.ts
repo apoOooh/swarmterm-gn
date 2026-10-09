@@ -15,6 +15,8 @@ export interface LeafNode {
   type: 'leaf'
   id: string
   terminalId: string
+  /** Plain-shell file runner; derived from a root-scoped explorer file. */
+  startupCommand?: string
   /**
    * Agent this pane runs — a template id from the agent catalog. Absent means
    * the default 'terminal' agent (a plain shell). The pane's startup command is

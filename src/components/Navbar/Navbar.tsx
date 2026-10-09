@@ -31,7 +31,9 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { TerminalList } from '@/components/Navbar/TerminalList'
-import { UpdateButton } from '@/components/Navbar/UpdateButton'
+import { Group, Panel, Separator } from 'react-resizable-panels'
+import { FileExplorer } from '@/components/Files/FileExplorer'
+import { useExplorerStore } from '@/store/explorer-store'
 import { getAppVersion } from '@/tauri/app'
 
 interface NavbarProps {
@@ -48,6 +50,9 @@ interface NavbarProps {
  * the title bar's toggle button is off.
  */
 export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: NavbarProps): ReactElement {
+  const [sidebarWidth, setSidebarWidth] = useState(280)
+  const resizing = useRef(false)
+  const filesVisible = useExplorerStore((s) => s.visible)
   const visible = useNavbarVisibilityStore((s) => s.visible)
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
@@ -102,11 +107,15 @@ export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: Navba
       // Anything that legitimately claims focus (the rename input, a dropdown,
       // the Settings dialog) is exempt by lib/terminal-focus.ts's own check.
       data-focus-return
-      style={{ width: visible ? 224 : 0 }}
-      className="h-full shrink-0 overflow-hidden border-r border-border bg-card transition-[width] duration-200 ease-in-out motion-reduce:transition-none"
+      style={{ width: visible ? sidebarWidth : 0 }}
+      className="relative h-full shrink-0 overflow-hidden border-r border-border bg-card transition-[width] duration-200 ease-in-out motion-reduce:transition-none"
     >
-      <div className="flex h-full w-56 flex-col">
-        <div className="flex min-h-0 flex-1 flex-col">
+      <div role="separator" aria-label="Resize sidebar" aria-orientation="vertical" tabIndex={0} className="absolute bottom-0 right-0 top-0 z-10 w-1 cursor-col-resize hover:bg-ring focus:bg-ring" onPointerDown={(e) => { resizing.current = true; e.currentTarget.setPointerCapture(e.pointerId) }} onPointerMove={(e) => { if (resizing.current) setSidebarWidth(Math.max(224, Math.min(520, e.clientX))) }} onPointerUp={(e) => { resizing.current = false; e.currentTarget.releasePointerCapture(e.pointerId) }} onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setSidebarWidth((w) => Math.max(224, Math.min(520, w + (e.key === 'ArrowRight' ? 16 : -16)))) } }} />
+      <div className="flex h-full w-full flex-col">
+        <Group orientation="vertical" className="min-h-0 flex-1" defaultLayout={{ workspaces: 25, terminals: 25, files: 50 }}>
+        <Panel id="workspaces" minSize="10%">
+
+        <div className="flex h-full min-h-0 flex-col">
           <div className="flex shrink-0 items-center justify-between border-b border-border bg-muted/40 px-3 py-2">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground/80">Workspaces</p>
             <AttentionBadge />
@@ -165,7 +174,12 @@ export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: Navba
           </div>
         </div>
 
-        <TerminalList />
+        </Panel>
+        <Separator className="h-1 cursor-row-resize bg-border hover:bg-ring" />
+        <Panel id="terminals" minSize="10%" className="flex min-h-0 flex-col"><TerminalList /></Panel>
+        <Separator className="h-1 cursor-row-resize bg-border hover:bg-ring" />
+        <Panel id="files" minSize="36px" maxSize={filesVisible ? '100%' : '36px'}><FileExplorer /></Panel>
+        </Group>
 
         <div className="shrink-0 space-y-0.5 border-t border-border p-2">
           <Button
@@ -183,7 +197,6 @@ export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: Navba
             <Settings className="h-4 w-4" />
             Settings
           </Button>
-          <UpdateButton />
           {version && (
             <p className="mt-1 border-t border-border pt-2 text-center text-[11px] tracking-wider text-muted-foreground/70">
               v{version}

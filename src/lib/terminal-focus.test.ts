@@ -6,6 +6,9 @@ function info(over: Partial<FocusedElementInfo> = {}): FocusedElementInfo {
 }
 
 describe('shouldReturnFocus', () => {
+  it('lets the file tree and editor chrome retain keyboard focus', () => {
+    expect(shouldReturnFocus(info({ tagName: 'DIV', keyboardOwner: true }))).toBe(false)
+  })
   it('returns focus when nothing is focused', () => {
     expect(shouldReturnFocus(null)).toBe(true)
   })

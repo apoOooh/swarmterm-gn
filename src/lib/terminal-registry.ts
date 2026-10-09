@@ -12,6 +12,7 @@ import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { resolveBroadcastTargets } from '@/lib/broadcast-input'
 import { useAppStore, selectWorkspaceByTerminalId, selectFocusedTerminalId } from '@/store/app-store'
+import { collectLeaves } from '@/lib/layout-tree'
 import type { TerminalTextPref } from '@/lib/terminal-text'
 import { decideClipboardAction, isMacPlatform } from '@/lib/terminal-clipboard'
 import { isWindowsPlatform } from '@/lib/platform'
@@ -705,8 +706,20 @@ function getOrCreate(id: string): Entry {
     }
     const { path, line, col } = parsePathSuffix(target)
     void resolvePathLink(getTerminalCwd(id) ?? '', path)
-      .then((resolved) => {
-        if (resolved) return openPathLocation(linkDeps, resolved, line, col)
+      .then(async (resolved) => {
+        if (!resolved) return
+        const [{ openFileContext }, { isSubPath }, { useDocumentStore }] = await Promise.all([
+          import('@/tauri/files'), import('@/lib/files/ops'), import('@/store/document-store')
+        ])
+        const context = await openFileContext(id).catch(() => null)
+        const ws = selectWorkspaceByTerminalId(useAppStore.getState(), id)
+        const leaf = ws ? collectLeaves(ws.layout).find((l) => l.terminalId === id) : undefined
+        if (context && leaf && isSubPath(context.root, resolved)) {
+          useAppStore.getState().revealTerminal(id)
+          await useDocumentStore.getState().open(leaf.id, context, resolved, { line: line ?? 1, column: col ?? 1 })
+          return
+        }
+        return openPathLocation(linkDeps, resolved, line, col)
       })
       .catch(console.warn)
   }

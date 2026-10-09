@@ -5,6 +5,85 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::pty::{AppState, CreateTerminalOptions, CreateTerminalResult, PtyOut};
 
+fn files_main_only(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() == "main" {
+        Ok(())
+    } else {
+        Err("Files are available only in the main application".into())
+    }
+}
+
+#[tauri::command]
+pub fn confirm_quit(window: tauri::WebviewWindow, app: AppHandle) -> Result<(), String> {
+    files_main_only(&window)?;
+    crate::tray::quit(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn files_open_context(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    terminal_id: String,
+    expected_cwd: Option<String>,
+) -> Result<crate::files::FileContext, String> {
+    files_main_only(&window)?;
+    let cwd = state
+        .terminals
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(&terminal_id)
+        .map(|t| t.cwd.clone())
+        .ok_or("Terminal is not ready; try again when its shell has started")?;
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        service.open_for_terminal(&cwd, expected_cwd.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn files_request(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    request: crate::files::FileRequest,
+) -> Result<serde_json::Value, String> {
+    files_main_only(&window)?;
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || service.request(request, Some(&app)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn files_watch(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    context_id: String,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    files_main_only(&window)?;
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || service.watch(&context_id, paths, app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn files_unwatch(
+    window: tauri::WebviewWindow,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    context_id: String,
+) -> Result<(), String> {
+    files_main_only(&window)?;
+    service.unwatch(&context_id);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn create_terminal(
     app: AppHandle,
@@ -119,11 +198,12 @@ pub fn report_agent_state(state: State<'_, AppState>, id: String, display: Strin
     if !live {
         return;
     }
-    let changed = state
-        .peer_states
-        .lock()
-        .unwrap()
-        .set_state(&id, &display, crate::warroom::now_ms());
+    let changed =
+        state
+            .peer_states
+            .lock()
+            .unwrap()
+            .set_state(&id, &display, crate::warroom::now_ms());
     if changed {
         state.peer_wake.notify_waiters();
     }
@@ -307,30 +387,7 @@ pub fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
 /// anything.
 #[tauri::command]
 pub fn reveal_in_file_manager(path: String) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let mut cmd = {
-        let mut c = std::process::Command::new("open");
-        c.arg("-R").arg(&path);
-        c
-    };
-    #[cfg(target_os = "windows")]
-    let mut cmd = {
-        let mut c = std::process::Command::new("explorer");
-        c.arg(format!("/select,{path}"));
-        c
-    };
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let mut cmd = {
-        // No portable "reveal" on Linux; open the containing directory instead.
-        let parent = std::path::Path::new(&path)
-            .parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| ".".to_string());
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(parent);
-        c
-    };
-    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+    crate::links::reveal_in_file_manager(&path)
 }
 
 /// Frontend drags a pane into one room's drop zone. Metadata is a frontend

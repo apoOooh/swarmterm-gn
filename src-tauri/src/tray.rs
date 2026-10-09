@@ -33,7 +33,7 @@ pub fn show_main(app: &tauri::AppHandle) {
 }
 
 /// Kill every pty, then exit the process for good.
-fn quit(app: &tauri::AppHandle) {
+pub fn quit(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     state.quitting.store(true, Ordering::SeqCst);
     // Use `if let Ok` rather than `unwrap` so the process still exits even if the
@@ -47,32 +47,24 @@ fn quit(app: &tauri::AppHandle) {
 }
 
 pub fn setup_tray(app: &App) -> tauri::Result<()> {
-    let show = MenuItemBuilder::with_id("show", "Show Swarmterm").build(app)?;
-    let check_updates =
-        MenuItemBuilder::with_id("check-updates", "Check for Updates…").build(app)?;
+    let show = MenuItemBuilder::with_id("show", "Show Swarmterm GN").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-    let menu = MenuBuilder::new(app)
-        .items(&[&show, &check_updates, &quit_item])
-        .build()?;
+    let menu = MenuBuilder::new(app).items(&[&show, &quit_item]).build()?;
 
     TrayIconBuilder::with_id("main")
         .icon(tray_image())
         // No-op off macOS, so `cfg!` beats a second attribute-gated builder
         // statement for readability.
         .icon_as_template(cfg!(target_os = "macos"))
-        .tooltip("Swarmterm")
+        .tooltip("Swarmterm GN")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main(app),
-            "check-updates" => {
-                // Surface the window first: the result renders as an in-app
-                // toast, and a toast inside a hidden window is a check that
-                // never happened.
+            "quit" => {
                 show_main(app);
-                let _ = app.emit("updater:check-requested", ());
+                let _ = app.emit_to("main", "app:quit-requested", ());
             }
-            "quit" => quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

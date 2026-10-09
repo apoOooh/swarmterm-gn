@@ -126,6 +126,7 @@ export function TerminalPane({
   // Worker panes carry a one-shot task brief; quote it for the shell the pty
   // actually types into (initialCommand is a typed line, not an exec).
   const resolvedCommand =
+    leaf.startupCommand ??
     resumeCommand ??
     (baseCommand !== undefined && leaf.initialPrompt !== undefined
       ? buildAgentSpawnCommand(
