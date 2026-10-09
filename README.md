@@ -23,7 +23,7 @@ Real split terminals, one git worktree per agent — and an app your agents can 
 
 ## What it is
 
-Swarmterm GN is a fork of [Duong Duc Nguyen's Swarmterm](https://github.com/duongducnguyen/swarmterm). It adds all seven [Astera](https://github.com/parsingk/Astera) themes and a terminal-linked file explorer, editor, Markdown/media previews and deletion history. Click a terminal in the left sidebar: **Files** follows its project or worktree. Running shells remain alive while you edit files or switch themes.
+Swarmterm GN is a **Windows x64** fork of [Duong Duc Nguyen's Swarmterm](https://github.com/duongducnguyen/swarmterm). It adds all seven [Astera](https://github.com/parsingk/Astera) themes and a terminal-linked file explorer, editor, Markdown/media previews and deletion history. Click a terminal in the left sidebar: **Files** follows its project or worktree. Running shells remain alive while you edit files or switch themes.
 
 See [the migration notes](docs/astera-port.md) for the source mapping, supported operations and verification. `dev` is the fork's integration branch; `main` retains the upstream baseline. Screenshots below show the original Swarmterm interface.
 
@@ -52,13 +52,13 @@ Everything else hangs off those three ideas. The full tour — panes, broadcast,
 
 ## Install & run
 
-Build this fork from source. It uses the application name **Swarmterm GN** and identifier `com.apooooh.swarmterm.gn`. Upstream automatic updates are disabled so an upstream release cannot replace the fork. Install whichever agent CLIs you plan to use (`claude`, `codex`, `opencode`) — anything missing appears disabled.
+Download the Windows x64 installer from [this fork's releases](https://github.com/apoOooh/swarmterm-gn/releases), or build from source. It uses the application name **Swarmterm GN** and identifier `com.apooooh.swarmterm.gn`. Upstream automatic updates are disabled so an upstream release cannot replace the fork. Install whichever agent CLIs you plan to use (`claude`, `codex`, `opencode`) — anything missing appears disabled. The initial installer is unsigned; Windows SmartScreen may show an unknown publisher warning. Release assets include SHA-256 checksums. macOS and Linux are not supported by this fork.
 
 ### Build from source
 
 Use Node.js 24, npm and a stable Rust toolchain:
 
-```bash
+```powershell
 git clone --branch dev https://github.com/apoOooh/swarmterm-gn.git
 cd swarmterm-gn
 npm ci
@@ -66,7 +66,7 @@ npm run tauri dev                    # develop / just use it
 npm run tauri build                  # installer / app bundle
 ```
 
-Platform prerequisites: on **Windows**, the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) and Microsoft C++ Build Tools; on **macOS**, Xcode Command Line Tools; on **Linux**, the WebKitGTK 4.1, librsvg and Ayatana appindicator development packages and C/C++ build tools. See [Tauri prerequisites](https://tauri.app/start/prerequisites/). The first build compiles the Rust side and takes a few minutes. `npm run tauri build -- --no-bundle` compiles the desktop executable without creating installers or opening the app.
+Windows prerequisites: the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) and Microsoft C++ Build Tools. See [Tauri prerequisites](https://tauri.app/start/prerequisites/). The first build compiles the Rust side and takes a few minutes. `npx tauri build --no-bundle` compiles the desktop executable without creating installers or opening the app. Tagged Windows releases are built and published by [GitHub Actions](docs/release-process.md).
 
 For checks, run `npm test`, `npm run build`, and `npx playwright install chromium && npm run test:e2e`. Browser tests are headless and use an in-memory native bridge. From `src-tauri/`, run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
 

@@ -18,9 +18,9 @@ guidance. The manual smoke-test checklist is `docs/manual-smoke-tests.md`.
 Update them when you ship user-visible behaviour: new features go into the
 guide (and README only if they change one of its three core ideas).
 
-**Cross-platform intent:** build for macOS and Linux as well as Windows, even
-though primary development happens on Windows. Don't hard-code Windows-only
-assumptions; gate platform code behind `#[cfg(...)]` (Rust) or runtime checks (TS).
+**Supported platform:** the GN fork supports Windows x64 only. CI and release
+bundles target Windows; retained upstream macOS/Linux code is not a support
+commitment. Preserve platform guards when editing inherited Rust code.
 
 ## Commands
 
@@ -211,20 +211,10 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   are denied and navigate the same preview in place. Webviews close on
   terminal death in `kill_terminal` AND `read_loop` (belt-and-braces, like the
   War Room auto-leave).
-- **Auto-update.** `tauri-plugin-updater` against GitHub Releases
-  (`latest.json` assembled by `scripts/release/publish.mjs` onto a draft
-  release — see `docs/release-process.md`). Updater trust is the minisign key
-  in `~/Developer/apple-signing/` — losing it strands every shipped app.
-  Decision rules live in `lib/updater-flow.ts` (silent startup + periodic
-  checks vs talkative tray check). There is no toast and no in-app manual
-  check: the navbar `UpdateButton` (under Settings) only exists while an
-  update is known — its presence is the notification (`updateButtonView` maps
-  phase → button). Tray-check verdicts (up to date / failed) are native OS
-  dialogs via `showMessage` — which needs `dialog:allow-message` in
-  `capabilities/default.json`, or it rejects silently — dispatched from an
-  App.tsx store subscription so download progress never re-renders App.
-  Windows: `downloadAndInstall` never resolves — the NSIS installer exits the
-  app.
+- **Auto-update.** Disabled in GN. The tag-triggered Windows release workflow
+  publishes standalone installers and checksums without updater artifacts.
+  `scripts/release/publish.mjs` deliberately refuses the current configuration.
+  See `docs/release-process.md`; do not restore upstream update endpoints.
 - **Anonymous telemetry is compile-time gated.** `analytics.rs` sends a GA4
   Measurement Protocol `app_open` + 5-minute heartbeat, but only when
   `SWARMTERM_GA_MEASUREMENT_ID` / `SWARMTERM_GA_API_SECRET` were in the env
@@ -264,12 +254,11 @@ first for anything non-trivial.
   shortcuts, troubleshooting, known limits.
 - `CONTRIBUTING.md` — how to build, test, and submit changes; the CI contract.
 - `docs/manual-smoke-tests.md` — release smoke checklist.
-- `docs/release-process.md` — the cross-platform release flow: version bump,
-  the draft-release meeting point, `latest.json`, and updater key management.
+- `docs/release-process.md` — the Windows release workflow: version bump,
+  annotated tag, checks, installer, checksums and GitHub publication.
   Start here when releasing.
-- `docs/release-macos.md` — signing and notarizing a macOS release: one-time
-  Apple setup, the `.env.release` variables, `npm run release:mac`, and the
-  Gatekeeper troubleshooting table.
+- `docs/release-macos.md` — retained upstream signing reference; GN does not
+  support or publish macOS releases.
 - `docs/release-windows.md` — the Windows NSIS build: one-time machine setup,
   `npm run release:win`, and the SmartScreen (unsigned build) story.
 - `docs/war-room-demo.md` — scripted War Room demo (Claude Code × Codex).

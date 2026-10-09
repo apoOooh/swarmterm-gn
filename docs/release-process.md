@@ -1,124 +1,63 @@
-# Releasing Swarmterm
+# Releasing Swarmterm GN for Windows
 
-Start here. Platform specifics live in [release-macos.md](release-macos.md)
-and [release-windows.md](release-windows.md); this page is the flow that ties
-the two machines together and the rules that keep auto-update working.
+Swarmterm GN supports **Windows x64**. The fork's
+[Windows release workflow](../.github/workflows/release.yml) builds an NSIS
+installer and publishes it on GitHub Releases when a `v<major>.<minor>.<patch>`
+tag is pushed. macOS and Linux packages are not published or supported.
 
-## The five steps
+## Create a release
 
-```
-[Mac]                                    [Windows]
-1. npm run bump -- 0.2.0
-   → package.json, Cargo.toml, Cargo.lock, tauri.conf.json
-   → commit
-2. git tag v0.2.0 && git push origin v0.2.0
-3. npm run release:mac                   3. npm run release:win
-   → .dmg (new installs)                    → Swarmterm_0.2.0_x64-setup.exe
-   → Swarmterm.app.tar.gz + .sig            → …setup.exe.sig
-4. npm run release:publish               4. npm run release:publish
-        └──────────► draft release "v0.2.0" ◄──────────┘
-5. npm run release:publish -- --publish   (either machine; refuses while any
-   → the draft goes public                 platform is missing)
+Start from the tested `dev` integration branch. Keep release preparation on a
+topic branch, merge it into `dev`, and push before creating the tag.
+
+```powershell
+npm run bump -- 1.1.0
+# Write docs/releases/1.1.0.md and update CHANGELOG.md.
+# Commit the version files, notes and workflow changes; merge into dev.
+git push origin dev
+git tag -a v1.1.0 -m "Swarmterm GN 1.1.0: first Windows release"
+git push origin v1.1.0
 ```
 
-The **GitHub draft release is the transfer medium** — the two machines never
-copy files to each other. `release:publish` uploads whatever the local build
-produced (`--clobber`, so re-runs are harmless), then reassembles
-`latest.json` from every asset currently on the draft. Run it from either
-machine, in either order, as many times as you like — while the release is a
-draft. Once it is published the script refuses to touch it; pass
-`-- --live` only to deliberately repair a live release. (The refusal exists
-because a failed `git pull` once left a build machine on the previous
-version, and its `release:publish` clobbered the already-shipped installer.)
+Use a new version for each release. `npm run bump` updates the npm manifest,
+npm lockfile, Tauri configuration, Rust manifest and Rust lockfile together.
+The workflow rejects a tag whose version disagrees with any of them, a tag
+outside `dev` history, or a version without `docs/releases/<version>.md`.
+Existing upstream tags are retained; the first GN release is `v1.1.0`.
 
-Drafts are inherently safe: the updater endpoint
-`releases/latest/download/latest.json` only resolves against **published**
-releases, so installed apps cannot see a half-assembled draft. The
-`--publish` flag is the single go-live switch, and it refuses to fire until
-all three platform entries exist.
+## What the workflow does
 
-Release notes: write them on the draft's GitHub page (or `gh release edit`)
-any time before publishing — every `release:publish` run copies the current
-body into `latest.json`, including the `--publish` run itself.
+1. Verify the existing tag, version agreement and release notes.
+2. Run the reusable CI workflow: frontend types, unit tests, production build,
+   headless browser tests, full-history secret scan and Windows Rust checks.
+3. Build the Windows x64 NSIS installer with locked Rust dependencies.
+4. Download the build artifact in a separate publishing job and add
+   `SHA256SUMS.txt`.
+5. Create a draft, upload both files, then publish the release only after all
+   checks and the installer build succeed.
 
-## The updater signing key
+The installer remains available as a workflow artifact for 14 days even if
+publication fails. A failed upload leaves a draft rather than a public,
+incomplete release. Rerun failed jobs or use **Actions → Windows release →
+Run workflow** with an existing tag to retry. The workflow refuses to replace
+assets of an already published release. Tags must not be moved or overwritten.
 
-Updates are trusted via **minisign**, not via Apple/Windows code signing.
-Every build signs its updater artifacts with the private key; the public key
-is baked into `tauri.conf.json`; the plugin refuses any artifact whose
-signature does not verify.
+Only the final publishing job receives repository write permission. No
+additional repository secrets are required. The workflow is restricted to
+`apoOooh/swarmterm-gn`; other forks can explicitly adapt that condition.
 
-- Private key: `~/Developer/apple-signing/swarmterm-updater.key`
-- Its password: `~/Developer/apple-signing/swarmterm-updater.key.password`
-- Both referenced from `.env.release` as `TAURI_SIGNING_PRIVATE_KEY` (path)
-  and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-- The **same key file** must exist on every build machine — copy it to the
-  Windows box over a private channel (AirDrop, USB stick), never through the
-  repo or a chat upload.
+## Signing and updates
 
-> **Losing the private key or its password permanently strands every shipped
-> app** — they verify updates against the baked-in public key and will never
-> accept an artifact signed by a replacement. Back up both files with the
-> Apple credentials. Leaking the key is bad but not fatal (an attacker would
-> also need write access to GitHub Releases); losing it is fatal.
+The first installer is **not Authenticode-signed**. Windows SmartScreen may
+show an unknown publisher warning. This is stated in each release's notes.
+The release supplies SHA-256 checksums alongside the installer.
 
-## Analytics keys
+Upstream automatic updates remain disabled, and this workflow does not upload
+`latest.json` or updater signatures. The old `release:publish` helper requires
+a configured fork-owned updater and deliberately refuses the current GN
+configuration. GitHub Releases is the supported download path.
 
-Official builds report anonymous usage to Google Analytics (see the user
-guide's *Telemetry* section for exactly what is sent). The keys are baked in
-at **compile** time via `option_env!`, so they must be present in
-`.env.release` on **both** build machines:
-
-- `SWARMTERM_GA_MEASUREMENT_ID` — the GA4 web stream's `G-…` id.
-- `SWARMTERM_GA_API_SECRET` — Measurement Protocol API secret, created under
-  the same stream (Admin → Data streams → Measurement Protocol API secrets).
-
-Forgetting them does not fail the build — it silently ships a release that
-reports nothing (exactly what community source builds get). If usage drops to
-zero after a release, check this first. Leaking the secret only lets someone
-send garbage events into the property; rotate it in GA and rebuild.
-
-## `latest.json` anatomy
-
-Assembled by `scripts/release/manifest.mjs` (unit-tested; the publish script
-is a thin `gh` wrapper around it):
-
-```json
-{
-  "version": "0.2.0",
-  "notes": "…release body…",
-  "pub_date": "2026-08-12T00:00:00Z",
-  "platforms": {
-    "darwin-aarch64":  { "signature": "…", "url": "…/v0.2.0/Swarmterm.app.tar.gz" },
-    "darwin-x86_64":   { "signature": "…", "url": "…/v0.2.0/Swarmterm.app.tar.gz" },
-    "windows-x86_64":  { "signature": "…", "url": "…/v0.2.0/Swarmterm_0.2.0_x64-setup.exe" }
-  }
-}
-```
-
-Both `darwin-*` keys point at the one universal `.app.tar.gz`. The Windows
-entry points at the NSIS installer itself. Signatures are the contents of the
-`.sig` files the build emitted. URLs use the published-release form — draft
-asset URLs are ephemeral and die on publish, which is why the script never
-uses them.
-
-## Rules that keep updates working
-
-- **Never publish a release without updater artifacts.** `releases/latest`
-  would start serving a 404 manifest and every installed app's update check
-  fails (silently on startup, visibly via the tray) until the next good
-  release. The publish script's refusal logic enforces this — don't hand-roll
-  releases in the web UI.
-- **Don't rotate the signing key.** See the warning above.
-- The in-app flow: silent check ~5 s after launch; tray → **Check for
-  Updates…** for a talkative manual check; download only on click; macOS
-  restarts via the toast, Windows hands off to the NSIS installer
-  (`installMode: passive`).
-
-## What is deliberately not here
-
-CI releases (GitHub Actions) remain future work — every step above is
-headless-capable (plain env vars, no prompts) so the eventual workflow is a
-lift-and-shift. Linux bundles: additive later (`linux-x86_64` key in the same
-manifest). Windows Authenticode: see the SmartScreen section of
-[release-windows.md](release-windows.md).
+For a local installer build, see [release-windows.md](release-windows.md).
+Native clipboard, tray and codec checks remain in
+[manual-smoke-tests.md](manual-smoke-tests.md); a headless build does not claim
+those desktop interactions were manually tested.

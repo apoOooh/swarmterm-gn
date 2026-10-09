@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-10
+
 - Add all seven Astera themes, bundled UI fonts and theme-specific density,
   corners, shadows and preview cards. Running terminals change palette in place.
 - Add a resizable Files section that follows the selected terminal's configured
@@ -15,4 +17,7 @@
 - Run supported files in a dedicated plain-shell pane, and open project paths
   printed in terminals in the integrated editor without respawning the PTY.
 - Brand the fork as Swarmterm GN and disable upstream updater endpoints.
-- Add headless integration coverage and Windows/Linux/macOS CI checks.
+- Add headless integration coverage and Windows Rust CI checks.
+- Add a tag-triggered Windows installer release workflow with version checks,
+  release notes, SHA-256 checksums and publication after successful checks.
+- Support Windows x64 in the GN fork; retain upstream platform code and history.

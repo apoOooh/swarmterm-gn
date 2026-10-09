@@ -1,5 +1,8 @@
 # Manual smoke tests
 
+Swarmterm GN supports Windows x64 only. Run the Windows checks here; retained
+macOS/Linux notes describe upstream behavior and are outside GN support.
+
 Run this by hand before a release, or after touching pty, focus, War Room or
 worktree code. Start with `npm run tauri dev`.
 
@@ -23,7 +26,7 @@ Do not mark them passed from the in-memory fixture alone.
       range-select and navigate with arrows/typeahead without terminal input.
 - [ ] Create, rename, duplicate, cut/paste and drag files across roots. Confirm
       existing destination files survive, errors stay visible and undo works.
-- [ ] Windows Explorer / macOS Finder / Linux file manager: copy files into the
+- [ ] Windows Explorer: copy files into the
       OS clipboard, import through the context menu, then copy back out. Test
       long paths, spaces and Unicode. Verify explicit clipboard-unavailable errors.
 - [ ] Delete nested folders and restore history after restarting the app. Test

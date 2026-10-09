@@ -111,9 +111,12 @@ dedicated runners without writing user files or launching native app windows.
 
 Rust tests exercise root guards, versioned writes, no-replace collisions,
 snapshots/restores, git status parsing and media ranges. CI checks frontend,
-headless tests and Rust on Windows/Linux/macOS; Windows also builds the desktop
-executable. Native OS clipboard, webview codecs, live watcher behavior and tray
-interactions still require the platform [manual smoke checks](manual-smoke-tests.md#astera-themes-and-files-gn).
+headless tests and Rust on Windows; native CI also builds the desktop
+executable. GN supports Windows x64 only. The tag-triggered release workflow
+builds an NSIS installer and publishes it with SHA-256 checksums after the same
+checks pass. See [release-process.md](release-process.md). Native OS clipboard,
+webview codecs, live watcher behavior and tray interactions still require
+Windows [manual smoke checks](manual-smoke-tests.md#astera-themes-and-files-gn).
 
 `dev` integrates `feat/astera-themes` and `feat/astera-explorer` with merge commits.
 Upstream changes should be merged through `upstream`, preserving fork history.

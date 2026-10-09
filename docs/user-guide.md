@@ -4,6 +4,9 @@ Everything the [README](../README.md) summarises, in detail: workspaces and pane
 running several agents at once, worktree isolation, the web preview, the War Room,
 settings, keyboard shortcuts, troubleshooting and current limits.
 
+Swarmterm GN supports **Windows x64**. Use the Ctrl bindings where inherited
+shortcut labels show both Ctrl and Command. macOS and Linux are not supported.
+
 ## Create a workspace
 
 Swarmterm opens on the **composer**: pick a folder (the working directory for every pane), choose how many terminals, and use the steppers to assign AI agents — **Claude Code**, **Codex**, **OpenCode**, **GitHub Copilot**, **Qwen Code**, **Amp**, **Gemini CLI**, **Cursor Agent**, **Antigravity** or **OMP (Oh My Pi)** — the rest stay plain shells. Agents whose CLI isn't installed show up greyed out. Turn on **Isolate features in git worktrees** for parallel work, then press `⌘/Ctrl + Enter`.
@@ -177,7 +180,7 @@ The pane header mirrors the percentage as a small `ctx 63%` chip (same amber / r
 - **Programs can copy to your clipboard** — nvim `"+y`, tmux `set -s set-clipboard on`, yazi and `gh` copy through OSC 52, exactly as in VS Code's terminal. Only writes are honoured: a program can never read your clipboard.
 - **Click a URL** to open it in your browser; `⌘/Ctrl + click` a file path (`src/foo.ts:42:9`, `src/foo.ts(42,9)`, `File "x.py", line 42`) to open project files in the integrated editor at that line. Paths outside the configured project retain the external-editor behavior.
 - **Drop a file or folder** onto a pane to insert its path, quoted for that pane's shell.
-- **Choose your shell** — PowerShell, cmd, PowerShell 7, Git Bash on Windows; zsh, bash, fish on macOS/Linux — per pane, or as a default in Settings.
+- **Choose your shell** — PowerShell, cmd, PowerShell 7 or Git Bash — per pane, or as a default in Settings.
 
 ## Shell integration
 
@@ -314,7 +317,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **War Room membership doesn't survive a pane restart** — re-drag the pane.
 - **The preview column has no devtools, zoom, tabs, or per-terminal cookie isolation**, and a failed page shows the platform's own error view.
 - **Terminal search covers the visible scrollback only** — matches beyond xterm's own buffer, and search-and-replace, aren't available.
-- **Linux** is implemented but less tested than Windows and macOS.
+- **Windows x64 only** — this fork does not support macOS or Linux releases.
 - **Claude Code hooks are written at every launch** — the `swarmterm --hook` entries in `~/.claude/settings.json` are re-checked on each boot (no write when nothing changed; your own hooks are left alone).
 - **`claude` started by hand in a plain Terminal pane gets no coloured dot** — only panes created as Claude Code agents are wired to the hooks.
 - **After Esc (interrupt) a Claude Code pane can read "working" for up to 30 s** — Claude fires no Stop hook on an interrupt, so the working signal has to time out before screen reading takes over again.

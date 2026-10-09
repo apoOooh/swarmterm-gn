@@ -4,6 +4,12 @@
 export const bumpJson = (text, version) =>
   text.replace(/^(\s*"version":\s*")[^"]+(")/m, `$1${version}$2`)
 
+export const bumpPackageLock = (text, version) =>
+  bumpJson(text, version).replace(
+    /("packages"\s*:\s*\{\s*""\s*:\s*\{[\s\S]*?"version"\s*:\s*")[^"]+(")/,
+    `$1${version}$2`
+  )
+
 // [package] is the first table in our Cargo.toml, so the first `version =`
 // line is the package's own — dependency tables use inline `{ version = … }`
 // which the ^-anchored multiline regex never touches.
@@ -11,4 +17,4 @@ export const bumpCargoToml = (text, version) =>
   text.replace(/^(version\s*=\s*")[^"]+(")/m, `$1${version}$2`)
 
 export const bumpCargoLock = (text, version) =>
-  text.replace(/(\[\[package\]\]\nname = "swarmterm"\nversion = ")[^"]+(")/, `$1${version}$2`)
+  text.replace(/(\[\[package\]\]\r?\nname = "swarmterm"\r?\nversion = ")[^"]+(")/, `$1${version}$2`)
