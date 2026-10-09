@@ -75,7 +75,8 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - name: Build NSIS installer
-        run: npx tauri build --locked --bundles nsis
+        run: npx tauri build --bundles nsis -- --locked
+        shell: bash
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
