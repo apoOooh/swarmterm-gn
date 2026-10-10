@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ComponentProps } from
 import { File, PanelsTopLeft, Terminal, X } from 'lucide-react'
 import { TerminalPane } from '@/components/TerminalPane/TerminalPane'
 import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
+import { devLog } from '@/lib/dev-log'
 import { EMPTY_PANE_FILES, useDocumentStore } from '@/store/document-store'
 import { useAppStore } from '@/store/app-store'
 import { refitAttachedTerminals, focusTerminal } from '@/lib/terminal-registry'
@@ -37,9 +38,13 @@ export function PaneWorkbench(props: ComponentProps<typeof TerminalPane>): React
     }
     startPointerDrag(e, { name: 'tab', items: [path], hit, drop: (x, y) => {
       const target = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest<HTMLElement>('[data-workbench-leaf]')?.dataset.workbenchLeaf
+      const before = useDocumentStore.getState().panes
+      devLog('tab.move', { from: leaf.id, to: target ?? null, key, fromTabs: before[leaf.id]?.tabs ?? null, toTabs: target ? before[target]?.tabs ?? null : null })
       if (!target || target === leaf.id) return
       store.move(leaf.id, target, key)
       useAppStore.getState().setFocusedLeaf(target)
+      const after = useDocumentStore.getState().panes
+      devLog('tab.moved', { fromTabs: after[leaf.id]?.tabs ?? null, toTabs: after[target]?.tabs ?? null, toActive: after[target]?.active ?? null })
     } })
   }
   return <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-md" data-workbench-leaf={leaf.id}>
