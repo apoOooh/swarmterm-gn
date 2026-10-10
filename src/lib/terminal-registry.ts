@@ -118,6 +118,8 @@ interface Entry {
   search: SearchAddon
   /** Stable host the xterm renders into; moved between pane containers. */
   host: HTMLDivElement
+  /** Padding-free child of `host` that xterm opens into — see getOrCreate. */
+  mount: HTMLDivElement
   session: TerminalSession
   config: AttachConfig
   /**
@@ -294,10 +296,18 @@ function getOrCreate(id: string): Entry {
   // the border. Padding lives on the host (not the .xterm element) and the host
   // carries the terminal's own background, so the dark interior still bleeds to
   // the pane edges — only the rows are pushed inward. box-sizing keeps the host
-  // filling the container despite the padding. The FitAddon reads the host's
-  // content-box size, so cols/rows already exclude this padding.
+  // filling the container despite the padding.
   host.style.boxSizing = 'border-box'
   host.style.padding = '6px 8px'
+  // xterm opens into this padding-free child, never into the host itself. The
+  // FitAddon sizes rows from getComputedStyle(parent).height, and for a
+  // border-box element WebView2 reports that INCLUDING padding — so with the
+  // host as parent it proposed up to 12px of rows too many and the last line
+  // slid under the pane border (visible after dragging a split by hand).
+  const mount = document.createElement('div')
+  mount.style.width = '100%'
+  mount.style.height = '100%'
+  host.appendChild(mount)
   host.style.background = terminalTheme(useAppearanceStore.getState().style).background as string
 
   const text = useTerminalTextStore.getState().text
@@ -868,6 +878,7 @@ function getOrCreate(id: string): Entry {
     fit,
     search,
     host,
+    mount,
     session,
     config: {},
     cwd: '',
@@ -901,7 +912,7 @@ export function attachTerminal(id: string, container: HTMLElement, config: Attac
   container.appendChild(entry.host)
 
   if (!entry.opened) {
-    entry.term.open(entry.host)
+    entry.term.open(entry.mount)
     loadWebglRenderer(id, entry)
     entry.opened = true
   }
