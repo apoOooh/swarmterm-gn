@@ -39,8 +39,8 @@ describe('quoteForShell', () => {
 
 describe('buildAgentSpawnCommand', () => {
   it('appends the quoted prompt', () => {
-    expect(buildAgentSpawnCommand('claude --dangerously-skip-permissions', 'Fix login', 'powershell'))
-      .toBe("claude --dangerously-skip-permissions 'Fix login'")
+    expect(buildAgentSpawnCommand('claude --permission-mode default', 'Fix login', 'powershell'))
+      .toBe("claude --permission-mode default 'Fix login'")
   })
   it('collapses newlines so the pty write stays one line', () => {
     expect(buildAgentSpawnCommand('codex', 'a\nb\r\nc', 'posix')).toBe("codex 'a b c'")

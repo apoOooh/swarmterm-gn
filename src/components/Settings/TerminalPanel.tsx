@@ -16,7 +16,7 @@ import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useStatuslineStore } from '@/store/statusline-store'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
-import { TEMPLATES, isTemplateAvailable } from '@/lib/templates'
+import { TEMPLATES, isTemplateAvailable, launchMode } from '@/lib/templates'
 import { AgentIcon } from '@/components/AgentIcon'
 import { listAvailableShells, type AvailableShell } from '@/tauri/shell'
 import { Button } from '@/components/ui/button'
@@ -109,6 +109,8 @@ export function TerminalPanel(): ReactElement {
 
       <DefaultAgentSettings />
 
+      <DefaultLaunchModeSettings />
+
       <StatusLineSettings />
     </div>
   )
@@ -163,6 +165,65 @@ function DefaultAgentSettings(): ReactElement {
               </span>
               {active && <Check aria-hidden className="h-3.5 w-3.5 text-primary" strokeWidth={3} />}
             </button>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+/**
+ * Per-provider default launch mode: the permission/sandbox mode a fresh pane
+ * of that agent starts in. Running panes keep the mode they spawned with; the
+ * pane header's agent menu still switches a single pane.
+ */
+function DefaultLaunchModeSettings(): ReactElement {
+  const prefs = useAgentPrefStore((s) => s.defaultLaunchModes)
+  const setDefaultLaunchMode = useAgentPrefStore((s) => s.setDefaultLaunchMode)
+  const agents = TEMPLATES.filter((t) => t.launchModes !== undefined && t.launchModes.length > 0)
+
+  return (
+    <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+      <div className="mb-4">
+        <h2 className="text-sm font-semibold text-foreground">Default launch mode</h2>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          The mode a new pane of each provider starts in. Applies to new panes only;
+          switch a running pane from its agent menu.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        {agents.map((t) => {
+          const activeId = launchMode(t.id, prefs[t.id])?.id
+          return (
+            <div key={t.id} className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <span className="flex w-36 shrink-0 items-center gap-2.5">
+                <AgentIcon template={t} className="h-4 w-4 shrink-0" />
+                <span className="truncate text-sm font-medium text-foreground">{t.name}</span>
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {t.launchModes!.map((m) => {
+                  const active = m.id === activeId
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setDefaultLaunchMode(t.id, m.id)}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm transition-colors',
+                        active
+                          ? 'border-primary/50 text-foreground ring-2 ring-primary/15'
+                          : 'border-pane-border text-muted-foreground hover:bg-muted/40'
+                      )}
+                    >
+                      {m.label}
+                      {active && <Check aria-hidden className="h-3.5 w-3.5 text-primary" strokeWidth={3} />}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
           )
         })}
       </div>

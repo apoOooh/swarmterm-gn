@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   DEFAULT_AGENT_STORAGE_KEY,
+  DEFAULT_LAUNCH_MODES_STORAGE_KEY,
+  readStoredLaunchModes,
+  resolveLaunchMode,
+  storeLaunchModes,
   isKnownAgentId,
   readStoredDefaultAgent,
   resolveSplitAgent,
@@ -72,5 +76,41 @@ describe('resolveSplitAgent', () => {
     expect(
       resolveSplitAgent({ workspaceDefault: 'codex', globalDefault: 'claude-code', availability: {}, forcePlain: true })
     ).toBe('terminal')
+  })
+})
+
+describe('stored launch modes', () => {
+  it('is empty when nothing or garbage is stored', () => {
+    expect(readStoredLaunchModes(fakeStorage())).toEqual({})
+    expect(readStoredLaunchModes(fakeStorage({ [DEFAULT_LAUNCH_MODES_STORAGE_KEY]: '{nope' }))).toEqual({})
+    expect(readStoredLaunchModes(fakeStorage({ [DEFAULT_LAUNCH_MODES_STORAGE_KEY]: '[1]' }))).toEqual({})
+  })
+
+  it('drops unknown agents, modeless agents and unknown modes', () => {
+    const raw = JSON.stringify({ 'claude-code': 'plan', codex: 'nope', gone: 'yolo', opencode: 'yolo' })
+    expect(readStoredLaunchModes(fakeStorage({ [DEFAULT_LAUNCH_MODES_STORAGE_KEY]: raw }))).toEqual({
+      'claude-code': 'plan'
+    })
+  })
+
+  it('round-trips through storage', () => {
+    const storage = fakeStorage()
+    storeLaunchModes(storage, { 'claude-code': 'bypass', codex: 'safe' })
+    expect(readStoredLaunchModes(storage)).toEqual({ 'claude-code': 'bypass', codex: 'safe' })
+  })
+})
+
+describe('resolveLaunchMode', () => {
+  it('prefers the pane choice, then the Settings default, then the first mode', () => {
+    expect(resolveLaunchMode('claude-code', 'plan', { 'claude-code': 'bypass' })).toBe('plan')
+    expect(resolveLaunchMode('claude-code', undefined, { 'claude-code': 'bypass' })).toBe('bypass')
+    expect(resolveLaunchMode('claude-code', undefined, {})).toBe('default')
+    expect(resolveLaunchMode('codex', 'nope', { codex: 'safe' })).toBe('safe')
+  })
+
+  it('is undefined for agents without modes', () => {
+    expect(resolveLaunchMode('opencode', undefined, {})).toBeUndefined()
+    expect(resolveLaunchMode('terminal', undefined, {})).toBeUndefined()
+    expect(resolveLaunchMode(undefined, undefined, {})).toBeUndefined()
   })
 })

@@ -83,14 +83,25 @@ export const TEMPLATES: WorkspaceTemplate[] = [
     id: 'claude-code',
     name: 'Claude Code',
     description: "Anthropic's coding agent.",
-    command: 'claude --dangerously-skip-permissions',
+    command: 'claude',
     executable: 'claude',
     icon: claudeIcon,
-    // Permission mode is never restored on resume — the flag must ride again,
-    // which building on `base` guarantees.
+    // Permission mode is never restored on resume — the mode args must ride
+    // again, which withLaunchMode on every spawn form guarantees.
     resume: { idPattern: UUID_RE, buildCommand: (base, id) => `${base} --resume ${id}` },
     sessionScanner: 'claude-jsonl',
-    mcpAutoEnrolled: true
+    mcpAutoEnrolled: true,
+    // Bypass keeps the dedicated flag: `--permission-mode bypassPermissions`
+    // is refused unless bypass was enabled in Claude's own settings.
+    launchModes: [
+      { id: 'default', label: 'Default', args: '--permission-mode default' },
+      { id: 'acceptEdits', label: 'Accept edits', args: '--permission-mode acceptEdits' },
+      { id: 'plan', label: 'Plan', args: '--permission-mode plan' },
+      { id: 'bypass', label: 'Bypass permissions', args: '--dangerously-skip-permissions' }
+    ],
+    // --continue is scoped to the pane's cwd by claude itself; bare --resume
+    // opens its session picker.
+    continueCommand: (base, how) => (how === 'pick' ? `${base} --resume` : `${base} --continue`)
   },
   {
     id: 'codex',

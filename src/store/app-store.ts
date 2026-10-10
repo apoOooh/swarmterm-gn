@@ -162,6 +162,8 @@ export interface AppActions {
   setPaneAgent: (leafId: string, agentId: string) => void
   setPaneCwd: (leafId: string, cwd: string | undefined) => void
   setPaneLaunchMode: (leafId: string, modeId: string) => void
+  /** Pin the mode a pane spawned under without respawning it (no-op when set). */
+  seedPaneLaunchMode: (leafId: string, modeId: string) => void
   pickPaneSession: (leafId: string) => void
   setPaneShell: (leafId: string, shellId: ShellId) => void
   spawnWorktreePane: (p: {
@@ -530,6 +532,19 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       })
     ),
 
+  // Records the Settings default a pane first spawned under, so a later
+  // Settings change never alters (or respawns) a running pane. The command
+  // string is unchanged by this, hence no respawn. Leaves may sit in any
+  // workspace, not just the active one.
+  seedPaneLaunchMode: (leafId, modeId) =>
+    set((s) => ({
+      workspaces: s.workspaces.map((w) => {
+        const leaf = findLeaf(w.layout, leafId)
+        if (leaf == null || leaf.launchMode !== undefined) return w
+        return { ...w, layout: updateLeaf(w.layout, leafId, { launchMode: modeId }) }
+      })
+    })),
+
   // Respawn into the CLI's own session picker (current launch mode kept), so
   // an older chat can be taken over in this pane.
   pickPaneSession: (leafId) =>
@@ -578,16 +593,23 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         (l) => l.terminalId === p.requesterTerminalId
       )
       if (!requester) return {}
+      // Fall back to the requester's agent; a plain-shell requester yields a
+      // plain shell in the worktree — visible, never a silent drop.
+      const agentId = p.agentId ?? requester.agentId
       const newLeaf: LeafNode = {
         type: 'leaf',
         id: uid(),
         terminalId: uid(),
-        // Fall back to the requester's agent; a plain-shell requester yields a
-        // plain shell in the worktree — visible, never a silent drop.
-        agentId: p.agentId ?? requester.agentId,
+        agentId,
         cwd: p.path,
         worktreeBranch: p.branch,
-        initialPrompt: p.prompt
+        initialPrompt: p.prompt,
+        // A worker runs unattended: inherit the requester's mode (same agent
+        // only — mode ids are per-agent) so a bypassed orchestrator doesn't
+        // spawn workers that stall on the first permission prompt.
+        ...(agentId === requester.agentId && requester.launchMode !== undefined
+          ? { launchMode: requester.launchMode }
+          : {})
       }
       return {
         workspaces: s.workspaces.map((w) =>

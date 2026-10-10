@@ -26,7 +26,7 @@ describe('isValidSessionId', () => {
 describe('buildResumeCommand', () => {
   it('claude-code: base command + --resume', () => {
     expect(buildResumeCommand('claude-code', CLAUDE_ID)).toBe(
-      `claude --dangerously-skip-permissions --resume ${CLAUDE_ID}`
+      `claude --resume ${CLAUDE_ID} --permission-mode default`
     )
   })
   it('codex: resume subcommand (not a flag)', () => {
@@ -58,6 +58,24 @@ describe('buildResumeCommand', () => {
   })
 })
 
+describe('claude launch modes', () => {
+  it('defaults to the normal (asking) permission mode', () => {
+    expect(withLaunchMode('claude', 'claude-code', undefined)).toBe('claude --permission-mode default')
+  })
+  it('maps each mode onto its CLI flag', () => {
+    expect(withLaunchMode('claude', 'claude-code', 'acceptEdits')).toBe('claude --permission-mode acceptEdits')
+    expect(withLaunchMode('claude', 'claude-code', 'plan')).toBe('claude --permission-mode plan')
+    expect(withLaunchMode('claude', 'claude-code', 'bypass')).toBe('claude --dangerously-skip-permissions')
+  })
+  it('resume and continue carry the mode', () => {
+    expect(buildResumeCommand('claude-code', CLAUDE_ID, 'bypass')).toBe(
+      `claude --resume ${CLAUDE_ID} --dangerously-skip-permissions`
+    )
+    expect(buildContinueCommand('claude-code', 'plan')).toBe('claude --continue --permission-mode plan')
+    expect(buildContinueCommand('claude-code', 'bypass', 'pick')).toBe('claude --resume --dangerously-skip-permissions')
+  })
+})
+
 describe('codex launch modes', () => {
   it('appends the default (auto) mode args when no mode is set', () => {
     expect(withLaunchMode('codex', 'codex', undefined)).toBe('codex -s workspace-write -a on-request')
@@ -67,9 +85,7 @@ describe('codex launch modes', () => {
     expect(withLaunchMode('codex', 'codex', 'nope')).toBe('codex -s workspace-write -a on-request')
   })
   it('leaves agents without modes untouched', () => {
-    expect(withLaunchMode('claude --dangerously-skip-permissions', 'claude-code', 'yolo')).toBe(
-      'claude --dangerously-skip-permissions'
-    )
+    expect(withLaunchMode('opencode', 'opencode', 'yolo')).toBe('opencode')
   })
   it('resume keeps the session and carries the mode args after the id', () => {
     expect(buildResumeCommand('codex', CODEX_ID, 'safe')).toBe(
@@ -80,7 +96,7 @@ describe('codex launch modes', () => {
     expect(buildContinueCommand('codex', 'yolo')).toBe(
       'codex resume --last --dangerously-bypass-approvals-and-sandbox'
     )
-    expect(buildContinueCommand('claude-code', 'yolo')).toBeUndefined()
+    expect(buildContinueCommand('opencode', 'yolo')).toBeUndefined()
   })
   it('pick opens the codex session picker under the mode', () => {
     expect(buildContinueCommand('codex', 'safe', 'pick')).toBe('codex resume -s read-only -a on-request')

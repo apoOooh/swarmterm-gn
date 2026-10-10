@@ -25,6 +25,17 @@ Do not mark them passed from the in-memory fixture alone.
       preview; restore each. Park a Claude pane mid-task: its state dot still
       updates in the drawer row and `Ctrl+Shift+J` restores it when it needs you.
 
+## Default launch mode
+
+- [ ] Fresh profile: a new Claude Code pane starts in normal mode (header shows
+      "Default"; Claude asks before an edit).
+- [ ] Settings → Terminal → Default launch mode → Claude Code = Bypass permissions:
+      a new Claude pane starts bypassed; an already running pane is not restarted
+      and keeps its mode. Restart the app: the choice is kept.
+- [ ] Pane header → Plan on a Claude pane: Claude restarts in plan mode and
+      continues the conversation.
+- [ ] Codex default = Safe: a new Codex pane runs `-s read-only -a on-request`.
+
 ## Default AI provider for splits
 
 - [ ] Fresh profile: split right/down opens a plain shell; tooltip just "Split right".

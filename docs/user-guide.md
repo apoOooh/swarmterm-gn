@@ -147,9 +147,19 @@ A system notification (banner) only appears while the Swarmterm window is **unfo
 
 Turn channels on or off in **Settings → Notifications**: **Sound** and **System notifications** apply everywhere, and a **per-agent** toggle below silences one CLI without touching the others — every agent with a state dot gets a row, and all default to on. A plain Terminal pane has no agent state, but once its shell has **shell integration** set up (see below) it chimes the same way when a command that ran for more than 10 seconds finishes while you were elsewhere — the banner reads "Command finished (42s)" or "Command failed (exit 1 · 42s)" — and the **Terminal** row in the per-agent list turns that off.
 
-## Codex launch modes
+## Launch modes
 
-A Codex pane starts in **Auto** (`-s workspace-write -a on-request`). The agent menu in the pane header also offers **Safe** (`-s read-only -a on-request`) and **YOLO** (`--dangerously-bypass-approvals-and-sandbox`); the current mode is shown next to the agent icon. Switching restarts Codex with the new flags and continues the conversation (`codex resume`, the pane's own session id or the folder's latest session). **Resume previous chat…** in the same menu restarts the pane into Codex's own session picker (current mode kept), so an older conversation can be taken over. Plan mode is not a Codex CLI flag — use `/plan` inside the session.
+Claude Code and Codex panes run in a **launch mode** that sets how much the agent may do without asking. The current mode is shown next to the agent icon, and the agent menu in the pane header switches it: the pane restarts the CLI with the new flags and continues the conversation (the pane's own session id or the folder's latest session). **Resume previous chat…** in the same menu restarts the pane into the CLI's own session picker (current mode kept), so an older conversation can be taken over.
+
+**Settings → Terminal → Default launch mode** picks, per provider, the mode new panes start in. It applies to new panes only — running panes keep the mode they started with. Worker panes spawned by an agent (`worktree.spawn`) inherit the spawning pane's mode when they run the same agent.
+
+### Claude Code
+
+A Claude Code pane starts in **Default** (`--permission-mode default`, Claude asks before edits and commands). The menu also offers **Accept edits** (`--permission-mode acceptEdits`), **Plan** (`--permission-mode plan`) and **Bypass permissions** (`--dangerously-skip-permissions`). Earlier versions always started Claude with bypass; choose **Bypass permissions** as the default launch mode to keep that behaviour.
+
+### Codex
+
+A Codex pane starts in **Auto** (`-s workspace-write -a on-request`). The agent menu in the pane header also offers **Safe** (`-s read-only -a on-request`) and **YOLO** (`--dangerously-bypass-approvals-and-sandbox`); switching continues the conversation via `codex resume`. Plan mode is not a Codex CLI flag — use `/plan` inside the session.
 
 ## Resume past agent sessions
 

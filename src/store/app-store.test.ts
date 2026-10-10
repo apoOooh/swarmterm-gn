@@ -502,6 +502,28 @@ describe('setPaneAgent', () => {
   })
 })
 
+describe('seedPaneLaunchMode', () => {
+  it('pins the mode without triggering a continue respawn', () => {
+    const store = storeWithWorkspace()
+    const leafId = activeWorkspace(store).focusedLeafId
+    store.getState().setPaneAgent(leafId, 'claude-code')
+    store.getState().seedPaneLaunchMode(leafId, 'bypass')
+    const leaf = collectLeaves(activeWorkspace(store).layout).find((l) => l.id === leafId)
+    expect(leaf?.launchMode).toBe('bypass')
+    expect(leaf?.continueSession).toBeUndefined()
+  })
+
+  it('never overwrites a mode the pane already has', () => {
+    const store = storeWithWorkspace()
+    const leafId = activeWorkspace(store).focusedLeafId
+    store.getState().setPaneAgent(leafId, 'claude-code')
+    store.getState().seedPaneLaunchMode(leafId, 'plan')
+    store.getState().seedPaneLaunchMode(leafId, 'bypass')
+    const leaf = collectLeaves(activeWorkspace(store).layout).find((l) => l.id === leafId)
+    expect(leaf?.launchMode).toBe('plan')
+  })
+})
+
 describe('setPaneLaunchMode', () => {
   it('sets the mode and continues the latest session', () => {
     const store = storeWithWorkspace()
@@ -871,6 +893,25 @@ describe('worktree panes', () => {
     expect(worker.agentId).toBe('claude-code') // inherited from requester
     expect(worker.initialPrompt).toBe('Implement login')
     expect(after.focusedLeafId).toBe(worker.id)
+  })
+
+  it('spawnWorktreePane inherits the requester launch mode for the same agent only', () => {
+    const store = workspaceWithWorktrees()
+    const requester = collectLeaves(store.getState().workspaces[0].layout)[0]
+    store.getState().seedPaneLaunchMode(requester.id, 'bypass')
+    const spawn = (branch: string, agentId?: string): void =>
+      store.getState().spawnWorktreePane({
+        requesterTerminalId: requester.terminalId,
+        path: `C:/dev/myapp.worktrees/${branch}`,
+        branch,
+        prompt: 'x',
+        ...(agentId ? { agentId } : {})
+      })
+    spawn('same')
+    spawn('other', 'codex')
+    const leaves = collectLeaves(store.getState().workspaces[0].layout)
+    expect(leaves.find((l) => l.worktreeBranch === 'same')?.launchMode).toBe('bypass')
+    expect(leaves.find((l) => l.worktreeBranch === 'other')?.launchMode).toBeUndefined()
   })
 
   it('spawnWorktreePane is a no-op when worktreeMode is off or requester unknown', () => {

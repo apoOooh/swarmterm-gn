@@ -7,7 +7,7 @@ import { useAppStore, type ClearTarget } from '@/store/app-store'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
-import { resolveSplitAgent } from '@/lib/agent-pref'
+import { resolveLaunchMode, resolveSplitAgent } from '@/lib/agent-pref'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useTerminalSearchStore } from '@/store/terminal-search-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
@@ -85,6 +85,8 @@ export function TerminalPane({
   const toggleBroadcastMember = useAppStore((s) => s.toggleBroadcastMember)
   const setPaneAgent = useAppStore((s) => s.setPaneAgent)
   const setPaneLaunchMode = useAppStore((s) => s.setPaneLaunchMode)
+  const seedPaneLaunchMode = useAppStore((s) => s.seedPaneLaunchMode)
+  const defaultLaunchModes = useAgentPrefStore((s) => s.defaultLaunchModes)
   const pickPaneSession = useAppStore((s) => s.pickPaneSession)
   const setPaneCwd = useAppStore((s) => s.setPaneCwd)
   const setPaneShell = useAppStore((s) => s.setPaneShell)
@@ -141,17 +143,20 @@ export function TerminalPane({
   const resolvedShellId = leaf.shellId ?? globalShellId
   const resolvedAgentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
   const rawCommand = agentCommand(resolvedAgentId)
+  // Pane choice → Settings default → template default; seeded into the leaf
+  // below so the pane keeps it when the Settings default changes later.
+  const resolvedLaunchMode = resolveLaunchMode(resolvedAgentId, leaf.launchMode, defaultLaunchModes)
   // Launch-mode args ride on every spawn form (fresh, brief, resume, continue).
   const baseCommand =
-    rawCommand === undefined ? undefined : withLaunchMode(rawCommand, resolvedAgentId, leaf.launchMode)
+    rawCommand === undefined ? undefined : withLaunchMode(rawCommand, resolvedAgentId, resolvedLaunchMode)
   // A resume pane re-enters a session the CLI recorded on disk; the resume
   // line wins over the worker-brief path (a resume leaf never carries
   // initialPrompt — see createWorkspace).
   const resumeCommand =
     leaf.resumeSessionId !== undefined
-      ? buildResumeCommand(resolvedAgentId, leaf.resumeSessionId, leaf.launchMode)
+      ? buildResumeCommand(resolvedAgentId, leaf.resumeSessionId, resolvedLaunchMode)
       : leaf.continueSession !== undefined
-        ? buildContinueCommand(resolvedAgentId, leaf.launchMode, leaf.continueSession)
+        ? buildContinueCommand(resolvedAgentId, resolvedLaunchMode, leaf.continueSession)
         : undefined
   // Worker panes carry a one-shot task brief; quote it for the shell the pty
   // actually types into (initialCommand is a typed line, not an exec).
@@ -166,6 +171,11 @@ export function TerminalPane({
           templateById(resolvedAgentId).spawnPromptFlag
         )
       : baseCommand)
+  useEffect(() => {
+    if (leaf.launchMode === undefined && resolvedLaunchMode !== undefined) {
+      seedPaneLaunchMode(leaf.id, resolvedLaunchMode)
+    }
+  }, [leaf.id, leaf.launchMode, resolvedLaunchMode, seedPaneLaunchMode])
   // Published to the DOM so the app-level file-drop listener can quote paths
   // for this pane's shell without re-deriving the resolution chain.
   const paneShellFlavor = shellFlavor(resolvedShellId, isWindowsPlatform())
@@ -365,7 +375,7 @@ export function TerminalPane({
         shellId={resolvedShellId}
         resolvedCwd={resolvedCwd}
         hasCwdOverride={leaf.cwd !== undefined}
-        launchModeId={leaf.launchMode}
+        launchModeId={resolvedLaunchMode}
         onAgentChange={(id) => setPaneAgent(leafId, id)}
         onLaunchModeChange={(id) => setPaneLaunchMode(leafId, id)}
         onPickSession={() => pickPaneSession(leafId)}
