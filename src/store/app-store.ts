@@ -108,6 +108,7 @@ export interface AppActions {
   setPaneAgent: (leafId: string, agentId: string) => void
   setPaneCwd: (leafId: string, cwd: string | undefined) => void
   setPaneLaunchMode: (leafId: string, modeId: string) => void
+  pickPaneSession: (leafId: string) => void
   setPaneShell: (leafId: string, shellId: ShellId) => void
   spawnWorktreePane: (p: {
     requesterTerminalId: string
@@ -403,10 +404,24 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           layout: updateLeaf(w.layout, leafId, {
             launchMode: modeId,
             initialPrompt: undefined,
-            continueSession: leaf?.resumeSessionId === undefined ? true : undefined
+            continueSession: leaf?.resumeSessionId === undefined ? 'last' : undefined
           })
         }
       })
+    ),
+
+  // Respawn into the CLI's own session picker (current launch mode kept), so
+  // an older chat can be taken over in this pane.
+  pickPaneSession: (leafId) =>
+    set((s) =>
+      mapActive(s, (w) => ({
+        ...w,
+        layout: updateLeaf(w.layout, leafId, {
+          continueSession: 'pick',
+          resumeSessionId: undefined,
+          initialPrompt: undefined
+        })
+      }))
     ),
 
   // Re-pointing a pane's folder must drop any stale worktree binding — otherwise

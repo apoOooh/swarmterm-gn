@@ -6,6 +6,7 @@
  * The shapes and command forms live in the template catalog (templates.ts);
  * this module only applies them.
  */
+import type { ContinueHow } from '@/lib/layout-tree'
 import { agentCommand, templateById, withLaunchMode } from '@/lib/templates'
 
 export function isValidSessionId(agentId: string, sessionId: string): boolean {
@@ -35,13 +36,17 @@ export function buildResumeCommand(
 }
 
 /**
- * The command that continues the agent's latest session under launch mode
- * `modeId` (mode switch without a known session id), or `undefined` when the
- * agent cannot continue a session.
+ * The command that continues a session under launch mode `modeId` — the
+ * latest one or, with `how` = 'pick', one chosen in the CLI's picker — or
+ * `undefined` when the agent cannot continue a session.
  */
-export function buildContinueCommand(agentId: string, modeId?: string): string | undefined {
+export function buildContinueCommand(
+  agentId: string,
+  modeId?: string,
+  how: ContinueHow = 'last'
+): string | undefined {
   const base = agentCommand(agentId)
   const cont = templateById(agentId).continueCommand
   if (base === undefined || cont === undefined) return undefined
-  return withLaunchMode(cont(base), agentId, modeId)
+  return withLaunchMode(cont(base, how), agentId, modeId)
 }

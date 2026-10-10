@@ -13,6 +13,7 @@ import geminiIcon from '@/assets/agents/gemini.svg'
 import ompIcon from '@/assets/agents/omp.svg'
 import opencodeIcon from '@/assets/agents/opencode.svg'
 import qwenIcon from '@/assets/agents/qwen.svg'
+import type { ContinueHow } from '@/lib/layout-tree'
 
 /** Session ids come from on-disk stores owned by other programs and end up
  *  typed into a live shell line — each pattern is an allow-list of the exact
@@ -71,9 +72,10 @@ export interface WorkspaceTemplate {
   /** Selectable launch modes; the first entry is the default. Absent ⇒ the
    *  command runs as-is. A mode switch respawns the pane with the new args. */
   launchModes?: LaunchMode[]
-  /** Command that continues the pane's latest session (mode switch without a
-   *  known session id). Absent ⇒ a mode switch starts a fresh session. */
-  continueCommand?: (base: string) => string
+  /** Command that continues a session: the latest one ('last', mode switch
+   *  without a known id) or one picked in the CLI ('pick'). Absent ⇒ a mode
+   *  switch starts a fresh session and no picker is offered. */
+  continueCommand?: (base: string, how: ContinueHow) => string
 }
 
 export const TEMPLATES: WorkspaceTemplate[] = [
@@ -109,7 +111,7 @@ export const TEMPLATES: WorkspaceTemplate[] = [
       { id: 'yolo', label: 'YOLO', args: '--dangerously-bypass-approvals-and-sandbox' }
     ],
     // --last is filtered to the pane's cwd by codex itself.
-    continueCommand: (base) => `${base} resume --last`
+    continueCommand: (base, how) => (how === 'pick' ? `${base} resume` : `${base} resume --last`)
   },
   {
     id: 'opencode',

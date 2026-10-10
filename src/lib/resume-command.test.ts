@@ -82,4 +82,7 @@ describe('codex launch modes', () => {
     )
     expect(buildContinueCommand('claude-code', 'yolo')).toBeUndefined()
   })
+  it('pick opens the codex session picker under the mode', () => {
+    expect(buildContinueCommand('codex', 'safe', 'pick')).toBe('codex resume -s read-only -a on-request')
+  })
 })

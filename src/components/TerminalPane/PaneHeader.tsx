@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch } from 'lucide-react'
+import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History } from 'lucide-react'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 import { AgentIcon } from '@/components/AgentIcon'
 import { Button } from '@/components/ui/button'
@@ -34,6 +34,8 @@ interface PaneHeaderProps {
   launchModeId?: string
   /** Switch the launch mode — respawns the agent, continuing its session. */
   onLaunchModeChange: (id: string) => void
+  /** Respawn into the agent's session picker to take over an older chat. */
+  onPickSession: () => void
   onShellChange: (id: ShellId) => void
   onChoosePath: () => void
   onResetPath: () => void
@@ -174,6 +176,12 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
                   </DropdownMenuItem>
                 ))}
               </>
+            )}
+            {agent.continueCommand !== undefined && (
+              <DropdownMenuItem onSelect={props.onPickSession}>
+                <History aria-hidden="true" className="h-3.5 w-3.5" />
+                <span>Resume previous chat…</span>
+              </DropdownMenuItem>
             )}
           </DropdownMenuContent>
         </DropdownMenu>

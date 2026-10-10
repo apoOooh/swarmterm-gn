@@ -74,6 +74,7 @@ export function TerminalPane({
   const toggleBroadcastMember = useAppStore((s) => s.toggleBroadcastMember)
   const setPaneAgent = useAppStore((s) => s.setPaneAgent)
   const setPaneLaunchMode = useAppStore((s) => s.setPaneLaunchMode)
+  const pickPaneSession = useAppStore((s) => s.pickPaneSession)
   const setPaneCwd = useAppStore((s) => s.setPaneCwd)
   const setPaneShell = useAppStore((s) => s.setPaneShell)
   const clearWorktrees = useAppStore((s) => s.clearWorktrees)
@@ -126,8 +127,8 @@ export function TerminalPane({
   const resumeCommand =
     leaf.resumeSessionId !== undefined
       ? buildResumeCommand(resolvedAgentId, leaf.resumeSessionId, leaf.launchMode)
-      : leaf.continueSession === true
-        ? buildContinueCommand(resolvedAgentId, leaf.launchMode)
+      : leaf.continueSession !== undefined
+        ? buildContinueCommand(resolvedAgentId, leaf.launchMode, leaf.continueSession)
         : undefined
   // Worker panes carry a one-shot task brief; quote it for the shell the pty
   // actually types into (initialCommand is a typed line, not an exec).
@@ -322,6 +323,7 @@ export function TerminalPane({
         launchModeId={leaf.launchMode}
         onAgentChange={(id) => setPaneAgent(leafId, id)}
         onLaunchModeChange={(id) => setPaneLaunchMode(leafId, id)}
+        onPickSession={() => pickPaneSession(leafId)}
         onShellChange={(id) => setPaneShell(leafId, id)}
         onChoosePath={() => void handleChoosePath()}
         onResetPath={() => setPaneCwd(leafId, undefined)}

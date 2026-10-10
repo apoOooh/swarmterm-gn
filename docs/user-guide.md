@@ -133,7 +133,7 @@ Turn channels on or off in **Settings → Notifications**: **Sound** and **Syste
 
 ## Codex launch modes
 
-A Codex pane starts in **Auto** (`-s workspace-write -a on-request`). The agent menu in the pane header also offers **Safe** (`-s read-only -a on-request`) and **YOLO** (`--dangerously-bypass-approvals-and-sandbox`); the current mode is shown next to the agent icon. Switching restarts Codex with the new flags and continues the conversation (`codex resume`, the pane's own session id or the folder's latest session). Plan mode is not a Codex CLI flag — use `/plan` inside the session.
+A Codex pane starts in **Auto** (`-s workspace-write -a on-request`). The agent menu in the pane header also offers **Safe** (`-s read-only -a on-request`) and **YOLO** (`--dangerously-bypass-approvals-and-sandbox`); the current mode is shown next to the agent icon. Switching restarts Codex with the new flags and continues the conversation (`codex resume`, the pane's own session id or the folder's latest session). **Resume previous chat…** in the same menu restarts the pane into Codex's own session picker (current mode kept), so an older conversation can be taken over. Plan mode is not a Codex CLI flag — use `/plan` inside the session.
 
 ## Resume past agent sessions
 

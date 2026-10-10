@@ -372,7 +372,18 @@ describe('setPaneLaunchMode', () => {
     store.getState().setPaneLaunchMode(leafId, 'yolo')
     const leaf = collectLeaves(activeWorkspace(store).layout).find((l) => l.id === leafId)
     expect(leaf?.launchMode).toBe('yolo')
-    expect(leaf?.continueSession).toBe(true)
+    expect(leaf?.continueSession).toBe('last')
+  })
+
+  it('pickPaneSession opens the CLI picker and keeps the mode', () => {
+    const store = storeWithWorkspace()
+    const leafId = activeWorkspace(store).focusedLeafId
+    store.getState().setPaneAgent(leafId, 'codex')
+    store.getState().setPaneLaunchMode(leafId, 'safe')
+    store.getState().pickPaneSession(leafId)
+    const leaf = collectLeaves(activeWorkspace(store).layout).find((l) => l.id === leafId)
+    expect(leaf?.continueSession).toBe('pick')
+    expect(leaf?.launchMode).toBe('safe')
   })
 
   it('is reset by an agent switch', () => {

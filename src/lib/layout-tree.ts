@@ -11,6 +11,8 @@ import type { ShellId } from '@/lib/terminal-pref'
 
 export type Direction = 'horizontal' | 'vertical'
 
+export type ContinueHow = 'last' | 'pick'
+
 export interface LeafNode {
   type: 'leaf'
   id: string
@@ -37,9 +39,10 @@ export interface LeafNode {
   /** Launch mode id from the agent's template (templates.ts launchModes).
    *  Absent means the template's default mode. Cleared on agent switch. */
   launchMode?: string
-  /** Continue the latest session at spawn (set by a mode switch when no
-   *  session id is known). Cleared on agent/folder switch. */
-  continueSession?: boolean
+  /** Continue a session at spawn: 'last' = the latest one (mode switch
+   *  without a known session id), 'pick' = the CLI's own session picker.
+   *  Cleared on agent/folder switch. */
+  continueSession?: ContinueHow
 }
 
 export interface SplitNode {
