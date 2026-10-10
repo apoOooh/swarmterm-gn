@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildResumeCommand, isValidSessionId } from '@/lib/resume-command'
+import { buildContinueCommand, buildResumeCommand, isValidSessionId } from '@/lib/resume-command'
+import { withLaunchMode } from '@/lib/templates'
 
 const CLAUDE_ID = 'fe845bc6-6932-4459-8fb6-cdd0e7c6cc84'
 const CODEX_ID = '018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f'
@@ -29,7 +30,7 @@ describe('buildResumeCommand', () => {
     )
   })
   it('codex: resume subcommand (not a flag)', () => {
-    expect(buildResumeCommand('codex', CODEX_ID)).toBe(`codex resume ${CODEX_ID}`)
+    expect(buildResumeCommand('codex', CODEX_ID)).toBe(`codex resume ${CODEX_ID} -s workspace-write -a on-request`)
   })
   it('opencode: --session flag', () => {
     expect(buildResumeCommand('opencode', OPENCODE_ID)).toBe(
@@ -54,5 +55,31 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('claude-code', 'bogus; id')).toBeUndefined()
     expect(buildResumeCommand('terminal', CLAUDE_ID)).toBeUndefined()
     expect(buildResumeCommand('unknown-agent', CLAUDE_ID)).toBeUndefined()
+  })
+})
+
+describe('codex launch modes', () => {
+  it('appends the default (auto) mode args when no mode is set', () => {
+    expect(withLaunchMode('codex', 'codex', undefined)).toBe('codex -s workspace-write -a on-request')
+  })
+  it('appends the chosen mode args, unknown ids fall back to the default', () => {
+    expect(withLaunchMode('codex', 'codex', 'yolo')).toBe('codex --dangerously-bypass-approvals-and-sandbox')
+    expect(withLaunchMode('codex', 'codex', 'nope')).toBe('codex -s workspace-write -a on-request')
+  })
+  it('leaves agents without modes untouched', () => {
+    expect(withLaunchMode('claude --dangerously-skip-permissions', 'claude-code', 'yolo')).toBe(
+      'claude --dangerously-skip-permissions'
+    )
+  })
+  it('resume keeps the session and carries the mode args after the id', () => {
+    expect(buildResumeCommand('codex', CODEX_ID, 'safe')).toBe(
+      `codex resume ${CODEX_ID} -s read-only -a on-request`
+    )
+  })
+  it('continue resumes the latest session under the new mode', () => {
+    expect(buildContinueCommand('codex', 'yolo')).toBe(
+      'codex resume --last --dangerously-bypass-approvals-and-sandbox'
+    )
+    expect(buildContinueCommand('claude-code', 'yolo')).toBeUndefined()
   })
 })

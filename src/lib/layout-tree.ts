@@ -34,6 +34,12 @@ export interface LeafNode {
   /** Session id this pane resumes at spawn (claude/codex/opencode session
    *  recorded on disk by the CLI itself). Cleared on agent switch. */
   resumeSessionId?: string
+  /** Launch mode id from the agent's template (templates.ts launchModes).
+   *  Absent means the template's default mode. Cleared on agent switch. */
+  launchMode?: string
+  /** Continue the latest session at spawn (set by a mode switch when no
+   *  session id is known). Cleared on agent/folder switch. */
+  continueSession?: boolean
 }
 
 export interface SplitNode {
@@ -65,7 +71,14 @@ export function updateLeaf(
   patch: Partial<
     Pick<
       LeafNode,
-      'agentId' | 'cwd' | 'shellId' | 'worktreeBranch' | 'initialPrompt' | 'resumeSessionId'
+      | 'agentId'
+      | 'cwd'
+      | 'shellId'
+      | 'worktreeBranch'
+      | 'initialPrompt'
+      | 'resumeSessionId'
+      | 'launchMode'
+      | 'continueSession'
     >
   >
 ): LayoutNode {

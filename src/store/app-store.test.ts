@@ -364,6 +364,29 @@ describe('setPaneAgent', () => {
   })
 })
 
+describe('setPaneLaunchMode', () => {
+  it('sets the mode and continues the latest session', () => {
+    const store = storeWithWorkspace()
+    const leafId = activeWorkspace(store).focusedLeafId
+    store.getState().setPaneAgent(leafId, 'codex')
+    store.getState().setPaneLaunchMode(leafId, 'yolo')
+    const leaf = collectLeaves(activeWorkspace(store).layout).find((l) => l.id === leafId)
+    expect(leaf?.launchMode).toBe('yolo')
+    expect(leaf?.continueSession).toBe(true)
+  })
+
+  it('is reset by an agent switch', () => {
+    const store = storeWithWorkspace()
+    const leafId = activeWorkspace(store).focusedLeafId
+    store.getState().setPaneAgent(leafId, 'codex')
+    store.getState().setPaneLaunchMode(leafId, 'safe')
+    store.getState().setPaneAgent(leafId, 'claude-code')
+    const leaf = collectLeaves(activeWorkspace(store).layout).find((l) => l.id === leafId)
+    expect(leaf?.launchMode).toBeUndefined()
+    expect(leaf?.continueSession).toBeUndefined()
+  })
+})
+
 describe('setPaneCwd', () => {
   it('sets a per-pane cwd override', () => {
     const store = storeWithWorkspace()

@@ -107,6 +107,7 @@ export interface AppActions {
   resizeSplitNode: (splitId: string, sizes: [number, number]) => void
   setPaneAgent: (leafId: string, agentId: string) => void
   setPaneCwd: (leafId: string, cwd: string | undefined) => void
+  setPaneLaunchMode: (leafId: string, modeId: string) => void
   setPaneShell: (leafId: string, shellId: ShellId) => void
   spawnWorktreePane: (p: {
     requesterTerminalId: string
@@ -383,9 +384,29 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         layout: updateLeaf(w.layout, leafId, {
           agentId,
           initialPrompt: undefined,
-          resumeSessionId: undefined
+          resumeSessionId: undefined,
+          launchMode: undefined,
+          continueSession: undefined
         })
       }))
+    ),
+
+  // A mode switch respawns the pty with the new launch args and keeps the
+  // conversation: an explicit resume id carries over, otherwise the pane
+  // continues its latest session. A pending brief must not run twice.
+  setPaneLaunchMode: (leafId, modeId) =>
+    set((s) =>
+      mapActive(s, (w) => {
+        const leaf = findLeaf(w.layout, leafId)
+        return {
+          ...w,
+          layout: updateLeaf(w.layout, leafId, {
+            launchMode: modeId,
+            initialPrompt: undefined,
+            continueSession: leaf?.resumeSessionId === undefined ? true : undefined
+          })
+        }
+      })
     ),
 
   // Re-pointing a pane's folder must drop any stale worktree binding — otherwise
@@ -401,7 +422,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           cwd,
           worktreeBranch: undefined,
           initialPrompt: undefined,
-          resumeSessionId: undefined
+          resumeSessionId: undefined,
+          continueSession: undefined
         })
       }))
     ),

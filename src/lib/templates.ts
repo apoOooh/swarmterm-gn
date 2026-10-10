@@ -37,6 +37,14 @@ export interface TemplateResume {
   buildCommand: (base: string, sessionId: string) => string
 }
 
+/** One way to launch an agent CLI: the arguments appended to its command.
+ *  Swapping a CLI-native mode flag in later only touches this table. */
+export interface LaunchMode {
+  id: string
+  label: string
+  args: string
+}
+
 export interface WorkspaceTemplate {
   id: string
   name: string
@@ -60,6 +68,12 @@ export interface WorkspaceTemplate {
   /** Swarmterm writes this CLI's MCP config automatically at boot (L3).
    *  Everything else gets the manual hint in the War Room members list. */
   mcpAutoEnrolled?: boolean
+  /** Selectable launch modes; the first entry is the default. Absent ⇒ the
+   *  command runs as-is. A mode switch respawns the pane with the new args. */
+  launchModes?: LaunchMode[]
+  /** Command that continues the pane's latest session (mode switch without a
+   *  known session id). Absent ⇒ a mode switch starts a fresh session. */
+  continueCommand?: (base: string) => string
 }
 
 export const TEMPLATES: WorkspaceTemplate[] = [
@@ -86,7 +100,16 @@ export const TEMPLATES: WorkspaceTemplate[] = [
     // `codex resume <id>` is a subcommand, not a flag.
     resume: { idPattern: UUID_RE, buildCommand: (base, id) => `${base} resume ${id}` },
     sessionScanner: 'codex-rollout',
-    mcpAutoEnrolled: true
+    mcpAutoEnrolled: true,
+    // Codex has no plan/mode CLI flag yet (Plan stays /plan in the session);
+    // the modes map onto sandbox + approval flags, accepted by `resume` too.
+    launchModes: [
+      { id: 'auto', label: 'Auto', args: '-s workspace-write -a on-request' },
+      { id: 'safe', label: 'Safe (read-only)', args: '-s read-only -a on-request' },
+      { id: 'yolo', label: 'YOLO', args: '--dangerously-bypass-approvals-and-sandbox' }
+    ],
+    // --last is filtered to the pane's cwd by codex itself.
+    continueCommand: (base) => `${base} resume --last`
   },
   {
     id: 'opencode',
@@ -194,6 +217,20 @@ export function templateById(id: string): WorkspaceTemplate {
 /** The startup command for an agent id, or `undefined` for a plain shell. */
 export function agentCommand(agentId: string | undefined): string | undefined {
   return templateById(agentId ?? DEFAULT_TEMPLATE_ID).command ?? undefined
+}
+
+/** The launch mode `modeId` of an agent, falling back to its default (first)
+ *  mode; `undefined` when the agent has no modes. */
+export function launchMode(agentId: string | undefined, modeId: string | undefined): LaunchMode | undefined {
+  const modes = templateById(agentId ?? DEFAULT_TEMPLATE_ID).launchModes
+  if (modes === undefined || modes.length === 0) return undefined
+  return modes.find((m) => m.id === modeId) ?? modes[0]
+}
+
+/** `command` with the launch-mode args appended (unchanged without modes). */
+export function withLaunchMode(command: string, agentId: string | undefined, modeId: string | undefined): string {
+  const mode = launchMode(agentId, modeId)
+  return mode === undefined || mode.args === '' ? command : `${command} ${mode.args}`
 }
 
 /**

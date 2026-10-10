@@ -9,7 +9,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem
 } from '@/components/ui/dropdown-menu'
-import { TEMPLATES, templateById, isTemplateAvailable } from '@/lib/templates'
+import { TEMPLATES, templateById, isTemplateAvailable, launchMode } from '@/lib/templates'
 import { resolvePaneTitle } from '@/lib/pane-title'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { KNOWN_SHELLS, visibleShells, type ShellId } from '@/lib/terminal-pref'
@@ -30,6 +30,10 @@ interface PaneHeaderProps {
   /** Agent-set title (via the terminal.set_title MCP tool); falls back to the agent name. */
   agentTitle?: string
   onAgentChange: (id: string) => void
+  /** Launch mode id of this pane; absent ⇒ the agent's default mode. */
+  launchModeId?: string
+  /** Switch the launch mode — respawns the agent, continuing its session. */
+  onLaunchModeChange: (id: string) => void
   onShellChange: (id: ShellId) => void
   onChoosePath: () => void
   onResetPath: () => void
@@ -72,6 +76,7 @@ const CTX_BAND_CLASS: Record<ContextBand, string> = {
 export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   const { agentId, shellId, resolvedCwd, hasCwdOverride, worktreeBranch, ctxPct } = props
   const agent = templateById(agentId)
+  const mode = launchMode(agentId, props.launchModeId)
   const agentLabel = agent.name
   const shellLabel = KNOWN_SHELLS.find((s) => s.id === shellId)?.label ?? KNOWN_SHELLS[0].label
   const availability = useAgentAvailabilityStore((s) => s.availability)
@@ -128,7 +133,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
       className="pane-header flex h-7 shrink-0 cursor-grab items-center gap-0.5 border-b border-border bg-card px-1.5 active:cursor-grabbing"
     >
       {/* Agent — pinned far-left identity, never collapses. */}
-      <div data-no-dnd>
+      <div className="flex items-center" data-no-dnd>
         <DropdownMenu
           onOpenChange={(open) => {
             if (open) void useAgentAvailabilityStore.getState().refresh()
@@ -158,8 +163,25 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
                 </DropdownMenuItem>
               )
             })}
+            {agent.launchModes !== undefined && mode !== undefined && (
+              <>
+                <div role="separator" className="my-1 h-px bg-border" />
+                <div className="px-2 py-1 text-xs text-muted-foreground">Mode (restarts, keeps session)</div>
+                {agent.launchModes.map((m) => (
+                  <DropdownMenuItem key={m.id} onSelect={() => props.onLaunchModeChange(m.id)}>
+                    <Check aria-hidden="true" className={cn('h-3.5 w-3.5', m.id === mode.id ? 'opacity-100' : 'opacity-0')} />
+                    <span>{m.label}</span>
+                  </DropdownMenuItem>
+                ))}
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
+        {mode !== undefined && (
+          <span className="px-0.5 text-[10px] uppercase text-muted-foreground" title={`Mode: ${mode.label}`}>
+            {mode.id}
+          </span>
+        )}
       </div>
 
       {/* Title — the star. flex-1 soaks free space; truncates last. Draggable. */}
