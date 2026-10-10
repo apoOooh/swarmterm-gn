@@ -4,7 +4,8 @@
 
 - Dragging from Files now shows a proper copy/move cursor and a label under
   the pointer instead of the Windows "no-drop" sign; Ctrl copies into a
-  folder, Esc cancels. No OS drag loop is involved any more.
+  folder, Esc cancels. No OS drag loop is involved any more. File tabs
+  drag between panes the same way (that HTML5 drag never landed on Windows).
 
 - Sidebar "Auto" layout (new default): Workspaces and Terminals take their
   content height, Files fills the rest. "Manual" keeps the resizable

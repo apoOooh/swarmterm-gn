@@ -1,8 +1,7 @@
-import { devLog } from '@/lib/dev-log'
 import { insertExplorerPaths } from '@/components/FileDropListener'
-import { canDropInto, dragCursor, dragEffect, dropDirectory, pastThreshold, type DragTargetKind } from '@/lib/pointer-drag'
+import { canDropInto, dragEffect, dropDirectory } from '@/lib/pointer-drag'
+import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
 import { useExplorerDragStore } from '@/store/explorer-drag-store'
-import { ExplorerDragGhost } from './ExplorerDragGhost'
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDownUp, Copy, File, FilePlus, Folder, FolderPlus, History, RefreshCw, X } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
@@ -291,58 +290,29 @@ export function FileExplorer(): React.ReactElement {
    * DOM contracts: `[data-terminal-id]` panes, `[data-drop-dir]` rows.
    */
   function beginDrag(e: React.PointerEvent, row: TreeRow): void {
-    if (e.button !== 0 || !root || !context) return
-    const start = { x: e.clientX, y: e.clientY }
+    if (!root || !context) return
     const paths = topLevelOnly(root.selection.includes(row.entry.path) ? root.selection : [row.entry.path])
     const rootDir = context.root
-    let active = false
-    const hit = (x: number, y: number): { kind: DragTargetKind; terminalId?: string; dir?: string } => {
+    const hit = (x: number, y: number, copyKey: boolean): DragHit => {
       const el = document.elementFromPoint(x, y) as HTMLElement | null
       const pane = el?.closest<HTMLElement>('[data-terminal-id]')
-      if (pane?.dataset.terminalId) return { kind: 'pane', terminalId: pane.dataset.terminalId }
-      const target = el?.closest<HTMLElement>('[data-drop-dir]')?.dataset.dropDir ?? (el?.closest('[role="tree"]') ? rootDir : undefined)
-      if (target && canDropInto(target, paths)) return { kind: 'dir', dir: target }
-      return { kind: 'none' }
+      if (pane?.dataset.terminalId) return { effect: dragEffect('pane', copyKey), terminalId: pane.dataset.terminalId }
+      const dir = el?.closest<HTMLElement>('[data-drop-dir]')?.dataset.dropDir ?? (el?.closest('[role="tree"]') ? rootDir : undefined)
+      if (dir && canDropInto(dir, paths)) return { effect: dragEffect('dir', copyKey), overDir: dir }
+      return { effect: 'none' }
     }
-    const finish = (): void => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      window.removeEventListener('keydown', key, true)
-      useExplorerDragStore.setState({ drag: null })
-      useAppStore.getState().setDropTarget(null)
-      delete document.documentElement.dataset.dragging
-      document.documentElement.style.cursor = ''
+    startPointerDrag(e, {
+      name: 'explorer', items: paths, hit,
+      onStart: () => { suppressClick.current = true },
       // The click that follows this pointerup (if any) belongs to the drag; any
       // later click is a real one. Without the reset an Esc-cancelled drag,
       // which gets no click, would swallow the next click in the tree.
-      setTimeout(() => { suppressClick.current = false }, 0)
-    }
-    const move = (ev: globalThis.PointerEvent): void => {
-      if (!active) {
-        if (!pastThreshold(start, { x: ev.clientX, y: ev.clientY })) return
-        active = true
-        suppressClick.current = true
-        devLog('explorer.drag-start', { paths })
+      onEnd: () => { setTimeout(() => { suppressClick.current = false }, 0) },
+      drop: (_x, _y, copyKey, h) => {
+        if (h.terminalId) insertExplorerPaths(h.terminalId, paths)
+        else if (h.overDir) transfer(paths, h.overDir, !copyKey)
       }
-      const t = hit(ev.clientX, ev.clientY)
-      const effect = dragEffect(t.kind, ev.ctrlKey || ev.metaKey)
-      useAppStore.getState().setDropTarget(t.kind === 'pane' ? t.terminalId! : null)
-      useExplorerDragStore.setState({ drag: { paths, x: ev.clientX, y: ev.clientY, effect, overDir: t.kind === 'dir' ? t.dir! : null } })
-      document.documentElement.dataset.dragging = '1'
-      document.documentElement.style.cursor = dragCursor(effect)
-    }
-    const up = (ev: globalThis.PointerEvent): void => {
-      finish()
-      if (!active) return
-      const t = hit(ev.clientX, ev.clientY)
-      devLog('explorer.drag-drop', { paths, target: t })
-      if (t.kind === 'pane') insertExplorerPaths(t.terminalId!, paths)
-      else if (t.kind === 'dir') transfer(paths, t.dir!, !(ev.ctrlKey || ev.metaKey))
-    }
-    const key = (ev: globalThis.KeyboardEvent): void => { if (ev.key === 'Escape') { active = false; finish(); ev.stopPropagation() } }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-    window.addEventListener('keydown', key, true)
+    })
   }
   function menu(): React.ReactElement {
     return <ContextMenuContent>
@@ -367,7 +337,6 @@ export function FileExplorer(): React.ReactElement {
     </ContextMenuContent>
   }
   return <section data-keyboard-owner="explorer" className="flex h-full min-h-0 flex-col border-t border-border" aria-label="File explorer">
-    <ExplorerDragGhost />
     <div className="flex shrink-0 items-center gap-1 border-b border-border bg-muted/40 px-2 py-1.5">
       <button className="flex-1 text-left text-[11px] font-semibold uppercase tracking-wider" onClick={() => useExplorerStore.setState({ visible: !explorer.visible })} aria-expanded={explorer.visible}>Files</button>
       <Tool title="New file" disabled={!context || explorer.busy} onClick={() => void create(false)}><FilePlus size={14} /></Tool>

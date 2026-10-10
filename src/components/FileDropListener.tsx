@@ -1,4 +1,5 @@
 import { useEffect, type ReactElement } from 'react'
+import { ExplorerDragGhost } from '@/components/Files/ExplorerDragGhost'
 import { onFileDrop, type DropPosition } from '@/tauri/dragdrop'
 import { paneDropText, dropPointToCss } from '@/lib/terminal-drop'
 import { devLog } from '@/lib/dev-log'
@@ -56,7 +57,7 @@ export function insertExplorerPaths(terminalId: string, paths: string[]): void {
  * they were dropped on. Renders nothing; mounted once at app level because the
  * native drag event is per-window, not per-element.
  */
-export function FileDropListener(): ReactElement | null {
+export function FileDropListener(): ReactElement {
   useEffect(() => {
     let unlisten: (() => void) | undefined
     let cancelled = false
@@ -97,5 +98,7 @@ export function FileDropListener(): ReactElement | null {
     }
   }, [])
 
-  return null
+  // The ghost of pointer drags (explorer rows, file tabs) lives here too: app-level, so it
+  // still shows when the sidebar is hidden.
+  return <ExplorerDragGhost />
 }
