@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Fix a stray `^[[I` / `^[[O` above the Claude Code banner when focus moved
+  while the agent was starting. Focus reports are no longer fanned out to
+  broadcast members or counted as typing for War Room deliveries.
+
 - Ctrl+drag a detected file path from a terminal onto another pane to insert
   it there; Ctrl+click still opens it. File names in a PowerShell `dir` /
   Get-ChildItem listing are links too, resolved against its Directory header;

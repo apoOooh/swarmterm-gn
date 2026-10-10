@@ -11,6 +11,7 @@ import { TerminalSession, type TerminalStatus } from '@/lib/terminal-session'
 import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { resolveBroadcastTargets } from '@/lib/broadcast-input'
+import { isFocusReport, shouldDropFocusReport } from '@/lib/focus-report'
 import { useAppStore, selectWorkspaceByTerminalId, selectFocusedTerminalId } from '@/store/app-store'
 import { collectLeaves } from '@/lib/layout-tree'
 import type { TerminalTextPref } from '@/lib/terminal-text'
@@ -162,6 +163,9 @@ interface Entry {
    * callers has any way to know that.
    */
   resetInputSegment: () => void
+  /** When the current pty reached `running` — anchors the start window in
+   *  which agent panes drop focus reports (`lib/focus-report.ts`). */
+  ptyStartedAt?: number
 }
 
 /** Live terminals keyed by terminalId, owned outside React's render tree. */
@@ -453,6 +457,18 @@ function getOrCreate(id: string): Entry {
   // — for free. Each target pty echoes independently: this is real broadcast,
   // not a text mirror.
   const sendInput = (data: string): void => {
+    // A focus report belongs to the pane that changed focus only: fanned out
+    // it would type `ESC[I` into every broadcast member, and recorded as
+    // typing it would hold that pane's War Room deliveries for a line the
+    // user never typed.
+    if (isFocusReport(data)) {
+      const entry = entries.get(id)
+      const isAgent = entry !== undefined && !isPlainShellPane(entry.config.agentId)
+      if (!shouldDropFocusReport(isAgent, entry?.ptyStartedAt, Date.now())) {
+        void writeTerminal(id, data)
+      }
+      return
+    }
     const state = useAppStore.getState()
     const ws = selectWorkspaceByTerminalId(state, id)
     const targets = ws
@@ -932,6 +948,13 @@ function getOrCreate(id: string): Entry {
   // exit/error, and the detector has no pty visibility of its own.
   session.subscribe(() => {
     const kind = session.getStatus().kind
+    const entry = entries.get(id)
+    // Stamped on the transition only, so later status repaints don't keep
+    // re-opening the focus-report window.
+    if (entry) {
+      if (kind !== 'running') entry.ptyStartedAt = undefined
+      else entry.ptyStartedAt ??= Date.now()
+    }
     if (kind === 'exited' || kind === 'error') {
       entries.get(id)?.detector?.noteExit()
       // The pty behind the OSC 133 marks is gone: a `running` left here would
