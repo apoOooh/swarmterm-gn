@@ -374,6 +374,15 @@ export default function App(): ReactElement {
           return
         }
       }
+      if (action === 'toggle-zoom') {
+        if (!isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
+        const st = useAppStore.getState()
+        const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
+        if (!ws || st.welcomeFocused) return
+        e.preventDefault()
+        st.toggleZoom(ws.focusedLeafId)
+        return
+      }
       if (action === 'clear-input') {
         // Only while a terminal itself has the keyboard: in an input field the
         // browser's own Ctrl+Shift+Backspace behaviour is what the user wants.

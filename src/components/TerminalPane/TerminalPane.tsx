@@ -53,6 +53,8 @@ interface TerminalPaneProps {
   isBroadcastMember: boolean
   /** Whether the workspace exposes MCP worktree tools to every terminal. */
   worktreeMode: boolean
+  /** Whether this pane is zoomed to fill its workspace. */
+  isZoomed?: boolean
 }
 
 /**
@@ -68,7 +70,8 @@ export function TerminalPane({
   isFocused,
   broadcastActive,
   isBroadcastMember,
-  worktreeMode
+  worktreeMode,
+  isZoomed = false
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -361,6 +364,8 @@ export function TerminalPane({
         onSplitRight={() => splitPane(leafId, 'horizontal')}
         onSplitDown={() => splitPane(leafId, 'vertical')}
         onClose={() => closePane(leafId)}
+        isZoomed={isZoomed}
+        onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
         broadcastActive={broadcastActive}
         isBroadcastMember={isBroadcastMember}
         onToggleBroadcast={() => toggleBroadcastMember(leafId)}

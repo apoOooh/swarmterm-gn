@@ -218,3 +218,11 @@ describe('clear-input shortcut', () => {
     expect(matchAppShortcut(ev({ ctrlKey: true }), false)).toBeNull()
   })
 })
+
+describe('toggle-zoom shortcut', () => {
+  it('maps Ctrl+Shift+Enter, not plain Ctrl+Enter', () => {
+    const ev = (shiftKey: boolean) => ({ key: 'Enter', ctrlKey: true, metaKey: false, shiftKey, altKey: false })
+    expect(matchAppShortcut(ev(true), false)).toBe('toggle-zoom')
+    expect(matchAppShortcut(ev(false), false)).toBeNull()
+  })
+})

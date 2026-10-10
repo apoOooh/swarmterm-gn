@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Maximize a pane to fill its workspace (header button, header double-click
+  or Ctrl+Shift+Enter); the other panes keep running.
+
 - Ctrl+Shift+Backspace clears the pending input line of the focused terminal
   without quitting a running agent.
 - Fix the last terminal row slipping under the pane border after resizing.
