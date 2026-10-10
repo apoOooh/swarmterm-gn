@@ -253,7 +253,8 @@ export function TerminalPane({
   }, [isFocused, terminalId])
 
   async function handleChoosePath(): Promise<void> {
-    const dir = await pickDirectory()
+    // Start in the workspace folder, not the OS default (home).
+    const dir = await pickDirectory(cwd)
     if (dir) setPaneCwd(leafId, dir)
   }
 

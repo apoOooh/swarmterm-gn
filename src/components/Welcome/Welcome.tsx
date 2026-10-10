@@ -171,7 +171,7 @@ export function Welcome(): ReactElement {
   }, [trimmedFolder, availability])
 
   const browse = async (): Promise<void> => {
-    const picked = await pickDirectory()
+    const picked = await pickDirectory(trimmedFolder)
     if (picked) setFolder(picked)
   }
 

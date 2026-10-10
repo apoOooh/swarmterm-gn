@@ -11,10 +11,11 @@ export async function showMessage(
   await message(text, { title: opts?.title, kind: opts?.kind })
 }
 
-/** Open a native folder picker. Resolves to the chosen path, or null if cancelled. */
-export async function pickDirectory(): Promise<string | null> {
-  const home = await homeDir()
-  const picked = await open({ directory: true, defaultPath: home })
+/** Open a native folder picker, starting in `startDir` (home when absent).
+ * Resolves to the chosen path, or null if cancelled. */
+export async function pickDirectory(startDir?: string): Promise<string | null> {
+  const defaultPath = startDir !== undefined && startDir !== '' ? startDir : await homeDir()
+  const picked = await open({ directory: true, defaultPath })
   return typeof picked === 'string' ? picked : null
 }
 
