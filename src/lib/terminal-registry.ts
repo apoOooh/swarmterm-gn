@@ -29,7 +29,7 @@ import { parseOsc52 } from '@/lib/osc52'
 import { parseShellMark } from '@/lib/shell-marks'
 import { isPlainShellPane } from '@/lib/templates'
 import { sanitizePromptText } from '@/lib/prompt-sanitize'
-import { detectPathCandidates, parsePathSuffix } from '@/lib/path-link-parse'
+import { detectPathCandidates, listingDirAbove, listingEntry, parsePathSuffix } from '@/lib/path-link-parse'
 import { classifyOscLink, openPathLocation } from '@/lib/terminal-link-actions'
 import { openUrl } from '@/tauri/opener'
 import {
@@ -792,13 +792,31 @@ function getOrCreate(id: string): Entry {
       const lineText = term.buffer.active.getLine(y - 1)?.translateToString(true)
       if (!lineText) return callback(undefined)
       const candidates = detectPathCandidates(lineText)
+      // A listing row's bare Name becomes a candidate too; listingDir() below
+      // decides whether there is a listing header at all (else it never resolves).
+      const entry = listingEntry(lineText)
+      if (entry && !candidates.some((c) => c.start <= entry.start && c.end >= entry.end)) candidates.push(entry)
       if (candidates.length === 0) return callback(undefined)
 
       const cwd = getTerminalCwd(id) ?? ''
+      // Bare names in a `dir` / Get-ChildItem listing are relative to its
+      // "Directory:" header, not to the shell's cwd. Looked up lazily, once.
+      let listing: string | null | undefined
+      const listingDir = (): string | null => {
+        if (listing !== undefined) return listing
+        const buffer = term.buffer.active
+        const above: string[] = []
+        for (let i = y - 2; i >= Math.max(0, y - 302); i--) above.push(buffer.getLine(i)?.translateToString(true) ?? '')
+        return (listing = listingDirAbove(above))
+      }
       void Promise.all(
         candidates.map(async (c) => {
           const { path } = parsePathSuffix(c.text)
-          const resolved = await resolvePathLink(cwd, path).catch(() => null)
+          let resolved = await resolvePathLink(cwd, path).catch(() => null)
+          if (!resolved && !/[\\/]/.test(path)) {
+            const dir = listingDir()
+            if (dir) resolved = await resolvePathLink(dir, path).catch(() => null)
+          }
           if (!resolved) return null
           const link: ILink = {
             // xterm buffer ranges are 1-based and inclusive; candidate indices

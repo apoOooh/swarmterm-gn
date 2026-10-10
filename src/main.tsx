@@ -27,6 +27,7 @@ if (import.meta.env.DEV) {
     Object.assign(window, { __swarmtermDev: {
       terminalText: (id: string, lines?: number) => reg.readTerminalText(id, lines),
       terminalGeometry: (id: string) => reg.terminalGeometry(id),
+      hoveredPathLink: (id: string) => reg.getHoveredPathLink(id) ?? null,
       workspaces: () => app.useAppStore.getState().workspaces.map((w) => ({ id: w.id, name: w.name, cwd: w.cwd, focusedLeafId: w.focusedLeafId, zoomedLeafId: w.zoomedLeafId })),
       // The one write: lets a scenario remove the workspace it created.
       closeWorkspace: (id: string) => app.useAppStore.getState().closeWorkspace(id),

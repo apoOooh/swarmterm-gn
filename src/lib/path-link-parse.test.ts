@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectPathCandidates, parsePathSuffix } from './path-link-parse'
+import { detectPathCandidates, listingDirAbove, listingEntry, parsePathSuffix } from './path-link-parse'
 
 describe('parsePathSuffix', () => {
   it('parses line and column', () => {
@@ -67,5 +67,28 @@ describe('detectPathCandidates', () => {
   it('caps the number of candidates per line', () => {
     const line = Array.from({ length: 20 }, (_, i) => `s/f${i}.ts`).join(' ')
     expect(detectPathCandidates(line)).toHaveLength(10)
+  })
+})
+
+describe('listingEntry', () => {
+  it('takes the Name column of a file row, with spaces', () => {
+    expect(listingEntry('-a----        10.10.2026     22:25            437 logo.svg')).toEqual({ text: 'logo.svg', start: 50, end: 58 })
+    expect(listingEntry('-a----        10.10.2026     22:25             21 my notes.txt')?.text).toBe('my notes.txt')
+  })
+  it('ignores folders, headers and prose', () => {
+    expect(listingEntry('d-----        10.10.2026     22:25                assets')).toBeNull()
+    expect(listingEntry('Mode                 LastWriteTime         Length Name')).toBeNull()
+    expect(listingEntry('see logo.svg')).toBeNull()
+  })
+})
+describe('listingDirAbove', () => {
+  it('finds the PowerShell listing header above an entry', () => {
+    const above = ['', 'Mode                 LastWriteTime         Length Name', '', '    Verzeichnis: D:\\p\\assets', '']
+    expect(listingDirAbove(above)).toBe('D:\\p\\assets')
+    expect(listingDirAbove(['    Directory: C:\\Users\\me'])).toBe('C:\\Users\\me')
+  })
+  it('stops at the prompt of an earlier command', () => {
+    expect(listingDirAbove(['PS D:\\p> dir', '    Verzeichnis: D:\\old'])).toBeNull()
+    expect(listingDirAbove(['nothing here'])).toBeNull()
   })
 })
