@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Ctrl+Shift+Backspace clears the pending input line of the focused terminal
+  without quitting a running agent.
+- Fix the last terminal row slipping under the pane border after resizing.
+
 - SVG and HTML files open with Editor / Split / Preview modes, updated live
   while typing. SVG preview with wheel zoom, pan, Fit/100 % and background
   choice; HTML preview with relative assets and sandboxed scripts. New

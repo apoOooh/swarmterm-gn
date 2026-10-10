@@ -322,6 +322,7 @@ War Room abilities only work for panes you dragged into a room, worktree abiliti
 | `⌘/Ctrl + C` · `⌘/Ctrl + V` | Copy (when text is selected) · paste |
 | `⌘/Ctrl + Click` | Open a file path in your editor, at that line, and select it in Files |
 | `⌘/Ctrl + F` | Find in the focused editor/Markdown preview or terminal |
+| `⌘/Ctrl + Shift + Backspace` | Clear the pending input line of the focused terminal (e.g. after a submit hook refused a prompt). Agents get one Ctrl+C, shells their line-kill; a second press within 2 s is ignored so an agent never quits |
 | `⌘/Ctrl + Shift + J` | Jump to the next pane needing attention (longest-waiting blocked → done → working → idle) |
 
 On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the terminal for tmux.

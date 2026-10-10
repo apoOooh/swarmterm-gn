@@ -21,7 +21,14 @@ import { useContextUsageStore } from '@/store/context-usage-store'
 import { matchAppShortcut } from '@/lib/keybindings'
 import { jumpToAttention } from '@/lib/attention-jump'
 import { collectLeaves, findLeaf } from '@/lib/layout-tree'
-import { isMacPlatform } from '@/lib/platform'
+import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
+import { ClearGuard, clearInputSequence } from '@/lib/clear-input'
+import { shellFlavor } from '@/lib/agent-spawn-command'
+import { writeTerminal } from '@/tauri/terminal'
+import { useTerminalPrefStore } from '@/store/terminal-pref-store'
+import { useTerminalTypingStore } from '@/store/terminal-typing-store'
+
+const clearGuard = new ClearGuard()
 import { nextSystemChromeReveal, systemChromeOffset } from '@/lib/titlebar-chrome'
 import { onFullscreenChanged } from '@/tauri/window'
 import {
@@ -366,6 +373,25 @@ export default function App(): ReactElement {
           useTerminalSearchStore.getState().open(terminalId)
           return
         }
+      }
+      if (action === 'clear-input') {
+        // Only while a terminal itself has the keyboard: in an input field the
+        // browser's own Ctrl+Shift+Backspace behaviour is what the user wants.
+        if (!isAnyTerminalFocused()) return
+        const st = useAppStore.getState()
+        const terminalId = selectFocusedTerminalId(st)
+        const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
+        const leaf = ws ? collectLeaves(ws.layout).find((l) => l.terminalId === terminalId) : undefined
+        if (!terminalId || !leaf) return
+        e.preventDefault()
+        // Focused pane only, never the broadcast group: clearing is a repair,
+        // not something to fan out. The guard keeps a held key from turning
+        // one Ctrl+C into the double press that quits an agent.
+        if (!clearGuard.allow(terminalId)) return
+        const flavor = shellFlavor(leaf.shellId ?? useTerminalPrefStore.getState().shellId, isWindowsPlatform())
+        void writeTerminal(terminalId, clearInputSequence(leaf.agentId, flavor)).catch(console.warn)
+        useTerminalTypingStore.getState().clearTyping(terminalId)
+        return
       }
       if (action === 'jump-to-attention') {
         // Same stand-down as find: never yank focus out of the composer, a

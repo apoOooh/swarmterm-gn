@@ -209,3 +209,12 @@ describe('matchAppShortcut jump-to-attention', () => {
     }
   })
 })
+
+describe('clear-input shortcut', () => {
+  it('maps Ctrl/Cmd+Shift+Backspace only', () => {
+    const ev = (o: Partial<{ ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }>) => ({ key: 'Backspace', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...o })
+    expect(matchAppShortcut(ev({ ctrlKey: true, shiftKey: true }), false)).toBe('clear-input')
+    expect(matchAppShortcut(ev({ metaKey: true, shiftKey: true }), true)).toBe('clear-input')
+    expect(matchAppShortcut(ev({ ctrlKey: true }), false)).toBeNull()
+  })
+})
