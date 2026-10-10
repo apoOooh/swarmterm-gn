@@ -66,3 +66,27 @@ export function formatDroppedPaths(paths: string[], flavor: ShellFlavor): string
   const words = usable.map((path) => (safe.test(path) ? path : quoteForShell(path, flavor)))
   return `${words.join(' ')} `
 }
+
+/**
+ * Claude Code file mentions for paths dragged onto an agent pane: `@src/a.ts`
+ * relative to the pane's cwd, so the agent attaches the file instead of just
+ * reading a path. A path outside the cwd stays absolute; one with whitespace
+ * cannot be an `@` token and falls back to the quoted plain path.
+ */
+export function formatMentions(paths: string[], cwd: string, flavor: ShellFlavor, foldCase: boolean): string {
+  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const base = norm(cwd)
+  const fold = (p: string): string => (foldCase ? p.toLowerCase() : p)
+  const words = paths.filter((p) => p !== '' && !/[\r\n]/.test(p)).map((path) => {
+    const full = norm(path)
+    const inside = base !== '' && fold(full).startsWith(fold(base) + '/')
+    const target = inside ? full.slice(base.length + 1) : full
+    return /\s/.test(target) ? formatDroppedPaths([path], flavor).trimEnd() : `@${target}`
+  })
+  return words.length === 0 ? '' : `${words.join(' ')} `
+}
+
+/** Text for paths dropped on a pane: `@` mentions for Claude Code, quoted paths otherwise. */
+export function paneDropText(paths: string[], pane: { agentId?: string; cwd: string; flavor: ShellFlavor }, foldCase: boolean): string {
+  return pane.agentId === 'claude-code' ? formatMentions(paths, pane.cwd, pane.flavor, foldCase) : formatDroppedPaths(paths, pane.flavor)
+}

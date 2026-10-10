@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data: blob: swarmterm-media: http://swarmterm-media.localhost https://swarmterm-media.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420; media-src 'self' swarmterm-media: http://swarmterm-media.localhost https://swarmterm-media.localhost"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data: blob: swarmterm-media: http://swarmterm-media.localhost https://swarmterm-media.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420; frame-src swarmterm-media: http://swarmterm-media.localhost https://swarmterm-media.localhost; media-src 'self' swarmterm-media: http://swarmterm-media.localhost https://swarmterm-media.localhost"
     }
   },
   "plugins": {},

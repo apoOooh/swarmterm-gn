@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History } from 'lucide-react'
+import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2 } from 'lucide-react'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 import { AgentIcon } from '@/components/AgentIcon'
 import { Button } from '@/components/ui/button'
@@ -42,6 +42,8 @@ interface PaneHeaderProps {
   onSplitRight: () => void
   onSplitDown: () => void
   onClose: () => void
+  isZoomed: boolean
+  onToggleZoom: () => void
   /** Whether broadcast mode is armed for this workspace. */
   broadcastActive: boolean
   /** Whether this pane is in the broadcast group. */
@@ -132,6 +134,8 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
       // tab order: it has no keyboard action, and a Tab meant for the shell must
       // never park the focus ring on app chrome (see lib/terminal-focus.ts).
       tabIndex={-1}
+      // Double-click on bare header space zooms; controls keep their own clicks.
+      onDoubleClick={(e) => { if (!(e.target as HTMLElement).closest('button, [role="menuitem"], input')) props.onToggleZoom() }}
       className="pane-header flex h-7 shrink-0 cursor-grab items-center gap-0.5 border-b border-border bg-card px-1.5 active:cursor-grabbing"
     >
       {/* Agent — pinned far-left identity, never collapses. */}
@@ -313,6 +317,9 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
         </Button>
         <Button variant="ghost" size="icon-sm" title="Split down" aria-label="Split down" onClick={props.onSplitDown}>
           <Rows2 className="h-3.5 w-3.5" />
+        </Button>
+        <Button variant="ghost" size="icon-sm" title={props.isZoomed ? 'Restore pane (Ctrl+Shift+Enter)' : 'Maximize pane (Ctrl+Shift+Enter)'} aria-label={props.isZoomed ? 'Restore pane' : 'Maximize pane'} aria-pressed={props.isZoomed} onClick={props.onToggleZoom}>
+          {props.isZoomed ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
         </Button>
         <Button variant="ghost" size="icon-sm" title="Close pane" aria-label="Close pane" onClick={props.onClose}>
           <X className="h-3.5 w-3.5" />

@@ -3,11 +3,19 @@ import { Check } from 'lucide-react'
 import { useAppearanceStore } from '@/store/appearance-store'
 import { styleOptions, themeVariables, type StyleOption } from '@/lib/theme-adapter'
 import { cn } from '@/lib/utils'
+import { useSidebarLayoutStore } from '@/store/sidebar-layout-store'
+import type { SidebarLayout } from '@/lib/sidebar-layout'
+
+const SIDEBAR_LAYOUTS: { id: SidebarLayout; label: string; description: string }[] = [
+  { id: 'auto', label: 'Auto', description: 'Lists take their height, Files fills the rest' },
+  { id: 'manual', label: 'Manual', description: 'Three sections with drag handles' }
+]
 
 /** Theme previews render in their own palette, independent of the active theme. */
 export function AppearancePanel(): ReactElement {
   const style = useAppearanceStore((s) => s.style)
   const setStyle = useAppearanceStore((s) => s.setStyle)
+  const sidebarLayout = useSidebarLayoutStore((s) => s.layout)
 
   return (
     <div className="space-y-8">
@@ -19,6 +27,20 @@ export function AppearancePanel(): ReactElement {
           Customise how Swarmterm looks — applied across the sidebar, workspace tabs,
           and every terminal pane.
         </p>
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-foreground">Sidebar</h2>
+        <div role="radiogroup" aria-label="Sidebar layout" className="grid grid-cols-2 gap-2">
+          {SIDEBAR_LAYOUTS.map((l) => (
+            <button key={l.id} type="button" role="radio" aria-checked={sidebarLayout === l.id}
+              onClick={() => useSidebarLayoutStore.getState().setLayout(l.id)}
+              className={cn('rounded-md border p-3 text-left text-sm transition-colors', sidebarLayout === l.id ? 'border-primary bg-accent' : 'border-border hover:bg-accent/50')}>
+              <div className="font-medium text-foreground">{l.label}</div>
+              <div className="mt-0.5 text-xs text-muted-foreground">{l.description}</div>
+            </button>
+          ))}
+        </div>
       </section>
 
       <section>

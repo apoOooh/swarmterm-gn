@@ -86,3 +86,23 @@ export function legacyFoldedKey(key: string, platform: string = runtimePlatform(
   const lower = key.toLowerCase()
   return lower === key ? null : lower
 }
+
+/** Directories between `root` (inclusive) and `path` (exclusive), outermost first — what the
+ *  explorer must expand to show `path`. Empty when `path` is not under `root`. */
+export function ancestorDirs(root: string, path: string, platform: string = runtimePlatform()): string[] {
+  const top = foldPathCase(root.replace(/[/\\]+$/, ''), platform)
+  const dirs: string[] = []
+  for (let dir = parentDir(path); ; dir = parentDir(dir)) {
+    dirs.unshift(dir)
+    if (foldPathCase(dir, platform) === top) return dirs
+    if (parentDir(dir) === dir || dirs.length > 256) return []
+  }
+}
+
+/** Drop Windows' verbatim prefix (`\\?\C:\…`, `\\?\UNC\host\…`) that Rust's canonicalize returns —
+ *  fine for IPC, wrong anywhere a person or an agent reads the path. */
+export function displayPath(p: string): string {
+  if (p.startsWith('\\\\?\\UNC\\')) return '\\\\' + p.slice(8)
+  if (p.startsWith('\\\\?\\')) return p.slice(4)
+  return p
+}

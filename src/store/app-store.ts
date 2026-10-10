@@ -1,3 +1,4 @@
+import { toggledZoom } from '@/lib/pane-zoom'
 import { create, type StateCreator } from 'zustand'
 import {
   paneLayoutFor,
@@ -34,6 +35,8 @@ export interface Workspace {
   broadcastLeafIds: string[]
   /** Enable MCP worktree tools for every terminal in this workspace. */
   worktreeMode: boolean
+  /** Leaf shown alone (pane zoom); the others keep running off-screen. */
+  zoomedLeafId?: string
 }
 
 /** What the setup wizard collects to build a new workspace. */
@@ -102,6 +105,7 @@ export interface AppActions {
   setDropTarget: (terminalId: string | null) => void
   splitPane: (leafId: string, direction: Direction) => void
   closePane: (leafId: string) => void
+  toggleZoom: (leafId: string) => void
   runFileInPane: (leafId: string, cwd: string, command: string) => void
   reorderPane: (fromLeafId: string, toLeafId: string) => void
   resizeSplitNode: (splitId: string, sizes: [number, number]) => void
@@ -302,7 +306,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
     set((s) => {
       const ws = selectActiveWorkspace(s)
       if (!ws || ws.focusedLeafId === leafId || !findLeaf(ws.layout, leafId)) return s
-      return mapActive(s, (w) => ({ ...w, focusedLeafId: leafId }))
+      // Focusing a pane hidden behind a zoom must show it, not type blind.
+      return mapActive(s, (w) => ({ ...w, focusedLeafId: leafId, zoomedLeafId: w.zoomedLeafId && w.zoomedLeafId !== leafId ? undefined : w.zoomedLeafId }))
     }),
 
   revealTerminal: (terminalId) =>
@@ -314,7 +319,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       return {
         activeWorkspaceId: ws.id,
         welcomeFocused: false,
-        workspaces: s.workspaces.map((w) => (w.id === ws.id ? { ...w, focusedLeafId: leaf.id } : w))
+        workspaces: s.workspaces.map((w) => (w.id === ws.id ? { ...w, focusedLeafId: leaf.id, zoomedLeafId: w.zoomedLeafId && w.zoomedLeafId !== leaf.id ? undefined : w.zoomedLeafId } : w))
       }
     }),
 
@@ -328,7 +333,9 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         return {
           ...w,
           layout: splitLeaf(w.layout, leafId, direction, newLeaf, uid()),
-          focusedLeafId: newLeaf.id
+          focusedLeafId: newLeaf.id,
+          // The new pane must be visible, so a split always ends the zoom.
+          zoomedLeafId: undefined
         }
       })
     ),
@@ -338,8 +345,15 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
     if (!ws) return {}
     const source = findLeaf(ws.layout, leafId)!
     const runner: LeafNode = { ...makeLeaf(), cwd, shellId: source.shellId, startupCommand: command }
-    return { activeWorkspaceId: ws.id, workspaces: s.workspaces.map((w) => w.id === ws.id ? { ...w, layout: splitLeaf(w.layout, leafId, 'horizontal', runner, uid()), focusedLeafId: runner.id } : w) }
+    return { activeWorkspaceId: ws.id, workspaces: s.workspaces.map((w) => w.id === ws.id ? { ...w, layout: splitLeaf(w.layout, leafId, 'horizontal', runner, uid()), focusedLeafId: runner.id, zoomedLeafId: undefined } : w) }
   }),
+
+  toggleZoom: (leafId) =>
+    set((s) => {
+      const ws = s.workspaces.find((w) => findLeaf(w.layout, leafId))
+      if (!ws) return {}
+      return { workspaces: s.workspaces.map((w) => w.id === ws.id ? { ...w, zoomedLeafId: toggledZoom(w.zoomedLeafId, leafId), focusedLeafId: leafId } : w) }
+    }),
 
   closePane: (leafId) => {
     const owner = get().workspaces.find((w) => findLeaf(w.layout, leafId))

@@ -134,6 +134,17 @@ pub enum FileRequest {
     LocateMarkText {
         executable: String,
     },
+    /// Unsaved buffer the HTML preview frame should render instead of disk.
+    /// `content: None` drops the draft (buffer saved or closed).
+    PreviewDraft {
+        context_id: String,
+        path: String,
+        content: Option<String>,
+    },
+    OpenPreviewExternal {
+        context_id: String,
+        path: String,
+    },
 }
 
 pub struct FileService {
@@ -141,6 +152,9 @@ pub struct FileService {
     operation: Mutex<()>,
     pub watchers: Mutex<HashMap<String, WatchHandle>>,
     history_dir: PathBuf,
+    /// Keyed by canonical path. Lives only in memory: the preview protocol
+    /// serves it so relative assets still resolve from the file's folder.
+    drafts: Mutex<HashMap<PathBuf, String>>,
 }
 
 impl FileService {
@@ -150,7 +164,12 @@ impl FileService {
             operation: Mutex::new(()),
             watchers: Mutex::new(HashMap::new()),
             history_dir,
+            drafts: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn draft(&self, path: &Path) -> Option<String> {
+        self.drafts.lock().ok()?.get(path).cloned()
     }
 
     pub fn open(&self, cwd: &Path) -> Result<FileContext, String> {
@@ -230,7 +249,7 @@ impl FileService {
             }
             FileRequest::MediaStat { context_id, path } => {
                 let path = guarded(&self.root(&context_id)?, &path, false)?;
-                if media::mime(&path).is_none() {
+                if !media::is_media(&path) {
                     return Err("Unsupported media type".into());
                 }
                 let meta = fs::metadata(&path).map_err(|e| e.to_string())?;
@@ -245,7 +264,7 @@ impl FileService {
             FileRequest::OpenMedia { context_id, path } => {
                 use tauri_plugin_opener::OpenerExt;
                 let path = guarded(&self.root(&context_id)?, &path, false)?;
-                if media::mime(&path).is_none() {
+                if !media::is_media(&path) {
                     return Err("Only images and videos can open in the default application".into());
                 }
                 app.ok_or("Open media requires a native application")?
@@ -469,6 +488,36 @@ impl FileService {
             }
             FileRequest::LocateMarkText { executable } => {
                 Ok(json!(marktext::locate(&executable).map(|p| display(&p))))
+            }
+            FileRequest::PreviewDraft {
+                context_id,
+                path,
+                content,
+            } => {
+                let target = guarded(&self.root(&context_id)?, &path, false)?;
+                if !media::previewable(&target) {
+                    return Err("Only HTML files have a live preview draft".into());
+                }
+                let mut drafts = self.drafts.lock().map_err(|e| e.to_string())?;
+                match content {
+                    Some(content) => drafts.insert(target, content),
+                    None => drafts.remove(&target),
+                };
+                Ok(Value::Null)
+            }
+            FileRequest::OpenPreviewExternal { context_id, path } => {
+                use tauri_plugin_opener::OpenerExt;
+                let target = guarded(&self.root(&context_id)?, &path, false)?;
+                // Deliberately not `mime()`: that list now includes .js, whose
+                // Windows default handler is Script Host, not a browser.
+                if !media::external_preview(&target) {
+                    return Err("Only HTML and SVG files open in the browser".into());
+                }
+                app.ok_or("Open in browser requires a native application")?
+                    .opener()
+                    .open_path(display(&target), None::<&str>)
+                    .map_err(|e| e.to_string())?;
+                Ok(Value::Null)
             }
         }
     }

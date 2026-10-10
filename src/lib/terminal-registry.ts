@@ -11,6 +11,7 @@ import { TerminalSession, type TerminalStatus } from '@/lib/terminal-session'
 import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { resolveBroadcastTargets } from '@/lib/broadcast-input'
+import { isFocusReport, shouldDropFocusReport } from '@/lib/focus-report'
 import { useAppStore, selectWorkspaceByTerminalId, selectFocusedTerminalId } from '@/store/app-store'
 import { collectLeaves } from '@/lib/layout-tree'
 import type { TerminalTextPref } from '@/lib/terminal-text'
@@ -29,18 +30,21 @@ import { parseOsc52 } from '@/lib/osc52'
 import { parseShellMark } from '@/lib/shell-marks'
 import { isPlainShellPane } from '@/lib/templates'
 import { sanitizePromptText } from '@/lib/prompt-sanitize'
-import { detectPathCandidates, parsePathSuffix } from '@/lib/path-link-parse'
+import { detectPathCandidates, listingDirAbove, listingEntry, parsePathSuffix } from '@/lib/path-link-parse'
 import { classifyOscLink, openPathLocation } from '@/lib/terminal-link-actions'
 import { openUrl } from '@/tauri/opener'
 import {
   findAvailableEditor,
   openInEditor,
+  resolveDirLink,
   resolvePathLink,
   revealInFileManager
 } from '@/tauri/links'
 import { ActivityTracker } from '@/lib/activity-tracker'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
+import { displayPath } from '@/lib/files/paths'
+import { devLog } from '@/lib/dev-log'
 import { useShellMarkStore } from '@/store/shell-mark-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
 import {
@@ -118,6 +122,8 @@ interface Entry {
   search: SearchAddon
   /** Stable host the xterm renders into; moved between pane containers. */
   host: HTMLDivElement
+  /** Padding-free child of `host` that xterm opens into — see getOrCreate. */
+  mount: HTMLDivElement
   session: TerminalSession
   config: AttachConfig
   /**
@@ -157,6 +163,9 @@ interface Entry {
    * callers has any way to know that.
    */
   resetInputSegment: () => void
+  /** When the current pty reached `running` — anchors the start window in
+   *  which agent panes drop focus reports (`lib/focus-report.ts`). */
+  ptyStartedAt?: number
 }
 
 /** Live terminals keyed by terminalId, owned outside React's render tree. */
@@ -283,6 +292,41 @@ function refreshDetector(id: string, entry: Entry): void {
   entry.detector.start()
 }
 
+/** Path link under the pointer per terminal (from the path link provider's hover/leave). */
+const hoveredPaths = new Map<string, { text: string; resolved: string; isDir: boolean }>()
+/** Per-terminal "follow this path link" — the same gesture-gated route a Ctrl+click takes. */
+const pathFollowers = new Map<string, (event: MouseEvent, text: string) => void>()
+
+/** The detected file path currently hovered in a terminal, if any (Ctrl+drag source). */
+export function getHoveredPathLink(id: string): { text: string; resolved: string; isDir: boolean } | undefined {
+  return hoveredPaths.get(id)
+}
+
+/** Open a path link as a Ctrl+click would (used when a Ctrl+press on a link never became a drag). */
+/** Show a folder in Files: select it with its parents expanded, and expand it too. */
+export function revealDirInFiles(id: string, dir: string): void {
+  void (async () => {
+    const [{ openFileContext }, { useExplorerStore }] = await Promise.all([import('@/tauri/files'), import('@/store/explorer-store')])
+    const context = await openFileContext(id).catch(() => null)
+    if (!context) return
+    useAppStore.getState().revealTerminal(id)
+    const explorer = useExplorerStore.getState()
+    await explorer.reveal(context.id, dir)
+    const root = useExplorerStore.getState().roots[context.id]
+    if (root && !root.expanded.includes(dir)) useExplorerStore.getState().toggle(context.id, dir)
+  })().catch(console.warn)
+}
+
+export function openPathLink(id: string, event: MouseEvent, text: string): void {
+  const hovered = hoveredPaths.get(id)
+  if (hovered?.isDir && hovered.text === text) { revealDirInFiles(id, hovered.resolved); return }
+  // The press was captured before xterm saw it, so lastMouseDown is stale; a
+  // stale point would make followLink's drag-vs-click check drop this click.
+  const entry = entries.get(id)
+  if (entry) entry.lastMouseDown = { clientX: event.clientX, clientY: event.clientY }
+  pathFollowers.get(id)?.(event, text)
+}
+
 function getOrCreate(id: string): Entry {
   const existing = entries.get(id)
   if (existing) return existing
@@ -294,10 +338,18 @@ function getOrCreate(id: string): Entry {
   // the border. Padding lives on the host (not the .xterm element) and the host
   // carries the terminal's own background, so the dark interior still bleeds to
   // the pane edges — only the rows are pushed inward. box-sizing keeps the host
-  // filling the container despite the padding. The FitAddon reads the host's
-  // content-box size, so cols/rows already exclude this padding.
+  // filling the container despite the padding.
   host.style.boxSizing = 'border-box'
   host.style.padding = '6px 8px'
+  // xterm opens into this padding-free child, never into the host itself. The
+  // FitAddon sizes rows from getComputedStyle(parent).height, and for a
+  // border-box element WebView2 reports that INCLUDING padding — so with the
+  // host as parent it proposed up to 12px of rows too many and the last line
+  // slid under the pane border (visible after dragging a split by hand).
+  const mount = document.createElement('div')
+  mount.style.width = '100%'
+  mount.style.height = '100%'
+  host.appendChild(mount)
   host.style.background = terminalTheme(useAppearanceStore.getState().style).background as string
 
   const text = useTerminalTextStore.getState().text
@@ -405,6 +457,18 @@ function getOrCreate(id: string): Entry {
   // — for free. Each target pty echoes independently: this is real broadcast,
   // not a text mirror.
   const sendInput = (data: string): void => {
+    // A focus report belongs to the pane that changed focus only: fanned out
+    // it would type `ESC[I` into every broadcast member, and recorded as
+    // typing it would hold that pane's War Room deliveries for a line the
+    // user never typed.
+    if (isFocusReport(data)) {
+      const entry = entries.get(id)
+      const isAgent = entry !== undefined && !isPlainShellPane(entry.config.agentId)
+      if (!shouldDropFocusReport(isAgent, entry?.ptyStartedAt, Date.now())) {
+        void writeTerminal(id, data)
+      }
+      return
+    }
     const state = useAppStore.getState()
     const ws = selectWorkspaceByTerminalId(state, id)
     const targets = ws
@@ -697,8 +761,8 @@ function getOrCreate(id: string): Entry {
    */
   const followLink = (event: MouseEvent, kind: LinkKind, target: string): void => {
     const entry = entries.get(id)
-    if (isDragNotClick(entry?.lastMouseDown, event)) return
-    if (!shouldFollowLink(event, isMac, kind)) return
+    if (isDragNotClick(entry?.lastMouseDown, event)) { devLog('link.skip-drag', { target }); return }
+    if (!shouldFollowLink(event, isMac, kind)) { devLog('link.skip-modifier', { target }); return }
 
     if (kind === 'url') {
       openUrl(target).catch(console.warn)
@@ -706,16 +770,23 @@ function getOrCreate(id: string): Entry {
     }
     const { path, line, col } = parsePathSuffix(target)
     void resolvePathLink(getTerminalCwd(id) ?? '', path)
-      .then(async (resolved) => {
-        if (!resolved) return
-        const [{ openFileContext }, { isSubPath }, { useDocumentStore }] = await Promise.all([
-          import('@/tauri/files'), import('@/lib/files/ops'), import('@/store/document-store')
+      .then(async (verbatim) => {
+        if (!verbatim) return
+        // Rust canonicalizes absolute Windows paths to `\\?\D:\…`; isSubPath
+        // against the plain project root then fails and an in-project file was
+        // sent to the external editor / file manager instead of the editor tab.
+        const resolved = displayPath(verbatim)
+        const [{ openFileContext }, { isSubPath }, { useDocumentStore }, { useExplorerStore }] = await Promise.all([
+          import('@/tauri/files'), import('@/lib/files/ops'), import('@/store/document-store'), import('@/store/explorer-store')
         ])
         const context = await openFileContext(id).catch(() => null)
+        devLog('link.follow', { target, resolved, root: context?.root ?? null })
         const ws = selectWorkspaceByTerminalId(useAppStore.getState(), id)
         const leaf = ws ? collectLeaves(ws.layout).find((l) => l.terminalId === id) : undefined
         if (context && leaf && isSubPath(context.root, resolved)) {
           useAppStore.getState().revealTerminal(id)
+          // The explorer follows the focused terminal, so its root for `id` is this context.
+          void useExplorerStore.getState().reveal(context.id, resolved).catch(console.warn)
           await useDocumentStore.getState().open(leaf.id, context, resolved, { line: line ?? 1, column: col ?? 1 })
           return
         }
@@ -730,6 +801,7 @@ function getOrCreate(id: string): Entry {
   // then window.open() — both wrong inside a Tauri webview. allowNonHttpProtocols
   // is what lets file:// through; classifyOscLink is the protection that permission
   // requires, refusing everything except http(s) and file.
+  pathFollowers.set(id, (event, text) => followLink(event, 'path', text))
   const linkHandler: ILinkHandler = {
     allowNonHttpProtocols: true,
     activate: (event, text) => {
@@ -753,20 +825,48 @@ function getOrCreate(id: string): Entry {
       const lineText = term.buffer.active.getLine(y - 1)?.translateToString(true)
       if (!lineText) return callback(undefined)
       const candidates = detectPathCandidates(lineText)
+      // A listing row's bare Name becomes a candidate too; listingDir() below
+      // decides whether there is a listing header at all (else it never resolves).
+      const entry = listingEntry(lineText)
+      if (entry && !candidates.some((c) => c.start <= entry.start && c.end >= entry.end)) candidates.push(entry)
       if (candidates.length === 0) return callback(undefined)
 
       const cwd = getTerminalCwd(id) ?? ''
+      // Bare names in a `dir` / Get-ChildItem listing are relative to its
+      // "Directory:" header, not to the shell's cwd. Looked up lazily, once.
+      let listing: string | null | undefined
+      const listingDir = (): string | null => {
+        if (listing !== undefined) return listing
+        const buffer = term.buffer.active
+        const above: string[] = []
+        for (let i = y - 2; i >= Math.max(0, y - 302); i--) above.push(buffer.getLine(i)?.translateToString(true) ?? '')
+        return (listing = listingDirAbove(above))
+      }
       void Promise.all(
         candidates.map(async (c) => {
           const { path } = parsePathSuffix(c.text)
-          const resolved = await resolvePathLink(cwd, path).catch(() => null)
+          const bare = !/[\\/]/.test(path)
+          // Files first (cwd, then the listing folder for bare names); a name that
+          // is no file may still be a folder — the `d-----` rows and the header path.
+          let resolved = await resolvePathLink(cwd, path).catch(() => null)
+          if (!resolved && bare && listingDir()) resolved = await resolvePathLink(listingDir()!, path).catch(() => null)
+          let isDir = false
+          if (!resolved) {
+            resolved = await resolveDirLink(cwd, path).catch(() => null)
+            if (!resolved && bare && listingDir()) resolved = await resolveDirLink(listingDir()!, path).catch(() => null)
+            isDir = resolved !== null
+          }
           if (!resolved) return null
+          const shown = displayPath(resolved)
           const link: ILink = {
             // xterm buffer ranges are 1-based and inclusive; candidate indices
             // are 0-based with an exclusive end.
             range: { start: { x: c.start + 1, y }, end: { x: c.end, y } },
             text: c.text,
-            activate: (event, text) => followLink(event, 'path', text)
+            // A folder never goes to an editor or the OS opener: Ctrl+click shows it in Files.
+            activate: (event, text) => { if (isDir) { if (shouldFollowLink(event, isMac, 'path')) revealDirInFiles(id, shown) } else followLink(event, 'path', text) },
+            hover: () => { hoveredPaths.set(id, { text: c.text, resolved: shown, isDir }) },
+            leave: () => { if (hoveredPaths.get(id)?.text === c.text) hoveredPaths.delete(id) }
           }
           return link
         })
@@ -848,6 +948,13 @@ function getOrCreate(id: string): Entry {
   // exit/error, and the detector has no pty visibility of its own.
   session.subscribe(() => {
     const kind = session.getStatus().kind
+    const entry = entries.get(id)
+    // Stamped on the transition only, so later status repaints don't keep
+    // re-opening the focus-report window.
+    if (entry) {
+      if (kind !== 'running') entry.ptyStartedAt = undefined
+      else entry.ptyStartedAt ??= Date.now()
+    }
     if (kind === 'exited' || kind === 'error') {
       entries.get(id)?.detector?.noteExit()
       // The pty behind the OSC 133 marks is gone: a `running` left here would
@@ -866,6 +973,7 @@ function getOrCreate(id: string): Entry {
     fit,
     search,
     host,
+    mount,
     session,
     config: {},
     cwd: '',
@@ -899,7 +1007,7 @@ export function attachTerminal(id: string, container: HTMLElement, config: Attac
   container.appendChild(entry.host)
 
   if (!entry.opened) {
-    entry.term.open(entry.host)
+    entry.term.open(entry.mount)
     loadWebglRenderer(id, entry)
     entry.opened = true
   }
@@ -930,6 +1038,8 @@ export function detachTerminal(id: string): void {
 
 /** Permanently destroy a terminal: kill the pty, dispose xterm, drop the entry. */
 export function disposeTerminal(id: string): void {
+  hoveredPaths.delete(id)
+  pathFollowers.delete(id)
   const entry = entries.get(id)
   if (!entry) return
   entry.observer?.disconnect()
@@ -1161,6 +1271,27 @@ export function getTerminalStatus(id: string): TerminalStatus {
 }
 
 /** The terminal's live cwd — OSC 7 if the shell reports it, else the spawn cwd. */
+/** Last `lines` rows of a terminal's buffer as text — for the dev test hook (testlab) only. */
+export function readTerminalText(id: string, lines = 40): string {
+  const buffer = entries.get(id)?.term.buffer.active
+  if (!buffer) return ''
+  const out: string[] = []
+  // Up to the cursor row, not buffer.length: a fresh shell's prompt sits at the
+  // top and everything below it is blank rows.
+  const end = buffer.baseY + buffer.cursorY + 1
+  for (let y = Math.max(0, end - lines); y < end; y++) out.push(buffer.getLine(y)?.translateToString(true) ?? '')
+  return out.join('\n').replace(/\s+$/, '')
+}
+
+/** Screen box and cell size of a terminal — for the dev test hook (testlab) only. */
+export function terminalGeometry(id: string): { x: number; y: number; cellW: number; cellH: number; cols: number; rows: number; cursorY: number } | null {
+  const entry = entries.get(id)
+  const screen = entry?.term.element?.querySelector('.xterm-screen')
+  if (!entry || !screen) return null
+  const r = screen.getBoundingClientRect()
+  return { x: r.x, y: r.y, cellW: r.width / entry.term.cols, cellH: r.height / entry.term.rows, cols: entry.term.cols, rows: entry.term.rows, cursorY: entry.term.buffer.active.cursorY }
+}
+
 export function getTerminalCwd(id: string): string | undefined {
   return entries.get(id)?.cwd || undefined
 }

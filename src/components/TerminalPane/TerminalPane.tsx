@@ -27,11 +27,16 @@ import { buildContinueCommand, buildResumeCommand } from '@/lib/resume-command'
 import { isWindowsPlatform } from '@/lib/platform'
 import { pickDirectory } from '@/tauri/dialog'
 import { cn } from '@/lib/utils'
+import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
+import { insertExplorerPaths } from '@/components/FileDropListener'
+import { devLog } from '@/lib/dev-log'
 import {
   attachTerminal,
   detachTerminal,
   focusTerminal,
   getTerminalStatus,
+  getHoveredPathLink,
+  openPathLink,
   respawnTerminal,
   retryTerminal,
   subscribeTerminalStatus,
@@ -49,6 +54,8 @@ interface TerminalPaneProps {
   isBroadcastMember: boolean
   /** Whether the workspace exposes MCP worktree tools to every terminal. */
   worktreeMode: boolean
+  /** Whether this pane is zoomed to fill its workspace. */
+  isZoomed?: boolean
 }
 
 /**
@@ -64,7 +71,8 @@ export function TerminalPane({
   isFocused,
   broadcastActive,
   isBroadcastMember,
-  worktreeMode
+  worktreeMode,
+  isZoomed = false
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -294,9 +302,31 @@ export function TerminalPane({
       // Clicking pane chrome (header, borders) blurs xterm; App.tsx returns the
       // keyboard to the terminal on the way back up (lib/terminal-focus.ts).
       data-focus-return
+      // Ctrl+press on a detected file path: a drag carries it to another pane
+      // (path / @ mention, like a Files drag); released in place it opens the
+      // link exactly as Ctrl+click did. Captured before xterm so the press
+      // doesn't start a text selection.
+      onMouseDownCapture={(e) => {
+        if (e.button !== 0 || !(isWindowsPlatform() ? e.ctrlKey : e.metaKey)) return
+        const link = getHoveredPathLink(terminalId)
+        if (!link) return
+        e.preventDefault()
+        e.stopPropagation()
+        const native = e.nativeEvent
+        const hit = (x: number, y: number): DragHit => {
+          const pane = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest<HTMLElement>('[data-terminal-id]')
+          const target = pane?.dataset.terminalId
+          return target && target !== terminalId ? { effect: 'copy', terminalId: target } : { effect: 'none' }
+        }
+        startPointerDrag(e, { name: 'terminal-link', items: [link.resolved], hit,
+          drop: (_x, _y, _c, h) => { if (h.terminalId) insertExplorerPaths(h.terminalId, [link.resolved]) },
+          onTap: () => { devLog('terminal-link.tap', { text: link.text }); openPathLink(terminalId, native, link.text) } })
+      }}
       data-terminal-id={terminalId}
       data-leaf-id={leafId}
       data-shell-flavor={paneShellFlavor}
+      data-agent-id={resolvedAgentId}
+      data-cwd={resolvedCwd}
       className={cn(
         'flex h-full w-full flex-col overflow-hidden rounded-md border bg-background',
         isFocused
@@ -330,6 +360,8 @@ export function TerminalPane({
         onSplitRight={() => splitPane(leafId, 'horizontal')}
         onSplitDown={() => splitPane(leafId, 'vertical')}
         onClose={() => closePane(leafId)}
+        isZoomed={isZoomed}
+        onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
         broadcastActive={broadcastActive}
         isBroadcastMember={isBroadcastMember}
         onToggleBroadcast={() => toggleBroadcastMember(leafId)}

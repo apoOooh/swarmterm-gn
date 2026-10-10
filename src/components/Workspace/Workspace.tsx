@@ -7,6 +7,7 @@ import { BroadcastBanner } from '@/components/Workspace/BroadcastBanner'
 import { AgentIcon } from '@/components/AgentIcon'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
+import { zoomedLeaf } from '@/lib/pane-zoom'
 
 interface WorkspaceProps {
   workspace: WorkspaceModel
@@ -29,6 +30,7 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
             workspace.broadcastActive && workspace.broadcastLeafIds.includes(node.id)
           }
           worktreeMode={workspace.worktreeMode}
+          isZoomed={workspace.zoomedLeafId === node.id}
         />
       )
     }
@@ -71,7 +73,9 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
   return (
     <div data-focus-return className="flex h-full w-full flex-col bg-canvas">
       <BroadcastBanner workspace={workspace} />
-      <div className="min-h-0 flex-1 p-2">{renderNode(workspace.layout)}</div>
+      {/* Zoom renders the one leaf alone; the hidden panes unmount, but their
+          xterm + pty live on in terminal-registry and reattach on unzoom. */}
+      <div className="min-h-0 flex-1 p-2">{renderNode(zoomedLeaf(workspace.layout, workspace.zoomedLeafId) ?? workspace.layout)}</div>
     </div>
   )
 }
