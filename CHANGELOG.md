@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-10
+
+- Release 1.3.0 again; its release checks failed on two browser tests still
+  using HTML5 drop events. 1.3.0 was never published.
+
 ## [1.3.0] - 2026-10-10
 
 - Fix a stray `^[[I` / `^[[O` above the Claude Code banner when focus moved
