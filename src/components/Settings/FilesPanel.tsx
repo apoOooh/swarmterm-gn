@@ -30,13 +30,13 @@ export function FilesPanel(): ReactElement {
       <section>
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">Files</h1>
         <p className="mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground">
-          How Markdown files open from the explorer. The view can be switched per file in its toolbar
+          How Markdown, SVG and HTML files open from the explorer. The view can be switched per file in its toolbar
           (Ctrl/Cmd+Shift+V cycles Source, Split and Rendered).
         </p>
       </section>
 
       <section>
-        <h2 className="mb-2 text-sm font-semibold text-foreground">Open Markdown as</h2>
+        <h2 className="mb-2 text-sm font-semibold text-foreground">Open Markdown, SVG and HTML as</h2>
         <div role="radiogroup" aria-label="Default Markdown view" className="grid grid-cols-3 gap-2">
           {MODES.map((m) => (
             <button

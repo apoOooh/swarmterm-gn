@@ -6,10 +6,12 @@ import remarkGfm from 'remark-gfm'
 import rehypeSanitize from 'rehype-sanitize'
 import rehypeRaw from 'rehype-raw'
 import rehypeSlug from 'rehype-slug'
-import { ExternalLink, Play, Save, Search } from 'lucide-react'
+import { ExternalLink, Globe, Play, Save, Search } from 'lucide-react'
 import { CodeEditor } from './CodeEditor'
 import { MediaView } from './MediaView'
 import { CodeFence } from './CodeFence'
+import { SvgPreview } from './SvgPreview'
+import { HtmlPreview } from './HtmlPreview'
 import type { FileDocument } from '@/lib/files/documents'
 import { parentDir, resolveRelative, decodeUriPath } from '@/lib/files/paths'
 import { fileRun } from '@/lib/files/run'
@@ -20,8 +22,8 @@ import { useDocumentStore } from '@/store/document-store'
 import { useAppStore } from '@/store/app-store'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useMarkdownPrefStore } from '@/store/markdown-pref-store'
-import { isMarkdownPath } from '@/lib/markdown-pref'
-import { mediaUrl, openInMarkText } from '@/tauri/files'
+import { previewKind } from '@/lib/files/preview-kind'
+import { mediaUrl, openInMarkText, openPreviewExternal } from '@/tauri/files'
 import { openUrl } from '@/tauri/opener'
 import type { LeafNode } from '@/lib/layout-tree'
 import { cn } from '@/lib/utils'
@@ -38,7 +40,9 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
   const findInput = useRef<HTMLInputElement>(null)
   const shellId = useTerminalPrefStore((s) => s.shellId)
   const runner = fileRun(doc.path, shellFlavor(leaf.shellId ?? shellId, isWindowsPlatform()))
-  const markdown = isMarkdownPath(doc.path)
+  const kind = previewKind(doc.path)
+  const markdown = kind === 'markdown'
+  const kindLabel = kind === 'markdown' ? 'Markdown' : kind?.toUpperCase()
   useEffect(() => {
     const matches = preview.current?.querySelectorAll('[data-file-match]')
     setFindCount(matches?.length ?? 0)
@@ -46,7 +50,7 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
   }, [findQuery, findIndex, doc.content, doc.mode])
   useEffect(() => { if (findOpen) findInput.current?.focus() }, [findOpen])
   function find(): void {
-    if (doc.mode === 'preview') setFindOpen(true)
+    if (doc.mode === 'preview' && markdown) setFindOpen(true)
     else window.dispatchEvent(new Event('swarmterm:find-file'))
   }
   function editorScroll(line: number): void {
@@ -75,6 +79,11 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
     if (doc.dirty && !await store.save(doc.key)) return
     await openInMarkText(doc.context.id, doc.path, useMarkdownPrefStore.getState().prefs.marktextPath)
       .catch((e) => useDocumentStore.setState({ error: String(e) }))
+  }
+  // Same save-first contract: the browser reads the file from disk.
+  async function openBrowser(): Promise<void> {
+    if (doc.dirty && !await store.save(doc.key)) return
+    await openPreviewExternal(doc.context.id, doc.path).catch((e) => useDocumentStore.setState({ error: String(e) }))
   }
   const code = <CodeEditor doc={doc} paneId={leaf.id} viewRef={view} onScroll={editorScroll} />
   const markdownComponents = useMemo<Components>(() => ({
@@ -106,11 +115,12 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
       return defaultUrlTransform(url)
     }} components={markdownComponents}>{doc.content}</ReactMarkdown></div>
   </div>
+  const previewPane = markdown ? rendered : kind === 'svg' ? <SvgPreview content={doc.content} /> : kind === 'html' ? <HtmlPreview doc={doc} /> : null
   return <div data-keyboard-owner="editor" data-file-active={focused} className="flex h-full min-h-0 flex-col bg-background" onMouseDown={() => useAppStore.getState().setFocusedLeaf(leaf.id)} onKeyDown={(e) => {
     if (e.defaultPrevented) return
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); e.stopPropagation(); void store.save(doc.key) }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); e.stopPropagation(); find() }
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v' && markdown) { e.preventDefault(); e.stopPropagation(); store.mode(doc.key, doc.mode === 'editor' ? 'split' : doc.mode === 'split' ? 'preview' : 'editor') }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v' && kind) { e.preventDefault(); e.stopPropagation(); store.mode(doc.key, doc.mode === 'editor' ? 'split' : doc.mode === 'split' ? 'preview' : 'editor') }
   }}>
     <div className="flex shrink-0 items-center gap-1 border-b border-border bg-card px-2 py-1 text-[11px]">
       <span className="min-w-0 flex-1 truncate text-muted-foreground" title={doc.path}>{doc.path}</span>
@@ -120,7 +130,8 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
         <button title="Save (Ctrl/Cmd+S)" aria-label="Save file" disabled={!doc.dirty || doc.readOnly || doc.saving || !!doc.conflict || doc.missing} className="flex items-center gap-1 rounded px-2 py-1 hover:bg-accent disabled:opacity-40" onClick={() => void store.save(doc.key)}><Save size={13} />Save</button>
       </>}
       {markdown && <button title="Open in MarkText" aria-label="Open in MarkText" className="flex items-center gap-1 rounded px-2 py-1 hover:bg-accent" onClick={() => void openMarkText()}><ExternalLink size={12} />MarkText</button>}
-      {markdown && (['editor', 'split', 'preview'] as const).map((mode) => <button key={mode} aria-label={`Markdown ${mode}`} aria-pressed={doc.mode === mode} onClick={() => store.mode(doc.key, mode)} className={cn('rounded px-2 py-1 capitalize hover:bg-accent', doc.mode === mode && 'bg-accent')}>{mode}</button>)}
+      {(kind === 'svg' || kind === 'html') && <button title="Open in browser" aria-label="Open in browser" className="flex items-center gap-1 rounded px-2 py-1 hover:bg-accent" onClick={() => void openBrowser()}><Globe size={12} />Browser</button>}
+      {kind && (['editor', 'split', 'preview'] as const).map((mode) => <button key={mode} aria-label={`${kindLabel} ${mode}`} aria-pressed={doc.mode === mode} onClick={() => store.mode(doc.key, mode)} className={cn('rounded px-2 py-1 capitalize hover:bg-accent', doc.mode === mode && 'bg-accent')}>{mode}</button>)}
     </div>
     {findOpen && markdown && <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1 text-xs">
       <input ref={findInput} aria-label="Find in Markdown preview" placeholder="Find in preview" value={findQuery} className="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1" onChange={(e) => { setFindQuery(e.target.value); setFindIndex(0) }} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setFindOpen(false); setFindQuery('') } if (e.key === 'Enter' && findCount) { e.preventDefault(); setFindIndex((i) => (i + (e.shiftKey ? findCount - 1 : 1)) % findCount) } }} />
@@ -137,7 +148,7 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
     {doc.missing && <p role="alert" className="shrink-0 border-b border-border p-2 text-xs text-destructive">The file was removed or is unavailable on disk. Your buffer is preserved.</p>}
     {doc.readOnly && <p role="status" className="shrink-0 border-b border-border p-2 text-xs text-muted-foreground">Read only: binary / non-UTF-8 content or file larger than 1 MB. Use an external editor for this file.</p>}
     <div className="min-h-0 flex-1">
-      {doc.kind !== 'text' ? <MediaView doc={doc} leafId={leaf.id} /> : markdown && doc.mode === 'preview' ? rendered : markdown && doc.mode === 'split' ? <Group orientation="horizontal" className="h-full"><Panel id="markdown-code" minSize="15%">{code}</Panel><Separator className="w-1 cursor-col-resize bg-border hover:bg-ring" /><Panel id="markdown-preview" minSize="15%">{rendered}</Panel></Group> : code}
+      {doc.kind !== 'text' ? <MediaView doc={doc} leafId={leaf.id} /> : previewPane && doc.mode === 'preview' ? previewPane : previewPane && doc.mode === 'split' ? <Group orientation="horizontal" className="h-full"><Panel id="markdown-code" minSize="15%">{code}</Panel><Separator className="w-1 cursor-col-resize bg-border hover:bg-ring" /><Panel id="markdown-preview" minSize="15%">{previewPane}</Panel></Group> : code}
     </div>
 
     {doc.kind === 'text' && <div className="shrink-0 border-t border-border px-2 py-0.5 text-[10px] text-muted-foreground">{doc.eol === '\r\n' ? 'CRLF' : 'LF'} · UTF-8{doc.bom ? ' BOM' : ''} · {doc.saving ? 'Saving…' : doc.dirty ? 'Unsaved' : 'Saved'}</div>}

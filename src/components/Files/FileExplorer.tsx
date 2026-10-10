@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type DragEvent } from 'react'
+import { insertExplorerPaths } from '@/components/FileDropListener'
+import { canDropInto, dragEffect, dropDirectory } from '@/lib/pointer-drag'
+import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
+import { useExplorerDragStore } from '@/store/explorer-drag-store'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDownUp, Copy, File, FilePlus, Folder, FolderPlus, History, RefreshCw, X } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { useExplorerStore, type ExplorerRoot } from '@/store/explorer-store'
@@ -19,7 +23,6 @@ import { cn } from '@/lib/utils'
 import { isMarkdownPath } from '@/lib/markdown-pref'
 import { useMarkdownPrefStore } from '@/store/markdown-pref-store'
 
-export const FILE_DRAG_TYPE = 'application/x-swarmterm-files'
 const rowHeight = 26
 const basename = (path: string): string => path.replace(/\\/g, '/').split('/').pop() ?? path
 
@@ -61,7 +64,17 @@ export function FileExplorer(): React.ReactElement {
     return () => window.removeEventListener('swarmterm:focus-explorer', focus)
   }, [])
 
+  const rowsRef = useRef<TreeRow[]>([])
+  useEffect(() => {
+    const reveal = (e: Event): void => {
+      const index = rowsRef.current.findIndex((r) => r.entry.path === (e as CustomEvent<string>).detail)
+      if (index >= 0 && tree.current) tree.current.scrollTop = Math.max(0, index * rowHeight - tree.current.clientHeight / 2)
+    }
+    window.addEventListener('swarmterm:reveal-file', reveal)
+    return () => window.removeEventListener('swarmterm:reveal-file', reveal)
+  }, [])
   const rows = root ? treeRows(root.context.root, root.dirs, new Set(root.expanded), filter) : []
+  rowsRef.current = rows
   const range = virtualRange(rows.length, scrollTop, height, rowHeight)
   const context = root?.context
   const activeEntry = rows.find((r) => r.entry.path === root?.active)?.entry
@@ -265,16 +278,41 @@ export function FileExplorer(): React.ReactElement {
       if (tree.current && (top < scrollTop || top + rowHeight > scrollTop + height)) tree.current.scrollTop = Math.max(0, top - height / 2)
     }
   }
-  function drop(e: DragEvent, directory: string): void {
-    if (!context || !e.dataTransfer.types.includes(FILE_DRAG_TYPE)) return
-    e.preventDefault(); e.stopPropagation()
-    try {
-      const data = JSON.parse(e.dataTransfer.getData(FILE_DRAG_TYPE)) as { contextId: string; paths: string[] }
-      const source = useExplorerStore.getState().roots[data.contextId]?.context
-      if (!source || !Array.isArray(data.paths)) return
-      const cut = !(e.ctrlKey || e.metaKey)
-      void operation(async (id) => transferred(await transferFiles(context.id, source.id, topLevelOnly(data.paths), directory, cut, id), source, context, cut))
-    } catch (error) { useExplorerStore.setState({ error: String(error) }) }
+  // Internal moves/copies; the source is always this explorer's own root.
+  function transfer(paths: string[], directory: string, cut: boolean): void {
+    if (!context) return
+    void operation(async (id) => transferred(await transferFiles(context.id, context.id, topLevelOnly(paths), directory, cut, id), context, context, cut))
+  }
+  const suppressClick = useRef(false)
+  /**
+   * Pointer-driven drag of the selection (see lib/pointer-drag.ts for why not
+   * HTML5). Window listeners follow the pointer; hit-testing goes through the
+   * DOM contracts: `[data-terminal-id]` panes, `[data-drop-dir]` rows.
+   */
+  function beginDrag(e: React.PointerEvent, row: TreeRow): void {
+    if (!root || !context) return
+    const paths = topLevelOnly(root.selection.includes(row.entry.path) ? root.selection : [row.entry.path])
+    const rootDir = context.root
+    const hit = (x: number, y: number, copyKey: boolean): DragHit => {
+      const el = document.elementFromPoint(x, y) as HTMLElement | null
+      const pane = el?.closest<HTMLElement>('[data-terminal-id]')
+      if (pane?.dataset.terminalId) return { effect: dragEffect('pane', copyKey), terminalId: pane.dataset.terminalId }
+      const dir = el?.closest<HTMLElement>('[data-drop-dir]')?.dataset.dropDir ?? (el?.closest('[role="tree"]') ? rootDir : undefined)
+      if (dir && canDropInto(dir, paths)) return { effect: dragEffect('dir', copyKey), overDir: dir }
+      return { effect: 'none' }
+    }
+    startPointerDrag(e, {
+      name: 'explorer', items: paths, hit,
+      onStart: () => { suppressClick.current = true },
+      // The click that follows this pointerup (if any) belongs to the drag; any
+      // later click is a real one. Without the reset an Esc-cancelled drag,
+      // which gets no click, would swallow the next click in the tree.
+      onEnd: () => { setTimeout(() => { suppressClick.current = false }, 0) },
+      drop: (_x, _y, copyKey, h) => {
+        if (h.terminalId) insertExplorerPaths(h.terminalId, paths)
+        else if (h.overDir) transfer(paths, h.overDir, !copyKey)
+      }
+    })
   }
   function menu(): React.ReactElement {
     return <ContextMenuContent>
@@ -323,13 +361,13 @@ export function FileExplorer(): React.ReactElement {
         {root && <input className="mx-2 mb-1 shrink-0 rounded border border-input bg-background px-2 py-1 text-[11px] outline-none focus:ring-1 focus:ring-ring" placeholder="Filter loaded files" aria-label="Filter loaded files" value={filter} onChange={(e) => setFilter(e.target.value)} />}
         <ContextMenu>
           <ContextMenuTrigger asChild>
-            <div ref={tree} role="tree" aria-label="Project files" aria-multiselectable="true" aria-activedescendant={root?.active ? `file-row-${encodeURIComponent(root.active)}` : undefined} tabIndex={0} className="min-h-0 flex-1 overflow-auto outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" onKeyDown={keyboard} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)} onDragOver={(e) => { if (e.dataTransfer.types.includes(FILE_DRAG_TYPE)) e.preventDefault() }} onDrop={(e) => drop(e, context?.root ?? '')} onContextMenu={(e) => { if (root && e.target === e.currentTarget) explorer.select(root.context.id, [], root.context.root, root.context.root) }}>
+            <div ref={tree} role="tree" aria-label="Project files" aria-multiselectable="true" aria-activedescendant={root?.active ? `file-row-${encodeURIComponent(root.active)}` : undefined} tabIndex={0} className="min-h-0 flex-1 overflow-auto outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" onKeyDown={keyboard} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)} onContextMenu={(e) => { if (root && e.target === e.currentTarget) explorer.select(root.context.id, [], root.context.root, root.context.root) }}>
               {explorer.loading && <p className="p-3 text-xs text-muted-foreground">Connecting to terminal…</p>}
               {!root && !explorer.loading && <p className="p-3 text-xs text-muted-foreground">Select a terminal to browse its project.</p>}
               {root?.dirs[root.context.root]?.error && <p role="alert" className="p-3 text-xs text-destructive">{root.dirs[root.context.root].error}</p>}
               {root && rows.length === 0 && !root.dirs[root.context.root]?.loading && <p className="p-3 text-xs text-muted-foreground">{filter ? 'No loaded files match.' : 'This folder is empty.'}</p>}
               <div style={{ height: rows.length * rowHeight, position: 'relative' }}>
-                {rows.slice(range.start, range.end).map((row, offset) => <ExplorerRow key={row.entry.path} row={row} root={root!} index={range.start + offset} onSelect={(shift, mod) => selectRow(row, shift, mod)} onOpen={() => open(row)} onDrop={(e) => drop(e, row.entry.isDir ? row.entry.path : row.parent)} onContext={() => { if (!root?.selection.includes(row.entry.path)) selectRow(row, false, false) }} />)}
+                {rows.slice(range.start, range.end).map((row, offset) => <ExplorerRow key={row.entry.path} row={row} root={root!} index={range.start + offset} onSelect={(shift, mod) => selectRow(row, shift, mod)} onOpen={() => open(row)} onDragBegin={(e) => beginDrag(e, row)} suppressClick={suppressClick} onContext={() => { if (!root?.selection.includes(row.entry.path)) selectRow(row, false, false) }} />)}
               </div>
               {root && root.expanded.map((p) => root.dirs[p]?.error ? <button key={p} className="m-2 text-[11px] text-destructive" onClick={() => void explorer.load(root.context.id, p)}>Retry {basename(p)}: {root.dirs[p].error}</button> : null)}
             </div>
@@ -341,15 +379,12 @@ export function FileExplorer(): React.ReactElement {
   </section>
 }
 
-function ExplorerRow({ row, root, index, onSelect, onOpen, onDrop, onContext }: { row: TreeRow; root: ExplorerRoot; index: number; onSelect: (shift: boolean, mod: boolean) => void; onOpen: () => void; onDrop: (e: DragEvent) => void; onContext: () => void }): React.ReactElement {
+function ExplorerRow({ row, root, index, onSelect, onOpen, onDragBegin, suppressClick, onContext }: { row: TreeRow; root: ExplorerRoot; index: number; onSelect: (shift: boolean, mod: boolean) => void; onOpen: () => void; onDragBegin: (e: React.PointerEvent) => void; suppressClick: React.MutableRefObject<boolean>; onContext: () => void }): React.ReactElement {
   const selected = root.selection.includes(row.entry.path)
+  const dropDir = dropDirectory({ path: row.entry.path, isDir: row.entry.isDir, parent: row.parent })
+  const dropHere = useExplorerDragStore((s) => row.entry.isDir && s.drag?.overDir === row.entry.path)
   const status = gitBadge(row.entry.path, root.statuses)
-  return <div id={`file-row-${encodeURIComponent(row.entry.path)}`} role="treeitem" aria-level={row.depth + 1} aria-selected={selected} aria-expanded={row.entry.isDir ? row.expanded : undefined} title={`${row.entry.path}${row.entry.isSymlink ? ' (symbolic link)' : ''}`} draggable className={cn('absolute left-0 right-0 flex cursor-default items-center gap-1.5 pr-2 text-xs hover:bg-accent/40', selected && 'bg-accent text-accent-foreground', root.active === row.entry.path && 'outline outline-1 -outline-offset-1 outline-ring/50')} style={{ top: index * rowHeight, height: rowHeight, paddingLeft: 8 + row.depth * 14 }} onContextMenu={onContext} onClick={(e) => { onSelect(e.shiftKey, isMacPlatform() ? e.metaKey : e.ctrlKey); if (!e.shiftKey && !e.ctrlKey && !e.metaKey) onOpen() }} onDragStart={(e) => {
-    const paths = selected ? root.selection : [row.entry.path]
-    e.dataTransfer.setData(FILE_DRAG_TYPE, JSON.stringify({ contextId: root.context.id, paths: topLevelOnly(paths) })); e.dataTransfer.effectAllowed = 'copyMove'
-    // dnd-kit must not interpret a native file drag as a terminal-pane gesture.
-    e.stopPropagation()
-  }} onDragOver={(e) => { if (e.dataTransfer.types.includes(FILE_DRAG_TYPE)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = e.ctrlKey || e.metaKey ? 'copy' : 'move' } }} onDrop={onDrop}>
+  return <div id={`file-row-${encodeURIComponent(row.entry.path)}`} role="treeitem" aria-level={row.depth + 1} aria-selected={selected} aria-expanded={row.entry.isDir ? row.expanded : undefined} title={`${row.entry.path}${row.entry.isSymlink ? ' (symbolic link)' : ''}`} data-drop-dir={dropDir} className={cn('absolute left-0 right-0 flex cursor-default items-center gap-1.5 pr-2 text-xs hover:bg-accent/40', selected && 'bg-accent text-accent-foreground', root.active === row.entry.path && 'outline outline-1 -outline-offset-1 outline-ring/50', dropHere && 'bg-primary/20 ring-1 ring-inset ring-primary')} style={{ top: index * rowHeight, height: rowHeight, paddingLeft: 8 + row.depth * 14 }} onContextMenu={onContext} onPointerDown={onDragBegin} onClick={(e) => { if (suppressClick.current) { suppressClick.current = false; return } onSelect(e.shiftKey, isMacPlatform() ? e.metaKey : e.ctrlKey); if (!e.shiftKey && !e.ctrlKey && !e.metaKey) onOpen() }}>
     {row.entry.isDir ? (row.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : <span className="w-3" />}
     {row.entry.isDir ? <Folder size={14} className="shrink-0 text-muted-foreground" /> : <File size={14} className="shrink-0 text-muted-foreground" />}
     <span className="min-w-0 flex-1 truncate">{row.entry.name}</span>

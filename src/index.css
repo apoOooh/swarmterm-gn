@@ -4,6 +4,10 @@
    generous, proportional type rather than editor-width monospace. Colours stay
    on the --md-* theme tokens so every Astera theme (and its contrast checks)
    applies unchanged. */
+.svg-preview-light { background: #ffffff; }
+.svg-preview-dark { background: #1e1e1e; }
+/* VS Code image preview's transparency checkerboard. */
+.svg-preview-checker { background-color: #ffffff; background-image: linear-gradient(45deg, #e5e5e5 25%, transparent 25%, transparent 75%, #e5e5e5 75%), linear-gradient(45deg, #e5e5e5 25%, transparent 25%, transparent 75%, #e5e5e5 75%); background-size: 16px 16px; background-position: 0 0, 8px 8px; }
 .markdown-preview { color: var(--md-text); background: var(--md-bg); font-family: var(--sans); font-size: 16px; line-height: 1.75; -webkit-font-smoothing: antialiased; container-type: inline-size; }
 .markdown-preview .markdown-body { max-width: 52rem; margin: 0 auto; padding: clamp(1rem, 5cqi, 2.5rem) clamp(1rem, 6cqi, 3rem) 5rem; overflow-wrap: break-word; }
 .markdown-preview .markdown-body > :first-child { margin-top: 0; }
@@ -157,3 +161,6 @@
 .theme-row[data-active="true"] { box-shadow: inset var(--marker-w, 2px) 0 rgb(var(--color-primary)); }
 .theme-elevated { box-shadow: var(--shadow-lg); }
 .font-mono { font-family: var(--mono, ui-monospace, monospace); }
+
+/* Explorer pointer drag: the root cursor (copy / move / no-drop) wins over every element's own. */
+html[data-dragging] * { cursor: inherit !important; user-select: none; }

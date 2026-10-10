@@ -11,6 +11,11 @@ export function resolvePathLink(cwd: string, candidate: string): Promise<string 
   return invoke<string | null>('resolve_path_link', { cwd, candidate })
 }
 
+/** Canonical path of an existing folder, or null (drag source / reveal in Files only). */
+export function resolveDirLink(cwd: string, candidate: string): Promise<string | null> {
+  return invoke<string | null>('resolve_dir_link', { cwd, candidate })
+}
+
 /** First allowlisted editor id found on PATH, or null. */
 export function findAvailableEditor(candidates: readonly string[]): Promise<string | null> {
   return invoke<string | null>('find_available_editor', { candidates })

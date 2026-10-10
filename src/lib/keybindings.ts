@@ -17,6 +17,8 @@ export type AppShortcutAction =
   | 'find-in-terminal'
   | 'jump-to-attention'
   | 'focus-explorer'
+  | 'clear-input'
+  | 'toggle-zoom'
 
 /** The subset of a KeyboardEvent the matcher needs, kept pure for unit tests. */
 export interface ShortcutKeyEvent {
@@ -49,6 +51,8 @@ export function matchAppShortcut(
   // registry gate would otherwise swallow a keystroke users rely on.
   if (key === 'j' && event.shiftKey) return 'jump-to-attention'
   if (key === 'e' && event.shiftKey) return 'focus-explorer'
+  if (key === 'backspace' && event.shiftKey) return 'clear-input'
+  if (key === 'enter' && event.shiftKey) return 'toggle-zoom'
   return null
 }
 
@@ -75,6 +79,8 @@ export function getShortcutGroups(isMac: boolean): KeybindingGroup[] {
         { description: 'Save active file', keys: [mod, 'S'] },
         { description: 'Cycle Markdown view', keys: [mod, 'Shift', 'V'] },
         { description: 'Find in terminal', keys: [mod, 'F'] },
+        { description: 'Clear the pending input line', keys: [mod, 'Shift', 'Backspace'] },
+        { description: 'Maximize / restore the focused pane', keys: [mod, 'Shift', 'Enter'] },
         { description: 'Jump to next pane needing attention', keys: [mod, 'Shift', 'J'] },
         { description: 'Close find',       keys: ['Esc'] },
         { description: 'Close Settings',   keys: ['Esc'] },

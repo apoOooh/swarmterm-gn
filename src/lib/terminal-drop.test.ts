@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { formatDroppedPaths, dropPointToCss } from './terminal-drop'
+import { formatMentions, paneDropText, formatDroppedPaths, dropPointToCss } from './terminal-drop'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -76,5 +76,25 @@ describe('dropPointToCss', () => {
 
   it('treats a zero ratio as 1 rather than dividing by zero', () => {
     expect(dropPointToCss({ x: 300, y: 150 }, 0, false)).toEqual({ x: 300, y: 150 })
+  })
+})
+
+describe('formatMentions', () => {
+  it('turns paths under the cwd into relative @ mentions', () => {
+    expect(formatMentions(['/p/src/a.ts', '/p/img/x.png'], '/p', 'posix', false)).toBe('@src/a.ts @img/x.png ')
+    expect(formatMentions(['C:\\Proj\\src\\a.ts'], 'c:\\proj\\', 'powershell', true)).toBe('@src/a.ts ')
+  })
+  it('keeps outside paths absolute and quotes paths with spaces', () => {
+    expect(formatMentions(['/q/a.ts'], '/p', 'posix', false)).toBe('@/q/a.ts ')
+    expect(formatMentions(['/p/my file.ts'], '/p', 'posix', false)).toBe("'/p/my file.ts' ")
+    expect(formatMentions(['/P/a.ts'], '/p', 'posix', false)).toBe('@/P/a.ts ')
+    expect(formatMentions([], '/p', 'posix', false)).toBe('')
+  })
+})
+
+describe('paneDropText', () => {
+  it('uses mentions only for Claude Code panes', () => {
+    expect(paneDropText(['/p/a.svg'], { agentId: 'claude-code', cwd: '/p', flavor: 'posix' }, false)).toBe('@a.svg ')
+    expect(paneDropText(['/p/a.svg'], { agentId: 'codex', cwd: '/p', flavor: 'posix' }, false)).toBe('/p/a.svg ')
   })
 })

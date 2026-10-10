@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { MoreVertical, Pencil, Plus, Settings, X } from 'lucide-react'
+import { ArrowDownToLine, GripHorizontal, MoreVertical, Pencil, Plus, Settings, X } from 'lucide-react'
 import {
   DndContext,
   DragOverlay,
@@ -33,6 +33,7 @@ import { cn } from '@/lib/utils'
 import { TerminalList } from '@/components/Navbar/TerminalList'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { FileExplorer } from '@/components/Files/FileExplorer'
+import { useSidebarLayoutStore } from '@/store/sidebar-layout-store'
 import { useExplorerStore } from '@/store/explorer-store'
 import { getAppVersion } from '@/tauri/app'
 
@@ -53,6 +54,7 @@ export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: Navba
   const [sidebarWidth, setSidebarWidth] = useState(280)
   const resizing = useRef(false)
   const filesVisible = useExplorerStore((s) => s.visible)
+  const sidebarLayout = useSidebarLayoutStore((s) => s.layout)
   const visible = useNavbarVisibilityStore((s) => s.visible)
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
@@ -98,6 +100,74 @@ export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: Navba
     }
   }
 
+  const workspacesSection = (
+        <div className="flex h-full min-h-0 flex-col">
+            <div className="flex shrink-0 items-center justify-between border-b border-border bg-muted/40 px-3 py-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground/80">Workspaces</p>
+              <div className="flex items-center gap-1">
+              <AttentionBadge />
+              <button type="button" title={sidebarLayout === 'auto' ? 'Sidebar: Auto height — switch to Manual' : 'Sidebar: Manual — switch to Auto height'} aria-label="Toggle sidebar layout" aria-pressed={sidebarLayout === 'auto'}
+                onClick={() => useSidebarLayoutStore.getState().setLayout(sidebarLayout === 'auto' ? 'manual' : 'auto')}
+                className="-my-1 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground">
+                {sidebarLayout === 'auto' ? <ArrowDownToLine className="h-3.5 w-3.5" /> : <GripHorizontal className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              onDragCancel={() => setDraggingId(null)}
+            >
+              <SortableContext
+                items={workspaces.map((w) => w.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <ul className="space-y-0.5">
+                  {workspaces.map((ws) => (
+                    <WorkspaceItem
+                      key={ws.id}
+                      workspace={ws}
+                      active={!welcomeFocused && ws.id === activeWorkspaceId}
+                      renaming={renamingId === ws.id}
+                      onSelect={() => setActiveWorkspace(ws.id)}
+                      onStartRename={() => setRenamingId(ws.id)}
+                      onCommitRename={(name) => {
+                        renameWorkspace(ws.id, name)
+                        setRenamingId(null)
+                      }}
+                      onCancelRename={() => setRenamingId(null)}
+                      onClose={() => closeWorkspace(ws.id)}
+                    />
+                  ))}
+                </ul>
+              </SortableContext>
+              <DragOverlay>
+                {draggingWorkspace ? (
+                  <div aria-hidden className="flex items-center gap-1.5 rounded-md bg-accent px-2 py-1.5 text-sm text-accent-foreground shadow-lg">
+                    <span className="flex-1 truncate">{draggingWorkspace.name}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {collectLeaves(draggingWorkspace.layout).length}
+                    </span>
+                  </div>
+                ) : null}
+              </DragOverlay>
+            </DndContext>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-1 w-full justify-start text-muted-foreground"
+              onClick={onNewWorkspace}
+            >
+              <Plus className="h-4 w-4" />
+              New workspace
+            </Button>
+            </div>
+          </div>
+    )
+
   return (
     <nav
       aria-hidden={!visible}
@@ -112,74 +182,25 @@ export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: Navba
     >
       <div role="separator" aria-label="Resize sidebar" aria-orientation="vertical" tabIndex={0} className="absolute bottom-0 right-0 top-0 z-10 w-1 cursor-col-resize hover:bg-ring focus:bg-ring" onPointerDown={(e) => { resizing.current = true; e.currentTarget.setPointerCapture(e.pointerId) }} onPointerMove={(e) => { if (resizing.current) setSidebarWidth(Math.max(224, Math.min(520, e.clientX))) }} onPointerUp={(e) => { resizing.current = false; e.currentTarget.releasePointerCapture(e.pointerId) }} onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setSidebarWidth((w) => Math.max(224, Math.min(520, w + (e.key === 'ArrowRight' ? 16 : -16)))) } }} />
       <div className="flex h-full w-full flex-col">
+        {sidebarLayout === 'manual' ? (
         <Group orientation="vertical" className="min-h-0 flex-1" defaultLayout={{ workspaces: 25, terminals: 25, files: 50 }}>
-        <Panel id="workspaces" minSize="10%">
-
-        <div className="flex h-full min-h-0 flex-col">
-          <div className="flex shrink-0 items-center justify-between border-b border-border bg-muted/40 px-3 py-2">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground/80">Workspaces</p>
-            <AttentionBadge />
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-            onDragCancel={() => setDraggingId(null)}
-          >
-            <SortableContext
-              items={workspaces.map((w) => w.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              <ul className="space-y-0.5">
-                {workspaces.map((ws) => (
-                  <WorkspaceItem
-                    key={ws.id}
-                    workspace={ws}
-                    active={!welcomeFocused && ws.id === activeWorkspaceId}
-                    renaming={renamingId === ws.id}
-                    onSelect={() => setActiveWorkspace(ws.id)}
-                    onStartRename={() => setRenamingId(ws.id)}
-                    onCommitRename={(name) => {
-                      renameWorkspace(ws.id, name)
-                      setRenamingId(null)
-                    }}
-                    onCancelRename={() => setRenamingId(null)}
-                    onClose={() => closeWorkspace(ws.id)}
-                  />
-                ))}
-              </ul>
-            </SortableContext>
-            <DragOverlay>
-              {draggingWorkspace ? (
-                <div aria-hidden className="flex items-center gap-1.5 rounded-md bg-accent px-2 py-1.5 text-sm text-accent-foreground shadow-lg">
-                  <span className="flex-1 truncate">{draggingWorkspace.name}</span>
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {collectLeaves(draggingWorkspace.layout).length}
-                  </span>
-                </div>
-              ) : null}
-            </DragOverlay>
-          </DndContext>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mt-1 w-full justify-start text-muted-foreground"
-            onClick={onNewWorkspace}
-          >
-            <Plus className="h-4 w-4" />
-            New workspace
-          </Button>
-          </div>
-        </div>
-
-        </Panel>
+        <Panel id="workspaces" minSize="10%">{workspacesSection}</Panel>
         <Separator className="h-1 cursor-row-resize bg-border hover:bg-ring" />
         <Panel id="terminals" minSize="10%" className="flex min-h-0 flex-col"><TerminalList /></Panel>
         <Separator className="h-1 cursor-row-resize bg-border hover:bg-ring" />
         <Panel id="files" minSize="36px" maxSize={filesVisible ? '100%' : '36px'}><FileExplorer /></Panel>
         </Group>
+        ) : (
+        // Auto: lists take their content height (each capped at 35 %, then they
+        // scroll inside), Files gets everything left — a new workspace or pane
+        // grows its list and pushes the explorer down instead of scrolling a
+        // fixed quarter of the rail.
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex max-h-[35%] min-h-0 shrink-0 flex-col">{workspacesSection}</div>
+          <div className="flex max-h-[35%] min-h-0 shrink-0 flex-col"><TerminalList /></div>
+          <div className="min-h-[36px] flex-1 overflow-hidden border-t border-border"><FileExplorer /></div>
+        </div>
+        )}
 
         <div className="shrink-0 space-y-0.5 border-t border-border p-2">
           <Button

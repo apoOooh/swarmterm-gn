@@ -355,6 +355,14 @@ pub fn resolve_path_link(cwd: String, candidate: String) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Folder counterpart of [`resolve_path_link`]: canonical path of an existing
+/// directory, or `None`.
+#[tauri::command]
+pub fn resolve_dir_link(cwd: String, candidate: String) -> Option<String> {
+    crate::links::resolve_dir_candidate(std::path::Path::new(&cwd), &candidate)
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 /// First of `candidates` (an allowlisted editor id) found on PATH. The renderer
 /// asks once and caches; `None` means fall back to revealing in the file manager.
 #[tauri::command]

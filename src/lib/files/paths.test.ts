@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parentDir, resolveRelative, decodeUriPath, foldsPathCase, foldPathCase, legacyFoldedKey, runtimePlatform } from './paths'
+import { ancestorDirs, displayPath, parentDir, resolveRelative, decodeUriPath, foldsPathCase, foldPathCase, legacyFoldedKey, runtimePlatform } from './paths'
 
 describe('parentDir', () => {
   it('마지막 구분자 앞까지 돌려준다 (역슬래시/슬래시 모두)', () => {
@@ -106,5 +106,23 @@ describe('runtimePlatform', () => {
       if (previous) Object.defineProperty(globalThis, 'navigator', previous)
       else Reflect.deleteProperty(globalThis, 'navigator')
     }
+  })
+})
+
+describe('displayPath', () => {
+  it('strips the Windows verbatim prefix and keeps everything else', () => {
+    expect(displayPath('\\\\?\\D:\\p\\a.svg')).toBe('D:\\p\\a.svg')
+    expect(displayPath('\\\\?\\UNC\\host\\share\\a')).toBe('\\\\host\\share\\a')
+    expect(displayPath('/home/u/a')).toBe('/home/u/a')
+  })
+})
+describe('ancestorDirs', () => {
+  it('lists the folders to expand, outermost first', () => {
+    expect(ancestorDirs('/p', '/p/src/lib/a.ts', 'linux')).toEqual(['/p', '/p/src', '/p/src/lib'])
+    expect(ancestorDirs(String.raw`C:\Proj`, String.raw`c:\proj\src\a.ts`, 'win32')).toEqual([String.raw`c:\proj`, String.raw`c:\proj\src`])
+  })
+  it('refuses paths outside the root', () => {
+    expect(ancestorDirs('/p', '/q/a.ts', 'linux')).toEqual([])
+    expect(ancestorDirs('/p', '/P/a.ts', 'linux')).toEqual([])
   })
 })

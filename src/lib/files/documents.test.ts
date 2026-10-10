@@ -19,6 +19,8 @@ describe('document lifecycle', () => {
     expect(newDocument(context, '/p/README.md', disk('# hi')).mode).toBe('preview')
     expect(newDocument(context, '/p/README.md', disk('# hi'), 'split').mode).toBe('split')
     expect(newDocument(context, '/p/a.ts', disk(''), 'preview').mode).toBe('editor')
+    expect(newDocument(context, '/p/icon.svg', disk('<svg/>'), 'split').mode).toBe('split')
+    expect(newDocument(context, '/p/index.html', disk(''), 'preview').mode).toBe('preview')
     const doc = { ...newDocument(context, '/p/README.md', disk('# hi')), mode: 'editor' as const }
     expect(diskChanged(doc, disk('# changed', 'v2')).mode).toBe('editor')
   })

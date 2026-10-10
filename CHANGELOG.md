@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-10
+
+- Fix a stray `^[[I` / `^[[O` above the Claude Code banner when focus moved
+  while the agent was starting. Focus reports are no longer fanned out to
+  broadcast members or counted as typing for War Room deliveries.
+
+- Ctrl+drag a detected file path from a terminal onto another pane to insert
+  it there; Ctrl+click still opens it. File names in a PowerShell `dir` /
+  Get-ChildItem listing are links too, resolved against its Directory header;
+  folders (rows and header path) can be Ctrl+dragged, Ctrl+click shows them
+  expanded in Files.
+- Fix Ctrl+click on absolute Windows paths opening the file externally
+  instead of in the editor (verbatim `\\?\` paths failed the project check).
+
+- Dragging from Files now shows a proper copy/move cursor and a label under
+  the pointer instead of the Windows "no-drop" sign; Ctrl copies into a
+  folder, Esc cancels. No OS drag loop is involved any more. File tabs
+  drag between panes the same way (that HTML5 drag never landed on Windows).
+
+- Sidebar "Auto" layout (new default): Workspaces and Terminals take their
+  content height, Files fills the rest. "Manual" keeps the resizable
+  sections (Settings → Appearance → Sidebar).
+
+- Maximize a pane to fill its workspace (header button, header double-click
+  or Ctrl+Shift+Enter); the other panes keep running.
+
+- Ctrl+Shift+Backspace clears the pending input line of the focused terminal
+  without quitting a running agent.
+- Fix the last terminal row slipping under the pane border after resizing.
+
+- SVG and HTML files open with Editor / Split / Preview modes, updated live
+  while typing. SVG preview with wheel zoom, pan, Fit/100 % and background
+  choice; HTML preview with relative assets and sandboxed scripts. New
+  "Browser" button opens the file in the system default app.
+- Drag files or folders from Files onto a terminal pane to insert their
+  quoted paths, like a drop from the OS file manager. Claude Code panes get
+  relative `@` mentions instead (`@src/foo.ts`).
+- Ctrl+clicking a file path in a terminal also selects it in Files, expanding
+  its folders and scrolling to it.
+
+- Codex panes start in a selectable launch mode (Auto, Safe, YOLO) passed as
+  CLI flags; switching restarts Codex and continues the session. "Resume previous chat…"
+  takes over an older Codex chat in the pane.
+
 ## [1.2.0] - 2026-10-10
 
 - Open Markdown files rendered by default in a MarkText-style reading view;

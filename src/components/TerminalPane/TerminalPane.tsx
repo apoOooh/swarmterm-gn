@@ -21,17 +21,22 @@ import {
 import { ClearWorktreeDialog, type DialogTarget } from '@/components/Workspace/ClearWorktreeDialog'
 import { getChangedFiles, branchUnmergedCount } from '@/tauri/git'
 import { classifyWorktree, clearWorktreeMenuLabel } from '@/lib/worktree-cleanup'
-import { agentCommand, DEFAULT_TEMPLATE_ID, templateById } from '@/lib/templates'
+import { agentCommand, DEFAULT_TEMPLATE_ID, templateById, withLaunchMode } from '@/lib/templates'
 import { buildAgentSpawnCommand, shellFlavor } from '@/lib/agent-spawn-command'
-import { buildResumeCommand } from '@/lib/resume-command'
+import { buildContinueCommand, buildResumeCommand } from '@/lib/resume-command'
 import { isWindowsPlatform } from '@/lib/platform'
 import { pickDirectory } from '@/tauri/dialog'
 import { cn } from '@/lib/utils'
+import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
+import { insertExplorerPaths } from '@/components/FileDropListener'
+import { devLog } from '@/lib/dev-log'
 import {
   attachTerminal,
   detachTerminal,
   focusTerminal,
   getTerminalStatus,
+  getHoveredPathLink,
+  openPathLink,
   respawnTerminal,
   retryTerminal,
   subscribeTerminalStatus,
@@ -49,6 +54,8 @@ interface TerminalPaneProps {
   isBroadcastMember: boolean
   /** Whether the workspace exposes MCP worktree tools to every terminal. */
   worktreeMode: boolean
+  /** Whether this pane is zoomed to fill its workspace. */
+  isZoomed?: boolean
 }
 
 /**
@@ -64,7 +71,8 @@ export function TerminalPane({
   isFocused,
   broadcastActive,
   isBroadcastMember,
-  worktreeMode
+  worktreeMode,
+  isZoomed = false
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -73,6 +81,8 @@ export function TerminalPane({
   const setFocusedLeaf = useAppStore((s) => s.setFocusedLeaf)
   const toggleBroadcastMember = useAppStore((s) => s.toggleBroadcastMember)
   const setPaneAgent = useAppStore((s) => s.setPaneAgent)
+  const setPaneLaunchMode = useAppStore((s) => s.setPaneLaunchMode)
+  const pickPaneSession = useAppStore((s) => s.pickPaneSession)
   const setPaneCwd = useAppStore((s) => s.setPaneCwd)
   const setPaneShell = useAppStore((s) => s.setPaneShell)
   const clearWorktrees = useAppStore((s) => s.clearWorktrees)
@@ -115,14 +125,19 @@ export function TerminalPane({
   const resolvedCwd = leaf.cwd ?? cwd
   const resolvedShellId = leaf.shellId ?? globalShellId
   const resolvedAgentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
-  const baseCommand = agentCommand(resolvedAgentId)
+  const rawCommand = agentCommand(resolvedAgentId)
+  // Launch-mode args ride on every spawn form (fresh, brief, resume, continue).
+  const baseCommand =
+    rawCommand === undefined ? undefined : withLaunchMode(rawCommand, resolvedAgentId, leaf.launchMode)
   // A resume pane re-enters a session the CLI recorded on disk; the resume
   // line wins over the worker-brief path (a resume leaf never carries
   // initialPrompt — see createWorkspace).
   const resumeCommand =
     leaf.resumeSessionId !== undefined
-      ? buildResumeCommand(resolvedAgentId, leaf.resumeSessionId)
-      : undefined
+      ? buildResumeCommand(resolvedAgentId, leaf.resumeSessionId, leaf.launchMode)
+      : leaf.continueSession !== undefined
+        ? buildContinueCommand(resolvedAgentId, leaf.launchMode, leaf.continueSession)
+        : undefined
   // Worker panes carry a one-shot task brief; quote it for the shell the pty
   // actually types into (initialCommand is a typed line, not an exec).
   const resolvedCommand =
@@ -287,9 +302,31 @@ export function TerminalPane({
       // Clicking pane chrome (header, borders) blurs xterm; App.tsx returns the
       // keyboard to the terminal on the way back up (lib/terminal-focus.ts).
       data-focus-return
+      // Ctrl+press on a detected file path: a drag carries it to another pane
+      // (path / @ mention, like a Files drag); released in place it opens the
+      // link exactly as Ctrl+click did. Captured before xterm so the press
+      // doesn't start a text selection.
+      onMouseDownCapture={(e) => {
+        if (e.button !== 0 || !(isWindowsPlatform() ? e.ctrlKey : e.metaKey)) return
+        const link = getHoveredPathLink(terminalId)
+        if (!link) return
+        e.preventDefault()
+        e.stopPropagation()
+        const native = e.nativeEvent
+        const hit = (x: number, y: number): DragHit => {
+          const pane = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest<HTMLElement>('[data-terminal-id]')
+          const target = pane?.dataset.terminalId
+          return target && target !== terminalId ? { effect: 'copy', terminalId: target } : { effect: 'none' }
+        }
+        startPointerDrag(e, { name: 'terminal-link', items: [link.resolved], hit,
+          drop: (_x, _y, _c, h) => { if (h.terminalId) insertExplorerPaths(h.terminalId, [link.resolved]) },
+          onTap: () => { devLog('terminal-link.tap', { text: link.text }); openPathLink(terminalId, native, link.text) } })
+      }}
       data-terminal-id={terminalId}
       data-leaf-id={leafId}
       data-shell-flavor={paneShellFlavor}
+      data-agent-id={resolvedAgentId}
+      data-cwd={resolvedCwd}
       className={cn(
         'flex h-full w-full flex-col overflow-hidden rounded-md border bg-background',
         isFocused
@@ -313,13 +350,18 @@ export function TerminalPane({
         shellId={resolvedShellId}
         resolvedCwd={resolvedCwd}
         hasCwdOverride={leaf.cwd !== undefined}
+        launchModeId={leaf.launchMode}
         onAgentChange={(id) => setPaneAgent(leafId, id)}
+        onLaunchModeChange={(id) => setPaneLaunchMode(leafId, id)}
+        onPickSession={() => pickPaneSession(leafId)}
         onShellChange={(id) => setPaneShell(leafId, id)}
         onChoosePath={() => void handleChoosePath()}
         onResetPath={() => setPaneCwd(leafId, undefined)}
         onSplitRight={() => splitPane(leafId, 'horizontal')}
         onSplitDown={() => splitPane(leafId, 'vertical')}
         onClose={() => closePane(leafId)}
+        isZoomed={isZoomed}
+        onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
         broadcastActive={broadcastActive}
         isBroadcastMember={isBroadcastMember}
         onToggleBroadcast={() => toggleBroadcastMember(leafId)}

@@ -92,3 +92,36 @@ export function detectPathCandidates(lineText: string): PathCandidate[] {
   }
   return out
 }
+
+/**
+ * The Name column of one Get-ChildItem / `dir` row (`-a----  10.10.2026  22:25  437 logo.svg`).
+ * Bare names are no link candidates in prose (see CANDIDATE_RE); inside a listing the row
+ * shape itself is the false-positive control. Folder rows (`d-----`, no Length column) come
+ * back with `dir: true`.
+ */
+export function listingEntry(line: string): (PathCandidate & { dir: boolean }) | null {
+  const m = /^([-ad][-a-z]{5})\s+\S+\s+\S+\s+(?:(\d+)\s+)?(\S.*?)\s*$/.exec(line)
+  if (!m) return null
+  const dir = m[1].startsWith('d')
+  // A file row always has a Length; a folder row never does.
+  if (dir === (m[2] !== undefined)) return null
+  const start = line.lastIndexOf(m[3])
+  return { text: m[3], start, end: start + m[3].length, dir }
+}
+
+const LISTING_HEADER = /^\s*(?:Directory|Verzeichnis|Répertoire|Directorio|Directory of)\s*:?\s+(\S.*?)\s*$/
+
+/**
+ * Folder a `dir` / Get-ChildItem listing names its entries relative to: the
+ * nearest "Directory: X" ("Verzeichnis: X" on German Windows) header above the
+ * line. `linesAbove` is ordered nearest-first. A PowerShell prompt line
+ * (`PS …>`) ends the search — a header above it belongs to an older command.
+ */
+export function listingDirAbove(linesAbove: string[], maxLines = 300): string | null {
+  for (const line of linesAbove.slice(0, maxLines)) {
+    const m = LISTING_HEADER.exec(line)
+    if (m) return m[1]
+    if (/^PS [^>]*>/.test(line)) return null
+  }
+  return null
+}

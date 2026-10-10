@@ -35,6 +35,23 @@ pub fn resolve_candidate(cwd: &Path, candidate: &str) -> Option<PathBuf> {
     }
 }
 
+/// Like [`resolve_candidate`] but for folders: canonical path of an existing
+/// directory, else `None`. Folder links are drag sources and reveal targets in
+/// Files; they are never handed to an editor or the OS opener.
+pub fn resolve_dir_candidate(cwd: &Path, candidate: &str) -> Option<PathBuf> {
+    if candidate.is_empty() || candidate.len() > MAX_CANDIDATE_LEN {
+        return None;
+    }
+    let raw = Path::new(candidate);
+    let joined = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        cwd.join(raw)
+    };
+    let canonical = std::fs::canonicalize(joined).ok()?;
+    canonical.is_dir().then_some(canonical)
+}
+
 /// Mirrors EditorId in `src/lib/editor-command.ts`. Duplicated rather than
 /// shared because this copy is the one that matters: the renderer builds the
 /// argv, but the renderer is not the security boundary. A misclick must never be
@@ -91,6 +108,18 @@ mod tests {
     /// no temp-dir dependency.
     fn manifest_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    #[test]
+    fn dir_candidates_resolve_folders_only() {
+        assert_eq!(
+            resolve_dir_candidate(&manifest_dir(), "src"),
+            Some(manifest_dir().join("src").canonicalize().unwrap())
+        );
+        assert_eq!(resolve_dir_candidate(&manifest_dir(), "Cargo.toml"), None);
+        assert_eq!(resolve_dir_candidate(&manifest_dir(), "no-such-dir"), None);
+        // and the file resolver keeps refusing folders
+        assert_eq!(resolve_candidate(&manifest_dir(), "src"), None);
     }
 
     #[test]

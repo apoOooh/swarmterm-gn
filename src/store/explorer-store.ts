@@ -3,6 +3,7 @@ import { getFileGitStatus, listFiles, openFileContext, type FileContext, type Fi
 import { FileWatchLease } from '@/lib/files/watch-lease'
 import type { Directory } from '@/lib/files/tree'
 import { appendUndo, type FileUndo } from '@/lib/files/undo'
+import { ancestorDirs } from '@/lib/files/paths'
 export interface ExplorerRoot {
   context: FileContext; dirs: Record<string, Directory>; expanded: string[]; selection: string[]
   active: string | null; anchor: string | null; statuses: Record<string, string>
@@ -19,6 +20,8 @@ interface ExplorerState {
   toggle: (id: string, path: string) => void
   select: (id: string, selection: string[], active: string, anchor?: string) => void
   changed: (change: FileChange) => Promise<void>
+  /** Expand the folders down to `path`, select it and scroll it into view (terminal Ctrl+click). */
+  reveal: (id: string, path: string) => Promise<void>
 }
 let generation = 0
 let currentTerminal: string | null = null
@@ -98,6 +101,16 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     if (expanded.includes(path)) void get().load(id, path)
   },
   select: (id, selection, active, anchor) => set((s) => ({ roots: { ...s.roots, [id]: { ...s.roots[id], selection, active, anchor: anchor ?? s.roots[id].anchor } } })),
+  reveal: async (id, path) => {
+    const root = get().roots[id]; if (!root) return
+    const dirs = ancestorDirs(root.context.root, path)
+    if (dirs.length === 0) return
+    const expanded = [...new Set([...root.expanded, ...dirs.slice(1)])]
+    set((s) => ({ visible: true, roots: { ...s.roots, [id]: { ...s.roots[id], expanded, selection: [path], active: path, anchor: path } } }))
+    // Listings must exist before the row does; load the chain in parallel, then scroll.
+    await Promise.all(dirs.filter((d) => !get().roots[id]?.dirs[d]?.entries).map((d) => get().load(id, d)))
+    window.dispatchEvent(new CustomEvent('swarmterm:reveal-file', { detail: path }))
+  },
   changed: async (change) => {
     if (change.error) set({ notice: `Live refresh: ${change.error}` })
     const root = get().roots[change.contextId]; if (!root) return

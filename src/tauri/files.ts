@@ -41,5 +41,11 @@ export function mediaUrl(contextId: string, path: string, revision: string | num
 }
 /** Hands a Markdown file to the external MarkText app. `executable` empty = auto-detect. */
 export const openInMarkText = (contextId: string, path: string, executable: string): Promise<void> => request('openMarkText', { contextId, path, executable })
+/** Unsaved HTML buffer the preview frame renders instead of disk; `null` drops it. */
+export const setPreviewDraft = (contextId: string, path: string, content: string | null): Promise<void> => request('previewDraft', { contextId, path, content })
+/** Opens an HTML/SVG file with the OS default handler (normally the browser). */
+export const openPreviewExternal = (contextId: string, path: string): Promise<void> => request('openPreviewExternal', { contextId, path })
+/** Base for path-addressed preview URLs, see `previewFrameUrl`. */
+export const previewBase = (contextId: string): string => convertFileSrc(contextId, 'swarmterm-media')
 /** Resolved MarkText executable, or null when none is installed where we look. */
 export const locateMarkText = (executable: string): Promise<string | null> => request('locateMarkText', { executable })
