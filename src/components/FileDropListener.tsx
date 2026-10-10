@@ -1,7 +1,6 @@
 import { useEffect, type ReactElement } from 'react'
 import { onFileDrop, type DropPosition } from '@/tauri/dragdrop'
 import { paneDropText, dropPointToCss } from '@/lib/terminal-drop'
-import { takeExplorerDrag } from '@/lib/explorer-drag'
 import { devLog } from '@/lib/dev-log'
 import { getTerminalCwd } from '@/lib/terminal-registry'
 import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
@@ -41,18 +40,13 @@ function typeInto(target: DropPane, text: string): void {
   focusTerminal(target.terminalId)
 }
 
-/**
- * Explorer drag released at a CSS point (its `dragend`). On Windows Tauri's
- * native drag-drop handler swallows in-window drags: neither the pane's HTML5
- * `drop` nor a native drop event arrives (dev log: dragend with dropEffect
- * "none" and nothing else). `dragend` still reports where the button went up,
- * so the pane is found from that point instead.
- */
-export function dropExplorerDragAt(point: { x: number; y: number }): void {
-  const paths = takeExplorerDrag()
-  const target = paths ? paneAtCss(point) : null
-  devLog('explorer.drop-at', { point, paths, target })
-  if (!paths || !target) return
+/** Types explorer-dragged paths into a pane (pointer drag, see lib/pointer-drag.ts). */
+export function insertExplorerPaths(terminalId: string, paths: string[]): void {
+  const el = document.querySelector<HTMLElement>(`[data-terminal-id="${CSS.escape(terminalId)}"]`)
+  const leafId = el?.dataset.leafId
+  const flavor = el?.dataset.shellFlavor as ShellFlavor | undefined
+  if (!el || !leafId || !flavor) return
+  const target: DropPane = { terminalId, leafId, flavor, agentId: el.dataset.agentId, cwd: getTerminalCwd(terminalId) ?? el.dataset.cwd ?? '' }
   const text = paneDropText(paths, target, isWindowsPlatform())
   if (text !== '') typeInto(target, text)
 }
@@ -86,11 +80,8 @@ export function FileDropListener(): ReactElement | null {
       // rather than guess at the focused pane and type into the wrong shell.
       if (!target) return
 
-      // An in-window drag from Files reaches us with no paths (see explorer-drag.ts).
-      const explorer = event.paths.length === 0 ? takeExplorerDrag() : null
-      const text = explorer
-        ? paneDropText(explorer, target, isWindowsPlatform())
-        : paneDropText(event.paths, { ...target, agentId: undefined }, isWindowsPlatform())
+      // OS drops keep plain quoted paths for every pane, agents included.
+      const text = paneDropText(event.paths, { ...target, agentId: undefined }, isWindowsPlatform())
       if (text === '') return
 
       typeInto(target, text)

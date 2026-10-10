@@ -161,3 +161,6 @@
 .theme-row[data-active="true"] { box-shadow: inset var(--marker-w, 2px) 0 rgb(var(--color-primary)); }
 .theme-elevated { box-shadow: var(--shadow-lg); }
 .font-mono { font-family: var(--mono, ui-monospace, monospace); }
+
+/* Explorer pointer drag: the root cursor (copy / move / no-drop) wins over every element's own. */
+html[data-dragging] * { cursor: inherit !important; user-select: none; }

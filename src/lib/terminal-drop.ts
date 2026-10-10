@@ -5,19 +5,6 @@
  */
 import { quoteForShell, type ShellFlavor } from '@/lib/agent-spawn-command'
 
-/** dataTransfer type of an internal Files-explorer drag: JSON `{ contextId, paths }`. */
-export const FILE_DRAG_TYPE = 'application/x-swarmterm-files'
-
-/** Paths carried by an explorer drag payload; `[]` for anything malformed. */
-export function explorerDragPaths(data: string): string[] {
-  try {
-    const parsed = JSON.parse(data) as { paths?: unknown }
-    return Array.isArray(parsed.paths) ? parsed.paths.filter((p): p is string => typeof p === 'string') : []
-  } catch {
-    return []
-  }
-}
-
 // Characters that survive a shell word unquoted. Quoting everything would work
 // too, but a bare `/Users/me/a.ts` reads far better at the prompt — this is the
 // same trade-off Terminal.app makes.

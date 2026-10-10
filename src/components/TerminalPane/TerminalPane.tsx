@@ -27,16 +27,11 @@ import { buildContinueCommand, buildResumeCommand } from '@/lib/resume-command'
 import { isWindowsPlatform } from '@/lib/platform'
 import { pickDirectory } from '@/tauri/dialog'
 import { cn } from '@/lib/utils'
-import { FILE_DRAG_TYPE, paneDropText } from '@/lib/terminal-drop'
-import { takeExplorerDrag } from '@/lib/explorer-drag'
-import { devLog } from '@/lib/dev-log'
 import {
   attachTerminal,
   detachTerminal,
   focusTerminal,
   getTerminalStatus,
-  getTerminalCwd,
-  pasteIntoTerminal,
   respawnTerminal,
   retryTerminal,
   subscribeTerminalStatus,
@@ -302,32 +297,6 @@ export function TerminalPane({
       // Clicking pane chrome (header, borders) blurs xterm; App.tsx returns the
       // keyboard to the terminal on the way back up (lib/terminal-focus.ts).
       data-focus-return
-      // Files-explorer drags are HTML5 drags inside the webview, so they never
-      // reach FileDropListener (native OS drops only). Same text, same paste
-      // route — broadcast fan-out included.
-      onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes(FILE_DRAG_TYPE)) return
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'copy'
-        if (useAppStore.getState().dropTargetTerminalId !== terminalId) useAppStore.getState().setDropTarget(terminalId)
-      }}
-      onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) useAppStore.getState().setDropTarget(null)
-      }}
-      onDrop={(e) => {
-        if (!e.dataTransfer.types.includes(FILE_DRAG_TYPE)) return
-        e.preventDefault()
-        useAppStore.getState().setDropTarget(null)
-        // Shared with FileDropListener's native drop — whichever fires first types it.
-        const paths = takeExplorerDrag()
-        devLog('pane.html5-drop', { terminalId, paths })
-        if (!paths) return
-        const text = paneDropText(paths, { agentId: resolvedAgentId, cwd: getTerminalCwd(terminalId) ?? resolvedCwd ?? '', flavor: paneShellFlavor }, isWindowsPlatform())
-        if (text === '') return
-        pasteIntoTerminal(terminalId, text)
-        setFocusedLeaf(leafId)
-        focusTerminal(terminalId)
-      }}
       data-terminal-id={terminalId}
       data-leaf-id={leafId}
       data-shell-flavor={paneShellFlavor}

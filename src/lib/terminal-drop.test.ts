@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { explorerDragPaths, formatMentions, paneDropText, formatDroppedPaths, dropPointToCss } from './terminal-drop'
+import { formatMentions, paneDropText, formatDroppedPaths, dropPointToCss } from './terminal-drop'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -76,14 +76,6 @@ describe('dropPointToCss', () => {
 
   it('treats a zero ratio as 1 rather than dividing by zero', () => {
     expect(dropPointToCss({ x: 300, y: 150 }, 0, false)).toEqual({ x: 300, y: 150 })
-  })
-})
-
-describe('explorerDragPaths', () => {
-  it('reads the explorer payload and ignores anything malformed', () => {
-    expect(explorerDragPaths(JSON.stringify({ contextId: 'c', paths: ['/p/a.png', 3, '/p/b c.ts'] }))).toEqual(['/p/a.png', '/p/b c.ts'])
-    expect(explorerDragPaths('not json')).toEqual([])
-    expect(explorerDragPaths('{"paths":"x"}')).toEqual([])
   })
 })
 

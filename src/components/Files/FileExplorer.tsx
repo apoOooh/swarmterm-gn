@@ -1,8 +1,9 @@
-import { FILE_DRAG_TYPE } from '@/lib/terminal-drop'
-import { endExplorerDrag, startExplorerDrag, takeExplorerDrag } from '@/lib/explorer-drag'
 import { devLog } from '@/lib/dev-log'
-import { dropExplorerDragAt } from '@/components/FileDropListener'
-import { useEffect, useRef, useState, type KeyboardEvent, type DragEvent } from 'react'
+import { insertExplorerPaths } from '@/components/FileDropListener'
+import { canDropInto, dragCursor, dragEffect, dropDirectory, pastThreshold, type DragTargetKind } from '@/lib/pointer-drag'
+import { useExplorerDragStore } from '@/store/explorer-drag-store'
+import { ExplorerDragGhost } from './ExplorerDragGhost'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDownUp, Copy, File, FilePlus, Folder, FolderPlus, History, RefreshCw, X } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
 import { useExplorerStore, type ExplorerRoot } from '@/store/explorer-store'
@@ -278,18 +279,70 @@ export function FileExplorer(): React.ReactElement {
       if (tree.current && (top < scrollTop || top + rowHeight > scrollTop + height)) tree.current.scrollTop = Math.max(0, top - height / 2)
     }
   }
-  function drop(e: DragEvent, directory: string): void {
-    if (!context || !e.dataTransfer.types.includes(FILE_DRAG_TYPE)) return
-    // Landed in the explorer itself: no terminal may type these paths afterwards.
-    takeExplorerDrag()
-    e.preventDefault(); e.stopPropagation()
-    try {
-      const data = JSON.parse(e.dataTransfer.getData(FILE_DRAG_TYPE)) as { contextId: string; paths: string[] }
-      const source = useExplorerStore.getState().roots[data.contextId]?.context
-      if (!source || !Array.isArray(data.paths)) return
-      const cut = !(e.ctrlKey || e.metaKey)
-      void operation(async (id) => transferred(await transferFiles(context.id, source.id, topLevelOnly(data.paths), directory, cut, id), source, context, cut))
-    } catch (error) { useExplorerStore.setState({ error: String(error) }) }
+  // Internal moves/copies; the source is always this explorer's own root.
+  function transfer(paths: string[], directory: string, cut: boolean): void {
+    if (!context) return
+    void operation(async (id) => transferred(await transferFiles(context.id, context.id, topLevelOnly(paths), directory, cut, id), context, context, cut))
+  }
+  const suppressClick = useRef(false)
+  /**
+   * Pointer-driven drag of the selection (see lib/pointer-drag.ts for why not
+   * HTML5). Window listeners follow the pointer; hit-testing goes through the
+   * DOM contracts: `[data-terminal-id]` panes, `[data-drop-dir]` rows.
+   */
+  function beginDrag(e: React.PointerEvent, row: TreeRow): void {
+    if (e.button !== 0 || !root || !context) return
+    const start = { x: e.clientX, y: e.clientY }
+    const paths = topLevelOnly(root.selection.includes(row.entry.path) ? root.selection : [row.entry.path])
+    const rootDir = context.root
+    let active = false
+    const hit = (x: number, y: number): { kind: DragTargetKind; terminalId?: string; dir?: string } => {
+      const el = document.elementFromPoint(x, y) as HTMLElement | null
+      const pane = el?.closest<HTMLElement>('[data-terminal-id]')
+      if (pane?.dataset.terminalId) return { kind: 'pane', terminalId: pane.dataset.terminalId }
+      const target = el?.closest<HTMLElement>('[data-drop-dir]')?.dataset.dropDir ?? (el?.closest('[role="tree"]') ? rootDir : undefined)
+      if (target && canDropInto(target, paths)) return { kind: 'dir', dir: target }
+      return { kind: 'none' }
+    }
+    const finish = (): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('keydown', key, true)
+      useExplorerDragStore.setState({ drag: null })
+      useAppStore.getState().setDropTarget(null)
+      delete document.documentElement.dataset.dragging
+      document.documentElement.style.cursor = ''
+      // The click that follows this pointerup (if any) belongs to the drag; any
+      // later click is a real one. Without the reset an Esc-cancelled drag,
+      // which gets no click, would swallow the next click in the tree.
+      setTimeout(() => { suppressClick.current = false }, 0)
+    }
+    const move = (ev: globalThis.PointerEvent): void => {
+      if (!active) {
+        if (!pastThreshold(start, { x: ev.clientX, y: ev.clientY })) return
+        active = true
+        suppressClick.current = true
+        devLog('explorer.drag-start', { paths })
+      }
+      const t = hit(ev.clientX, ev.clientY)
+      const effect = dragEffect(t.kind, ev.ctrlKey || ev.metaKey)
+      useAppStore.getState().setDropTarget(t.kind === 'pane' ? t.terminalId! : null)
+      useExplorerDragStore.setState({ drag: { paths, x: ev.clientX, y: ev.clientY, effect, overDir: t.kind === 'dir' ? t.dir! : null } })
+      document.documentElement.dataset.dragging = '1'
+      document.documentElement.style.cursor = dragCursor(effect)
+    }
+    const up = (ev: globalThis.PointerEvent): void => {
+      finish()
+      if (!active) return
+      const t = hit(ev.clientX, ev.clientY)
+      devLog('explorer.drag-drop', { paths, target: t })
+      if (t.kind === 'pane') insertExplorerPaths(t.terminalId!, paths)
+      else if (t.kind === 'dir') transfer(paths, t.dir!, !(ev.ctrlKey || ev.metaKey))
+    }
+    const key = (ev: globalThis.KeyboardEvent): void => { if (ev.key === 'Escape') { active = false; finish(); ev.stopPropagation() } }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('keydown', key, true)
   }
   function menu(): React.ReactElement {
     return <ContextMenuContent>
@@ -314,6 +367,7 @@ export function FileExplorer(): React.ReactElement {
     </ContextMenuContent>
   }
   return <section data-keyboard-owner="explorer" className="flex h-full min-h-0 flex-col border-t border-border" aria-label="File explorer">
+    <ExplorerDragGhost />
     <div className="flex shrink-0 items-center gap-1 border-b border-border bg-muted/40 px-2 py-1.5">
       <button className="flex-1 text-left text-[11px] font-semibold uppercase tracking-wider" onClick={() => useExplorerStore.setState({ visible: !explorer.visible })} aria-expanded={explorer.visible}>Files</button>
       <Tool title="New file" disabled={!context || explorer.busy} onClick={() => void create(false)}><FilePlus size={14} /></Tool>
@@ -338,13 +392,13 @@ export function FileExplorer(): React.ReactElement {
         {root && <input className="mx-2 mb-1 shrink-0 rounded border border-input bg-background px-2 py-1 text-[11px] outline-none focus:ring-1 focus:ring-ring" placeholder="Filter loaded files" aria-label="Filter loaded files" value={filter} onChange={(e) => setFilter(e.target.value)} />}
         <ContextMenu>
           <ContextMenuTrigger asChild>
-            <div ref={tree} role="tree" aria-label="Project files" aria-multiselectable="true" aria-activedescendant={root?.active ? `file-row-${encodeURIComponent(root.active)}` : undefined} tabIndex={0} className="min-h-0 flex-1 overflow-auto outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" onKeyDown={keyboard} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)} onDragOver={(e) => { if (e.dataTransfer.types.includes(FILE_DRAG_TYPE)) e.preventDefault() }} onDrop={(e) => drop(e, context?.root ?? '')} onContextMenu={(e) => { if (root && e.target === e.currentTarget) explorer.select(root.context.id, [], root.context.root, root.context.root) }}>
+            <div ref={tree} role="tree" aria-label="Project files" aria-multiselectable="true" aria-activedescendant={root?.active ? `file-row-${encodeURIComponent(root.active)}` : undefined} tabIndex={0} className="min-h-0 flex-1 overflow-auto outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" onKeyDown={keyboard} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)} onContextMenu={(e) => { if (root && e.target === e.currentTarget) explorer.select(root.context.id, [], root.context.root, root.context.root) }}>
               {explorer.loading && <p className="p-3 text-xs text-muted-foreground">Connecting to terminal…</p>}
               {!root && !explorer.loading && <p className="p-3 text-xs text-muted-foreground">Select a terminal to browse its project.</p>}
               {root?.dirs[root.context.root]?.error && <p role="alert" className="p-3 text-xs text-destructive">{root.dirs[root.context.root].error}</p>}
               {root && rows.length === 0 && !root.dirs[root.context.root]?.loading && <p className="p-3 text-xs text-muted-foreground">{filter ? 'No loaded files match.' : 'This folder is empty.'}</p>}
               <div style={{ height: rows.length * rowHeight, position: 'relative' }}>
-                {rows.slice(range.start, range.end).map((row, offset) => <ExplorerRow key={row.entry.path} row={row} root={root!} index={range.start + offset} onSelect={(shift, mod) => selectRow(row, shift, mod)} onOpen={() => open(row)} onDrop={(e) => drop(e, row.entry.isDir ? row.entry.path : row.parent)} onContext={() => { if (!root?.selection.includes(row.entry.path)) selectRow(row, false, false) }} />)}
+                {rows.slice(range.start, range.end).map((row, offset) => <ExplorerRow key={row.entry.path} row={row} root={root!} index={range.start + offset} onSelect={(shift, mod) => selectRow(row, shift, mod)} onOpen={() => open(row)} onDragBegin={(e) => beginDrag(e, row)} suppressClick={suppressClick} onContext={() => { if (!root?.selection.includes(row.entry.path)) selectRow(row, false, false) }} />)}
               </div>
               {root && root.expanded.map((p) => root.dirs[p]?.error ? <button key={p} className="m-2 text-[11px] text-destructive" onClick={() => void explorer.load(root.context.id, p)}>Retry {basename(p)}: {root.dirs[p].error}</button> : null)}
             </div>
@@ -356,17 +410,12 @@ export function FileExplorer(): React.ReactElement {
   </section>
 }
 
-function ExplorerRow({ row, root, index, onSelect, onOpen, onDrop, onContext }: { row: TreeRow; root: ExplorerRoot; index: number; onSelect: (shift: boolean, mod: boolean) => void; onOpen: () => void; onDrop: (e: DragEvent) => void; onContext: () => void }): React.ReactElement {
+function ExplorerRow({ row, root, index, onSelect, onOpen, onDragBegin, suppressClick, onContext }: { row: TreeRow; root: ExplorerRoot; index: number; onSelect: (shift: boolean, mod: boolean) => void; onOpen: () => void; onDragBegin: (e: React.PointerEvent) => void; suppressClick: React.MutableRefObject<boolean>; onContext: () => void }): React.ReactElement {
   const selected = root.selection.includes(row.entry.path)
+  const dropDir = dropDirectory({ path: row.entry.path, isDir: row.entry.isDir, parent: row.parent })
+  const dropHere = useExplorerDragStore((s) => row.entry.isDir && s.drag?.overDir === row.entry.path)
   const status = gitBadge(row.entry.path, root.statuses)
-  return <div id={`file-row-${encodeURIComponent(row.entry.path)}`} role="treeitem" aria-level={row.depth + 1} aria-selected={selected} aria-expanded={row.entry.isDir ? row.expanded : undefined} title={`${row.entry.path}${row.entry.isSymlink ? ' (symbolic link)' : ''}`} draggable className={cn('absolute left-0 right-0 flex cursor-default items-center gap-1.5 pr-2 text-xs hover:bg-accent/40', selected && 'bg-accent text-accent-foreground', root.active === row.entry.path && 'outline outline-1 -outline-offset-1 outline-ring/50')} style={{ top: index * rowHeight, height: rowHeight, paddingLeft: 8 + row.depth * 14 }} onContextMenu={onContext} onClick={(e) => { onSelect(e.shiftKey, isMacPlatform() ? e.metaKey : e.ctrlKey); if (!e.shiftKey && !e.ctrlKey && !e.metaKey) onOpen() }} onDragStart={(e) => {
-    const paths = selected ? root.selection : [row.entry.path]
-    e.dataTransfer.setData(FILE_DRAG_TYPE, JSON.stringify({ contextId: root.context.id, paths: topLevelOnly(paths) })); e.dataTransfer.effectAllowed = 'copyMove'
-    startExplorerDrag(topLevelOnly(paths))
-    devLog('explorer.dragstart', { paths: topLevelOnly(paths), types: [...e.dataTransfer.types] })
-    // dnd-kit must not interpret a native file drag as a terminal-pane gesture.
-    e.stopPropagation()
-  }} onDragEnd={(e) => { devLog('explorer.dragend', { dropEffect: e.dataTransfer.dropEffect, x: e.clientX, y: e.clientY }); dropExplorerDragAt({ x: e.clientX, y: e.clientY }); endExplorerDrag() }} onDragOver={(e) => { if (e.dataTransfer.types.includes(FILE_DRAG_TYPE)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = e.ctrlKey || e.metaKey ? 'copy' : 'move' } }} onDrop={onDrop}>
+  return <div id={`file-row-${encodeURIComponent(row.entry.path)}`} role="treeitem" aria-level={row.depth + 1} aria-selected={selected} aria-expanded={row.entry.isDir ? row.expanded : undefined} title={`${row.entry.path}${row.entry.isSymlink ? ' (symbolic link)' : ''}`} data-drop-dir={dropDir} className={cn('absolute left-0 right-0 flex cursor-default items-center gap-1.5 pr-2 text-xs hover:bg-accent/40', selected && 'bg-accent text-accent-foreground', root.active === row.entry.path && 'outline outline-1 -outline-offset-1 outline-ring/50', dropHere && 'bg-primary/20 ring-1 ring-inset ring-primary')} style={{ top: index * rowHeight, height: rowHeight, paddingLeft: 8 + row.depth * 14 }} onContextMenu={onContext} onPointerDown={onDragBegin} onClick={(e) => { if (suppressClick.current) { suppressClick.current = false; return } onSelect(e.shiftKey, isMacPlatform() ? e.metaKey : e.ctrlKey); if (!e.shiftKey && !e.ctrlKey && !e.metaKey) onOpen() }}>
     {row.entry.isDir ? (row.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : <span className="w-3" />}
     {row.entry.isDir ? <Folder size={14} className="shrink-0 text-muted-foreground" /> : <File size={14} className="shrink-0 text-muted-foreground" />}
     <span className="min-w-0 flex-1 truncate">{row.entry.name}</span>
