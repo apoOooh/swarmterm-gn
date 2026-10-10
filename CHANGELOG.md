@@ -4,7 +4,9 @@
 
 - Ctrl+drag a detected file path from a terminal onto another pane to insert
   it there; Ctrl+click still opens it. File names in a PowerShell `dir` /
-  Get-ChildItem listing are links too, resolved against its Directory header.
+  Get-ChildItem listing are links too, resolved against its Directory header;
+  folders (rows and header path) can be Ctrl+dragged, Ctrl+click shows them
+  expanded in Files.
 - Fix Ctrl+click on absolute Windows paths opening the file externally
   instead of in the editor (verbatim `\\?\` paths failed the project check).
 

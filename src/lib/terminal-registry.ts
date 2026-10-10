@@ -35,6 +35,7 @@ import { openUrl } from '@/tauri/opener'
 import {
   findAvailableEditor,
   openInEditor,
+  resolveDirLink,
   resolvePathLink,
   revealInFileManager
 } from '@/tauri/links'
@@ -288,17 +289,33 @@ function refreshDetector(id: string, entry: Entry): void {
 }
 
 /** Path link under the pointer per terminal (from the path link provider's hover/leave). */
-const hoveredPaths = new Map<string, { text: string; resolved: string }>()
+const hoveredPaths = new Map<string, { text: string; resolved: string; isDir: boolean }>()
 /** Per-terminal "follow this path link" — the same gesture-gated route a Ctrl+click takes. */
 const pathFollowers = new Map<string, (event: MouseEvent, text: string) => void>()
 
 /** The detected file path currently hovered in a terminal, if any (Ctrl+drag source). */
-export function getHoveredPathLink(id: string): { text: string; resolved: string } | undefined {
+export function getHoveredPathLink(id: string): { text: string; resolved: string; isDir: boolean } | undefined {
   return hoveredPaths.get(id)
 }
 
 /** Open a path link as a Ctrl+click would (used when a Ctrl+press on a link never became a drag). */
+/** Show a folder in Files: select it with its parents expanded, and expand it too. */
+export function revealDirInFiles(id: string, dir: string): void {
+  void (async () => {
+    const [{ openFileContext }, { useExplorerStore }] = await Promise.all([import('@/tauri/files'), import('@/store/explorer-store')])
+    const context = await openFileContext(id).catch(() => null)
+    if (!context) return
+    useAppStore.getState().revealTerminal(id)
+    const explorer = useExplorerStore.getState()
+    await explorer.reveal(context.id, dir)
+    const root = useExplorerStore.getState().roots[context.id]
+    if (root && !root.expanded.includes(dir)) useExplorerStore.getState().toggle(context.id, dir)
+  })().catch(console.warn)
+}
+
 export function openPathLink(id: string, event: MouseEvent, text: string): void {
+  const hovered = hoveredPaths.get(id)
+  if (hovered?.isDir && hovered.text === text) { revealDirInFiles(id, hovered.resolved); return }
   // The press was captured before xterm saw it, so lastMouseDown is stale; a
   // stale point would make followLink's drag-vs-click check drop this click.
   const entry = entries.get(id)
@@ -812,19 +829,27 @@ function getOrCreate(id: string): Entry {
       void Promise.all(
         candidates.map(async (c) => {
           const { path } = parsePathSuffix(c.text)
+          const bare = !/[\\/]/.test(path)
+          // Files first (cwd, then the listing folder for bare names); a name that
+          // is no file may still be a folder — the `d-----` rows and the header path.
           let resolved = await resolvePathLink(cwd, path).catch(() => null)
-          if (!resolved && !/[\\/]/.test(path)) {
-            const dir = listingDir()
-            if (dir) resolved = await resolvePathLink(dir, path).catch(() => null)
+          if (!resolved && bare && listingDir()) resolved = await resolvePathLink(listingDir()!, path).catch(() => null)
+          let isDir = false
+          if (!resolved) {
+            resolved = await resolveDirLink(cwd, path).catch(() => null)
+            if (!resolved && bare && listingDir()) resolved = await resolveDirLink(listingDir()!, path).catch(() => null)
+            isDir = resolved !== null
           }
           if (!resolved) return null
+          const shown = displayPath(resolved)
           const link: ILink = {
             // xterm buffer ranges are 1-based and inclusive; candidate indices
             // are 0-based with an exclusive end.
             range: { start: { x: c.start + 1, y }, end: { x: c.end, y } },
             text: c.text,
-            activate: (event, text) => followLink(event, 'path', text),
-            hover: () => { hoveredPaths.set(id, { text: c.text, resolved: displayPath(resolved) }) },
+            // A folder never goes to an editor or the OS opener: Ctrl+click shows it in Files.
+            activate: (event, text) => { if (isDir) { if (shouldFollowLink(event, isMac, 'path')) revealDirInFiles(id, shown) } else followLink(event, 'path', text) },
+            hover: () => { hoveredPaths.set(id, { text: c.text, resolved: shown, isDir }) },
             leave: () => { if (hoveredPaths.get(id)?.text === c.text) hoveredPaths.delete(id) }
           }
           return link

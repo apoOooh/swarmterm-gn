@@ -72,11 +72,12 @@ describe('detectPathCandidates', () => {
 
 describe('listingEntry', () => {
   it('takes the Name column of a file row, with spaces', () => {
-    expect(listingEntry('-a----        10.10.2026     22:25            437 logo.svg')).toEqual({ text: 'logo.svg', start: 50, end: 58 })
+    expect(listingEntry('-a----        10.10.2026     22:25            437 logo.svg')).toEqual({ text: 'logo.svg', start: 50, end: 58, dir: false })
     expect(listingEntry('-a----        10.10.2026     22:25             21 my notes.txt')?.text).toBe('my notes.txt')
   })
-  it('ignores folders, headers and prose', () => {
-    expect(listingEntry('d-----        10.10.2026     22:25                assets')).toBeNull()
+  it('marks folder rows and ignores headers and prose', () => {
+    expect(listingEntry('d-----        10.10.2026     22:25                assets')).toMatchObject({ text: 'assets', dir: true })
+    expect(listingEntry('d-----        10.10.2026     22:25                mit leerzeichen')?.text).toBe('mit leerzeichen')
     expect(listingEntry('Mode                 LastWriteTime         Length Name')).toBeNull()
     expect(listingEntry('see logo.svg')).toBeNull()
   })
