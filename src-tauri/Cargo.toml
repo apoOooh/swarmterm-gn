@@ -34,6 +34,7 @@ serde = { version = "1", features = ["derive"] }
 # Trap: with this feature `Map::remove` is swap_remove — use shift_remove.
 serde_json = { version = "1", features = ["preserve_order"] }
 url = "2"
+percent-encoding = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"

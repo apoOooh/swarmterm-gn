@@ -1,7 +1,9 @@
 import { useEffect, type ReactElement } from 'react'
 import { onFileDrop, type DropPosition } from '@/tauri/dragdrop'
-import { formatDroppedPaths, dropPointToCss } from '@/lib/terminal-drop'
-import { isMacPlatform } from '@/lib/platform'
+import { paneDropText, dropPointToCss } from '@/lib/terminal-drop'
+import { takeExplorerDrag } from '@/lib/explorer-drag'
+import { getTerminalCwd } from '@/lib/terminal-registry'
+import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
 import { focusTerminal, pasteIntoTerminal } from '@/lib/terminal-registry'
 import { useAppStore } from '@/store/app-store'
 import type { ShellFlavor } from '@/lib/agent-spawn-command'
@@ -11,6 +13,8 @@ interface DropPane {
   terminalId: string
   leafId: string
   flavor: ShellFlavor
+  agentId?: string
+  cwd: string
 }
 
 function paneAt(position: DropPosition): DropPane | null {
@@ -21,7 +25,7 @@ function paneAt(position: DropPosition): DropPane | null {
   const leafId = pane?.dataset.leafId
   const flavor = pane?.dataset.shellFlavor as ShellFlavor | undefined
   if (!terminalId || !leafId || !flavor) return null
-  return { terminalId, leafId, flavor }
+  return { terminalId, leafId, flavor, agentId: pane?.dataset.agentId, cwd: getTerminalCwd(terminalId) ?? pane?.dataset.cwd ?? '' }
 }
 
 /**
@@ -52,7 +56,11 @@ export function FileDropListener(): ReactElement | null {
       // rather than guess at the focused pane and type into the wrong shell.
       if (!target) return
 
-      const text = formatDroppedPaths(event.paths, target.flavor)
+      // An in-window drag from Files reaches us with no paths (see explorer-drag.ts).
+      const explorer = event.paths.length === 0 ? takeExplorerDrag() : null
+      const text = explorer
+        ? paneDropText(explorer, target, isWindowsPlatform())
+        : paneDropText(event.paths, { ...target, agentId: undefined }, isWindowsPlatform())
       if (text === '') return
 
       // Paste rather than write: this routes through the registry's onData, so

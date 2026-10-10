@@ -708,14 +708,16 @@ function getOrCreate(id: string): Entry {
     void resolvePathLink(getTerminalCwd(id) ?? '', path)
       .then(async (resolved) => {
         if (!resolved) return
-        const [{ openFileContext }, { isSubPath }, { useDocumentStore }] = await Promise.all([
-          import('@/tauri/files'), import('@/lib/files/ops'), import('@/store/document-store')
+        const [{ openFileContext }, { isSubPath }, { useDocumentStore }, { useExplorerStore }] = await Promise.all([
+          import('@/tauri/files'), import('@/lib/files/ops'), import('@/store/document-store'), import('@/store/explorer-store')
         ])
         const context = await openFileContext(id).catch(() => null)
         const ws = selectWorkspaceByTerminalId(useAppStore.getState(), id)
         const leaf = ws ? collectLeaves(ws.layout).find((l) => l.terminalId === id) : undefined
         if (context && leaf && isSubPath(context.root, resolved)) {
           useAppStore.getState().revealTerminal(id)
+          // The explorer follows the focused terminal, so its root for `id` is this context.
+          void useExplorerStore.getState().reveal(context.id, resolved).catch(console.warn)
           await useDocumentStore.getState().open(leaf.id, context, resolved, { line: line ?? 1, column: col ?? 1 })
           return
         }

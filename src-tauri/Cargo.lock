@@ -4306,6 +4306,7 @@ dependencies = [
  "dunce",
  "libc",
  "notify",
+ "percent-encoding",
  "portable-pty",
  "reqwest",
  "rmcp",

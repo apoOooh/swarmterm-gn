@@ -86,3 +86,15 @@ export function legacyFoldedKey(key: string, platform: string = runtimePlatform(
   const lower = key.toLowerCase()
   return lower === key ? null : lower
 }
+
+/** Directories between `root` (inclusive) and `path` (exclusive), outermost first — what the
+ *  explorer must expand to show `path`. Empty when `path` is not under `root`. */
+export function ancestorDirs(root: string, path: string, platform: string = runtimePlatform()): string[] {
+  const top = foldPathCase(root.replace(/[/\\]+$/, ''), platform)
+  const dirs: string[] = []
+  for (let dir = parentDir(path); ; dir = parentDir(dir)) {
+    dirs.unshift(dir)
+    if (foldPathCase(dir, platform) === top) return dirs
+    if (parentDir(dir) === dir || dirs.length > 256) return []
+  }
+}

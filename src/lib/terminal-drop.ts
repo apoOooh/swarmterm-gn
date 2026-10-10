@@ -5,6 +5,19 @@
  */
 import { quoteForShell, type ShellFlavor } from '@/lib/agent-spawn-command'
 
+/** dataTransfer type of an internal Files-explorer drag: JSON `{ contextId, paths }`. */
+export const FILE_DRAG_TYPE = 'application/x-swarmterm-files'
+
+/** Paths carried by an explorer drag payload; `[]` for anything malformed. */
+export function explorerDragPaths(data: string): string[] {
+  try {
+    const parsed = JSON.parse(data) as { paths?: unknown }
+    return Array.isArray(parsed.paths) ? parsed.paths.filter((p): p is string => typeof p === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 // Characters that survive a shell word unquoted. Quoting everything would work
 // too, but a bare `/Users/me/a.ts` reads far better at the prompt — this is the
 // same trade-off Terminal.app makes.
@@ -65,4 +78,28 @@ export function formatDroppedPaths(paths: string[], flavor: ShellFlavor): string
   const safe = flavor === 'posix' ? SAFE_POSIX : SAFE_WINDOWS
   const words = usable.map((path) => (safe.test(path) ? path : quoteForShell(path, flavor)))
   return `${words.join(' ')} `
+}
+
+/**
+ * Claude Code file mentions for paths dragged onto an agent pane: `@src/a.ts`
+ * relative to the pane's cwd, so the agent attaches the file instead of just
+ * reading a path. A path outside the cwd stays absolute; one with whitespace
+ * cannot be an `@` token and falls back to the quoted plain path.
+ */
+export function formatMentions(paths: string[], cwd: string, flavor: ShellFlavor, foldCase: boolean): string {
+  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const base = norm(cwd)
+  const fold = (p: string): string => (foldCase ? p.toLowerCase() : p)
+  const words = paths.filter((p) => p !== '' && !/[\r\n]/.test(p)).map((path) => {
+    const full = norm(path)
+    const inside = base !== '' && fold(full).startsWith(fold(base) + '/')
+    const target = inside ? full.slice(base.length + 1) : full
+    return /\s/.test(target) ? formatDroppedPaths([path], flavor).trimEnd() : `@${target}`
+  })
+  return words.length === 0 ? '' : `${words.join(' ')} `
+}
+
+/** Text for paths dropped on a pane: `@` mentions for Claude Code, quoted paths otherwise. */
+export function paneDropText(paths: string[], pane: { agentId?: string; cwd: string; flavor: ShellFlavor }, foldCase: boolean): string {
+  return pane.agentId === 'claude-code' ? formatMentions(paths, pane.cwd, pane.flavor, foldCase) : formatDroppedPaths(paths, pane.flavor)
 }

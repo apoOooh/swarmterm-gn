@@ -1,7 +1,8 @@
 import { applyEol, classifyExternalChange, detectEol, toLf, type Eol } from './edit'
 import type { FileContext, TextFile } from '@/tauri/files'
 import { fileKind } from './tree'
-import { isMarkdownPath, type MarkdownMode } from '@/lib/markdown-pref'
+import type { MarkdownMode } from '@/lib/markdown-pref'
+import { previewKind } from './preview-kind'
 export interface FileDocument {
   key: string; context: FileContext; path: string; kind: 'text' | 'image' | 'video'
   content: string; saved: string; version: string; eol: Eol; bom: boolean; readOnly: boolean
@@ -9,13 +10,13 @@ export interface FileDocument {
   mode: 'editor' | 'split' | 'preview'
   jump?: { line: number; column: number; token: number }
 }
-/** `markdownMode` only applies to .md files; everything else opens in the editor. */
+/** `markdownMode` applies to previewable files (Markdown, SVG, HTML); everything else opens in the editor. */
 export function newDocument(context: FileContext, path: string, disk?: TextFile, markdownMode: MarkdownMode = 'preview'): FileDocument {
   const content = toLf(disk?.content ?? '')
   return { key: `${context.id}:${path}`, context, path, kind: fileKind(path), content, saved: content,
     version: disk?.version ?? '', eol: detectEol(disk?.content ?? ''), bom: disk?.bom ?? false,
     readOnly: disk?.binary === true || disk?.truncated === true, dirty: false, saving: false,
-    missing: false, revision: 0, mode: isMarkdownPath(path) ? markdownMode : 'editor' }
+    missing: false, revision: 0, mode: previewKind(path) ? markdownMode : 'editor' }
 }
 export function editDocument(doc: FileDocument, content: string): FileDocument {
   const text = toLf(content)

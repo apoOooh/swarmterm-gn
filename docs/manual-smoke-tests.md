@@ -41,6 +41,13 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Render Markdown with GFM, source links, local/remote images, duplicate
       headings, fenced code and preview search. Check synchronized split scrolling;
       script tags and javascript URLs cannot execute.
+- [ ] Open an SVG: split preview updates while typing, wheel zoom keeps the
+      cursor point, drag pans, Fit/100 %/backgrounds work; an inline `<script>`
+      in the SVG does not run.
+- [ ] Open an HTML page with a relative stylesheet, image and inline script:
+      all load, unsaved edits show after ~300 ms, Save keeps the view.
+      `window.parent`/`__TAURI__` access fails; a `../` link out of the project
+      root is refused. **Browser** opens the system default app.
 - [ ] Preview each image/video format supported by the native webview. Seek a
       video, regenerate it, verify stable-change reload and playback position;
       switch workspaces and check background playback stops. Test missing files.

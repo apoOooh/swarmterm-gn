@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- SVG and HTML files open with Editor / Split / Preview modes, updated live
+  while typing. SVG preview with wheel zoom, pan, Fit/100 % and background
+  choice; HTML preview with relative assets and sandboxed scripts. New
+  "Browser" button opens the file in the system default app.
+- Drag files or folders from Files onto a terminal pane to insert their
+  quoted paths, like a drop from the OS file manager. Claude Code panes get
+  relative `@` mentions instead (`@src/foo.ts`).
+- Ctrl+clicking a file path in a terminal also selects it in Files, expanding
+  its folders and scrolling to it.
+
 - Codex panes start in a selectable launch mode (Auto, Safe, YOLO) passed as
   CLI flags; switching restarts Codex and continues the session. "Resume previous chat…"
   takes over an older Codex chat in the pane.

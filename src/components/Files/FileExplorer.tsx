@@ -1,3 +1,5 @@
+import { FILE_DRAG_TYPE } from '@/lib/terminal-drop'
+import { endExplorerDrag, startExplorerDrag, takeExplorerDrag } from '@/lib/explorer-drag'
 import { useEffect, useRef, useState, type KeyboardEvent, type DragEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDownUp, Copy, File, FilePlus, Folder, FolderPlus, History, RefreshCw, X } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
@@ -19,7 +21,6 @@ import { cn } from '@/lib/utils'
 import { isMarkdownPath } from '@/lib/markdown-pref'
 import { useMarkdownPrefStore } from '@/store/markdown-pref-store'
 
-export const FILE_DRAG_TYPE = 'application/x-swarmterm-files'
 const rowHeight = 26
 const basename = (path: string): string => path.replace(/\\/g, '/').split('/').pop() ?? path
 
@@ -61,7 +62,17 @@ export function FileExplorer(): React.ReactElement {
     return () => window.removeEventListener('swarmterm:focus-explorer', focus)
   }, [])
 
+  const rowsRef = useRef<TreeRow[]>([])
+  useEffect(() => {
+    const reveal = (e: Event): void => {
+      const index = rowsRef.current.findIndex((r) => r.entry.path === (e as CustomEvent<string>).detail)
+      if (index >= 0 && tree.current) tree.current.scrollTop = Math.max(0, index * rowHeight - tree.current.clientHeight / 2)
+    }
+    window.addEventListener('swarmterm:reveal-file', reveal)
+    return () => window.removeEventListener('swarmterm:reveal-file', reveal)
+  }, [])
   const rows = root ? treeRows(root.context.root, root.dirs, new Set(root.expanded), filter) : []
+  rowsRef.current = rows
   const range = virtualRange(rows.length, scrollTop, height, rowHeight)
   const context = root?.context
   const activeEntry = rows.find((r) => r.entry.path === root?.active)?.entry
@@ -267,6 +278,8 @@ export function FileExplorer(): React.ReactElement {
   }
   function drop(e: DragEvent, directory: string): void {
     if (!context || !e.dataTransfer.types.includes(FILE_DRAG_TYPE)) return
+    // Landed in the explorer itself: no terminal may type these paths afterwards.
+    takeExplorerDrag()
     e.preventDefault(); e.stopPropagation()
     try {
       const data = JSON.parse(e.dataTransfer.getData(FILE_DRAG_TYPE)) as { contextId: string; paths: string[] }
@@ -347,9 +360,10 @@ function ExplorerRow({ row, root, index, onSelect, onOpen, onDrop, onContext }: 
   return <div id={`file-row-${encodeURIComponent(row.entry.path)}`} role="treeitem" aria-level={row.depth + 1} aria-selected={selected} aria-expanded={row.entry.isDir ? row.expanded : undefined} title={`${row.entry.path}${row.entry.isSymlink ? ' (symbolic link)' : ''}`} draggable className={cn('absolute left-0 right-0 flex cursor-default items-center gap-1.5 pr-2 text-xs hover:bg-accent/40', selected && 'bg-accent text-accent-foreground', root.active === row.entry.path && 'outline outline-1 -outline-offset-1 outline-ring/50')} style={{ top: index * rowHeight, height: rowHeight, paddingLeft: 8 + row.depth * 14 }} onContextMenu={onContext} onClick={(e) => { onSelect(e.shiftKey, isMacPlatform() ? e.metaKey : e.ctrlKey); if (!e.shiftKey && !e.ctrlKey && !e.metaKey) onOpen() }} onDragStart={(e) => {
     const paths = selected ? root.selection : [row.entry.path]
     e.dataTransfer.setData(FILE_DRAG_TYPE, JSON.stringify({ contextId: root.context.id, paths: topLevelOnly(paths) })); e.dataTransfer.effectAllowed = 'copyMove'
+    startExplorerDrag(topLevelOnly(paths))
     // dnd-kit must not interpret a native file drag as a terminal-pane gesture.
     e.stopPropagation()
-  }} onDragOver={(e) => { if (e.dataTransfer.types.includes(FILE_DRAG_TYPE)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = e.ctrlKey || e.metaKey ? 'copy' : 'move' } }} onDrop={onDrop}>
+  }} onDragEnd={() => endExplorerDrag()} onDragOver={(e) => { if (e.dataTransfer.types.includes(FILE_DRAG_TYPE)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = e.ctrlKey || e.metaKey ? 'copy' : 'move' } }} onDrop={onDrop}>
     {row.entry.isDir ? (row.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : <span className="w-3" />}
     {row.entry.isDir ? <Folder size={14} className="shrink-0 text-muted-foreground" /> : <File size={14} className="shrink-0 text-muted-foreground" />}
     <span className="min-w-0 flex-1 truncate">{row.entry.name}</span>

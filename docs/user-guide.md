@@ -63,7 +63,7 @@ closing its pane/workspace or quitting from the tray offers Save/Discard/Cancel.
 The embedded editor supports UTF-8 files up to 1 MiB. Binary, non-UTF-8 and larger
 files are read only; use an external editor for those.
 
-### Markdown and media
+### Markdown, SVG, HTML and media
 
 Markdown supports Editor, Split and Preview modes (`⌘/Ctrl + Shift + V` cycles
 them). Split scrolling follows source lines in both directions. The preview
@@ -83,6 +83,16 @@ locations (`%LOCALAPPDATA%\Programs\marktext`, `Program Files\MarkText`); a
 different install can be set under **Settings → Files → MarkText**. Only a file
 named `marktext.exe` is accepted there, so the setting cannot launch another
 program.
+
+SVG and HTML files get the same Editor / Split / Preview modes and follow the
+same **Open … as** default. Both previews update as you type, before saving.
+The SVG preview zooms with the mouse wheel around the cursor, pans by dragging,
+and offers **Fit** (also a double-click), **100 %** and a dark (default), light or
+checkerboard background; SVG scripts never run there. The HTML preview loads the page
+from its own folder, so relative stylesheets, scripts, fonts and images work.
+Page scripts run in a sandbox without access to Swarmterm; popups, forms and
+pages outside the project are blocked. **Browser** saves unsaved changes and
+opens the file in the system default app for `.html`/`.svg`.
 
 PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos open in a media viewer.
 Video playback depends on the platform's codecs. Generated media reloads after
@@ -194,8 +204,8 @@ The pane header mirrors the percentage as a small `ctx 63%` chip (same amber / r
 - **Real PTYs with 24-bit truecolor** — agent CLIs, emoji and box drawing render exactly as in your normal terminal, and IMEs (Vietnamese Telex, CJK) work without dropped characters.
 - `⌘/Ctrl + C` copies when text is selected and otherwise interrupts; `⌘/Ctrl + V` pastes — like VS Code.
 - **Programs can copy to your clipboard** — nvim `"+y`, tmux `set -s set-clipboard on`, yazi and `gh` copy through OSC 52, exactly as in VS Code's terminal. Only writes are honoured: a program can never read your clipboard.
-- **Click a URL** to open it in your browser; `⌘/Ctrl + click` a file path (`src/foo.ts:42:9`, `src/foo.ts(42,9)`, `File "x.py", line 42`) to open project files in the integrated editor at that line. Paths outside the configured project retain the external-editor behavior.
-- **Drop a file or folder** onto a pane to insert its path, quoted for that pane's shell.
+- **Click a URL** to open it in your browser; `⌘/Ctrl + click` a file path (`src/foo.ts:42:9`, `src/foo.ts(42,9)`, `File "x.py", line 42`) to open project files in the integrated editor at that line; the file is also selected in **Files**, with its folders expanded and the row scrolled into view. Paths outside the configured project retain the external-editor behavior.
+- **Drop a file or folder** onto a pane — from your OS file manager or from **Files** (several selected entries at once) — to insert its path, quoted for that pane's shell. Dragged from **Files** onto a Claude Code pane, entries become `@` mentions relative to the pane's folder (`@src/foo.ts`), so Claude attaches them; paths with spaces stay quoted.
 - **Choose your shell** — PowerShell, cmd, PowerShell 7 or Git Bash — per pane, or as a default in Settings.
 
 ## Shell integration
@@ -304,13 +314,13 @@ War Room abilities only work for panes you dragged into a room, worktree abiliti
 | `⌘/Ctrl + B` | Show or hide the sidebar |
 | `⌘/Ctrl + Shift + E` | Open and focus the Files tree |
 | `⌘/Ctrl + S` | Save the focused file |
-| `⌘/Ctrl + Shift + V` | Cycle Markdown Editor / Split / Preview |
+| `⌘/Ctrl + Shift + V` | Cycle Editor / Split / Preview (Markdown, SVG, HTML) |
 | `⌘/Ctrl + Shift + B` | Toggle broadcast input |
 | `Alt + Click` | Add or remove a pane from the broadcast group |
 | `Esc` | Leave broadcast mode · close Settings |
 | `⌘/Ctrl + Enter` | Create the workspace from the composer |
 | `⌘/Ctrl + C` · `⌘/Ctrl + V` | Copy (when text is selected) · paste |
-| `⌘/Ctrl + Click` | Open a file path in your editor, at that line |
+| `⌘/Ctrl + Click` | Open a file path in your editor, at that line, and select it in Files |
 | `⌘/Ctrl + F` | Find in the focused editor/Markdown preview or terminal |
 | `⌘/Ctrl + Shift + J` | Jump to the next pane needing attention (longest-waiting blocked → done → working → idle) |
 
