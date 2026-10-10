@@ -41,6 +41,8 @@ import {
 import { ActivityTracker } from '@/lib/activity-tracker'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
+import { displayPath } from '@/lib/files/paths'
+import { devLog } from '@/lib/dev-log'
 import { useShellMarkStore } from '@/store/shell-mark-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
 import {
@@ -283,6 +285,25 @@ function refreshDetector(id: string, entry: Entry): void {
   }
   entry.detector = new AgentStateDetector(manifest, deps)
   entry.detector.start()
+}
+
+/** Path link under the pointer per terminal (from the path link provider's hover/leave). */
+const hoveredPaths = new Map<string, { text: string; resolved: string }>()
+/** Per-terminal "follow this path link" — the same gesture-gated route a Ctrl+click takes. */
+const pathFollowers = new Map<string, (event: MouseEvent, text: string) => void>()
+
+/** The detected file path currently hovered in a terminal, if any (Ctrl+drag source). */
+export function getHoveredPathLink(id: string): { text: string; resolved: string } | undefined {
+  return hoveredPaths.get(id)
+}
+
+/** Open a path link as a Ctrl+click would (used when a Ctrl+press on a link never became a drag). */
+export function openPathLink(id: string, event: MouseEvent, text: string): void {
+  // The press was captured before xterm saw it, so lastMouseDown is stale; a
+  // stale point would make followLink's drag-vs-click check drop this click.
+  const entry = entries.get(id)
+  if (entry) entry.lastMouseDown = { clientX: event.clientX, clientY: event.clientY }
+  pathFollowers.get(id)?.(event, text)
 }
 
 function getOrCreate(id: string): Entry {
@@ -707,8 +728,8 @@ function getOrCreate(id: string): Entry {
    */
   const followLink = (event: MouseEvent, kind: LinkKind, target: string): void => {
     const entry = entries.get(id)
-    if (isDragNotClick(entry?.lastMouseDown, event)) return
-    if (!shouldFollowLink(event, isMac, kind)) return
+    if (isDragNotClick(entry?.lastMouseDown, event)) { devLog('link.skip-drag', { target }); return }
+    if (!shouldFollowLink(event, isMac, kind)) { devLog('link.skip-modifier', { target }); return }
 
     if (kind === 'url') {
       openUrl(target).catch(console.warn)
@@ -716,12 +737,17 @@ function getOrCreate(id: string): Entry {
     }
     const { path, line, col } = parsePathSuffix(target)
     void resolvePathLink(getTerminalCwd(id) ?? '', path)
-      .then(async (resolved) => {
-        if (!resolved) return
+      .then(async (verbatim) => {
+        if (!verbatim) return
+        // Rust canonicalizes absolute Windows paths to `\\?\D:\…`; isSubPath
+        // against the plain project root then fails and an in-project file was
+        // sent to the external editor / file manager instead of the editor tab.
+        const resolved = displayPath(verbatim)
         const [{ openFileContext }, { isSubPath }, { useDocumentStore }, { useExplorerStore }] = await Promise.all([
           import('@/tauri/files'), import('@/lib/files/ops'), import('@/store/document-store'), import('@/store/explorer-store')
         ])
         const context = await openFileContext(id).catch(() => null)
+        devLog('link.follow', { target, resolved, root: context?.root ?? null })
         const ws = selectWorkspaceByTerminalId(useAppStore.getState(), id)
         const leaf = ws ? collectLeaves(ws.layout).find((l) => l.terminalId === id) : undefined
         if (context && leaf && isSubPath(context.root, resolved)) {
@@ -742,6 +768,7 @@ function getOrCreate(id: string): Entry {
   // then window.open() — both wrong inside a Tauri webview. allowNonHttpProtocols
   // is what lets file:// through; classifyOscLink is the protection that permission
   // requires, refusing everything except http(s) and file.
+  pathFollowers.set(id, (event, text) => followLink(event, 'path', text))
   const linkHandler: ILinkHandler = {
     allowNonHttpProtocols: true,
     activate: (event, text) => {
@@ -778,7 +805,9 @@ function getOrCreate(id: string): Entry {
             // are 0-based with an exclusive end.
             range: { start: { x: c.start + 1, y }, end: { x: c.end, y } },
             text: c.text,
-            activate: (event, text) => followLink(event, 'path', text)
+            activate: (event, text) => followLink(event, 'path', text),
+            hover: () => { hoveredPaths.set(id, { text: c.text, resolved: displayPath(resolved) }) },
+            leave: () => { if (hoveredPaths.get(id)?.text === c.text) hoveredPaths.delete(id) }
           }
           return link
         })
@@ -943,6 +972,8 @@ export function detachTerminal(id: string): void {
 
 /** Permanently destroy a terminal: kill the pty, dispose xterm, drop the entry. */
 export function disposeTerminal(id: string): void {
+  hoveredPaths.delete(id)
+  pathFollowers.delete(id)
   const entry = entries.get(id)
   if (!entry) return
   entry.observer?.disconnect()
@@ -1184,6 +1215,15 @@ export function readTerminalText(id: string, lines = 40): string {
   const end = buffer.baseY + buffer.cursorY + 1
   for (let y = Math.max(0, end - lines); y < end; y++) out.push(buffer.getLine(y)?.translateToString(true) ?? '')
   return out.join('\n').replace(/\s+$/, '')
+}
+
+/** Screen box and cell size of a terminal — for the dev test hook (testlab) only. */
+export function terminalGeometry(id: string): { x: number; y: number; cellW: number; cellH: number; cols: number; rows: number; cursorY: number } | null {
+  const entry = entries.get(id)
+  const screen = entry?.term.element?.querySelector('.xterm-screen')
+  if (!entry || !screen) return null
+  const r = screen.getBoundingClientRect()
+  return { x: r.x, y: r.y, cellW: r.width / entry.term.cols, cellH: r.height / entry.term.rows, cols: entry.term.cols, rows: entry.term.rows, cursorY: entry.term.buffer.active.cursorY }
 }
 
 export function getTerminalCwd(id: string): string | undefined {

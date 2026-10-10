@@ -26,6 +26,7 @@ if (import.meta.env.DEV) {
   void Promise.all([import('./lib/terminal-registry'), import('./store/app-store'), import('./store/document-store')]).then(([reg, app, docs]) => {
     Object.assign(window, { __swarmtermDev: {
       terminalText: (id: string, lines?: number) => reg.readTerminalText(id, lines),
+      terminalGeometry: (id: string) => reg.terminalGeometry(id),
       workspaces: () => app.useAppStore.getState().workspaces.map((w) => ({ id: w.id, name: w.name, cwd: w.cwd, focusedLeafId: w.focusedLeafId, zoomedLeafId: w.zoomedLeafId })),
       // The one write: lets a scenario remove the workspace it created.
       closeWorkspace: (id: string) => app.useAppStore.getState().closeWorkspace(id),

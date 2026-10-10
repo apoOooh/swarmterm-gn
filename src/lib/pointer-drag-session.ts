@@ -19,6 +19,8 @@ export interface PointerDragOptions {
   drop: (x: number, y: number, copyKey: boolean, hit: DragHit) => void
   /** Called once the press crosses the drag threshold (e.g. to swallow the follow-up click). */
   onStart?: () => void
+  /** Released before the drag threshold: it was a click, not a drag. */
+  onTap?: (up: PointerEvent) => void
   /** Called when the gesture ends, dropped or not. */
   onEnd?: () => void
   /** dev-log event prefix */
@@ -61,7 +63,7 @@ export function startPointerDrag(down: { button: number; clientX: number; client
   const up = (ev: PointerEvent): void => {
     const was = active
     reset()
-    if (!was) return
+    if (!was) { opts.onTap?.(ev); return }
     const copyKey = ev.ctrlKey || ev.metaKey
     const hit = opts.hit(ev.clientX, ev.clientY, copyKey)
     devLog(`${opts.name}.drag-drop`, { items: opts.items, hit })

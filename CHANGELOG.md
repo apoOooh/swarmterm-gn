@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Ctrl+drag a detected file path from a terminal onto another pane to insert
+  it there; Ctrl+click still opens it.
+- Fix Ctrl+click on absolute Windows paths opening the file externally
+  instead of in the editor (verbatim `\?\` paths failed the project check).
+
 - Dragging from Files now shows a proper copy/move cursor and a label under
   the pointer instead of the Windows "no-drop" sign; Ctrl copies into a
   folder, Esc cancels. No OS drag loop is involved any more. File tabs
