@@ -1,5 +1,15 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 test.beforeEach(async ({ page }) => { await page.goto('/tests/fixtures/app.html'); await expect(page.getByRole('tree', { name: 'Project files' })).toBeVisible(); await expect(page.getByRole('treeitem', { name: 'README.md' })).toBeVisible() })
+
+/** Press on `from`, travel past the drag threshold in steps, release over `to`. */
+async function pointerDrag(page: Page, from: Locator, to: Locator): Promise<void> {
+  const a = await from.boundingBox(); const b = await to.boundingBox()
+  if (!a || !b) throw new Error('drag endpoints not visible')
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 8 })
+  await page.mouse.up()
+}
 
 test('terminal selection follows worktrees; editor preserves PTYs and CRLF', async ({ page }) => {
   const before = await page.evaluate(() => (window as any).fixture.counters.created)
@@ -86,11 +96,10 @@ test('file tabs move between panes without respawning terminals; shared buffers 
   const panes = page.locator('[data-workbench-leaf]')
   const data = await page.evaluate(() => {
     const f = (window as any).fixture; const ws = f.useAppStore.getState().workspaces[0]
-    const a = ws.layout.children[0], b = ws.layout.children[1]; const key = f.useDocumentStore.getState().panes[a.id].active
-    return { from: a.id, to: b.id, key }
+    return { from: ws.layout.children[0].id }
   })
-  const transfer = await page.evaluateHandle((data) => { const dt = new DataTransfer(); dt.setData('application/x-swarmterm-file-tab', JSON.stringify({ paneId: data.from, key: data.key })); return dt }, data)
-  await panes.nth(1).dispatchEvent('drop', { dataTransfer: transfer })
+  // Pointer-driven like the app (HTML5 drags never land on Windows), so drive the real mouse.
+  await pointerDrag(page, panes.nth(0).getByRole('tab', { name: 'README.md' }), panes.nth(1))
   await expect(panes.nth(0).getByRole('tab', { name: 'README.md' })).toHaveCount(0)
   await expect(panes.nth(1).getByRole('tab', { name: 'README.md' })).toBeVisible()
   await page.evaluate(async (data) => { const f = (window as any).fixture; await f.useDocumentStore.getState().open(data.from, { id: 'project', root: '/project' }, '/project/README.md') }, data)
@@ -124,8 +133,7 @@ test('copy paste, internal drag moves and undo preserve file data', async ({ pag
   await expect(page.getByRole('treeitem', { name: 'delete.txt' })).toHaveCount(2)
   await tree.focus(); await page.keyboard.press('Control+z')
   await expect(page.getByRole('treeitem', { name: 'delete.txt' })).toHaveCount(1)
-  const transfer = await page.evaluateHandle(() => { const dt = new DataTransfer(); dt.setData('application/x-swarmterm-files', JSON.stringify({ contextId: 'project', paths: ['/project/delete.txt'] })); return dt })
-  await page.getByRole('treeitem', { name: 'src' }).dispatchEvent('drop', { dataTransfer: transfer })
+  await pointerDrag(page, page.getByRole('treeitem', { name: 'delete.txt' }), page.getByRole('treeitem', { name: 'src' }))
   await expect.poll(() => page.evaluate(() => (window as any).fixture.files['/project/delete.txt'])).toBeUndefined()
   expect(await page.evaluate(() => (window as any).fixture.files['/project/src/delete.txt'].content)).toBe('restore me')
   await tree.focus(); await page.keyboard.press('Control+z')
