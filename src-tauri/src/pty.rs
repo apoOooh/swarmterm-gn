@@ -107,6 +107,7 @@ pub enum PtyOut {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTerminalOptions {
+    pub agent_id: Option<String>,
     pub cwd: Option<String>,
     pub shell_id: Option<String>,
     pub initial_command: Option<String>,
@@ -145,6 +146,8 @@ impl CreateTerminalResult {
 /// (when set) owns the shell's whole process tree so closing the terminal frees
 /// every descendant, not just the shell.
 pub struct ManagedTerminal {
+    pub spawn_id: String,
+    pub agent_id: Option<String>,
     /// Configured spawn cwd; OSC 7 shell navigation must not change the explorer's root.
     pub cwd: std::path::PathBuf,
     pub writer: Box<dyn Write + Send>,
@@ -419,6 +422,8 @@ pub fn spawn_terminal(
     // bind, we skip the URL var (agents just won't have the swarmterm server
     // available) but still set the session so future subsystems can use it.
     cmd.env("SWARMTERM_SESSION", &id);
+    let spawn_id = uuid::Uuid::new_v4().to_string();
+    cmd.env("SWARMTERM_PTY_GENERATION", &spawn_id);
     if let Some(url) = state.mcp_url.get() {
         cmd.env("SWARMTERM_MCP_URL", url.as_ref());
     }
@@ -441,7 +446,7 @@ pub fn spawn_terminal(
     let pid = child.process_id();
     let killer = child.clone_killer();
 
-    let mut writer = match pair.master.take_writer() {
+    let writer = match pair.master.take_writer() {
         Ok(w) => w,
         Err(e) => {
             // The child already spawned; don't leave it orphaned.
@@ -464,20 +469,26 @@ pub fn spawn_terminal(
 
     // Run the template's first command (clearing the screen first for the
     // platform default shell so the prompt/echo don't linger above the program).
-    if let Some(ic) = &options.initial_command {
+    let initial_line = options.initial_command.as_ref().map(|ic| {
+        let ic = crate::hook::codex::isolated_command(
+            ic,
+            options.agent_id.as_deref(),
+            options.agent_id.as_deref() == Some("codex") && crate::hook::codex::supported(),
+        );
         let line = if resolved.is_some() {
             format!("{ic}\r")
         } else {
             let clear = if cfg!(windows) { "Clear-Host" } else { "clear" };
             format!("{clear}; {ic}\r")
         };
-        let _ = writer.write_all(line.as_bytes());
-        let _ = writer.flush();
-    }
+        line
+    });
 
     state.terminals.lock().unwrap().insert(
         id.clone(),
         ManagedTerminal {
+            spawn_id,
+            agent_id: options.agent_id,
             writer,
             master: pair.master,
             killer,
@@ -488,6 +499,15 @@ pub fn spawn_terminal(
             cwd: std::path::PathBuf::from(cwd),
         },
     );
+
+    // Publish the live generation before starting the agent: SessionStart may
+    // arrive immediately and must never race the terminal registration.
+    if let Some(line) = initial_line {
+        if let Some(terminal) = state.terminals.lock().unwrap().get_mut(&id) {
+            let _ = terminal.writer.write_all(line.as_bytes());
+            let _ = terminal.writer.flush();
+        }
+    }
 
     let app = app.clone();
     std::thread::spawn(move || {

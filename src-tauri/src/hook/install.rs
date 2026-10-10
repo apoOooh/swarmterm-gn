@@ -76,7 +76,7 @@ fn our_group(command: &str) -> Value {
 /// A group is ours iff it is an object whose `hooks` is a non-empty array and
 /// EVERY entry's command is ours. Anything mixed belongs to the user — they
 /// hand-copied our command into their own group and may edit it as they like.
-fn group_is_ours(group: &Value) -> bool {
+fn group_is_ours(group: &Value, is_ours: fn(&str) -> bool) -> bool {
     let Some(entries) = group.get("hooks").and_then(Value::as_array) else {
         return false;
     };
@@ -84,7 +84,7 @@ fn group_is_ours(group: &Value) -> bool {
         && entries.iter().all(|h| {
             h.get("command")
                 .and_then(Value::as_str)
-                .is_some_and(is_ours_hook)
+                .is_some_and(is_ours)
         })
 }
 
@@ -107,6 +107,15 @@ pub enum HooksWrite {
 /// restores the file to "we were never here". A pre-existing empty
 /// `"hooks": {}` gets tidied once by the same rule — a harmless one-time write.
 pub fn merge_hooks(existing: Option<&str>, command: Option<&str>) -> Result<HooksWrite, String> {
+    merge_events(existing, command, &HOOK_EVENTS, is_ours_hook)
+}
+
+pub fn merge_events(
+    existing: Option<&str>,
+    command: Option<&str>,
+    events: &[&str],
+    is_ours: fn(&str) -> bool,
+) -> Result<HooksWrite, String> {
     let before: Value = match existing.map(str::trim).filter(|s| !s.is_empty()) {
         None => json!({}),
         Some(s) => serde_json::from_str(s).map_err(|e| format!("parse: {e}"))?,
@@ -126,7 +135,7 @@ pub fn merge_hooks(existing: Option<&str>, command: Option<&str>) -> Result<Hook
         Value::Object(m) => m,
         _ => return Err("`hooks` is not a JSON object".into()),
     };
-    for event in HOOK_EVENTS {
+    for &event in events {
         if !hooks.contains_key(event) {
             if let Some(cmd) = command {
                 hooks.insert(event.to_owned(), Value::Array(vec![our_group(cmd)]));
@@ -139,7 +148,7 @@ pub fn merge_hooks(existing: Option<&str>, command: Option<&str>) -> Result<Hook
         };
         // Dropping every all-ours group and re-adding one is what repairs a
         // stale exe path (dev build → release build, or a moved app).
-        groups.retain(|g| !group_is_ours(g));
+        groups.retain(|g| !group_is_ours(g, is_ours));
         if let Some(cmd) = command {
             groups.push(our_group(cmd));
         }

@@ -34,6 +34,8 @@ import { LayoutPreview } from './LayoutPreview'
 import { RecentsDialog } from './RecentsDialog'
 import { SessionRow } from './SessionRow'
 import { SessionsDialog } from './SessionsDialog'
+import { SavedWorkspaceCard } from './SavedWorkspaceCard'
+import { useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
 
 const DEFAULT_TERMINAL_COUNT = 2
 
@@ -56,6 +58,8 @@ export function Welcome(): ReactElement {
   const addRecentFolder = useRecentsStore((s) => s.add)
   const removeRecentFolder = useRecentsStore((s) => s.remove)
   const availability = useAgentAvailabilityStore((s) => s.availability)
+  const savedWorkspaces = useSavedWorkspacesStore(s => s.entries)
+  const codexSessionHooks = useAgentAvailabilityStore(s => s.codexSessionHooks)
 
   const [terminalCount, setTerminalCount] = useState<number>(DEFAULT_TERMINAL_COUNT)
   // Optimistic seed: 1 Claude Code assigned until the probe says it's not installed.
@@ -300,6 +304,14 @@ export function Welcome(): ReactElement {
               </Button>
             </div>
           </div>
+
+          {savedWorkspaces.length > 0 && <section aria-label="Saved workspaces" className="mt-5">
+            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Saved workspaces</h3>
+            <div className="max-h-80 space-y-2 overflow-y-auto">{savedWorkspaces.map(workspace => <SavedWorkspaceCard key={workspace.id} workspace={workspace} />)}</div>
+          </section>}
+          {availability.codex === true && <p className="mt-3 text-xs text-muted-foreground">{codexSessionHooks
+            ? 'To save Codex conversations, review and trust the Swarmterm session hooks in /hooks. Send a message after trusting them.'
+            : 'Update Codex CLI to a version with session hooks to save new conversations. Workspace layouts are saved now.'}</p>}
 
           {/* Recent folders — inline list capped at VISIBLE_RECENT_ROWS;
               "Show all" opens the searchable pick-one dialog over the full

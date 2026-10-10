@@ -13,6 +13,98 @@ use serde::Serialize;
 use std::io::Read;
 use std::path::Path;
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedPane {
+    pub cwd: String,
+    pub agent_id: String,
+    pub session_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneInspection {
+    pub directory_available: bool,
+    pub session_available: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedInspection {
+    pub root_available: bool,
+    pub panes: Vec<PaneInspection>,
+}
+
+pub async fn inspect_saved(cwd: String, panes: Vec<SavedPane>) -> Result<SavedInspection, String> {
+    if panes.len() > 1024
+        || cwd.len() > 32768
+        || panes
+            .iter()
+            .any(|p| p.cwd.len() > 32768 || p.session_id.as_ref().is_some_and(|s| s.len() > 128))
+    {
+        return Err("Saved workspace is too large".into());
+    }
+    let mut opencode_matches = std::collections::HashSet::new();
+    for pane in &panes {
+        if pane.agent_id == "opencode"
+            && pane.session_id.as_deref().is_some_and(|s| {
+                s.starts_with("ses_") && s[4..].chars().all(|c| c.is_ascii_alphanumeric())
+            })
+            && Path::new(&pane.cwd).is_dir()
+            && opencode::scan(&pane.cwd)
+                .await
+                .iter()
+                .any(|s| Some(&s.session_id) == pane.session_id.as_ref())
+        {
+            opencode_matches.insert((pane.cwd.clone(), pane.session_id.clone()));
+        }
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let root_available = Path::new(&cwd).is_dir();
+        let panes = panes
+            .into_iter()
+            .map(|pane| {
+                let directory_available = Path::new(&pane.cwd).is_dir();
+                let session_available = directory_available
+                    && pane.session_id.as_deref().is_some_and(|id| {
+                        if pane.agent_id == "opencode" {
+                            return opencode_matches
+                                .contains(&(pane.cwd.clone(), pane.session_id.clone()));
+                        }
+                        if !is_uuid(id) {
+                            return false;
+                        }
+                        match pane.agent_id.as_str() {
+                            "claude-code" => claude_projects_root().is_some_and(|root| {
+                                root.join(claude::encode_project_dir(&pane.cwd))
+                                    .join(format!("{id}.jsonl"))
+                                    .is_file()
+                            }),
+                            "codex" => codex_sessions_root()
+                                .is_some_and(|root| codex::session_exists(&root, &pane.cwd, id)),
+                            "qwen" => qwen_projects_root().is_some_and(|root| {
+                                qwen::scan(&root, &pane.cwd)
+                                    .iter()
+                                    .any(|s| s.session_id == id)
+                            }),
+                            _ => false,
+                        }
+                    });
+                PaneInspection {
+                    directory_available,
+                    session_available,
+                }
+            })
+            .collect();
+        SavedInspection {
+            root_available,
+            panes,
+        }
+    })
+    .await
+    .map_err(|_| "Could not inspect saved workspace".into())
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionEntry {

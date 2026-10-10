@@ -335,6 +335,30 @@ async fn hook_handler(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     use tauri::Emitter;
+    if let Some(session) = &body.session {
+        let state = app.state::<crate::pty::AppState>();
+        let terminals = state.terminals.lock().unwrap();
+        if terminals
+            .get(&terminal_id)
+            .is_some_and(|t| session.matches(&t.spawn_id, t.agent_id.as_deref()))
+        {
+            let _ = app.emit(
+                "agent:session",
+                &crate::hook::AgentSessionEvent {
+                    terminal_id: terminal_id.clone(),
+                    agent_id: session.agent_id.clone(),
+                    session_id: session.session_id.clone(),
+                    at_ms: crate::warroom::now_ms(),
+                },
+            );
+        } else {
+            return StatusCode::NO_CONTENT.into_response();
+        }
+    }
+    // Codex capture carries no Claude lifecycle authority.
+    if body.session.as_ref().is_some_and(|s| s.agent_id == "codex") {
+        return StatusCode::NO_CONTENT.into_response();
+    }
     let _ = app.emit(
         "agent:hook",
         &crate::hook::AgentHookEvent {

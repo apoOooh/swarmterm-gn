@@ -224,6 +224,16 @@ pub async fn list_agent_sessions(folder: String) -> Vec<crate::sessions::Session
     crate::sessions::list_all(folder).await
 }
 
+#[tauri::command]
+pub async fn inspect_saved_workspace(
+    window: tauri::WebviewWindow,
+    cwd: String,
+    panes: Vec<crate::sessions::SavedPane>,
+) -> Result<crate::sessions::SavedInspection, String> {
+    files_main_only(&window)?;
+    crate::sessions::inspect_saved(cwd, panes).await
+}
+
 /// Install or remove Claude Code's `statusLine` entry. Driven from the renderer
 /// (on boot and on toggle) rather than from Rust's `setup`, because the
 /// preference lives in localStorage and only the renderer can read it. That

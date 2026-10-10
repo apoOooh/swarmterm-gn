@@ -14,7 +14,9 @@ add('/project/photo.png', 'image fixture')
 for (let i = 0; i < 2000; i++) add(`/project/many/file-${i}.ts`, `export const n = ${i}\n`)
 const contexts = new Map<string, string>()
 const terminals = new Map<string, { cwd: string; channel: unknown }>()
-const counters = { created: 0, killed: 0, writes: [] as string[], unknown: [] as string[], watched: 0, mediaStats: 0, openedMedia: [] as string[], marktext: [] as string[] }
+const counters = { created: 0, killed: 0, spawns: [] as Record<string, any>[], writes: [] as string[], unknown: [] as string[], watched: 0, mediaStats: 0, openedMedia: [] as string[], marktext: [] as string[] }
+const missingSessions = new Set<string>()
+const unavailableAgents = new Set<string>()
 let nativeFiles: string[] = []
 let textClipboard = ''
 const snapshots: { id: string; path: string; created: number; bytes: number; isDir: boolean; content: string }[] = []
@@ -22,7 +24,10 @@ const changes = async (id: string, paths: string[]): Promise<void> => { await em
 mockWindows('main'); mockConvertFileSrc('windows')
 mockIPC(async (command, raw) => {
   const args = raw as Record<string, any>
-  if (command === 'create_terminal') { counters.created++; terminals.set(args.id, { cwd: args.options.cwd, channel: args.onData }); return { ok: true, pid: counters.created, shell: '/bin/bash' } }
+  if (command === 'plugin:path|resolve_directory') return '/project'
+  if (command === 'create_terminal') { counters.created++; counters.spawns.push({ ...args.options, terminalId: args.id }); terminals.set(args.id, { cwd: args.options.cwd, channel: args.onData }); return { ok: true, pid: counters.created, shell: '/bin/bash' } }
+  if (command === 'inspect_saved_workspace') return { rootAvailable: !!files[args.cwd]?.dir, panes: args.panes.map((p: any) => ({ directoryAvailable: !!files[p.cwd]?.dir, sessionAvailable: !missingSessions.has(p.sessionId) })) }
+  if (command === 'list_agent_sessions') return []
   if (command === 'kill_terminal') { counters.killed++; terminals.delete(args.id); return }
   if (command === 'write_terminal') { counters.writes.push(args.data); return }
   if (command === 'resize_terminal' || command === 'report_agent_state') return
@@ -60,7 +65,7 @@ mockIPC(async (command, raw) => {
   if (command === 'plugin:notification|is_permission_granted') return true
   if (command.includes('is_maximized') || command.includes('is_fullscreen')) return false
   if (command === 'list_available_shells') return [{ id: 'default', name: 'System default', available: true }]
-  if (command === 'list_available_agents') return []
+  if (command === 'list_available_agents') return ['claude-code', 'codex'].map(id => ({ id, available: !unavailableAgents.has(id), sessionHooks: true }))
   if (command === 'git_list_worktrees') return []
   if (command === 'war_room_rooms') return [{ roomId: 'lobby', name: 'Lobby', members: [] }]
   if (command === 'set_claude_statusline') return { installed: false }
@@ -73,8 +78,8 @@ const { useExplorerStore } = await import('../../src/store/explorer-store')
 const { useAppearanceStore } = await import('../../src/store/appearance-store')
 const { applyVisualStyle } = await import('../../src/lib/theme-adapter')
 applyVisualStyle(useAppearanceStore.getState().style)
-useAppStore.getState().createWorkspace({ cwd: '/project', terminalCount: 2, agentIds: ['terminal', 'terminal'], paneWorktrees: [null, { path: '/worktree', branch: 'feature' }] })
-Object.assign(window, { fixture: { counters, files, useAppStore, useDocumentStore, useExplorerStore, useAppearanceStore,
+if (!new URLSearchParams(location.search).has('welcome')) useAppStore.getState().createWorkspace({ cwd: '/project', terminalCount: 2, agentIds: ['terminal', 'terminal'], paneWorktrees: [null, { path: '/worktree', branch: 'feature' }] })
+Object.assign(window, { fixture: { counters, files, missingSessions, unavailableAgents, emit, useAppStore, useDocumentStore, useExplorerStore, useAppearanceStore,
   change: async (path: string, content: string) => { const e = files[path]; e.content = content; e.version!++; await changes(path.startsWith('/worktree/') ? 'worktree' : 'project', [path]) },
   setNativeFiles: (paths: string[]) => { nativeFiles = paths }, textClipboard: () => textClipboard } })
 const { default: App } = await import('../../src/App')

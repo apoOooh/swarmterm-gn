@@ -89,6 +89,7 @@ pub fn run() {
             // one-shot, idempotent, log-only. Must run BEFORE any pane launches
             // `claude`: hooks are snapshotted at session start.
             crate::hook::install::register(app.handle());
+            crate::hook::codex::register(app.handle());
             // Boot the MCP server. Any failure is logged and swallowed: browser
             // preview via MCP just won't work for this run, but Swarmterm as a
             // whole still functions.
@@ -133,6 +134,7 @@ pub fn run() {
             commands::list_available_shells,
             commands::list_available_agents,
             commands::list_agent_sessions,
+            commands::inspect_saved_workspace,
             commands::set_claude_statusline,
             commands::resolve_path_link,
             commands::resolve_dir_link,

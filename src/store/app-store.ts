@@ -20,10 +20,14 @@ import { clearWorktree } from '@/tauri/git'
 import { isTransientLock } from '@/lib/worktree-cleanup'
 import { awaitTerminalRelocated } from '@/lib/terminal-registry'
 import { workspaceNameFor } from '@/lib/workspace-name'
+import { fromSaved, type SavedWorkspace } from '@/lib/saved-workspaces'
+import { isValidSessionId } from '@/lib/resume-command'
 
 /** A workspace: a named binary split-tree of terminal panes. */
 export interface Workspace {
   id: string
+  /** Absent after Forget: this live instance must no longer auto-save. */
+  savedId?: string
   name: string
   /** Working directory every terminal in this workspace starts from. */
   cwd: string
@@ -90,6 +94,9 @@ export interface AppState {
 
 export interface AppActions {
   createWorkspace: (config: CreateWorkspaceConfig) => void
+  restoreWorkspace: (saved: SavedWorkspace) => void
+  forgetWorkspace: (savedId: string) => void
+  recordPaneSession: (terminalId: string, agentId: string, sessionId: string) => void
   setWelcomeFolder: (path: string) => void
   openWelcome: () => void
   focusWelcome: () => void
@@ -227,6 +234,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
             terminalId: uid(),
             agentId: resume.agentId,
             resumeSessionId: resume.sessionId,
+            sessionId: resume.sessionId,
             cwd: resume.cwd
           }
         }
@@ -242,6 +250,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       const layout = paneLayoutFor(config.terminalCount + resumePanes.length, makeWizardLeaf, uid)
       const ws: Workspace = {
         id: uid(),
+        savedId: uid(),
         name: workspaceNameFor(
           config.cwd,
           s.workspaces.map((w) => w.name),
@@ -262,6 +271,23 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         welcomeFocused: false
       }
     }),
+
+  restoreWorkspace: (saved) => set((s) => {
+    const open = s.workspaces.find(w => w.savedId === saved.id)
+    if (open) return { activeWorkspaceId: open.id, welcomeFocused: false }
+    const ws = fromSaved(saved, uid)
+    return { workspaces: [...s.workspaces, ws], activeWorkspaceId: ws.id, welcomeFocused: false, welcomeOpen: false }
+  }),
+
+  forgetWorkspace: (savedId) => set((s) => ({ workspaces: s.workspaces.map(w => w.savedId === savedId ? { ...w, savedId: undefined } : w) })),
+
+  recordPaneSession: (terminalId, agentId, sessionId) => set((s) => {
+    if (!isValidSessionId(agentId, sessionId)) return s
+    const ws = selectWorkspaceByTerminalId(s, terminalId)
+    const leaf = ws && collectLeaves(ws.layout).find(l => l.terminalId === terminalId)
+    if (!ws || !leaf || leaf.agentId !== agentId || leaf.sessionId === sessionId) return s
+    return { workspaces: s.workspaces.map(w => w.id === ws.id ? { ...w, layout: updateLeaf(w.layout, leaf.id, { sessionId }) } : w) }
+  }),
 
   setWelcomeFolder: (path) => set({ welcomeFolder: path }),
 
@@ -400,6 +426,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           agentId,
           initialPrompt: undefined,
           resumeSessionId: undefined,
+          sessionId: undefined,
           launchMode: undefined,
           continueSession: undefined
         })
@@ -418,7 +445,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           layout: updateLeaf(w.layout, leafId, {
             launchMode: modeId,
             initialPrompt: undefined,
-            continueSession: leaf?.resumeSessionId === undefined ? 'last' : undefined
+            resumeSessionId: leaf?.sessionId ?? leaf?.resumeSessionId,
+            continueSession: (leaf?.sessionId ?? leaf?.resumeSessionId) === undefined ? 'last' : undefined
           })
         }
       })
@@ -433,6 +461,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         layout: updateLeaf(w.layout, leafId, {
           continueSession: 'pick',
           resumeSessionId: undefined,
+          sessionId: undefined,
           initialPrompt: undefined
         })
       }))
@@ -452,6 +481,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           worktreeBranch: undefined,
           initialPrompt: undefined,
           resumeSessionId: undefined,
+          sessionId: undefined,
           continueSession: undefined
         })
       }))
@@ -511,7 +541,10 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           layout = updateLeaf(layout, leaf.id, {
             worktreeBranch: undefined,
             cwd: undefined,
-            initialPrompt: undefined
+            initialPrompt: undefined,
+            resumeSessionId: undefined,
+            sessionId: undefined,
+            continueSession: undefined
           })
         }
         return { ...w, layout }

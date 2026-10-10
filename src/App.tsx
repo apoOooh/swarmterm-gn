@@ -97,6 +97,9 @@ import { onPreviewOpen } from '@/tauri/preview'
 import { closePreview, openPreview, wirePreviewEvents } from '@/lib/preview-registry'
 import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
+import { onAgentSession } from '@/tauri/sessions'
+import { wireSavedWorkspaces, flushSavedWorkspaces } from '@/store/saved-workspaces-store'
+import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
 
 // Platform never changes at runtime, so a module-level constant is fine.
@@ -112,6 +115,11 @@ function liveTerminalIds(workspaces: WorkspaceModel[]): Set<string> {
 }
 
 export default function App(): ReactElement {
+  useEffect(() => wireSavedWorkspaces(), [])
+  useEffect(() => {
+    const listener = onAgentSession(e => useAppStore.getState().recordPaneSession(e.terminalId, e.agentId, e.sessionId))
+    return () => { void listener.then(off => off()) }
+  }, [])
   useEffect(() => {
     const guard = registerCloseGuard((ids) => useDocumentStore.getState().guardPanes(ids))
     const listener = onFileChange((change) => {
@@ -120,9 +128,10 @@ export default function App(): ReactElement {
     })
     const quit = onQuitRequested(() => {
       const ids = useAppStore.getState().workspaces.flatMap((w) => collectLeaves(w.layout).map((l) => l.id))
-      void useDocumentStore.getState().guardPanes(ids).then((allowed) => { if (allowed) void confirmQuit() })
+      void useDocumentStore.getState().guardPanes(ids).then((allowed) => { if (allowed) { flushSavedWorkspaces(); void confirmQuit() } })
     })
     const beforeUnload = (event: BeforeUnloadEvent): void => {
+      flushSavedWorkspaces()
       if (Object.values(useDocumentStore.getState().documents).some((d) => d.dirty)) { event.preventDefault(); event.returnValue = '' }
     }
     window.addEventListener('beforeunload', beforeUnload)
@@ -825,6 +834,7 @@ export default function App(): ReactElement {
       <FileDropListener />
       <FileDialog />
       <TitleBar fullscreen={isFullscreen} />
+      <SavedWorkspaceNotice />
 
       <div className="relative flex min-h-0 flex-1">
         <Navbar

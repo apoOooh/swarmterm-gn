@@ -13,6 +13,7 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEntry {
+    pub session_hooks: bool,
     pub id: String,
     pub available: bool,
     pub detected_path: Option<String>,
@@ -48,6 +49,8 @@ pub fn list_agents() -> Vec<AgentEntry> {
             let cands = candidates(exe, &pathext, cfg!(windows));
             let found = find_in_dirs(&dirs, &cands);
             AgentEntry {
+                session_hooks: (*id == "claude-code")
+                    || (*id == "codex" && crate::hook::codex::supported()),
                 id: (*id).into(),
                 available: found.is_some(),
                 detected_path: found.map(|p| p.to_string_lossy().into_owned()),

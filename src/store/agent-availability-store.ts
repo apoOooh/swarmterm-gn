@@ -11,18 +11,20 @@ import type { AgentAvailabilityMap } from '@/lib/templates'
  * picked up without a restart.
  */
 interface AgentAvailabilityState {
+  codexSessionHooks: boolean
   availability: AgentAvailabilityMap
   refresh: () => Promise<void>
 }
 
 export const useAgentAvailabilityStore = create<AgentAvailabilityState>((set) => ({
+  codexSessionHooks: false,
   availability: {},
   refresh: async () => {
     try {
       const entries = await listAvailableAgents()
       const next: AgentAvailabilityMap = {}
       for (const e of entries) next[e.id] = e.available
-      set({ availability: next })
+      set({ availability: next, codexSessionHooks: entries.find(e => e.id === 'codex')?.sessionHooks === true })
     } catch {
       // Probe failure ⇒ keep the previous (optimistic) map rather than disabling anything.
     }

@@ -11,7 +11,7 @@ shortcut labels show both Ctrl and Command. macOS and Linux are not supported.
 
 Swarmterm opens on the **composer**: pick a folder (the working directory for every pane), choose how many terminals, and use the steppers to assign AI agents — **Claude Code**, **Codex**, **OpenCode**, **GitHub Copilot**, **Qwen Code**, **Amp**, **Gemini CLI**, **Cursor Agent**, **Antigravity** or **OMP (Oh My Pi)** — the rest stay plain shells. Agents whose CLI isn't installed show up greyed out. Turn on **Isolate features in git worktrees** for parallel work, then press `⌘/Ctrl + Enter`.
 
-Agent detection re-runs every time the composer opens, so installing a CLI needs no restart. Swarmterm keeps **no workspace state between launches** — every start is a clean slate (Settings do persist).
+Agent detection re-runs every time the composer opens, so installing a CLI needs no restart. Workspace layouts and known agent conversations can be reopened from **Saved workspaces** on Welcome. Settings persist too; terminal output and unsaved editor buffers do not.
 
 ## Panes
 
@@ -152,6 +152,30 @@ A Codex pane starts in **Auto** (`-s workspace-write -a on-request`). The agent 
 ## Resume past agent sessions
 
 Picking a working folder also lists that folder's recent Claude Code, Codex, OpenCode and Qwen Code sessions, read from each CLI's own history (never modified). Tick any of them — each reopens as an extra pane, right where the conversation left off. Tabs filter by agent, and "Show all" opens a searchable dialog over the full list.
+
+## Saved workspaces
+
+Workspaces save automatically as you change their layout, name, agents, shells,
+folders or launch modes. Welcome shows up to 24 **Saved workspaces** above Recent.
+Open a card to restore its split sizes and panes; opening an already running
+workspace brings it into focus. Rename changes its saved name. Forget removes
+the card and stops saving that open instance; its terminals keep running.
+
+Claude Code and Codex session hooks record each pane's exact conversation,
+including when several panes share a folder. For Codex, review and trust the
+Swarmterm hooks in **`/hooks`**, then send a message so its session is recorded.
+Hook-capable Codex panes run with their own process environment. Older CLIs or
+disabled or untrusted hooks still save the layout, but cannot record new
+conversations. Existing user hook definitions and trust settings are preserved.
+See the [Codex hook documentation](https://learn.chatgpt.com/docs/hooks).
+
+A missing working folder stops reopening and shows a notice. A missing pane or
+worktree folder falls back to the working folder with a fresh session. A missing
+conversation starts the same agent fresh; an unavailable agent opens a plain
+terminal. An unavailable shell uses the default shell. These fallbacks are shown
+in a notice. Saved data stays on this computer; terminal output, prompts, file
+tabs and unsaved editor buffers are not saved. Closing the window hides it to
+the tray; use **Quit** to test a full app restart.
 
 ## Worktree isolation
 
@@ -344,7 +368,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 
 ## Known limits
 
-- **Nothing is saved between launches** — workspaces, layouts and previews start fresh. Intentional for now.
+- **Terminal output, previews and unsaved editor buffers are transient.** Saved workspaces restore the pane layout and known agent conversations; they do not restore every running process or open file tab.
 - **Eight visual styles** — VS Code Dark Modern plus all seven Astera themes; terminal fonts remain a separate preference.
 - **War Room membership doesn't survive a pane restart** — re-drag the pane.
 - **The preview column has no devtools, zoom, tabs, or per-terminal cookie isolation**, and a failed page shows the platform's own error view.

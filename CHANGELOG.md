@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Save up to 24 workspaces locally and reopen them from Welcome with their
+  split layout, shells, agents, folders, launch modes and worktree bindings.
+  Rename or forget saved entries without stopping an open workspace.
+- Capture exact Claude Code and Codex session identities through lifecycle
+  hooks so panes in the same folder reopen their own conversations. Codex
+  hooks use the normal `/hooks` trust flow and supported panes run with
+  `--no-daemon`. Missing folders, sessions or CLIs show a fallback notice.
+
 ## [1.3.1] - 2026-10-10
 
 - Release 1.3.0 again; its release checks failed on two browser tests still

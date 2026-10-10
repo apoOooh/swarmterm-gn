@@ -66,6 +66,47 @@ fn rollout_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// Verify exactly the saved conversation from metadata only, never by newest
+/// rollout, title, or prompt. No fallback to another conversation in this cwd.
+pub fn session_exists(root: &Path, folder: &str, id: &str) -> bool {
+    if !super::is_uuid(id) {
+        return false;
+    }
+    let suffix = format!("-{id}.jsonl");
+    rollout_files(root)
+        .into_iter()
+        .filter(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|n| n.ends_with(&suffix))
+        })
+        .any(|p| {
+            use std::io::{BufRead, BufReader, Read};
+            let Ok(file) = std::fs::File::open(p) else {
+                return false;
+            };
+            let mut line = String::new();
+            // Session metadata includes CLI instructions and can exceed 16 KiB.
+            // Keep the read bounded while allowing a complete metadata record.
+            if BufReader::new(file.take(1024 * 1024))
+                .read_line(&mut line)
+                .is_err()
+            {
+                return false;
+            }
+            let Ok(meta) = serde_json::from_str::<Value>(&line) else {
+                return false;
+            };
+            let payload = &meta["payload"];
+            meta["type"] == "session_meta"
+                && payload["id"] == id
+                && payload["source"] != "exec"
+                && payload["cwd"]
+                    .as_str()
+                    .is_some_and(|cwd| same_path(cwd, folder))
+        })
+}
+
 pub fn scan(sessions_root: &Path, folder: &str) -> Vec<SessionEntry> {
     let mut out = Vec::new();
     for path in rollout_files(sessions_root) {
@@ -121,6 +162,41 @@ mod tests {
     use std::fs;
 
     const META: &str = "{\"timestamp\":\"2026-08-05T10:00:00.000Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f\",\"cwd\":\"/repo\",\"source\":\"cli\"}}";
+
+    #[test]
+    fn exact_session_lookup_checks_id_and_cwd_without_prompt_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f";
+        write_rollout(
+            dir.path(),
+            &format!("rollout-t-{id}.jsonl"),
+            &format!("{META}\nprivate non-json body"),
+        );
+        assert!(session_exists(dir.path(), "/repo", id));
+        assert!(!session_exists(dir.path(), "/other", id));
+        assert!(!session_exists(
+            dir.path(),
+            "/repo",
+            "11111111-2222-4333-8444-555555555555"
+        ));
+        assert!(!session_exists(dir.path(), "/repo", "../evil"));
+    }
+
+    #[test]
+    fn exact_session_lookup_accepts_large_metadata_and_bounds_the_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f";
+        let name = format!("rollout-t-{id}.jsonl");
+        let mut meta: Value = serde_json::from_str(META).unwrap();
+        meta["payload"]["instructions"] = Value::String("x".repeat(24 * 1024));
+        write_rollout(dir.path(), &name, &format!("{meta}\nprivate body"));
+        assert!(session_exists(dir.path(), "/repo", id));
+        assert!(!session_exists(dir.path(), "/other", id));
+
+        meta["payload"]["instructions"] = Value::String("x".repeat(1024 * 1024));
+        write_rollout(dir.path(), &name, &format!("{meta}\n"));
+        assert!(!session_exists(dir.path(), "/repo", id));
+    }
 
     fn write_rollout(root: &Path, name: &str, body: &str) {
         let day = root.join("2026").join("08").join("05");

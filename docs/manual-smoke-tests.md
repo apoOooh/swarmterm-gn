@@ -241,6 +241,41 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Switch a pane's agent (respawns the pty under the same id) → the line
       drops to `mcp …` until the new Claude connects.
 
+## Saved workspaces
+
+Automated checks: `npm run test:e2e -- tests/e2e/saved-workspaces.spec.ts`
+uses IPC mocks. With an already running Dev app on CDP port 9333,
+`node scripts/check-saved-workspaces-native.mjs <existing folder>` exercises
+real terminal creation and restore. `python scripts/check-session-hooks.py
+src-tauri/target/release/swarmterm.exe` checks built hook CLIs with a loopback
+server. The full Quit/restart and conversation checks below require real CLIs.
+
+- [ ] Create four panes (two Claude Code, two Codex) in the same working folder.
+      Review/trust Swarmterm's Codex hooks through `/hooks`, send a distinct
+      message in every pane, and verify the Saved card reports four sessions.
+      Capture must leave every existing terminal running without a respawn.
+- [ ] Resize both split directions, rename the workspace, change a Codex launch
+      mode and use a worktree in one pane. Quit from the tray and restart.
+      Open the card: exact split sizes, agents, shells, folders, launch mode,
+      worktree badge and each distinct conversation are restored.
+- [ ] Open the same card while its workspace is live: focus the existing one,
+      with no duplicate workspace or terminal. Rename and cancel with Escape.
+- [ ] Forget an open workspace: terminals stay alive, the card disappears,
+      and later layout changes, closing and restarting do not recreate it.
+- [ ] Close a workspace immediately after creating/resizing it (before 500 ms),
+      then reopen: the final snapshot is retained. Close one pane: the saved
+      tree contains the remaining panes.
+- [ ] Remove a saved pane/worktree folder or agent session, then reopen:
+      show a notice and start fresh; missing pane folders use the root folder.
+      Temporarily move the root folder: reopening stops with a notice.
+- [ ] Use an old Codex CLI or disable hooks: no unsupported flags are added;
+      layout restore works and new session capture remains unavailable.
+- [ ] Keep foreign Claude/Codex hooks (including inline TOML and comments).
+      App restarts retain them, repair only Swarmterm's command after a move,
+      perform no steady-state config writes, and never change hook trust.
+- [ ] Check saved storage: no terminal text, prompt, startup command, runtime
+      terminal id, file tab, unsaved buffer or broadcast group is persisted.
+
 ## Session resume (composer)
 
 - [ ] Pick a folder with prior Claude Code activity → "Resume sessions"
