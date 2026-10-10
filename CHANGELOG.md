@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-10
+
 - Fix a stray `^[[I` / `^[[O` above the Claude Code banner when focus moved
   while the agent was starting. Focus reports are no longer fanned out to
   broadcast members or counted as typing for War Room deliveries.
