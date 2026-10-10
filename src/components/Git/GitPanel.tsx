@@ -1,7 +1,7 @@
 // src/components/Git/GitPanel.tsx
 import { useEffect, useMemo, type ReactElement } from 'react'
-import { useAppStore, selectActiveWorkspace } from '@/store/app-store'
-import { collectLeaves, findLeaf } from '@/lib/layout-tree'
+import { useAppStore, selectActiveWorkspace, focusedVisibleLeaf } from '@/store/app-store'
+import { collectLeaves } from '@/lib/layout-tree'
 import { useGitStore } from '@/store/git-store'
 import { cn } from '@/lib/utils'
 import {
@@ -53,7 +53,7 @@ export function GitPanel(): ReactElement {
     const unsubscribe = useAppStore.subscribe((state) => {
       const ws = selectActiveWorkspace(state)
       if (!ws) return
-      const leaf = findLeaf(ws.layout, ws.focusedLeafId)
+      const leaf = focusedVisibleLeaf(ws)
       const cwd = leaf?.cwd ?? ws.cwd
       if (!cwd) return
       if (cwd !== useGitStore.getState().currentCwd) {
@@ -63,7 +63,7 @@ export function GitPanel(): ReactElement {
     // Initial fetch on mount.
     const ws = selectActiveWorkspace(useAppStore.getState())
     if (ws) {
-      const leaf = findLeaf(ws.layout, ws.focusedLeafId)
+      const leaf = focusedVisibleLeaf(ws)
       const cwd = leaf?.cwd ?? ws.cwd
       if (cwd) void fetchWorktrees(cwd)
     }

@@ -8,6 +8,8 @@ import { AgentIcon } from '@/components/AgentIcon'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
 import { zoomedLeaf } from '@/lib/pane-zoom'
+import { visibleLayout } from '@/lib/pane-drawer'
+import { Archive } from 'lucide-react'
 
 interface WorkspaceProps {
   workspace: WorkspaceModel
@@ -70,12 +72,32 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
   // data-focus-return: dragging a split separator (or clicking the gap
   // between panes) leaves DOM focus on chrome; App.tsx hands the keyboard
   // back to the focused terminal — see lib/terminal-focus.ts.
+  // Drawered panes are pruned first, then zoom picks from what is left. Both
+  // only unmount the hidden panes: their xterm + pty live on in
+  // terminal-registry and reattach on restore/unzoom.
+  const visible = visibleLayout(workspace.layout, workspace.drawerLeafIds ?? [])
+  const drawerCount = workspace.drawerLeafIds?.length ?? 0
   return (
     <div data-focus-return className="flex h-full w-full flex-col bg-canvas">
       <BroadcastBanner workspace={workspace} />
-      {/* Zoom renders the one leaf alone; the hidden panes unmount, but their
-          xterm + pty live on in terminal-registry and reattach on unzoom. */}
-      <div className="min-h-0 flex-1 p-2">{renderNode(zoomedLeaf(workspace.layout, workspace.zoomedLeafId) ?? workspace.layout)}</div>
+      <div className="min-h-0 flex-1 p-2">
+        {visible
+          ? renderNode(zoomedLeaf(visible, workspace.zoomedLeafId) ?? visible)
+          : <EmptyDrawerState count={drawerCount} />}
+      </div>
+    </div>
+  )
+}
+
+/** Shown when every pane of the workspace sits in the drawer. */
+function EmptyDrawerState({ count }: { count: number }): ReactElement {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border text-sm text-muted-foreground">
+      <Archive className="h-6 w-6" aria-hidden="true" />
+      <p>
+        {count === 1 ? 'The terminal is' : `All ${count} terminals are`} in the drawer.
+      </p>
+      <p className="text-xs">Click one under Drawer in the sidebar to restore it.</p>
     </div>
   )
 }

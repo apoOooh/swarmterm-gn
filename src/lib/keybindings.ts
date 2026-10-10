@@ -19,6 +19,7 @@ export type AppShortcutAction =
   | 'focus-explorer'
   | 'clear-input'
   | 'toggle-zoom'
+  | 'drawer-pane'
 
 /** The subset of a KeyboardEvent the matcher needs, kept pure for unit tests. */
 export interface ShortcutKeyEvent {
@@ -53,6 +54,8 @@ export function matchAppShortcut(
   if (key === 'e' && event.shiftKey) return 'focus-explorer'
   if (key === 'backspace' && event.shiftKey) return 'clear-input'
   if (key === 'enter' && event.shiftKey) return 'toggle-zoom'
+  // Shift is mandatory: bare Ctrl+D is EOF/logout in every shell.
+  if (key === 'd' && event.shiftKey) return 'drawer-pane'
   return null
 }
 
@@ -81,6 +84,7 @@ export function getShortcutGroups(isMac: boolean): KeybindingGroup[] {
         { description: 'Find in terminal', keys: [mod, 'F'] },
         { description: 'Clear the pending input line', keys: [mod, 'Shift', 'Backspace'] },
         { description: 'Maximize / restore the focused pane', keys: [mod, 'Shift', 'Enter'] },
+        { description: 'Move the focused pane to the drawer', keys: [mod, 'Shift', 'D'] },
         { description: 'Jump to next pane needing attention', keys: [mod, 'Shift', 'J'] },
         { description: 'Close find',       keys: ['Esc'] },
         { description: 'Close Settings',   keys: ['Esc'] },

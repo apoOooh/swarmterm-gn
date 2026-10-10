@@ -10,6 +10,7 @@ import {
 import {
   useAppStore,
   selectFocusedTerminalId,
+  focusedVisibleLeaf,
   selectWorkspaceByTerminalId,
   type Workspace as WorkspaceModel
 } from '@/store/app-store'
@@ -383,6 +384,17 @@ export default function App(): ReactElement {
         st.toggleZoom(ws.focusedLeafId)
         return
       }
+      if (action === 'drawer-pane') {
+        // Same gate as toggle-zoom: only when the keyboard belongs to a
+        // terminal (or bare chrome), never while typing in an input.
+        if (!isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
+        const st = useAppStore.getState()
+        const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
+        if (!ws || st.welcomeFocused) return
+        e.preventDefault()
+        st.drawerPane(ws.focusedLeafId)
+        return
+      }
       if (action === 'clear-input') {
         // Only while a terminal itself has the keyboard: in an input field the
         // browser's own Ctrl+Shift+Backspace behaviour is what the user wants.
@@ -612,7 +624,7 @@ export default function App(): ReactElement {
       openPreview(e.terminalId, e.url)
       const st = useAppStore.getState()
       const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
-      const focused = ws ? findLeaf(ws.layout, ws.focusedLeafId)?.terminalId : undefined
+      const focused = ws ? focusedVisibleLeaf(ws)?.terminalId : undefined
       if (focused === e.terminalId) {
         useGitStore.getState().setMode('browser')
         // Creating a native webview can grab OS focus out from under the

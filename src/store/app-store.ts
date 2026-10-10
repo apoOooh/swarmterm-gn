@@ -1,4 +1,5 @@
 import { toggledZoom } from '@/lib/pane-zoom'
+import { drawerAfterRemoval, nextVisibleLeafId } from '@/lib/pane-drawer'
 import { create, type StateCreator } from 'zustand'
 import {
   paneLayoutFor,
@@ -37,6 +38,42 @@ export interface Workspace {
   worktreeMode: boolean
   /** Leaf shown alone (pane zoom); the others keep running off-screen. */
   zoomedLeafId?: string
+  /** Leaves parked in the drawer: hidden from the split view but still in
+   *  `layout`, so their pty/xterm keep running (see lib/pane-drawer.ts).
+   *  Absent ⇒ empty. Order = drawer order (oldest first). */
+  drawerLeafIds?: string[]
+}
+
+/** Whether `leafId` is parked in `ws`'s drawer. */
+export function isDrawered(ws: Workspace, leafId: string): boolean {
+  return ws.drawerLeafIds?.includes(leafId) ?? false
+}
+
+/** Leaves of `ws` currently on screen (i.e. not drawered), in layout order. */
+export function visibleLeaves(ws: Workspace): LeafNode[] {
+  return collectLeaves(ws.layout).filter((l) => !isDrawered(ws, l.id))
+}
+
+/**
+ * The focused leaf, or undefined while it sits in the drawer. The focus id
+ * stays on a drawered leaf only when every pane is parked; anything that
+ * "follows the focused pane" (notifications' watched check, seen-marking,
+ * search, preview column, Git/Files panels) must then follow nothing rather
+ * than a pane the user cannot see.
+ */
+export function focusedVisibleLeaf(ws: Workspace): LeafNode | undefined {
+  if (isDrawered(ws, ws.focusedLeafId)) return undefined
+  return findLeaf(ws.layout, ws.focusedLeafId) ?? undefined
+}
+
+/** Focus `leafId`, pulling it out of the drawer and ending any zoom that hides it. */
+function focusLeaf(w: Workspace, leafId: string): Workspace {
+  return {
+    ...w,
+    focusedLeafId: leafId,
+    zoomedLeafId: w.zoomedLeafId && w.zoomedLeafId !== leafId ? undefined : w.zoomedLeafId,
+    drawerLeafIds: isDrawered(w, leafId) ? w.drawerLeafIds!.filter((id) => id !== leafId) : w.drawerLeafIds
+  }
 }
 
 /** What the setup wizard collects to build a new workspace. */
@@ -106,6 +143,10 @@ export interface AppActions {
   splitPane: (leafId: string, direction: Direction) => void
   closePane: (leafId: string) => void
   toggleZoom: (leafId: string) => void
+  /** Park a pane in its workspace's drawer: hidden like a close, but kept alive. */
+  drawerPane: (leafId: string) => void
+  /** Bring a drawered pane back into its original slot and focus it. */
+  restorePane: (leafId: string) => void
   runFileInPane: (leafId: string, cwd: string, command: string) => void
   reorderPane: (fromLeafId: string, toLeafId: string) => void
   resizeSplitNode: (splitId: string, sizes: [number, number]) => void
@@ -177,7 +218,7 @@ export function selectWorkspaceByTerminalId(
 export function selectFocusedTerminalId(state: AppState): string | undefined {
   const ws = selectActiveWorkspace(state)
   if (!ws) return undefined
-  return findLeaf(ws.layout, ws.focusedLeafId)?.terminalId
+  return focusedVisibleLeaf(ws)?.terminalId
 }
 
 /** Map the active workspace through `fn`, leaving the others untouched. */
@@ -305,9 +346,11 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   setFocusedLeaf: (leafId) =>
     set((s) => {
       const ws = selectActiveWorkspace(s)
-      if (!ws || ws.focusedLeafId === leafId || !findLeaf(ws.layout, leafId)) return s
-      // Focusing a pane hidden behind a zoom must show it, not type blind.
-      return mapActive(s, (w) => ({ ...w, focusedLeafId: leafId, zoomedLeafId: w.zoomedLeafId && w.zoomedLeafId !== leafId ? undefined : w.zoomedLeafId }))
+      if (!ws || !findLeaf(ws.layout, leafId)) return s
+      if (ws.focusedLeafId === leafId && !isDrawered(ws, leafId)) return s
+      // Focusing a pane hidden behind a zoom or in the drawer must show it,
+      // not type blind.
+      return mapActive(s, (w) => focusLeaf(w, leafId))
     }),
 
   revealTerminal: (terminalId) =>
@@ -319,7 +362,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       return {
         activeWorkspaceId: ws.id,
         welcomeFocused: false,
-        workspaces: s.workspaces.map((w) => (w.id === ws.id ? { ...w, focusedLeafId: leaf.id, zoomedLeafId: w.zoomedLeafId && w.zoomedLeafId !== leaf.id ? undefined : w.zoomedLeafId } : w))
+        workspaces: s.workspaces.map((w) => (w.id === ws.id ? focusLeaf(w, leaf.id) : w))
       }
     }),
 
@@ -328,7 +371,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   splitPane: (leafId, direction) =>
     set((s) =>
       mapActive(s, (w) => {
-        if (!findLeaf(w.layout, leafId)) return w
+        if (!findLeaf(w.layout, leafId) || isDrawered(w, leafId)) return w
         const newLeaf = makeLeaf()
         return {
           ...w,
@@ -351,8 +394,41 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   toggleZoom: (leafId) =>
     set((s) => {
       const ws = s.workspaces.find((w) => findLeaf(w.layout, leafId))
-      if (!ws) return {}
+      if (!ws || isDrawered(ws, leafId)) return {}
       return { workspaces: s.workspaces.map((w) => w.id === ws.id ? { ...w, zoomedLeafId: toggledZoom(w.zoomedLeafId, leafId), focusedLeafId: leafId } : w) }
+    }),
+
+  drawerPane: (leafId) =>
+    set((s) => {
+      const ws = s.workspaces.find((w) => findLeaf(w.layout, leafId))
+      if (!ws || isDrawered(ws, leafId)) return {}
+      const drawerLeafIds = [...(ws.drawerLeafIds ?? []), leafId]
+      // Focus moves on like a close would; with nothing left on screen it stays
+      // on the drawered leaf (the workspace shows its empty state) so the
+      // invariant "focusedLeafId is a leaf of layout" still holds.
+      const focusedLeafId = ws.focusedLeafId === leafId
+        ? nextVisibleLeafId(ws.layout, drawerLeafIds, leafId) ?? leafId
+        : ws.focusedLeafId
+      return { workspaces: s.workspaces.map((w) => w.id !== ws.id ? w : {
+        ...w,
+        drawerLeafIds,
+        focusedLeafId,
+        // A zoom on the parked pane lapses; a zoom on another pane survives.
+        zoomedLeafId: w.zoomedLeafId === leafId ? undefined : w.zoomedLeafId,
+        // Keystrokes must never fan out into a pane nobody can see.
+        broadcastLeafIds: w.broadcastLeafIds.filter((id) => id !== leafId)
+      }) }
+    }),
+
+  restorePane: (leafId) =>
+    set((s) => {
+      const ws = s.workspaces.find((w) => findLeaf(w.layout, leafId))
+      if (!ws || !isDrawered(ws, leafId)) return {}
+      return {
+        activeWorkspaceId: ws.id,
+        welcomeFocused: false,
+        workspaces: s.workspaces.map((w) => (w.id === ws.id ? focusLeaf(w, leafId) : w))
+      }
     }),
 
   closePane: (leafId) => {
@@ -367,7 +443,11 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         if (w.id !== ws.id) return w
         const leaves = collectLeaves(layout)
         const ids = new Set(leaves.map((l) => l.id))
-        return { ...w, layout, focusedLeafId: ids.has(w.focusedLeafId) ? w.focusedLeafId : leaves[0].id,
+        const drawerLeafIds = drawerAfterRemoval(w.drawerLeafIds ?? [], layout)
+        // Prefer a pane still on screen; fall back to a drawered one only when
+        // every survivor is parked (the workspace then shows its empty state).
+        const fallback = leaves.find((l) => !drawerLeafIds.includes(l.id)) ?? leaves[0]
+        return { ...w, layout, drawerLeafIds, focusedLeafId: ids.has(w.focusedLeafId) ? w.focusedLeafId : fallback.id,
           broadcastLeafIds: w.broadcastLeafIds.filter((id) => ids.has(id)) }
       }) }))
     })
@@ -554,7 +634,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           broadcastActive: active,
           // Turning on selects every pane (the common "drive all" case); the
           // user narrows from there. Turning off clears the group.
-          broadcastLeafIds: active ? collectLeaves(w.layout).map((l) => l.id) : []
+          broadcastLeafIds: active ? visibleLeaves(w).map((l) => l.id) : []
         }
       })
     ),
@@ -564,7 +644,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   toggleBroadcastMember: (leafId) =>
     set((s) =>
       mapActive(s, (w) => {
-        if (!findLeaf(w.layout, leafId)) return w
+        if (!findLeaf(w.layout, leafId) || isDrawered(w, leafId)) return w
         const has = w.broadcastLeafIds.includes(leafId)
         return {
           ...w,
@@ -577,7 +657,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
 
   selectAllBroadcast: () =>
     set((s) =>
-      mapActive(s, (w) => ({ ...w, broadcastLeafIds: collectLeaves(w.layout).map((l) => l.id) }))
+      mapActive(s, (w) => ({ ...w, broadcastLeafIds: visibleLeaves(w).map((l) => l.id) }))
     ),
 
   clearBroadcast: () => set((s) => mapActive(s, (w) => ({ ...w, broadcastLeafIds: [] })))

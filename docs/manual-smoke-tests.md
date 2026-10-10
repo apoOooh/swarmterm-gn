@@ -12,6 +12,19 @@ GN's automated browser tests are headless and mock native IPC. The following
 platform checks require an intentional desktop launch and disposable test files.
 Do not mark them passed from the in-memory fixture alone.
 
+## Pane drawer
+
+- [ ] In a 3-pane workspace run `ping -t localhost` in one pane, click its
+      archive button: it vanishes, the others fill the gap, it is listed under
+      Drawer in the sidebar and the workspace row shows the archive count.
+- [ ] Wait, click the drawer row: the pane returns to the same slot and size,
+      the ping kept counting, scrollback is intact, keyboard focus is in it.
+- [ ] `Ctrl+Shift+D` parks the focused pane; bare `Ctrl+D` still reaches the
+      shell. Park every pane: the workspace shows the empty drawer message.
+- [ ] Park a zoomed pane, a broadcast member and a pane with an open web
+      preview; restore each. Park a Claude pane mid-task: its state dot still
+      updates in the drawer row and `Ctrl+Shift+J` restores it when it needs you.
+
 ## Astera themes and Files (GN)
 
 - [ ] Select each of Vega, Orion, Umbra, Aurora, Antares, Quasar and Sirius;

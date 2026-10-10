@@ -17,6 +17,7 @@ Agent detection re-runs every time the composer opens, so installing a CLI needs
 
 - **Split** from the pane header, drag the separator to resize, and drag a header onto another pane to swap the two — shells keep running.
 - Closing a pane closes the gap; closing the last pane closes the workspace.
+- **Drawer:** the archive button just left of ✕ (or `⌘/Ctrl + Shift + D`) parks a pane for later. It leaves the screen like a close and the other panes fill the gap, but the shell, agent session, scrollback and any preview keep running. Parked panes are listed under **Drawer** at the bottom of the sidebar's terminal list (dimmed, state dots still live) and the workspace row shows how many are parked; one click on a row puts the pane back in its original spot. Jumping to a pane that needs attention restores it too. Drawers are not kept across restarts.
 - The left navbar lists workspaces (add, rename, reorder) and the current workspace's terminals — click one to jump to it. `⌘/Ctrl + B` hides the sidebar.
 - A pane can switch to a different agent, shell or folder from its header menu — note this restarts the shell.
 
@@ -327,6 +328,7 @@ War Room abilities only work for panes you dragged into a room, worktree abiliti
 | `⌘/Ctrl + Click` | Open a file path in your editor, at that line, and select it in Files |
 | `⌘/Ctrl + F` | Find in the focused editor/Markdown preview or terminal |
 | `⌘/Ctrl + Shift + Enter` | Maximize / restore the focused pane (also the header button or a double-click on the header). Hidden panes keep running; focusing one from the sidebar restores the layout |
+| `⌘/Ctrl + Shift + D` | Move the focused pane to the drawer (keeps running; click it in the sidebar to restore) |
 | `⌘/Ctrl + Shift + Backspace` | Clear the pending input line of the focused terminal (e.g. after a submit hook refused a prompt). Agents get one Ctrl+C, shells their line-kill; a second press within 2 s is ignored so an agent never quits |
 | `⌘/Ctrl + Shift + J` | Jump to the next pane needing attention (longest-waiting blocked → done → working → idle) |
 
