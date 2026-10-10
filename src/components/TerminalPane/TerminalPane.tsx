@@ -29,6 +29,7 @@ import { pickDirectory } from '@/tauri/dialog'
 import { cn } from '@/lib/utils'
 import { FILE_DRAG_TYPE, paneDropText } from '@/lib/terminal-drop'
 import { takeExplorerDrag } from '@/lib/explorer-drag'
+import { devLog } from '@/lib/dev-log'
 import {
   attachTerminal,
   detachTerminal,
@@ -319,6 +320,7 @@ export function TerminalPane({
         useAppStore.getState().setDropTarget(null)
         // Shared with FileDropListener's native drop — whichever fires first types it.
         const paths = takeExplorerDrag()
+        devLog('pane.html5-drop', { terminalId, paths })
         if (!paths) return
         const text = paneDropText(paths, { agentId: resolvedAgentId, cwd: getTerminalCwd(terminalId) ?? resolvedCwd ?? '', flavor: paneShellFlavor }, isWindowsPlatform())
         if (text === '') return

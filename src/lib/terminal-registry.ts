@@ -1174,6 +1174,18 @@ export function getTerminalStatus(id: string): TerminalStatus {
 }
 
 /** The terminal's live cwd — OSC 7 if the shell reports it, else the spawn cwd. */
+/** Last `lines` rows of a terminal's buffer as text — for the dev test hook (testlab) only. */
+export function readTerminalText(id: string, lines = 40): string {
+  const buffer = entries.get(id)?.term.buffer.active
+  if (!buffer) return ''
+  const out: string[] = []
+  // Up to the cursor row, not buffer.length: a fresh shell's prompt sits at the
+  // top and everything below it is blank rows.
+  const end = buffer.baseY + buffer.cursorY + 1
+  for (let y = Math.max(0, end - lines); y < end; y++) out.push(buffer.getLine(y)?.translateToString(true) ?? '')
+  return out.join('\n').replace(/\s+$/, '')
+}
+
 export function getTerminalCwd(id: string): string | undefined {
   return entries.get(id)?.cwd || undefined
 }

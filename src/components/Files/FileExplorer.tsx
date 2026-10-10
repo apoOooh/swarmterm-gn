@@ -1,5 +1,7 @@
 import { FILE_DRAG_TYPE } from '@/lib/terminal-drop'
 import { endExplorerDrag, startExplorerDrag, takeExplorerDrag } from '@/lib/explorer-drag'
+import { devLog } from '@/lib/dev-log'
+import { dropExplorerDragAt } from '@/components/FileDropListener'
 import { useEffect, useRef, useState, type KeyboardEvent, type DragEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDownUp, Copy, File, FilePlus, Folder, FolderPlus, History, RefreshCw, X } from 'lucide-react'
 import { useAppStore } from '@/store/app-store'
@@ -361,9 +363,10 @@ function ExplorerRow({ row, root, index, onSelect, onOpen, onDrop, onContext }: 
     const paths = selected ? root.selection : [row.entry.path]
     e.dataTransfer.setData(FILE_DRAG_TYPE, JSON.stringify({ contextId: root.context.id, paths: topLevelOnly(paths) })); e.dataTransfer.effectAllowed = 'copyMove'
     startExplorerDrag(topLevelOnly(paths))
+    devLog('explorer.dragstart', { paths: topLevelOnly(paths), types: [...e.dataTransfer.types] })
     // dnd-kit must not interpret a native file drag as a terminal-pane gesture.
     e.stopPropagation()
-  }} onDragEnd={() => endExplorerDrag()} onDragOver={(e) => { if (e.dataTransfer.types.includes(FILE_DRAG_TYPE)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = e.ctrlKey || e.metaKey ? 'copy' : 'move' } }} onDrop={onDrop}>
+  }} onDragEnd={(e) => { devLog('explorer.dragend', { dropEffect: e.dataTransfer.dropEffect, x: e.clientX, y: e.clientY }); dropExplorerDragAt({ x: e.clientX, y: e.clientY }); endExplorerDrag() }} onDragOver={(e) => { if (e.dataTransfer.types.includes(FILE_DRAG_TYPE)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = e.ctrlKey || e.metaKey ? 'copy' : 'move' } }} onDrop={onDrop}>
     {row.entry.isDir ? (row.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : <span className="w-3" />}
     {row.entry.isDir ? <Folder size={14} className="shrink-0 text-muted-foreground" /> : <File size={14} className="shrink-0 text-muted-foreground" />}
     <span className="min-w-0 flex-1 truncate">{row.entry.name}</span>

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Sidebar "Auto" layout (new default): Workspaces and Terminals take their
+  content height, Files fills the rest. "Manual" keeps the resizable
+  sections (Settings → Appearance → Sidebar).
+
 - Maximize a pane to fill its workspace (header button, header double-click
   or Ctrl+Shift+Enter); the other panes keep running.
 

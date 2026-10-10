@@ -1,6 +1,7 @@
 mod agents;
 mod analytics;
 mod commands;
+mod devlog;
 mod files;
 mod git;
 mod json_style;
@@ -111,6 +112,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            devlog::dev_log,
             commands::files_open_context,
             commands::confirm_quit,
             commands::files_request,

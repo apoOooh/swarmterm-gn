@@ -22,9 +22,13 @@ Agent detection re-runs every time the composer opens, so installing a CLI needs
 
 ## Files and editing
 
-The left sidebar has three resizable sections: **Workspaces**, **Terminals** and
+The left sidebar has three sections: **Workspaces**, **Terminals** and
 **Files**. Click a terminal to show its files, or press `⌘/Ctrl + Shift + E` to
-focus the tree. Drag the section separators or sidebar edge to resize them.
+focus the tree. In the default **Auto** layout the two lists take the height
+they need (up to about a third each, then they scroll) and Files fills the rest,
+so adding a workspace or pane pushes the explorer down. **Settings → Appearance
+→ Sidebar → Manual** (or the small toggle next to the Workspaces heading) brings back draggable section separators. Drag the
+sidebar edge to change its width.
 The root is the terminal's configured starting folder, including isolated
 worktrees. Running `cd` in its shell does not change the explorer root.
 Expanded folders are remembered separately for each root during this launch.

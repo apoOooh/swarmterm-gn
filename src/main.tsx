@@ -18,4 +18,20 @@ applyVisualStyle(useAppearanceStore.getState().style)
 // real OS pty; StrictMode's dev-only double-mount would spawn a shell, kill it,
 // and spawn another (and run a template's initialCommand twice), and the rapid
 // re-create races the async pty teardown ("Terminal already exists").
+// Dev builds only: mirror renderer warnings/errors into SWARMTERM_DEV_LOG.
+if (import.meta.env.DEV) {
+  void Promise.all([import('./lib/dev-log'), import('./tauri/devlog')]).then(([{ installDevLog }, { writeDevLog }]) => installDevLog(writeDevLog))
+  // Read-only probe for the external testlab (Playwright over CDP): state the
+  // DOM cannot show, e.g. terminal text drawn by the WebGL renderer.
+  void Promise.all([import('./lib/terminal-registry'), import('./store/app-store'), import('./store/document-store')]).then(([reg, app, docs]) => {
+    Object.assign(window, { __swarmtermDev: {
+      terminalText: (id: string, lines?: number) => reg.readTerminalText(id, lines),
+      workspaces: () => app.useAppStore.getState().workspaces.map((w) => ({ id: w.id, name: w.name, cwd: w.cwd, focusedLeafId: w.focusedLeafId, zoomedLeafId: w.zoomedLeafId })),
+      // The one write: lets a scenario remove the workspace it created.
+      closeWorkspace: (id: string) => app.useAppStore.getState().closeWorkspace(id),
+      documents: () => Object.values(docs.useDocumentStore.getState().documents).map((d) => ({ path: d.path, mode: d.mode, dirty: d.dirty }))
+    } })
+  })
+}
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<App />);
