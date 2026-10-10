@@ -24,8 +24,8 @@
 //! rest of the payload (prompt text, `last_assistant_message`, tool input,
 //! cwd) must not leave the pane, so it is never even read into a struct.
 
-pub mod post;
 pub mod install;
+pub mod post;
 
 /// What a hook event means for the pane's agent state. `Forget` = drop hook
 /// authority (SessionStart/SessionEnd) so the screen-scraper resumes alone:
@@ -82,9 +82,7 @@ pub fn signal_for(event: &str, notification_type: Option<&str>) -> Option<Signal
     match (event, notification_type) {
         ("UserPromptSubmit", _) => Some(Signal::Working),
         ("PermissionRequest", _) => Some(Signal::Blocked),
-        ("Notification", Some("permission_prompt" | "elicitation_dialog")) => {
-            Some(Signal::Blocked)
-        }
+        ("Notification", Some("permission_prompt" | "elicitation_dialog")) => Some(Signal::Blocked),
         ("Notification", Some("idle_prompt")) => Some(Signal::Idle),
         ("Notification", _) => None,
         ("PostToolUse", _) => Some(Signal::Working),
@@ -219,7 +217,12 @@ mod tests {
             serde_json::to_string(&Signal::Working).unwrap(),
             "\"working\""
         );
-        for s in [Signal::Working, Signal::Blocked, Signal::Idle, Signal::Forget] {
+        for s in [
+            Signal::Working,
+            Signal::Blocked,
+            Signal::Idle,
+            Signal::Forget,
+        ] {
             let json = serde_json::to_string(&s).unwrap();
             assert_eq!(serde_json::from_str::<Signal>(&json).unwrap(), s);
         }

@@ -16,6 +16,7 @@ export type AppShortcutAction =
   | 'toggle-broadcast'
   | 'find-in-terminal'
   | 'jump-to-attention'
+  | 'focus-explorer'
 
 /** The subset of a KeyboardEvent the matcher needs, kept pure for unit tests. */
 export interface ShortcutKeyEvent {
@@ -47,6 +48,7 @@ export function matchAppShortcut(
   // Shift is mandatory: bare Ctrl+J is a line feed in every shell, and the
   // registry gate would otherwise swallow a keystroke users rely on.
   if (key === 'j' && event.shiftKey) return 'jump-to-attention'
+  if (key === 'e' && event.shiftKey) return 'focus-explorer'
   return null
 }
 
@@ -69,6 +71,9 @@ export function getShortcutGroups(isMac: boolean): KeybindingGroup[] {
       label: 'Window',
       entries: [
         { description: 'Toggle sidebar',   keys: [mod, 'B'] },
+        { description: 'Focus file explorer', keys: [mod, 'Shift', 'E'] },
+        { description: 'Save active file', keys: [mod, 'S'] },
+        { description: 'Cycle Markdown view', keys: [mod, 'Shift', 'V'] },
         { description: 'Find in terminal', keys: [mod, 'F'] },
         { description: 'Jump to next pane needing attention', keys: [mod, 'Shift', 'J'] },
         { description: 'Close find',       keys: ['Esc'] },

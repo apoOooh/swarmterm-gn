@@ -5,48 +5,48 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        border: 'hsl(var(--border))',
-        'pane-border': 'hsl(var(--pane-border))',
-        input: 'hsl(var(--input))',
-        ring: 'hsl(var(--ring))',
-        broadcast: 'hsl(var(--broadcast))',
-        activity: 'hsl(var(--activity))',
-        background: 'hsl(var(--background))',
-        canvas: 'hsl(var(--canvas))',
-        foreground: 'hsl(var(--foreground))',
+        border: 'rgb(var(--color-border) / calc(var(--color-border-alpha, 1) * <alpha-value>))',
+        'pane-border': 'rgb(var(--color-pane-border) / calc(var(--color-pane-border-alpha, 1) * <alpha-value>))',
+        input: 'rgb(var(--color-input) / calc(var(--color-input-alpha, 1) * <alpha-value>))',
+        ring: 'rgb(var(--color-ring) / calc(var(--color-ring-alpha, 1) * <alpha-value>))',
+        broadcast: 'rgb(var(--color-broadcast) / calc(var(--color-broadcast-alpha, 1) * <alpha-value>))',
+        activity: 'rgb(var(--color-activity) / calc(var(--color-activity-alpha, 1) * <alpha-value>))',
+        background: 'rgb(var(--color-background) / calc(var(--color-background-alpha, 1) * <alpha-value>))',
+        canvas: 'rgb(var(--color-canvas) / calc(var(--color-canvas-alpha, 1) * <alpha-value>))',
+        foreground: 'rgb(var(--color-foreground) / calc(var(--color-foreground-alpha, 1) * <alpha-value>))',
         primary: {
-          DEFAULT: 'hsl(var(--primary))',
-          foreground: 'hsl(var(--primary-foreground))'
+          DEFAULT: 'rgb(var(--color-primary) / calc(var(--color-primary-alpha, 1) * <alpha-value>))',
+          foreground: 'rgb(var(--color-primary-foreground) / calc(var(--color-primary-foreground-alpha, 1) * <alpha-value>))'
         },
         secondary: {
-          DEFAULT: 'hsl(var(--secondary))',
-          foreground: 'hsl(var(--secondary-foreground))'
+          DEFAULT: 'rgb(var(--color-secondary) / calc(var(--color-secondary-alpha, 1) * <alpha-value>))',
+          foreground: 'rgb(var(--color-secondary-foreground) / calc(var(--color-secondary-foreground-alpha, 1) * <alpha-value>))'
         },
         destructive: {
-          DEFAULT: 'hsl(var(--destructive))',
-          foreground: 'hsl(var(--destructive-foreground))'
+          DEFAULT: 'rgb(var(--color-destructive) / calc(var(--color-destructive-alpha, 1) * <alpha-value>))',
+          foreground: 'rgb(var(--color-destructive-foreground) / calc(var(--color-destructive-foreground-alpha, 1) * <alpha-value>))'
         },
         muted: {
-          DEFAULT: 'hsl(var(--muted))',
-          foreground: 'hsl(var(--muted-foreground))'
+          DEFAULT: 'rgb(var(--color-muted) / calc(var(--color-muted-alpha, 1) * <alpha-value>))',
+          foreground: 'rgb(var(--color-muted-foreground) / calc(var(--color-muted-foreground-alpha, 1) * <alpha-value>))'
         },
         accent: {
-          DEFAULT: 'hsl(var(--accent))',
-          foreground: 'hsl(var(--accent-foreground))'
+          DEFAULT: 'rgb(var(--color-accent) / calc(var(--color-accent-alpha, 1) * <alpha-value>))',
+          foreground: 'rgb(var(--color-accent-foreground) / calc(var(--color-accent-foreground-alpha, 1) * <alpha-value>))'
         },
         popover: {
-          DEFAULT: 'hsl(var(--popover))',
-          foreground: 'hsl(var(--popover-foreground))'
+          DEFAULT: 'rgb(var(--color-popover) / calc(var(--color-popover-alpha, 1) * <alpha-value>))',
+          foreground: 'rgb(var(--color-popover-foreground) / calc(var(--color-popover-foreground-alpha, 1) * <alpha-value>))'
         },
         card: {
-          DEFAULT: 'hsl(var(--card))',
-          foreground: 'hsl(var(--card-foreground))'
+          DEFAULT: 'rgb(var(--color-card) / calc(var(--color-card-alpha, 1) * <alpha-value>))',
+          foreground: 'rgb(var(--color-card-foreground) / calc(var(--color-card-foreground-alpha, 1) * <alpha-value>))'
         }
       },
       borderRadius: {
-        lg: 'var(--radius)',
-        md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)'
+        lg: 'var(--radius-lg)',
+        md: 'var(--radius)',
+        sm: 'var(--radius-sm)'
       },
       keyframes: {
         'accordion-down': {

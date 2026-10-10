@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { applyVisualStyle } from '@/lib/theme-adapter'
 import {
   DEFAULT_STYLE,
   readStoredStyle,
@@ -23,6 +24,7 @@ export const useAppearanceStore = create<AppearanceStore>((set) => {
     style: initial,
     setStyle: (style) => {
       storeStyle(window.localStorage, style)
+      applyVisualStyle(style)
       set({ style })
     }
   }

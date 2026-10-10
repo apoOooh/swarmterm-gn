@@ -211,7 +211,10 @@ mod tests {
         // reach the server as the bare path — never as `ctx=0`, which is a
         // real reading.
         let req = build_status_request("127.0.0.1:52431", "tok", None);
-        assert!(req.starts_with("GET /status HTTP/1.1\r\n"), "req was {req:?}");
+        assert!(
+            req.starts_with("GET /status HTTP/1.1\r\n"),
+            "req was {req:?}"
+        );
         assert!(req.contains("Host: 127.0.0.1:52431\r\n"));
         assert!(req.contains("Authorization: Bearer tok\r\n"));
         assert!(req.contains("Connection: close\r\n"));
@@ -327,7 +330,12 @@ mod tests {
         // Port 1 on loopback is reserved and never bound by us; the connect is
         // refused immediately rather than waiting out the timeout.
         assert_eq!(
-            probe("http://127.0.0.1:1/mcp", "tok", None, Duration::from_millis(300)),
+            probe(
+                "http://127.0.0.1:1/mcp",
+                "tok",
+                None,
+                Duration::from_millis(300)
+            ),
             None
         );
     }

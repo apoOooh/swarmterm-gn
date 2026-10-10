@@ -1,21 +1,10 @@
-import { type ReactElement } from 'react'
+import { type CSSProperties, type ReactElement } from 'react'
 import { Check } from 'lucide-react'
 import { useAppearanceStore } from '@/store/appearance-store'
-import type { Style } from '@/lib/appearance'
+import { styleOptions, themeVariables, type StyleOption } from '@/lib/theme-adapter'
 import { cn } from '@/lib/utils'
 
-interface StyleOption {
-  id: Style
-  label: string
-  variant: 'Dark' | 'Light'
-  surface: string
-}
-
-const STYLE_OPTIONS: StyleOption[] = [
-  { id: 'vscode-dark', label: 'VS Code Dark', variant: 'Dark', surface: 'Modern' }
-]
-
-/** The "Appearance" settings category — currently a single Style picker. */
+/** Theme previews render in their own palette, independent of the active theme. */
 export function AppearancePanel(): ReactElement {
   const style = useAppearanceStore((s) => s.style)
   const setStyle = useAppearanceStore((s) => s.setStyle)
@@ -36,7 +25,7 @@ export function AppearancePanel(): ReactElement {
         <h2 className="mb-4 text-sm font-semibold text-foreground">Theme</h2>
 
         <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
-          {STYLE_OPTIONS.map((opt) => (
+          {styleOptions.map((opt) => (
             <ThemeCard
               key={opt.id}
               option={opt}
@@ -62,6 +51,9 @@ function ThemeCard({ option, active, onSelect }: ThemeCardProps): ReactElement {
       type="button"
       onClick={onSelect}
       aria-pressed={active}
+      aria-label={`Theme: ${option.label}`}
+      data-theme-preview={option.id}
+      style={themeVariables(option.id) as CSSProperties}
       className={cn(
         'flex flex-col gap-3 rounded-lg border bg-card p-3 text-left transition-colors',
         active
@@ -83,7 +75,7 @@ function ThemeCard({ option, active, onSelect }: ThemeCardProps): ReactElement {
       <div className="px-0.5">
         <div className="text-sm font-medium text-foreground">{option.label}</div>
         <div className="mt-0.5 text-xs text-muted-foreground">
-          {option.variant} · {option.surface}
+          Dark · {option.surface}
         </div>
       </div>
     </button>

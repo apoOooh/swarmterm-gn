@@ -24,30 +24,33 @@ if (Test-Path ".env.release") {
   }
 }
 
-if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
-  Die "TAURI_SIGNING_PRIVATE_KEY is unset - copy .env.release.example to .env.release"
-}
-if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
-  Die "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is unset - see .env.release.example"
-}
-# The variable accepts the key content or a path; only validate paths.
-if (($env:TAURI_SIGNING_PRIVATE_KEY -notmatch 'PRIVATE KEY') -and
-    -not (Test-Path $env:TAURI_SIGNING_PRIVATE_KEY)) {
-  Die "TAURI_SIGNING_PRIVATE_KEY is not a file: $($env:TAURI_SIGNING_PRIVATE_KEY)"
+$config = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+if ($config.bundle.createUpdaterArtifacts) {
+  if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+    Die "TAURI_SIGNING_PRIVATE_KEY is unset - copy .env.release.example to .env.release"
+  }
+  if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+    Die "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is unset - see .env.release.example"
+  }
+  # The variable accepts the key content or a path; only validate paths.
+  if (($env:TAURI_SIGNING_PRIVATE_KEY -notmatch 'PRIVATE KEY') -and
+      -not (Test-Path $env:TAURI_SIGNING_PRIVATE_KEY)) {
+    Die "TAURI_SIGNING_PRIVATE_KEY is not a file: $($env:TAURI_SIGNING_PRIVATE_KEY)"
+  }
 }
 
-$version = (Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+$version = $config.version
 Write-Host "==> building NSIS installer (v$version)"
 # npx, not `npm run tauri -- …`: PowerShell swallows a bare `--`, npm then
 # eats `--bundles` as its own flag, and cargo receives a stray `nsis`.
 npx tauri build --bundles nsis
 if ($LASTEXITCODE -ne 0) { Die "tauri build failed" }
 
-$setup = "src-tauri/target/release/bundle/nsis/Swarmterm_${version}_x64-setup.exe"
+$setup = "src-tauri/target/release/bundle/nsis/$($config.productName)_${version}_x64-setup.exe"
 if (-not (Test-Path $setup)) { Die "installer not found: $setup" }
-if (-not (Test-Path "$setup.sig")) {
+if ($config.bundle.createUpdaterArtifacts -and -not (Test-Path "$setup.sig")) {
   Die "updater signature not found: $setup.sig - was the build run without the signing key?"
 }
 
 Write-Host "==> release OK: $setup"
-Write-Host "    next: npm run release:publish"
+if ($config.bundle.createUpdaterArtifacts) { Write-Host "    next: npm run release:publish" }

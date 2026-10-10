@@ -5,11 +5,14 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import './index.css'
 import { installScrollbarActivity } from './lib/scrollbar-activity'
+import { applyVisualStyle } from './lib/theme-adapter'
+import { useAppearanceStore } from './store/appearance-store'
 
 // Reveal the minimal-overlay scrollbars while any element is actively scrolling
 // (they are hidden at rest and otherwise only show on hover). One global
 // listener covers every scroll container, including terminal viewports.
 installScrollbarActivity()
+applyVisualStyle(useAppearanceStore.getState().style)
 
 // NOTE: intentionally NOT wrapped in <React.StrictMode>. Each TerminalPane owns a
 // real OS pty; StrictMode's dev-only double-mount would spawn a shell, kill it,

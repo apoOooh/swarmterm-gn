@@ -1,9 +1,54 @@
 # Manual smoke tests
 
+Swarmterm GN supports Windows x64 only. Run the Windows checks here; retained
+macOS/Linux notes describe upstream behavior and are outside GN support.
+
 Run this by hand before a release, or after touching pty, focus, War Room or
 worktree code. Start with `npm run tauri dev`.
 
 A longer scripted War Room scenario lives in [`war-room-demo.md`](war-room-demo.md).
+
+GN's automated browser tests are headless and mock native IPC. The following
+platform checks require an intentional desktop launch and disposable test files.
+Do not mark them passed from the in-memory fixture alone.
+
+## Astera themes and Files (GN)
+
+- [ ] Select each of Vega, Orion, Umbra, Aurora, Antares, Quasar and Sirius;
+      check palette contrast, font loading, menus, dialogs and preview cards.
+      While a shell emits output, switch themes and verify PID/scrollback survive.
+- [ ] Click terminals with different folders/worktrees; Files follows configured
+      roots. Run `cd` in one shell; its explorer root stays fixed. Switch back
+      and check expanded folders. Try a symlinked project root.
+- [ ] Resize all three sidebar sections, sidebar width and terminal/editor split.
+      Use separators with the keyboard and check the editor fills its whole pane.
+- [ ] Browse a directory with thousands of entries; scroll, filter loaded files,
+      range-select and navigate with arrows/typeahead without terminal input.
+- [ ] Create, rename, duplicate, cut/paste and drag files across roots. Confirm
+      existing destination files survive, errors stay visible and undo works.
+- [ ] Windows Explorer: copy files into the
+      OS clipboard, import through the context menu, then copy back out. Test
+      long paths, spaces and Unicode. Verify explicit clipboard-unavailable errors.
+- [ ] Delete nested folders and restore history after restarting the app. Test
+      a destination-name collision, a symlink and a >50 MiB snapshot skip warning.
+- [ ] Open a UTF-8 BOM/CRLF file in two panes, edit/save and verify original
+      encoding/newlines, shared buffers and undo after switching tabs. Modify it
+      from another program; clean buffers reload, dirty buffers require a choice.
+- [ ] Cancel closing a dirty tab, pane, workspace and tray Quit. Save/Discard
+      succeeds; closing the window to the tray keeps buffers and shells alive.
+- [ ] Change files and git status from another process, including an isolated
+      worktree and a renamed/recreated directory; Files and open tabs update.
+- [ ] Render Markdown with GFM, source links, local/remote images, duplicate
+      headings, fenced code and preview search. Check synchronized split scrolling;
+      script tags and javascript URLs cannot execute.
+- [ ] Preview each image/video format supported by the native webview. Seek a
+      video, regenerate it, verify stable-change reload and playback position;
+      switch workspaces and check background playback stops. Test missing files.
+- [ ] Run Python/pytest/Node/Compose/.NET files; only a new plain-shell pane runs
+      the command. Original agent panes remain running. Ctrl+click a terminal
+      path opens the integrated editor at its line/column.
+- [ ] With the native web preview visible, open file menus and dirty dialogs;
+      preview hides beneath overlays and restores after dismissal.
 
 ## Basics
 
@@ -266,19 +311,8 @@ machine that never built Swarmterm. Details in
 
 ## Auto-update
 
-Needs two published releases (the older installed locally). Full flow in
-[`release-process.md`](release-process.md).
-
-- [ ] Install the previous version; within ~10 s of launch the update toast
-      appears bottom-left naming the newer version.
-- [ ] **Dismiss** hides it; tray → **Check for Updates…** brings it back.
-- [ ] **Download** shows progress; macOS then offers **Restart to update**
-      and relaunching lands on the new version (check the tray tooltip /
-      About); on Windows the installer runs and the app comes back updated.
-- [ ] On the freshly updated build, tray → **Check for Updates…** reports
-      "Swarmterm is up to date".
-- [ ] With Wi-Fi off, launching the app shows no update UI at all; the tray
-      check surfaces a dismissible error toast.
+- [ ] GN shows no upstream updater controls or tray entry and makes no upstream
+      update requests. App name and application-data identifier are distinct.
 
 ## Telemetry (release builds only)
 

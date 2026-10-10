@@ -1,6 +1,7 @@
 mod agents;
 mod analytics;
 mod commands;
+mod files;
 mod git;
 mod json_style;
 mod links;
@@ -36,10 +37,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .register_uri_scheme_protocol("swarmterm-media", |context, request| {
+            let service = context
+                .app_handle()
+                .state::<std::sync::Arc<files::FileService>>();
+            files::media_response(&service, request)
+        })
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            app.manage(std::sync::Arc::new(files::FileService::new(
+                app.path().app_data_dir()?.join("local-history"),
+            )));
             // The configured 1280×820 overflows small displays (on a MacBook
             // the Dock covers the bottom edge), so clamp the window to the
             // monitor's work area and center it. The window is created with
@@ -102,6 +111,11 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::files_open_context,
+            commands::confirm_quit,
+            commands::files_request,
+            commands::files_watch,
+            commands::files_unwatch,
             commands::create_terminal,
             commands::write_terminal,
             commands::resize_terminal,

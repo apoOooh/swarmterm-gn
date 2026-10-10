@@ -55,6 +55,33 @@ pub fn find_editor(path_var: &str, preferred: &[String]) -> Option<String> {
         .cloned()
 }
 
+pub fn reveal_in_file_manager(path: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg("-R").arg(path);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("explorer");
+        c.arg(format!("/select,{path}"));
+        c
+    };
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let mut cmd = {
+        // No portable "reveal" on Linux; open the containing directory instead.
+        let parent = std::path::Path::new(path)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".".to_string());
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(parent);
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

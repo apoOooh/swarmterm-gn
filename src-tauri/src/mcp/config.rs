@@ -498,7 +498,8 @@ mod tests {
     /// Byte offset of `"key"` in the rendered text — order is a TEXT property,
     /// `Value` equality is order-free.
     fn pos(text: &str, key: &str) -> usize {
-        text.find(&format!("\"{key}\"")).unwrap_or_else(|| panic!("{key} missing in {text}"))
+        text.find(&format!("\"{key}\""))
+            .unwrap_or_else(|| panic!("{key} missing in {text}"))
     }
 
     #[test]
@@ -518,14 +519,20 @@ mod tests {
     #[test]
     fn merge_keeps_tab_indent_and_no_trailing_newline() {
         let out = merge_claude(Some("{\n\t\"z\": 1\n}")).unwrap();
-        assert!(out.contains("\n\t\"mcpServers\": {\n\t\t\"swarmterm\": {\n\t\t\t\"type\""), "{out}");
+        assert!(
+            out.contains("\n\t\"mcpServers\": {\n\t\t\"swarmterm\": {\n\t\t\t\"type\""),
+            "{out}"
+        );
         assert!(out.ends_with('}'), "{out}");
     }
 
     #[test]
     fn merge_of_compact_or_new_file_is_byte_identical_to_pretty() {
         let compact = merge_claude(Some(r#"{"z":1}"#)).unwrap();
-        assert!(compact.starts_with("{\n  \"z\": 1,\n  \"mcpServers\""), "{compact}");
+        assert!(
+            compact.starts_with("{\n  \"z\": 1,\n  \"mcpServers\""),
+            "{compact}"
+        );
         assert!(compact.ends_with('}'), "{compact}");
         let fresh = merge_claude(None).unwrap();
         assert_eq!(fresh, serde_json::to_string_pretty(&parse(&fresh)).unwrap());

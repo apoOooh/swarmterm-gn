@@ -78,8 +78,18 @@ mod tests {
 
     #[test]
     fn execute_refusal_fails_open_for_every_other_state() {
-        for s in [None, Some("working"), Some("idle"), Some("done"), Some("unknown"), Some("")] {
-            assert!(execute_refusal("Codex", s).is_none(), "{s:?} must not refuse");
+        for s in [
+            None,
+            Some("working"),
+            Some("idle"),
+            Some("done"),
+            Some("unknown"),
+            Some(""),
+        ] {
+            assert!(
+                execute_refusal("Codex", s).is_none(),
+                "{s:?} must not refuse"
+            );
         }
     }
 

@@ -1,5 +1,9 @@
 # Releasing Swarmterm for macOS
 
+This document is retained as an **upstream reference**. Swarmterm GN supports
+Windows only and does not build, publish or support macOS releases. See the
+fork's [release process](release-process.md).
+
 Swarmterm ships as a universal `.dmg` signed with a Developer ID Application
 certificate and notarized by Apple. Without both, macOS refuses to open a
 downloaded build.

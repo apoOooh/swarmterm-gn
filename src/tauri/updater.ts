@@ -1,4 +1,4 @@
-import { check, type Update } from '@tauri-apps/plugin-updater'
+import type { Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { listen } from '@tauri-apps/api/event'
 
@@ -18,10 +18,10 @@ export type ProgressEvent =
 let pending: Update | null = null
 
 export async function checkForUpdate(): Promise<FoundUpdate | null> {
-  const update = await check()
-  pending = update
-  if (!update) return null
-  return { version: update.version, notes: update.body ?? undefined }
+  // This fork has its own application identifier and release channel.
+  // Never install a signed upstream binary over Swarmterm GN.
+  pending = null
+  return null
 }
 
 /** On Windows (NSIS, passive mode) the returned promise never resolves — the

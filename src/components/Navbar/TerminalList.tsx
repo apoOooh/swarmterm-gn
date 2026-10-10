@@ -3,6 +3,8 @@ import { collectLeaves } from '@/lib/layout-tree'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { resolvePaneTitle } from '@/lib/pane-title'
 import { useAppStore } from '@/store/app-store'
+import { useDocumentStore } from '@/store/document-store'
+import { useExplorerStore } from '@/store/explorer-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useAgentStateStore } from '@/store/agent-state-store'
@@ -54,10 +56,14 @@ export function TerminalList(): ReactElement | null {
           return (
             <li key={leaf.id}>
               <div
-                onClick={() => setFocusedLeaf(leaf.id)}
+                onClick={() => {
+                  useDocumentStore.getState().select(leaf.id, null)
+                  useExplorerStore.setState({ visible: true })
+                  setFocusedLeaf(leaf.id)
+                }}
                 title={title}
                 className={cn(
-                  'flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
+                  'theme-row flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
                   focused
                     ? 'bg-accent text-accent-foreground'
                     : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'

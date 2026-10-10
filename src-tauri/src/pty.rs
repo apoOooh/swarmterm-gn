@@ -145,6 +145,8 @@ impl CreateTerminalResult {
 /// (when set) owns the shell's whole process tree so closing the terminal frees
 /// every descendant, not just the shell.
 pub struct ManagedTerminal {
+    /// Configured spawn cwd; OSC 7 shell navigation must not change the explorer's root.
+    pub cwd: std::path::PathBuf,
     pub writer: Box<dyn Write + Send>,
     pub master: Box<dyn MasterPty + Send>,
     pub killer: Box<dyn ChildKiller + Send + Sync>,
@@ -426,7 +428,7 @@ pub fn spawn_terminal(
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| ".".to_string())
     });
-    cmd.cwd(cwd);
+    cmd.cwd(&cwd);
 
     // Clone worktree options to locals so they're available at the insert point.
     let worktree_mode = options.worktree_mode.unwrap_or(false);
@@ -483,6 +485,7 @@ pub fn spawn_terminal(
             job,
             worktree_mode,
             repo_root,
+            cwd: std::path::PathBuf::from(cwd),
         },
     );
 
@@ -526,11 +529,11 @@ fn read_loop(
                     // never reads less than xterm shows. Lock scope is the
                     // one statement — never held across the channel send.
                     if let Some(state) = &peer_state {
-                        state
-                            .peer_states
-                            .lock()
-                            .unwrap()
-                            .push_output(&id, &text, crate::warroom::now_ms());
+                        state.peer_states.lock().unwrap().push_output(
+                            &id,
+                            &text,
+                            crate::warroom::now_ms(),
+                        );
                         state.peer_wake.notify_waiters();
                     }
                     let _ = on_data.send(PtyOut::Data(text));

@@ -139,7 +139,10 @@ mod tests {
     #[test]
     fn build_request_is_a_well_formed_post() {
         let req = build_request("127.0.0.1:5", "tok", "{\"signal\":\"idle\"}");
-        assert!(req.starts_with("POST /hook HTTP/1.1\r\n"), "req was {req:?}");
+        assert!(
+            req.starts_with("POST /hook HTTP/1.1\r\n"),
+            "req was {req:?}"
+        );
         assert!(req.contains("Host: 127.0.0.1:5\r\n"));
         assert!(req.contains("Authorization: Bearer tok\r\n"));
         assert!(req.contains("Content-Type: application/json\r\n"));

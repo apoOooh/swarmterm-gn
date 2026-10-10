@@ -23,3 +23,15 @@ point in time, not a live mirror of herdr. Future re-syncs must diff against
 the current herdr repository (rules, priorities, region semantics) rather
 than assuming this port is still current — herdr's manifests can change
 upstream without any signal reaching this repo.
+## Astera port (Apache License 2.0)
+
+The theme definitions and pure file-management/editor rules adapted in this fork
+come from [parsingk/Astera](https://github.com/parsingk/Astera), commit
+`debc3098acd5098299ca956fe024763b2decaf3b`, copyright its original contributors,
+under Apache-2.0. The original license is in `licenses/Astera/Apache-2.0.txt`.
+Adapted code is identified in `src/lib/theme/` and `src/lib/files/`; the Rust
+filesystem backend and Swarmterm integration are new implementations.
+
+Unmodified Geist, IBM Plex Sans/Mono, Public Sans and JetBrains Mono font files
+were bundled from Astera. Their SIL Open Font License texts are in `licenses/fonts/`.
+Their original copyright and reserved-font-name notices are retained there.

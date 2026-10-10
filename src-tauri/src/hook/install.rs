@@ -255,7 +255,10 @@ mod tests {
     #[test]
     fn quotes_the_path_and_appends_the_flag() {
         assert_eq!(
-            format_command("/Applications/Swarmterm.app/Contents/MacOS/swarmterm", false),
+            format_command(
+                "/Applications/Swarmterm.app/Contents/MacOS/swarmterm",
+                false
+            ),
             OURS
         );
     }
@@ -265,7 +268,10 @@ mod tests {
         // Claude Code runs hook commands through Git Bash, which consumes
         // unquoted backslashes as escapes — same trap as the status line.
         assert_eq!(
-            format_command("C:\\Users\\me\\AppData\\Local\\Swarmterm\\swarmterm.exe", true),
+            format_command(
+                "C:\\Users\\me\\AppData\\Local\\Swarmterm\\swarmterm.exe",
+                true
+            ),
             "\"C:/Users/me/AppData/Local/Swarmterm/swarmterm.exe\" --hook"
         );
     }
@@ -290,7 +296,9 @@ mod tests {
     fn does_not_claim_a_foreign_hook_command() {
         // Both halves must match: our own --statusline entry is NOT a hook,
         // a bare binary is not ours, and a stranger's --hook is theirs.
-        assert!(!is_ours_hook("\"/Applications/Swarmterm.app/Contents/MacOS/swarmterm\" --statusline"));
+        assert!(!is_ours_hook(
+            "\"/Applications/Swarmterm.app/Contents/MacOS/swarmterm\" --statusline"
+        ));
         assert!(!is_ours_hook("swarmterm"));
         assert!(!is_ours_hook("some-other-tool --hook"));
         assert!(!is_ours_hook(FOREIGN));
@@ -308,7 +316,15 @@ mod tests {
             let nt = (event == "Notification").then_some("permission_prompt");
             assert!(signal_for(event, nt).is_some(), "{event} has no signal");
         }
-        for must in ["UserPromptSubmit", "PermissionRequest", "Notification", "PostToolUse", "Stop", "SessionStart", "SessionEnd"] {
+        for must in [
+            "UserPromptSubmit",
+            "PermissionRequest",
+            "Notification",
+            "PostToolUse",
+            "Stop",
+            "SessionStart",
+            "SessionEnd",
+        ] {
             assert!(HOOK_EVENTS.contains(&must), "{must} missing");
         }
         assert!(!HOOK_EVENTS.contains(&"PreToolUse"));
@@ -320,10 +336,15 @@ mod tests {
         for existing in [None, Some(""), Some("   \n"), Some("{}")] {
             let v = merged(existing, Some(OURS));
             for event in HOOK_EVENTS {
-                let groups = v["hooks"][event].as_array().unwrap_or_else(|| panic!("{event}"));
+                let groups = v["hooks"][event]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{event}"));
                 assert_eq!(groups.len(), 1, "{event}");
                 assert_eq!(groups[0], ours_group(OURS), "{event}");
-                assert!(groups[0].get("matcher").is_none(), "{event}: matcher must be omitted");
+                assert!(
+                    groups[0].get("matcher").is_none(),
+                    "{event}: matcher must be omitted"
+                );
             }
             assert_eq!(v["hooks"].as_object().unwrap().len(), 7);
         }
@@ -359,16 +380,28 @@ mod tests {
             HooksWrite::Write(s) => s,
             HooksWrite::Unchanged => panic!(),
         };
-        assert!(matches!(merge_hooks(Some(&pretty), Some(OURS)).unwrap(), HooksWrite::Unchanged));
+        assert!(matches!(
+            merge_hooks(Some(&pretty), Some(OURS)).unwrap(),
+            HooksWrite::Unchanged
+        ));
         // Different whitespace and key order are still "current" — Value
         // equality, not byte equality, or every boot would rewrite the file.
         let compact = parse(&pretty).to_string();
-        assert!(matches!(merge_hooks(Some(&compact), Some(OURS)).unwrap(), HooksWrite::Unchanged));
+        assert!(matches!(
+            merge_hooks(Some(&compact), Some(OURS)).unwrap(),
+            HooksWrite::Unchanged
+        ));
         let reordered = compact
             .replace(r#"{"type":"command","command":"#, r#"{"command":"#)
             .replace(r#","timeout":5}"#, r#","timeout":5,"type":"command"}"#);
-        assert_ne!(reordered, compact, "the reorder must be real or this proves nothing");
-        assert!(matches!(merge_hooks(Some(&reordered), Some(OURS)).unwrap(), HooksWrite::Unchanged));
+        assert_ne!(
+            reordered, compact,
+            "the reorder must be real or this proves nothing"
+        );
+        assert!(matches!(
+            merge_hooks(Some(&reordered), Some(OURS)).unwrap(),
+            HooksWrite::Unchanged
+        ));
     }
 
     #[test]
@@ -393,7 +426,8 @@ mod tests {
             "statusLine": { "type": "command", "command": "x --statusline" },
             "model": "opus",
             "hooks": { "PreToolUse": [foreign_group("lint")], "Stop": ["weird"] }
-        }).to_string();
+        })
+        .to_string();
         let v = merged(Some(&existing), Some(OURS));
         assert_eq!(v["statusLine"]["command"], "x --statusline");
         assert_eq!(v["model"], "opus");
@@ -424,13 +458,23 @@ mod tests {
     #[test]
     fn remove_with_nothing_ours_is_unchanged() {
         let foreign_only = json!({ "hooks": { "Stop": [foreign_group(FOREIGN)] } }).to_string();
-        assert!(matches!(merge_hooks(Some(&foreign_only), None).unwrap(), HooksWrite::Unchanged));
-        assert!(matches!(merge_hooks(Some("{}"), None).unwrap(), HooksWrite::Unchanged));
-        assert!(matches!(merge_hooks(None, None).unwrap(), HooksWrite::Unchanged));
+        assert!(matches!(
+            merge_hooks(Some(&foreign_only), None).unwrap(),
+            HooksWrite::Unchanged
+        ));
+        assert!(matches!(
+            merge_hooks(Some("{}"), None).unwrap(),
+            HooksWrite::Unchanged
+        ));
+        assert!(matches!(
+            merge_hooks(None, None).unwrap(),
+            HooksWrite::Unchanged
+        ));
     }
 
     fn pos(text: &str, key: &str) -> usize {
-        text.find(&format!("\"{key}\"")).unwrap_or_else(|| panic!("{key} missing in {text}"))
+        text.find(&format!("\"{key}\""))
+            .unwrap_or_else(|| panic!("{key} missing in {text}"))
     }
 
     fn written(existing: Option<&str>, command: Option<&str>) -> String {
@@ -448,10 +492,19 @@ mod tests {
             foreign_group("lint")
         );
         let out = written(Some(&existing), Some(OURS));
-        assert!(pos(&out, "z") < pos(&out, "hooks") && pos(&out, "hooks") < pos(&out, "a"), "{out}");
+        assert!(
+            pos(&out, "z") < pos(&out, "hooks") && pos(&out, "hooks") < pos(&out, "a"),
+            "{out}"
+        );
         // The user's event stays first; ours are appended in HOOK_EVENTS order.
-        assert!(pos(&out, "PreToolUse") < pos(&out, "UserPromptSubmit"), "{out}");
-        assert!(pos(&out, "UserPromptSubmit") < pos(&out, "SessionEnd"), "{out}");
+        assert!(
+            pos(&out, "PreToolUse") < pos(&out, "UserPromptSubmit"),
+            "{out}"
+        );
+        assert!(
+            pos(&out, "UserPromptSubmit") < pos(&out, "SessionEnd"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -463,7 +516,11 @@ mod tests {
             foreign_group(FOREIGN)
         );
         let out = written(Some(&existing), Some(OURS));
-        assert!(pos(&out, "PreToolUse") < pos(&out, "Stop") && pos(&out, "Stop") < pos(&out, "Notification"), "{out}");
+        assert!(
+            pos(&out, "PreToolUse") < pos(&out, "Stop")
+                && pos(&out, "Stop") < pos(&out, "Notification"),
+            "{out}"
+        );
         let v = parse(&out);
         assert_eq!(v["hooks"]["Stop"], json!([ours_group(OURS)]));
     }
@@ -471,10 +528,16 @@ mod tests {
     #[test]
     fn remove_shifts_instead_of_swapping_at_both_levels() {
         // Top level: z, hooks, m, a → z, m, a (swap would give z, a, m).
-        let existing = format!(r#"{{"z":1,"hooks":{{"Stop":[{}]}},"m":2,"a":3}}"#, ours_group(OURS));
+        let existing = format!(
+            r#"{{"z":1,"hooks":{{"Stop":[{}]}},"m":2,"a":3}}"#,
+            ours_group(OURS)
+        );
         let out = written(Some(&existing), None);
         assert!(!out.contains("hooks"), "{out}");
-        assert!(pos(&out, "z") < pos(&out, "m") && pos(&out, "m") < pos(&out, "a"), "{out}");
+        assert!(
+            pos(&out, "z") < pos(&out, "m") && pos(&out, "m") < pos(&out, "a"),
+            "{out}"
+        );
         // Event level: dropping Stop must not move PostToolUse ahead of Notification.
         let existing = format!(
             r#"{{"hooks":{{"PreToolUse":[{0}],"Stop":[{1}],"Notification":[{0}],"PostToolUse":[{0}]}}}}"#,
@@ -483,16 +546,26 @@ mod tests {
         );
         let out = written(Some(&existing), None);
         assert!(!out.contains("Stop"), "{out}");
-        assert!(pos(&out, "PreToolUse") < pos(&out, "Notification") && pos(&out, "Notification") < pos(&out, "PostToolUse"), "{out}");
+        assert!(
+            pos(&out, "PreToolUse") < pos(&out, "Notification")
+                && pos(&out, "Notification") < pos(&out, "PostToolUse"),
+            "{out}"
+        );
     }
 
     #[test]
     fn keeps_the_file_indent_and_trailing_newline() {
         let four = written(Some("{\n    \"theme\": \"dark\"\n}\n"), Some(OURS));
-        assert!(four.contains("\n    \"hooks\": {\n        \"UserPromptSubmit\": [\n            {"), "{four}");
+        assert!(
+            four.contains("\n    \"hooks\": {\n        \"UserPromptSubmit\": [\n            {"),
+            "{four}"
+        );
         assert!(four.ends_with("}\n"), "{four}");
         let tab = written(Some("{\n\t\"theme\": \"dark\"\n}"), Some(OURS));
-        assert!(tab.contains("\n\t\"hooks\": {\n\t\t\"UserPromptSubmit\": [\n\t\t\t{"), "{tab}");
+        assert!(
+            tab.contains("\n\t\"hooks\": {\n\t\t\"UserPromptSubmit\": [\n\t\t\t{"),
+            "{tab}"
+        );
         assert!(tab.ends_with('}'), "{tab}");
         let fresh = written(None, Some(OURS));
         assert_eq!(fresh, serde_json::to_string_pretty(&parse(&fresh)).unwrap());
@@ -526,7 +599,10 @@ mod tests {
         fs::write(&path, r#"{"theme":"dark"}"#).unwrap();
         write_hooks_to_file(&path, Some(OURS)).unwrap();
         write_hooks_to_file(&path, None).unwrap();
-        assert_eq!(parse(&fs::read_to_string(&path).unwrap()), json!({ "theme": "dark" }));
+        assert_eq!(
+            parse(&fs::read_to_string(&path).unwrap()),
+            json!({ "theme": "dark" })
+        );
     }
 
     #[test]

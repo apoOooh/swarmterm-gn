@@ -15,6 +15,8 @@ export interface FocusedElementInfo {
   isContentEditable: boolean
   /** Sits inside an open menu / dialog / popover, which owns focus while it lives. */
   inOverlay: boolean
+  /** Explorer navigation and editor controls keep their own keyboard focus. */
+  keyboardOwner?: boolean
 }
 
 /** Elements that legitimately hold the keyboard: the user is typing into them. */
@@ -28,6 +30,7 @@ export const OVERLAY_SELECTOR =
 export function shouldReturnFocus(focused: FocusedElementInfo | null): boolean {
   if (focused === null) return true
   if (focused.inOverlay) return false
+  if (focused.keyboardOwner) return false
   if (focused.isContentEditable) return false
   return !EDITABLE_TAGS.includes(focused.tagName.toUpperCase())
 }
@@ -38,7 +41,8 @@ export function describeFocusedElement(element: Element | null): FocusedElementI
   return {
     tagName: element.tagName,
     isContentEditable: element instanceof HTMLElement && element.isContentEditable,
-    inOverlay: element.closest(OVERLAY_SELECTOR) !== null
+    inOverlay: element.closest(OVERLAY_SELECTOR) !== null,
+    keyboardOwner: element.closest('[data-keyboard-owner]') !== null
   }
 }
 

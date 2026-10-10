@@ -2,8 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit or tag to check
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
 
 jobs:
   frontend:
@@ -11,40 +21,62 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: headless-browser-traces
+          path: test-results
 
   rust:
-    name: Rust (${{ matrix.os }})
-    # Windows is in the matrix so `#[cfg(windows)]` code actually compiles in
-    # CI — an Ubuntu-only matrix never sees it, and its warnings/breakage
-    # surface for the first time on a release machine.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    name: Rust (Windows)
+    runs-on: windows-latest
     defaults:
       run:
         working-directory: src-tauri
     steps:
       - uses: actions/checkout@v4
-      - name: Install Tauri system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci && npm run build
+        working-directory: .
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - name: Compile desktop application
+        run: npx tauri build --no-bundle -- --locked
+        shell: bash
+        working-directory: .
+
+  secrets:
+    name: Public history secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
