@@ -110,6 +110,13 @@ jobs:
           shopt -s nullglob
           installers=(release-assets/*_"$RELEASE_VERSION"_x64-setup.exe)
           test "${#installers[@]}" -eq 1
+          # GitHub replaces spaces in asset names with dots. Hash the final name.
+          installer="${installers[0]}"
+          asset="${installer// /.}"
+          if [ "$installer" != "$asset" ]; then
+            test ! -e "$asset"
+            mv -- "$installer" "$asset"
+          fi
           (cd release-assets && sha256sum *.exe > SHA256SUMS.txt)
 
           state=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null || true)
