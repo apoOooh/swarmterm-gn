@@ -25,6 +25,20 @@ Do not mark them passed from the in-memory fixture alone.
       preview; restore each. Park a Claude pane mid-task: its state dot still
       updates in the drawer row and `Ctrl+Shift+J` restores it when it needs you.
 
+## Default AI provider for splits
+
+- [ ] Fresh profile: split right/down opens a plain shell; tooltip just "Split right".
+- [ ] Settings → Terminal → Default AI provider = Codex: split opens Codex, the
+      tooltip says "Split right (Codex)". Restart the app: the choice is kept.
+- [ ] Alt+click a split button: a plain shell opens.
+- [ ] Workspace ⋮ → Split opens… → Claude Code: splits there open Claude while
+      another workspace still opens Codex. "Settings default" reverts it.
+- [ ] Composer "Split opens" = Claude Code: the new workspace's ⋮ menu shows it ticked.
+- [ ] Pick an agent whose CLI is not installed (rename it off PATH, re-probe):
+      it is greyed out; a stale default falls back to a plain shell on split.
+- [ ] Worktree isolation on: a default-agent split starts in the workspace
+      folder, no new `swarm/*` branch appears.
+
 ## Astera themes and Files (GN)
 
 - [ ] Select each of Vega, Orion, Umbra, Aurora, Antares, Quasar and Sirius;

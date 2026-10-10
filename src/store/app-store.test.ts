@@ -301,6 +301,45 @@ describe('splitPane', () => {
     const created = collectLeaves(activeWorkspace(store).layout).find((l) => l.id !== original)
     expect(created?.agentId).toBeUndefined()
   })
+
+  it('starts the split pane with the given agent', () => {
+    const store = storeWithWorkspace()
+    const original = activeWorkspace(store).focusedLeafId
+    store.getState().splitPane(original, 'horizontal', 'codex')
+    const created = collectLeaves(activeWorkspace(store).layout).find((l) => l.id !== original)
+    expect(created?.agentId).toBe('codex')
+    expect(created?.cwd).toBeUndefined()
+  })
+
+  it("treats agent 'terminal' as a plain shell", () => {
+    const store = storeWithWorkspace()
+    const original = activeWorkspace(store).focusedLeafId
+    store.getState().splitPane(original, 'horizontal', 'terminal')
+    const created = collectLeaves(activeWorkspace(store).layout).find((l) => l.id !== original)
+    expect(created?.agentId).toBeUndefined()
+  })
+})
+
+// --- workspace default agent ---------------------------------------------
+
+describe('workspace default agent', () => {
+  it('is taken from the create config', () => {
+    const store = storeWithWorkspace({ ...SINGLE_TERMINAL, defaultAgentId: 'claude-code' })
+    expect(activeWorkspace(store).defaultAgentId).toBe('claude-code')
+  })
+
+  it('is absent unless configured', () => {
+    expect(activeWorkspace(storeWithWorkspace()).defaultAgentId).toBeUndefined()
+  })
+
+  it('can be set and cleared', () => {
+    const store = storeWithWorkspace()
+    const id = activeWorkspace(store).id
+    store.getState().setWorkspaceDefaultAgent(id, 'codex')
+    expect(activeWorkspace(store).defaultAgentId).toBe('codex')
+    store.getState().setWorkspaceDefaultAgent(id, undefined)
+    expect('defaultAgentId' in activeWorkspace(store)).toBe(false)
+  })
 })
 
 // --- closePane ------------------------------------------------------------

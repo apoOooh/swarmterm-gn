@@ -42,6 +42,9 @@ export interface Workspace {
    *  `layout`, so their pty/xterm keep running (see lib/pane-drawer.ts).
    *  Absent ⇒ empty. Order = drawer order (oldest first). */
   drawerLeafIds?: string[]
+  /** Agent a split pane starts with in this workspace (template id).
+   *  Absent ⇒ inherit the global default from Settings (agent-pref-store). */
+  defaultAgentId?: string
 }
 
 /** Whether `leafId` is parked in `ws`'s drawer. */
@@ -96,6 +99,8 @@ export interface CreateWorkspaceConfig {
    *  find their session when run from where it was recorded, so these panes
    *  are exempt from worktree provisioning. */
   resumePanes?: Array<{ agentId: string; sessionId: string; cwd: string }>
+  /** Per-workspace default split agent; absent ⇒ the global default. */
+  defaultAgentId?: string
 }
 
 /** One worktree to clear: the bound leaf, its worktree path + branch, and the repo root. */
@@ -140,7 +145,11 @@ export interface AppActions {
    *  its pane. No-op for unknown ids. (War Room click-to-navigate.) */
   revealTerminal: (terminalId: string) => void
   setDropTarget: (terminalId: string | null) => void
-  splitPane: (leafId: string, direction: Direction) => void
+  /** `agentId` is the resolved split agent (lib/agent-pref resolveSplitAgent);
+   *  absent or 'terminal' ⇒ a plain shell. */
+  splitPane: (leafId: string, direction: Direction, agentId?: string) => void
+  /** Set (or clear with undefined) a workspace's default split agent. */
+  setWorkspaceDefaultAgent: (workspaceId: string, agentId: string | undefined) => void
   closePane: (leafId: string) => void
   toggleZoom: (leafId: string) => void
   /** Park a pane in its workspace's drawer: hidden like a close, but kept alive. */
@@ -293,7 +302,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         focusedLeafId: collectLeaves(layout)[0].id,
         broadcastActive: false,
         broadcastLeafIds: [],
-        worktreeMode: config.worktreeMode ?? false
+        worktreeMode: config.worktreeMode ?? false,
+        ...(config.defaultAgentId ? { defaultAgentId: config.defaultAgentId } : {})
       }
       return {
         workspaces: [...s.workspaces, ws],
@@ -368,11 +378,16 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
 
   setDropTarget: (terminalId) => set({ dropTargetTerminalId: terminalId }),
 
-  splitPane: (leafId, direction) =>
+  splitPane: (leafId, direction, agentId) =>
     set((s) =>
       mapActive(s, (w) => {
         if (!findLeaf(w.layout, leafId) || isDrawered(w, leafId)) return w
-        const newLeaf = makeLeaf()
+        // Plain shells keep agentId absent (the layout-tree convention). The
+        // split pane spawns at the workspace cwd, never in a fresh worktree:
+        // a branch per click would litter <repo>.worktrees; agents that need
+        // isolation mid-session use the worktree.spawn MCP tool instead.
+        const newLeaf: LeafNode =
+          agentId && agentId !== DEFAULT_TEMPLATE_ID ? { ...makeLeaf(), agentId } : makeLeaf()
         return {
           ...w,
           layout: splitLeaf(w.layout, leafId, direction, newLeaf, uid()),
@@ -382,6 +397,17 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         }
       })
     ),
+
+  setWorkspaceDefaultAgent: (workspaceId, agentId) =>
+    set((s) => ({
+      workspaces: s.workspaces.map((w) => {
+        if (w.id !== workspaceId) return w
+        if (agentId !== undefined) return { ...w, defaultAgentId: agentId }
+        const rest = { ...w }
+        delete rest.defaultAgentId
+        return rest
+      })
+    })),
 
   runFileInPane: (leafId, cwd, command) => set((s) => {
     const ws = s.workspaces.find((w) => findLeaf(w.layout, leafId))
