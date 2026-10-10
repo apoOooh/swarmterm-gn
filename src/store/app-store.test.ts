@@ -1093,3 +1093,48 @@ describe('revealTerminal', () => {
     expect(store.getState().activeWorkspaceId).toBe(before)
   })
 })
+
+// --- dockPane / applySnapLayout ---------------------------------------------
+
+describe('dockPane', () => {
+  it('docks a pane beside another, focuses it and ends the zoom', () => {
+    const store = storeWithWorkspace(FOUR_PANES)
+    const ids = collectLeaves(activeWorkspace(store).layout).map((l) => l.id)
+    store.getState().toggleZoom(ids[3])
+    store.getState().dockPane(ids[0], ids[3], 'bottom')
+    const ws = activeWorkspace(store)
+    expect(collectLeaves(ws.layout).map((l) => l.id)).toEqual([ids[1], ids[2], ids[3], ids[0]])
+    expect(ws.focusedLeafId).toBe(ids[0])
+    expect(ws.zoomedLeafId).toBeUndefined()
+  })
+
+  it('ignores drawered panes and self-drops', () => {
+    const store = storeWithWorkspace(FOUR_PANES)
+    const ids = collectLeaves(activeWorkspace(store).layout).map((l) => l.id)
+    store.getState().drawerPane(ids[1])
+    const before = activeWorkspace(store).layout
+    store.getState().dockPane(ids[0], ids[1], 'left')
+    store.getState().dockPane(ids[0], ids[0], 'left')
+    expect(activeWorkspace(store).layout).toBe(before)
+  })
+})
+
+describe('applySnapLayout', () => {
+  it('rebuilds the layout with the dragged pane in the chosen slot', () => {
+    const store = storeWithWorkspace(TWO_PANES)
+    const [a, b] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().applySnapLayout(a.id, 'rows', 1)
+    const ws = activeWorkspace(store)
+    expect(ws.layout.type === 'split' && ws.layout.direction).toBe('vertical')
+    expect(collectLeaves(ws.layout).map((l) => l.id)).toEqual([b.id, a.id])
+    expect(ws.focusedLeafId).toBe(a.id)
+  })
+
+  it('leaves the workspace untouched for a preset that does not fit', () => {
+    const store = storeWithWorkspace(TWO_PANES)
+    const [a] = collectLeaves(activeWorkspace(store).layout)
+    const before = activeWorkspace(store).layout
+    store.getState().applySnapLayout(a.id, 'grid', 0)
+    expect(activeWorkspace(store).layout).toBe(before)
+  })
+})

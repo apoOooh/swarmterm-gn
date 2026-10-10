@@ -148,15 +148,17 @@ export function reorderLeaves(tree: LayoutNode, fromId: string, toId: string): L
 
 /**
  * Replace the leaf `leafId` with a new split node (`splitId`) holding the
- * original leaf and `newLeaf`, divided along `direction` at 50/50.
- * Returns the tree unchanged if `leafId` is not found.
+ * original leaf and `newLeaf`, divided along `direction` at 50/50. `position`
+ * says which side `newLeaf` takes: 'after' (right/below, the default) or
+ * 'before' (left/above). Returns the tree unchanged if `leafId` is not found.
  */
 export function splitLeaf(
   tree: LayoutNode,
   leafId: string,
   direction: Direction,
   newLeaf: LeafNode,
-  splitId: string
+  splitId: string,
+  position: 'before' | 'after' = 'after'
 ): LayoutNode {
   if (tree.type === 'leaf') {
     if (tree.id !== leafId) return tree
@@ -165,16 +167,48 @@ export function splitLeaf(
       id: splitId,
       direction,
       sizes: [50, 50],
-      children: [tree, newLeaf]
+      children: position === 'before' ? [newLeaf, tree] : [tree, newLeaf]
     }
   }
   return {
     ...tree,
     children: [
-      splitLeaf(tree.children[0], leafId, direction, newLeaf, splitId),
-      splitLeaf(tree.children[1], leafId, direction, newLeaf, splitId)
+      splitLeaf(tree.children[0], leafId, direction, newLeaf, splitId, position),
+      splitLeaf(tree.children[1], leafId, direction, newLeaf, splitId, position)
     ]
   }
+}
+
+/** Which edge of a target pane a dragged pane docks onto. */
+export type DockSide = 'left' | 'right' | 'top' | 'bottom'
+
+/**
+ * Dock the leaf `fromId` onto `side` of the leaf `toId`: the dragged leaf is
+ * removed first (its parent split collapses, so its old neighbour grows into
+ * the gap), then the target's slot is split 50/50 between the two. Removing
+ * before splitting matters — the target may be the dragged leaf's sibling, and
+ * the split must land on the *collapsed* tree or the old parent lingers.
+ *
+ * The whole leaf node moves, so the live terminal (keyed by terminalId) is only
+ * re-parented and per-leaf state (focus, broadcast) follows it. Returns the
+ * input unchanged (same reference) when `fromId === toId` or either leaf is
+ * absent; never mutates it.
+ */
+export function moveLeafBeside(
+  tree: LayoutNode,
+  fromId: string,
+  toId: string,
+  side: DockSide,
+  splitId: string
+): LayoutNode {
+  if (fromId === toId) return tree
+  const moving = findLeaf(tree, fromId)
+  if (!moving || !findLeaf(tree, toId)) return tree
+  // Non-null: the tree holds both leaves, so removing one leaves the other.
+  const without = closeLeaf(tree, fromId)!
+  const direction: Direction = side === 'left' || side === 'right' ? 'horizontal' : 'vertical'
+  const position = side === 'left' || side === 'top' ? 'before' : 'after'
+  return splitLeaf(without, toId, direction, moving, splitId, position)
 }
 
 /**

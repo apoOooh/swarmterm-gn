@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, RotateCw } from 'lucide-react'
 import { useDraggable, useDroppable } from '@dnd-kit/core'
+import { DockPicker } from '@/components/TerminalPane/DockPicker'
 import type { LeafNode } from '@/lib/layout-tree'
 import { collectLeaves } from '@/lib/layout-tree'
 import { useAppStore, type ClearTarget } from '@/store/app-store'
@@ -412,6 +413,7 @@ export function TerminalPane({
         <div ref={containerRef} className="absolute inset-0" />
 
         <HeldDeliveryPill terminalId={terminalId} />
+        <DockPicker leafId={leafId} />
         {searchOpen && <SearchOverlay terminalId={terminalId} />}
 
         {status.kind === 'error' && (

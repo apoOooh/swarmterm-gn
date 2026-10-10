@@ -4,6 +4,7 @@ import type { LayoutNode, LeafNode } from '@/lib/layout-tree'
 import { useAppStore, type Workspace as WorkspaceModel } from '@/store/app-store'
 import { PaneWorkbench } from '@/components/Files/PaneWorkbench'
 import { BroadcastBanner } from '@/components/Workspace/BroadcastBanner'
+import { SnapBar } from '@/components/Workspace/SnapBar'
 import { AgentIcon } from '@/components/AgentIcon'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
@@ -80,10 +81,11 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
   return (
     <div data-focus-return className="flex h-full w-full flex-col bg-canvas">
       <BroadcastBanner workspace={workspace} />
-      <div className="min-h-0 flex-1 p-2">
+      <div className="relative min-h-0 flex-1 p-2">
         {visible
           ? renderNode(zoomedLeaf(visible, workspace.zoomedLeafId) ?? visible)
           : <EmptyDrawerState count={drawerCount} />}
+        <SnapBar layout={workspace.layout} drawerLeafIds={workspace.drawerLeafIds ?? []} />
       </div>
     </div>
   )
@@ -103,15 +105,16 @@ function EmptyDrawerState({ count }: { count: number }): ReactElement {
 }
 
 /**
- * The lifted "ghost" shown under the cursor while a pane is dragged. The
- * DragOverlay sizes it to the dragged pane, so it fills h/w to read as the whole
- * pane moving. The body is a static placeholder — a live xterm instance can't be
+ * The lifted "ghost" shown under the cursor while a pane is dragged. Kept a
+ * small card pinned to the grab corner rather than the pane's full size: a
+ * full-size ghost would blanket the dock picker and snap bar the user is
+ * aiming at. The body is a static placeholder — a live xterm instance can't be
  * cloned into the overlay.
  */
 export function PaneDragGhost({ leaf }: { leaf: LeafNode }): ReactElement {
   const agent = templateById(leaf.agentId ?? DEFAULT_TEMPLATE_ID)
   return (
-    <div className="flex h-full w-full cursor-grabbing flex-col overflow-hidden rounded-md border border-ring bg-background opacity-80 shadow-2xl">
+    <div className="pointer-events-none flex h-20 w-52 cursor-grabbing flex-col overflow-hidden rounded-md border border-ring bg-background opacity-80 shadow-2xl">
       <div className="flex h-7 shrink-0 items-center gap-1.5 border-b border-border bg-card px-2 text-sm text-foreground">
         <AgentIcon template={agent} className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">{agent.name}</span>
