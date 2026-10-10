@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Codex panes start in a selectable launch mode (Auto, Safe, YOLO) passed as
+  CLI flags; switching restarts Codex and continues the session. "Resume previous chat…"
+  takes over an older Codex chat in the pane.
+
 ## [1.2.0] - 2026-10-10
 
 - Open Markdown files rendered by default in a MarkText-style reading view;
