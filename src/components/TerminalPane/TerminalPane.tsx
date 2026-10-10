@@ -5,6 +5,9 @@ import type { LeafNode } from '@/lib/layout-tree'
 import { collectLeaves } from '@/lib/layout-tree'
 import { useAppStore, type ClearTarget } from '@/store/app-store'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
+import { useAgentPrefStore } from '@/store/agent-pref-store'
+import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
+import { resolveSplitAgent } from '@/lib/agent-pref'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useTerminalSearchStore } from '@/store/terminal-search-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
@@ -88,6 +91,18 @@ export function TerminalPane({
   const clearWorktrees = useAppStore((s) => s.clearWorktrees)
   const globalShellId = useTerminalPrefStore((s) => s.shellId)
   const isDropTarget = useAppStore((s) => s.dropTargetTerminalId === leaf.terminalId)
+  const workspaceDefaultAgent = useAppStore(
+    (s) => s.workspaces.find((w) => collectLeaves(w.layout).some((l) => l.id === leaf.id))?.defaultAgentId
+  )
+  const globalDefaultAgent = useAgentPrefStore((s) => s.defaultAgentId)
+  const agentAvailability = useAgentAvailabilityStore((s) => s.availability)
+  const splitAgentFor = (plain: boolean): string =>
+    resolveSplitAgent({
+      workspaceDefault: workspaceDefaultAgent,
+      globalDefault: globalDefaultAgent,
+      availability: agentAvailability,
+      forcePlain: plain
+    })
 
   const { id: leafId, terminalId } = leaf
 
@@ -357,8 +372,9 @@ export function TerminalPane({
         onShellChange={(id) => setPaneShell(leafId, id)}
         onChoosePath={() => void handleChoosePath()}
         onResetPath={() => setPaneCwd(leafId, undefined)}
-        onSplitRight={() => splitPane(leafId, 'horizontal')}
-        onSplitDown={() => splitPane(leafId, 'vertical')}
+        onSplitRight={(plain) => splitPane(leafId, 'horizontal', splitAgentFor(plain))}
+        onSplitDown={(plain) => splitPane(leafId, 'vertical', splitAgentFor(plain))}
+        splitAgentName={templateById(splitAgentFor(false)).name}
         onClose={() => closePane(leafId)}
         onDrawer={() => useAppStore.getState().drawerPane(leafId)}
         isZoomed={isZoomed}

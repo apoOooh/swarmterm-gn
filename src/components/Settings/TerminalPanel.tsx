@@ -14,6 +14,10 @@ import {
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useStatuslineStore } from '@/store/statusline-store'
+import { useAgentPrefStore } from '@/store/agent-pref-store'
+import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
+import { TEMPLATES, isTemplateAvailable } from '@/lib/templates'
+import { AgentIcon } from '@/components/AgentIcon'
 import { listAvailableShells, type AvailableShell } from '@/tauri/shell'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -58,8 +62,8 @@ export function TerminalPanel(): ReactElement {
           Terminal
         </h1>
         <p className="mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground">
-          Customise the terminal — text rendering and the shell each new pane
-          starts with.
+          Customise the terminal — text rendering, the shell each new pane
+          starts with, and the AI provider a split opens.
         </p>
       </section>
 
@@ -103,8 +107,66 @@ export function TerminalPanel(): ReactElement {
         </div>
       </section>
 
+      <DefaultAgentSettings />
+
       <StatusLineSettings />
     </div>
+  )
+}
+
+/**
+ * Global default AI provider: what the pane header's Split buttons open.
+ * A workspace can override it from its navbar menu ("Split opens…").
+ */
+function DefaultAgentSettings(): ReactElement {
+  const defaultAgentId = useAgentPrefStore((s) => s.defaultAgentId)
+  const setDefaultAgentId = useAgentPrefStore((s) => s.setDefaultAgentId)
+  const availability = useAgentAvailabilityStore((s) => s.availability)
+
+  // Re-probe on open so a CLI installed while the app runs is selectable.
+  useEffect(() => {
+    void useAgentAvailabilityStore.getState().refresh()
+  }, [])
+
+  return (
+    <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+      <div className="mb-4">
+        <h2 className="text-sm font-semibold text-foreground">Default AI provider</h2>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          What a split pane starts with. Workspaces can override this from their
+          menu in the sidebar. Alt+click a split button for a plain terminal.
+        </p>
+      </div>
+
+      <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(180px,1fr))]">
+        {TEMPLATES.map((t) => {
+          const available = isTemplateAvailable(t, availability)
+          const active = t.id === defaultAgentId
+          return (
+            <button
+              key={t.id}
+              type="button"
+              disabled={!available}
+              aria-pressed={active}
+              onClick={() => setDefaultAgentId(t.id)}
+              className={cn(
+                'flex items-center gap-2.5 rounded-lg border bg-card px-3 py-2 text-left transition-colors',
+                !available && 'cursor-not-allowed border-pane-border opacity-50',
+                available && active && 'border-primary/50 ring-2 ring-primary/15',
+                available && !active && 'border-pane-border hover:bg-muted/40'
+              )}
+            >
+              <AgentIcon template={t} className="h-4 w-4 shrink-0" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-foreground">{t.name}</span>
+                {!available && <span className="block text-[11px] text-muted-foreground/70">Not installed</span>}
+              </span>
+              {active && <Check aria-hidden className="h-3.5 w-3.5 text-primary" strokeWidth={3} />}
+            </button>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 
