@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { ArrowDownToLine, GripHorizontal, MoreVertical, Pencil, Plus, Settings, X } from 'lucide-react'
+import { Archive, ArrowDownToLine, GripHorizontal, MoreVertical, Pencil, Plus, Settings, X } from 'lucide-react'
 import {
   DndContext,
   DragOverlay,
@@ -256,6 +256,7 @@ function WorkspaceItem({
   })
   const style = { transform: CSS.Transform.toString(transform), transition }
   const paneCount = collectLeaves(workspace.layout).length
+  const drawerCount = workspace.drawerLeafIds?.length ?? 0
 
   if (renaming) {
     return (
@@ -290,7 +291,16 @@ function WorkspaceItem({
         )}
       >
         <span className="flex-1 truncate">{workspace.name}</span>
-        <span className="text-xs tabular-nums text-muted-foreground">{paneCount}</span>
+        {drawerCount > 0 && (
+          <span
+            className="flex items-center gap-0.5 text-xs tabular-nums text-muted-foreground"
+            title={`${drawerCount} in drawer`}
+          >
+            <Archive className="h-3 w-3" aria-hidden="true" />
+            {drawerCount}
+          </span>
+        )}
+        <span className="text-xs tabular-nums text-muted-foreground" title={`${paneCount} terminals`}>{paneCount}</span>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button

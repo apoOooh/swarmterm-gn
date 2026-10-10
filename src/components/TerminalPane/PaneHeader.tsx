@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2 } from 'lucide-react'
+import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2, Archive } from 'lucide-react'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 import { AgentIcon } from '@/components/AgentIcon'
 import { Button } from '@/components/ui/button'
@@ -42,6 +42,8 @@ interface PaneHeaderProps {
   onSplitRight: () => void
   onSplitDown: () => void
   onClose: () => void
+  /** Park the pane in the workspace drawer (hidden, kept running). */
+  onDrawer: () => void
   isZoomed: boolean
   onToggleZoom: () => void
   /** Whether broadcast mode is armed for this workspace. */
@@ -320,6 +322,9 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
         </Button>
         <Button variant="ghost" size="icon-sm" title={props.isZoomed ? 'Restore pane (Ctrl+Shift+Enter)' : 'Maximize pane (Ctrl+Shift+Enter)'} aria-label={props.isZoomed ? 'Restore pane' : 'Maximize pane'} aria-pressed={props.isZoomed} onClick={props.onToggleZoom}>
           {props.isZoomed ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+        </Button>
+        <Button variant="ghost" size="icon-sm" title="Move to drawer — keeps running (Ctrl+Shift+D)" aria-label="Move to drawer" onClick={props.onDrawer}>
+          <Archive className="h-3.5 w-3.5" />
         </Button>
         <Button variant="ghost" size="icon-sm" title="Close pane" aria-label="Close pane" onClick={props.onClose}>
           <X className="h-3.5 w-3.5" />

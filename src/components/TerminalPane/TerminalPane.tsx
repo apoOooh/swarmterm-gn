@@ -360,6 +360,7 @@ export function TerminalPane({
         onSplitRight={() => splitPane(leafId, 'horizontal')}
         onSplitDown={() => splitPane(leafId, 'vertical')}
         onClose={() => closePane(leafId)}
+        onDrawer={() => useAppStore.getState().drawerPane(leafId)}
         isZoomed={isZoomed}
         onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
         broadcastActive={broadcastActive}

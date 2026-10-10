@@ -4,7 +4,7 @@ import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
 import { useExplorerDragStore } from '@/store/explorer-drag-store'
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDownUp, Copy, File, FilePlus, Folder, FolderPlus, History, RefreshCw, X } from 'lucide-react'
-import { useAppStore } from '@/store/app-store'
+import { useAppStore, focusedVisibleLeaf } from '@/store/app-store'
 import { useExplorerStore, type ExplorerRoot } from '@/store/explorer-store'
 import { useDocumentStore } from '@/store/document-store'
 import { fileDialog } from '@/store/file-dialog-store'
@@ -29,7 +29,7 @@ const basename = (path: string): string => path.replace(/\\/g, '/').split('/').p
 export function FileExplorer(): React.ReactElement {
   const state = useAppStore()
   const ws = state.workspaces.find((w) => w.id === state.activeWorkspaceId)
-  const leaf = ws ? collectLeaves(ws.layout).find((l) => l.id === ws.focusedLeafId) : undefined
+  const leaf = ws ? focusedVisibleLeaf(ws) : undefined
   const explorer = useExplorerStore()
   const root = explorer.current ? explorer.roots[explorer.current] : undefined
   const tree = useRef<HTMLDivElement>(null)

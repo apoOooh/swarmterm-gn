@@ -340,6 +340,105 @@ describe('closePane', () => {
   })
 })
 
+// --- pane drawer ----------------------------------------------------------
+
+describe('pane drawer', () => {
+  function threePanes(): StoreApi<AppStore> {
+    return storeWithWorkspace({ cwd: 'C:/work', terminalCount: 3, agentIds: panes(3) })
+  }
+
+  it('parks a pane without removing it from the layout and moves focus on', () => {
+    const store = threePanes()
+    const before = activeWorkspace(store).layout
+    const [a, b] = collectLeaves(before)
+    store.getState().setFocusedLeaf(a.id)
+    store.getState().drawerPane(a.id)
+    const ws = activeWorkspace(store)
+    expect(ws.layout).toBe(before)
+    expect(ws.drawerLeafIds).toEqual([a.id])
+    expect(ws.focusedLeafId).toBe(b.id)
+  })
+
+  it('restores into the original slot, focused', () => {
+    const store = threePanes()
+    const [, b] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().drawerPane(b.id)
+    store.getState().restorePane(b.id)
+    const ws = activeWorkspace(store)
+    expect(ws.drawerLeafIds).toEqual([])
+    expect(ws.focusedLeafId).toBe(b.id)
+    expect(collectLeaves(ws.layout)[1].id).toBe(b.id)
+  })
+
+  it('restores from another workspace by activating it', () => {
+    const store = threePanes()
+    const firstId = store.getState().activeWorkspaceId
+    const [a] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().drawerPane(a.id)
+    store.getState().createWorkspace(SINGLE_TERMINAL)
+    store.getState().restorePane(a.id)
+    expect(store.getState().activeWorkspaceId).toBe(firstId)
+    expect(activeWorkspace(store).focusedLeafId).toBe(a.id)
+  })
+
+  it('setFocusedLeaf on a drawered pane restores it', () => {
+    const store = threePanes()
+    const [a] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().drawerPane(a.id)
+    store.getState().setFocusedLeaf(a.id)
+    expect(activeWorkspace(store).drawerLeafIds).toEqual([])
+    expect(activeWorkspace(store).focusedLeafId).toBe(a.id)
+  })
+
+  it('keeps focus on the last leaf when every pane is drawered, but nothing counts as focused', () => {
+    const store = storeWithWorkspace()
+    const only = activeWorkspace(store).focusedLeafId
+    expect(selectFocusedTerminalId(store.getState())).toBeDefined()
+    store.getState().drawerPane(only)
+    expect(store.getState().workspaces).toHaveLength(1)
+    expect(activeWorkspace(store).focusedLeafId).toBe(only)
+    expect(selectFocusedTerminalId(store.getState())).toBeUndefined()
+  })
+
+  it('ends a zoom on the parked pane and drops it from broadcast', () => {
+    const store = threePanes()
+    const [a] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().toggleZoom(a.id)
+    store.getState().toggleBroadcast()
+    store.getState().drawerPane(a.id)
+    const ws = activeWorkspace(store)
+    expect(ws.zoomedLeafId).toBeUndefined()
+    expect(ws.broadcastLeafIds).not.toContain(a.id)
+  })
+
+  it('ignores zoom, split and broadcast membership on a drawered pane', () => {
+    const store = threePanes()
+    const [a] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().drawerPane(a.id)
+    store.getState().toggleZoom(a.id)
+    store.getState().splitPane(a.id, 'horizontal')
+    store.getState().toggleBroadcastMember(a.id)
+    store.getState().selectAllBroadcast()
+    const ws = activeWorkspace(store)
+    expect(ws.zoomedLeafId).toBeUndefined()
+    expect(collectLeaves(ws.layout)).toHaveLength(3)
+    expect(ws.broadcastLeafIds).not.toContain(a.id)
+  })
+
+  it('closing a pane prunes stale drawer ids and focuses a visible survivor', () => {
+    const store = threePanes()
+    const [a, b, c] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().drawerPane(a.id)
+    store.getState().closePane(a.id)
+    expect(activeWorkspace(store).drawerLeafIds).toEqual([])
+    store.getState().drawerPane(b.id)
+    store.getState().setFocusedLeaf(c.id)
+    store.getState().closePane(c.id)
+    // Only the drawered b survives: focus falls back to it, workspace stays.
+    expect(activeWorkspace(store).focusedLeafId).toBe(b.id)
+  })
+})
+
 // --- resizeSplitNode ------------------------------------------------------
 
 describe('resizeSplitNode', () => {
