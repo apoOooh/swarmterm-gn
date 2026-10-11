@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-11
+
 - Keep terminal creation and account configuration off the UI thread, combine
   concurrent profile/agent refreshes, and delay project scans until folder
   typing settles. Workspace macros share a single fresh metadata probe.
