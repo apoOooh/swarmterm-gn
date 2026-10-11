@@ -38,7 +38,11 @@ fn roots() -> FolderListing {
         .collect();
     #[cfg(not(windows))]
     let folders = vec!["/".to_string()];
-    FolderListing { path: String::new(), parent: None, folders }
+    FolderListing {
+        path: String::new(),
+        parent: None,
+        folders,
+    }
 }
 
 pub fn list_folders(path: &str) -> Result<FolderListing, String> {
@@ -54,7 +58,11 @@ pub fn list_folders(path: &str) -> Result<FolderListing, String> {
         .filter_map(|entry| entry.ok())
         // file_type() does not follow symlinks; metadata() does, so a linked
         // folder (junction) still shows up as navigable.
-        .filter(|entry| std::fs::metadata(entry.path()).map(|m| m.is_dir()).unwrap_or(false))
+        .filter(|entry| {
+            std::fs::metadata(entry.path())
+                .map(|m| m.is_dir())
+                .unwrap_or(false)
+        })
         .map(|entry| plain(&entry.path()))
         .collect();
     folders.sort_by_key(|f| f.to_lowercase());
@@ -63,7 +71,11 @@ pub fn list_folders(path: &str) -> Result<FolderListing, String> {
         // A drive root climbs to the drive list.
         None => Some(String::new()),
     };
-    Ok(FolderListing { path: plain(&dir), parent, folders })
+    Ok(FolderListing {
+        path: plain(&dir),
+        parent,
+        folders,
+    })
 }
 
 /// At most this many listings run at once. A typed path on a dead network
@@ -88,7 +100,10 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("swarmterm-folder-list-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!(
+            "swarmterm-folder-list-{name}-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -101,7 +116,17 @@ mod tests {
         std::fs::create_dir(d.join("Alpha")).unwrap();
         std::fs::write(d.join("file.txt"), "x").unwrap();
         let l = list_folders(d.to_str().unwrap()).unwrap();
-        let names: Vec<_> = l.folders.iter().map(|f| Path::new(f).file_name().unwrap().to_string_lossy().into_owned()).collect();
+        let names: Vec<_> = l
+            .folders
+            .iter()
+            .map(|f| {
+                Path::new(f)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
         assert_eq!(names, vec!["Alpha", "beta"]);
         assert!(l.parent.is_some());
         assert!(!l.path.starts_with(r"\\?\"));
@@ -134,7 +159,9 @@ mod tests {
     fn blocking_entry_lists_off_the_runtime_and_reports_errors() {
         let dir = std::env::temp_dir().join(format!("fl-async-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("child")).unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         let ok = rt
             .block_on(list_folders_blocking(dir.to_string_lossy().into_owned()))
             .unwrap();
