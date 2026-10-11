@@ -144,17 +144,19 @@ export type EnterAction =
  * What Enter does in the path box / list. While a navigation is pending the
  * visible list still belongs to the OLD folder, so a list-based Enter would
  * open a subfolder of the wrong parent: instead Enter resolves the typed path
- * right away (skipping the debounce), or does nothing.
+ * right away (skipping the debounce), or does nothing. A failed navigation
+ * (`failed`) leaves the same stale list behind, so it locks list actions too.
  */
 export function enterAction(s: {
   ctrl: boolean
   pending: boolean
+  failed: boolean
   typedDir: string | null
   visibleCount: number
   active: number
   selectable: string | null
 }): EnterAction {
-  if (s.pending) return !s.ctrl && s.typedDir !== null ? { kind: 'navigate', dir: s.typedDir } : { kind: 'none' }
+  if (s.pending || s.failed) return !s.ctrl && s.typedDir !== null ? { kind: 'navigate', dir: s.typedDir } : { kind: 'none' }
   if (s.ctrl || s.visibleCount === 0) return s.selectable !== null ? { kind: 'select', path: s.selectable } : { kind: 'none' }
   return { kind: 'open', index: Math.min(s.active, s.visibleCount - 1) }
 }

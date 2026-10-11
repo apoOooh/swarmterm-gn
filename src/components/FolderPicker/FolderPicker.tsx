@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { ArrowUp, Folder, FolderOpen, Search, Star } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useModalFocus } from '@/components/ui/use-modal-focus'
 import { enterAction, filterEditVoidsNavigation, filterFolders, pickerOwnsEnter, quickAccess, samePath, selectableFolder, splitTypedPath, typedNavigation } from '@/lib/folder-picker'
 import { folderName } from '@/lib/recent-folders'
 import { useFolderPickerStore } from '@/store/folder-picker-store'
@@ -21,6 +22,10 @@ export function FolderPicker(): ReactElement | null {
   const favorites = useFolderPickerStore((s) => s.favorites)
   const settle = useFolderPickerStore((s) => s.settle)
   const toggleFav = useFolderPickerStore((s) => s.toggleFavorite)
+  // Trap Tab inside the picker (else it walks out to the xterm behind) and
+  // own Esc in the capture phase: it closes only the picker, never the
+  // Settings dialog that opened it. No terminal to return focus to.
+  const root = useModalFocus(request !== null, () => settle(null), undefined)
   const recents = useRecentsStore((s) => s.recents)
   const saved = useSavedWorkspacesStore((s) => s.entries)
 
@@ -151,10 +156,8 @@ export function FolderPicker(): ReactElement | null {
   }
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      settle(null)
-    } else if (e.key === 'ArrowDown') {
+    // Escape is handled by useModalFocus (capture phase, stops propagation).
+    if (e.key === 'ArrowDown') {
       e.preventDefault()
       setActive((i) => Math.min(i + 1, Math.max(visible.length - 1, 0)))
     } else if (e.key === 'ArrowUp') {
@@ -172,6 +175,7 @@ export function FolderPicker(): ReactElement | null {
       const action = enterAction({
         ctrl: e.ctrlKey,
         pending,
+        failed: error !== null,
         typedDir: typedNavigation(input, current),
         visibleCount: visible.length,
         active,
@@ -219,6 +223,7 @@ export function FolderPicker(): ReactElement | null {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onMouseDown={() => settle(null)}>
       <div
+        ref={root}
         role="dialog"
         aria-modal="true"
         aria-label="Choose folder"

@@ -205,7 +205,12 @@ pub fn terminal_agent_alive(state: State<'_, AppState>, id: String) -> bool {
     };
     let Some(pid) = pid else { return false };
     match crate::agent_process::snapshot() {
-        Some(procs) => crate::agent_process::agent_alive_in(&procs, pid, agent_id.as_deref()),
+        Some(procs) => crate::agent_process::agent_alive_in(
+            &procs,
+            pid,
+            agent_id.as_deref(),
+            crate::agent_process::command_line,
+        ),
         None => false,
     }
 }
