@@ -5,6 +5,9 @@ import { deliverHandoffBrief } from '@/lib/handoff-delivery'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { getTerminalGeneration, getTerminalStatus, readTerminalText } from '@/lib/terminal-registry'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { useAgentStateStore } from '@/store/agent-state-store'
+import { listAvailableAgents } from '@/tauri/agents'
+import { useModalFocus } from '@/components/ui/use-modal-focus'
 import { useAppStore } from '@/store/app-store'
 import { useHandoffStore } from '@/store/handoff-store'
 import { useNotificationCenterStore } from '@/store/notification-center-store'
@@ -27,6 +30,8 @@ export function HandoffDialog(): React.ReactElement | null {
   const [openedAt, setOpenedAt] = useState(0)
   const [hint, setHint] = useState<string | undefined>()
   const started = useRef(false)
+  // Ids of installed CLIs; undefined until the probe answers (nothing selectable yet).
+  const [available, setAvailable] = useState<ReadonlySet<string> | undefined>()
 
   useEffect(() => {
     if (!source) return
@@ -34,6 +39,14 @@ export function HandoffDialog(): React.ReactElement | null {
     void useAgentAccountsStore.getState().refresh()
     setOpenedAt(Date.now())
     setHint(limitHint(readTerminalText(source.terminalId, 40)))
+    setAvailable(undefined)
+    let alive = true
+    listAvailableAgents()
+      .then((list) => alive && setAvailable(new Set(list.filter((a) => a.available).map((a) => a.id))))
+      .catch(() => alive && setAvailable(new Set()))
+    return () => {
+      alive = false
+    }
   }, [source])
 
   const terminalId = state.terminalId
@@ -47,6 +60,7 @@ export function HandoffDialog(): React.ReactElement | null {
         type: 'status',
         kind: status.kind,
         generation: getTerminalGeneration(terminalId),
+        agent: useAgentStateStore.getState().byId[terminalId]?.state,
         message: status.kind === 'error' ? status.message : undefined
       })
     }
@@ -62,23 +76,18 @@ export function HandoffDialog(): React.ReactElement | null {
     close()
   }
 
-  useEffect(() => {
-    if (!source) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') dismiss()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  })
+  // Focus goes back to the new pane once one exists, else to the source pane.
+  const root = useModalFocus(source !== undefined, dismiss, terminalId ?? source?.terminalId)
 
   if (!source) return null
-  const targets = handoffTargets(accounts)
-  const selected = target ?? targets[0]
+  const targets = available ? handoffTargets(accounts, available) : []
+  const selected = target && targets.some((t) => t.agentId === target.agentId && t.accountId === target.accountId) ? target : targets[0]
   // No CLI exposes per-account usage as structured data yet, so this stays
   // "unknown" with the time it was checked — never a number scraped from text.
   const usage = describeUsage(undefined, openedAt)
 
   const startPane = (): void => {
+    if (!selected) return
     const id = useAppStore
       .getState()
       .handoffPane(source.leafId, { agentId: selected.agentId, accountId: selected.accountId, cwd: source.cwd })
@@ -88,7 +97,12 @@ export function HandoffDialog(): React.ReactElement | null {
 
   const send = (): void => {
     if (!terminalId || started.current) return
-    dispatch({ type: 'confirm', live: { kind: getTerminalStatus(terminalId).kind, generation: getTerminalGeneration(terminalId) } })
+    dispatch({ type: 'confirm', live: {
+        kind: getTerminalStatus(terminalId).kind,
+        generation: getTerminalGeneration(terminalId),
+        agent: useAgentStateStore.getState().byId[terminalId]?.state
+      }
+    })
     const after = useHandoffStore.getState().state
     if (after.phase !== 'delivering') return
     started.current = true
@@ -112,6 +126,10 @@ export function HandoffDialog(): React.ReactElement | null {
       held: (reason) => {
         if (reason) mine({ type: 'held', reason })
       },
+      pasted: (reason) => {
+        mine({ type: 'pasted', reason })
+        acknowledge(`Handoff brief pasted, not submitted: ${reason}`)
+      },
       delivered: (at) => {
         mine({ type: 'delivered', at })
         acknowledge('Handoff brief delivered')
@@ -125,19 +143,21 @@ export function HandoffDialog(): React.ReactElement | null {
 
   const statusText: Record<HandoffPhase, string> = {
     choosing: 'Choose who takes over. A new pane starts in the same folder; this pane keeps running.',
-    starting: 'Starting the new pane…',
-    ready: 'The new pane is running. Send the brief as its first prompt?',
+    starting: 'Starting the new pane… waiting for the agent to reach its prompt.',
+    ready: 'The agent in the new pane is ready. Send the brief as its first prompt?',
     delivering: state.held ? `Waiting to send (${HOLD_REASON_COPY[state.held]})…` : 'Sending once the pane is quiet…',
     delivered: 'Brief delivered.',
+    pasted: `Pasted, not submitted: ${state.error ?? 'something changed'}. Check the new pane and press Enter there yourself.`,
     failed: `Not sent: ${state.error ?? 'unknown error'} Copy the brief from the Handoff brief dialog instead.`,
     cancelled: 'Cancelled.'
   }
-  const finished = phase === 'delivered' || phase === 'failed' || phase === 'delivering'
+  const finished = phase === 'delivered' || phase === 'pasted' || phase === 'failed' || phase === 'delivering'
   const key = (t: { agentId: string; accountId?: string }): string => `${t.agentId}:${t.accountId ?? ''}`
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onMouseDown={dismiss}>
       <div
+        ref={root}
         role="dialog"
         aria-modal="true"
         aria-label="Hand off to another agent"
@@ -150,7 +170,7 @@ export function HandoffDialog(): React.ReactElement | null {
           <select
             aria-label="Handoff target"
             disabled={phase !== 'choosing'}
-            value={key(selected)}
+            value={selected ? key(selected) : ''}
             onChange={(e) => {
               const t = targets.find((x) => key(x) === e.target.value)
               if (t) setTarget(t)
@@ -164,6 +184,9 @@ export function HandoffDialog(): React.ReactElement | null {
             ))}
           </select>
         </label>
+        {available && targets.length === 0 && (
+          <div className="text-xs text-[#E5C07B]">No supported agent CLI (Claude Code, Codex) was found on this machine.</div>
+        )}
         <div className="text-xs text-muted-foreground">
           {usage.text} (checked {new Date(usage.checkedAt).toLocaleTimeString()})
           {hint && <div className="mt-1 text-[#E5C07B]">{hint}</div>}
@@ -177,7 +200,7 @@ export function HandoffDialog(): React.ReactElement | null {
             {finished ? 'Close' : 'Cancel'}
           </Button>
           {phase === 'choosing' && (
-            <Button size="sm" onClick={startPane}>
+            <Button size="sm" disabled={!selected} onClick={startPane}>
               Start pane
             </Button>
           )}

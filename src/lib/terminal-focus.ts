@@ -17,7 +17,14 @@ export interface FocusedElementInfo {
   inOverlay: boolean
   /** Explorer navigation and editor controls keep their own keyboard focus. */
   keyboardOwner?: boolean
+  /** A modal dialog is open anywhere: it owns the keyboard even when focus has
+   *  not (yet) moved into it — pulling focus to the xterm behind it would type
+   *  the user's Enter/Esc into the shell. */
+  modalOpen?: boolean
 }
+
+/** Open modal dialogs (`aria-modal`), which own the keyboard for their lifetime. */
+export const MODAL_SELECTOR = '[role="dialog"][aria-modal="true"]'
 
 /** Elements that legitimately hold the keyboard: the user is typing into them. */
 const EDITABLE_TAGS = ['INPUT', 'TEXTAREA', 'SELECT']
@@ -27,7 +34,8 @@ export const OVERLAY_SELECTOR =
   '[role="menu"],[role="dialog"],[role="listbox"],[data-radix-popper-content-wrapper]'
 
 /** True when keyboard focus should be handed back to the active terminal. */
-export function shouldReturnFocus(focused: FocusedElementInfo | null): boolean {
+export function shouldReturnFocus(focused: FocusedElementInfo | null, modalOpen = false): boolean {
+  if (modalOpen || focused?.modalOpen) return false
   if (focused === null) return true
   if (focused.inOverlay) return false
   if (focused.keyboardOwner) return false
@@ -42,7 +50,8 @@ export function describeFocusedElement(element: Element | null): FocusedElementI
     tagName: element.tagName,
     isContentEditable: element instanceof HTMLElement && element.isContentEditable,
     inOverlay: element.closest(OVERLAY_SELECTOR) !== null,
-    keyboardOwner: element.closest('[data-keyboard-owner]') !== null
+    keyboardOwner: element.closest('[data-keyboard-owner]') !== null,
+    modalOpen: element.ownerDocument.querySelector(MODAL_SELECTOR) !== null
   }
 }
 

@@ -17,6 +17,7 @@
  */
 import type { AgentAccount } from '@/tauri/accounts'
 import type { HoldReason } from '@/lib/war-room-nudge'
+import type { AgentEngineState } from '@/lib/agent-state/types'
 import { templateById } from '@/lib/templates'
 
 export type PtyKind = 'connecting' | 'running' | 'exited' | 'error'
@@ -24,9 +25,16 @@ export type PtyKind = 'connecting' | 'running' | 'exited' | 'error'
 export interface LivePty {
   kind: PtyKind
   generation: number | undefined
+  /** Agent-state engine verdict for the pane. A running pty only proves the
+   *  SHELL started; the target CLI may be missing or may have died back to the
+   *  prompt. `unknown`/absent = no agent detected = plain shell. */
+  agent: AgentEngineState | undefined
 }
 
-export type HandoffPhase = 'choosing' | 'starting' | 'ready' | 'delivering' | 'delivered' | 'failed' | 'cancelled'
+/** Agent detected in the pane (any engine verdict other than "no agent"). */
+const agentAlive = (agent: AgentEngineState | undefined): boolean => agent !== undefined && agent !== 'unknown'
+
+export type HandoffPhase = 'choosing' | 'starting' | 'ready' | 'delivering' | 'delivered' | 'pasted' | 'failed' | 'cancelled'
 
 export interface HandoffState {
   phase: HandoffPhase
@@ -40,10 +48,12 @@ export interface HandoffState {
 
 export type HandoffEvent =
   | { type: 'spawned'; terminalId: string }
-  | { type: 'status'; kind: PtyKind; generation: number | undefined; message?: string }
+  | { type: 'status'; kind: PtyKind; generation: number | undefined; agent?: AgentEngineState; message?: string }
   | { type: 'confirm'; live: LivePty }
   | { type: 'held'; reason: HoldReason }
   | { type: 'delivered'; at: number }
+  /** Body pasted but Enter withheld: something changed in the submit window. */
+  | { type: 'pasted'; reason: string }
   | { type: 'failed'; error: string }
   | { type: 'cancel' }
 
@@ -55,7 +65,7 @@ const fail = (s: HandoffState, error: string): HandoffState => ({ ...s, phase: '
 
 /** Returns the SAME object when the event does not apply, so callers can detect no-ops. */
 export function reduceHandoff(s: HandoffState, e: HandoffEvent): HandoffState {
-  if (s.phase === 'delivered' || s.phase === 'failed' || s.phase === 'cancelled') return s
+  if (s.phase === 'delivered' || s.phase === 'pasted' || s.phase === 'failed' || s.phase === 'cancelled') return s
   switch (e.type) {
     case 'spawned':
       return s.phase === 'choosing' ? { phase: 'starting', terminalId: e.terminalId } : s
@@ -63,20 +73,27 @@ export function reduceHandoff(s: HandoffState, e: HandoffEvent): HandoffState {
       if (s.phase === 'choosing') return s
       if (e.kind === 'error') return fail(s, e.message ?? 'The new pane failed to start.')
       if (e.kind === 'exited') return fail(s, 'The new pane exited before the brief was delivered.')
-      if (s.phase === 'starting' && e.kind === 'running') return { ...s, phase: 'ready', generation: e.generation }
-      if ((s.phase === 'ready' || s.phase === 'delivering') && e.generation !== s.generation) {
-        return fail(s, 'The new pane restarted; the brief was not sent.')
+      // Ready only once the agent sits idle at its own prompt: a shell whose
+      // CLI is missing or crashed is `running` too, and would execute the
+      // brief's lines as commands.
+      if (s.phase === 'starting') {
+        return e.kind === 'running' && e.agent === 'idle' ? { ...s, phase: 'ready', generation: e.generation } : s
       }
+      if (e.generation !== s.generation) return fail(s, 'The new pane restarted; the brief was not sent.')
+      if (!agentAlive(e.agent)) return fail(s, 'The agent in the new pane is not running; a plain shell never receives the brief.')
       return s
     case 'confirm':
       if (s.phase !== 'ready') return s
       if (e.live.kind !== 'running') return fail(s, 'The new pane is no longer running.')
       if (e.live.generation !== s.generation) return fail(s, 'The new pane restarted; the brief was not sent.')
+      if (!agentAlive(e.live.agent)) return fail(s, 'The agent in the new pane is not running; a plain shell never receives the brief.')
       return { ...s, phase: 'delivering' }
     case 'held':
       return s.phase === 'delivering' ? { ...s, held: e.reason } : s
     case 'delivered':
       return s.phase === 'delivering' ? { ...s, phase: 'delivered', held: undefined, deliveredAt: e.at } : s
+    case 'pasted':
+      return s.phase === 'delivering' ? { ...s, phase: 'pasted', held: undefined, error: e.reason } : s
     case 'failed':
       return s.phase === 'choosing' ? s : fail(s, e.error)
     case 'cancel':
@@ -90,9 +107,11 @@ export interface HandoffTarget {
   label: string
 }
 
-/** Default configuration first, then saved profiles (SWA-9), per CLI. */
-export function handoffTargets(accounts: readonly AgentAccount[]): HandoffTarget[] {
-  return (['claude-code', 'codex'] as const).flatMap((agentId) => {
+/** Default configuration first, then saved profiles (SWA-9), per CLI. With
+ *  `available` (ids the backend probe found), CLIs not installed are hidden —
+ *  starting them would leave a plain shell. */
+export function handoffTargets(accounts: readonly AgentAccount[], available?: ReadonlySet<string>): HandoffTarget[] {
+  return (['claude-code', 'codex'] as const).filter((id) => !available || available.has(id)).flatMap((agentId) => {
     const name = templateById(agentId).name
     return [
       { agentId, label: `${name} · Default` },
@@ -130,4 +149,36 @@ const LIMIT_PATTERN = /(usage limit|rate limit|limit reached|out of (?:credits|u
  */
 export function limitHint(terminalText: string): string | undefined {
   return LIMIT_PATTERN.test(terminalText) ? 'Hint: the source pane output mentions a usage limit (not verified).' : undefined
+}
+
+export interface SubmitSnapshot {
+  running: boolean
+  generation: number | undefined
+  expectedGeneration: number | undefined
+  hold: HoldReason | null
+  agent: AgentEngineState | undefined
+}
+
+/**
+ * Re-check right before the delayed Enter. Anything that changed since the
+ * body was pasted — user typing, a permission prompt, a restart, the agent
+ * gone — means Enter would submit something else (or approve a prompt), so it
+ * is withheld. Returns the reason, or null when Enter is safe.
+ */
+export function submitBlocker(s: SubmitSnapshot): string | null {
+  if (!s.running || s.generation !== s.expectedGeneration) return 'the new pane stopped or restarted'
+  if (!agentAlive(s.agent)) return 'the agent in the new pane is no longer running'
+  if (s.hold === 'typing') return 'you typed in the new pane'
+  if (s.hold === 'agent-blocked') return 'the agent is showing a permission or question prompt'
+  if (s.hold === 'agent-working') return 'the agent started working'
+  return null
+}
+
+/** Focus trap: index to move focus to on Tab, or null to let the browser move it. */
+export function focusTrapTarget(count: number, current: number, shift: boolean): number | null {
+  if (count === 0) return null
+  if (current < 0) return shift ? count - 1 : 0
+  if (shift && current === 0) return count - 1
+  if (!shift && current === count - 1) return 0
+  return null
 }

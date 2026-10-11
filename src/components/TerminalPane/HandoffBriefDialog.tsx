@@ -5,6 +5,7 @@ import { readTerminalText } from '@/lib/terminal-registry'
 import { getChangedFiles, getCommitInfo } from '@/tauri/git'
 import { writeClipboard } from '@/tauri/clipboard'
 import { useHandoffStore } from '@/store/handoff-store'
+import { useModalFocus } from '@/components/ui/use-modal-focus'
 
 interface HandoffBriefDialogProps {
   open: boolean
@@ -66,14 +67,9 @@ export function HandoffBriefDialog(props: HandoffBriefDialogProps): React.ReactE
     }
   }, [open, terminalId, cwd])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+  // Hand off… opens the next dialog; focus then belongs to it, not the pane.
+  const handingOff = useHandoffStore((st) => st.source !== undefined)
+  const root = useModalFocus(open, onClose, handingOff ? undefined : terminalId)
 
   const generated = useMemo(
     () =>
@@ -95,6 +91,7 @@ export function HandoffBriefDialog(props: HandoffBriefDialogProps): React.ReactE
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onMouseDown={onClose}>
       <div
+        ref={root}
         role="dialog"
         aria-modal="true"
         aria-label="Handoff brief"

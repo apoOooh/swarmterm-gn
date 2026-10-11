@@ -11,6 +11,7 @@
  * generation and status are compared with what the user confirmed against.
  */
 import { deliverPromptToTerminal, getTerminalGeneration, getTerminalStatus, submitTerminalPrompt } from '@/lib/terminal-registry'
+import { submitBlocker } from '@/lib/handoff-flow'
 import { NUDGE_IDLE_MS, deliveryHoldReason, type HoldReason } from '@/lib/war-room-nudge'
 import { HOLD_RECHECK_MS, SUBMIT_DELAY_MS } from '@/lib/war-room-delivery'
 import { useAgentStateStore } from '@/store/agent-state-store'
@@ -21,11 +22,17 @@ import { useTerminalTypingStore } from '@/store/terminal-typing-store'
 export interface HandoffDeliveryCallbacks {
   held: (reason: HoldReason | undefined) => void
   delivered: (at: number) => void
+  /** Body is in the prompt but Enter was withheld (see submitBlocker). */
+  pasted: (reason: string) => void
   failed: (error: string) => void
 }
 
 function sameProcess(terminalId: string, generation: number | undefined): boolean {
   return getTerminalStatus(terminalId).kind === 'running' && getTerminalGeneration(terminalId) === generation
+}
+
+function agentState(terminalId: string) {
+  return useAgentStateStore.getState().byId[terminalId]?.state
 }
 
 function holdReason(terminalId: string): HoldReason | null {
@@ -67,6 +74,12 @@ export function deliverHandoffBrief(
       finish(() => cb.failed('The new pane stopped or restarted; the brief was not sent.'))
       return
     }
+    // Never paste into a plain shell: without an agent the brief's lines run as commands.
+    const agent = agentState(terminalId)
+    if (agent === undefined || agent === 'unknown') {
+      finish(() => cb.failed('The agent in the new pane is not running; the brief was not sent.'))
+      return
+    }
     const reason = holdReason(terminalId)
     cb.held(reason ?? undefined)
     const now = Date.now()
@@ -81,8 +94,18 @@ export function deliverHandoffBrief(
     deliverPromptToTerminal(terminalId, text)
     timer = setTimeout(() => {
       timer = undefined
-      if (!sameProcess(terminalId, generation)) {
-        cb.failed('The new pane stopped before the brief was submitted; it was not retried.')
+      // Re-check everything the paste was gated on: the user may have typed
+      // into the pasted prompt, or a permission prompt may have appeared —
+      // Enter would then submit their text or approve the prompt.
+      const blocker = submitBlocker({
+        running: getTerminalStatus(terminalId).kind === 'running',
+        generation: getTerminalGeneration(terminalId),
+        expectedGeneration: generation,
+        hold: holdReason(terminalId),
+        agent: agentState(terminalId)
+      })
+      if (blocker !== null) {
+        cb.pasted(blocker)
         return
       }
       submitTerminalPrompt(terminalId)

@@ -47,3 +47,11 @@ describe('shouldReturnFocus', () => {
     expect(shouldReturnFocus(info({ tagName: 'input' }))).toBe(false)
   })
 })
+
+describe('modal dialogs own the keyboard (review P1)', () => {
+  it('never returns focus to a terminal while a modal dialog is open', () => {
+    expect(shouldReturnFocus({ tagName: 'TEXTAREA', isContentEditable: false, inOverlay: false, modalOpen: true })).toBe(false)
+    expect(shouldReturnFocus({ tagName: 'DIV', isContentEditable: false, inOverlay: false, modalOpen: true })).toBe(false)
+    expect(shouldReturnFocus(null, true)).toBe(false)
+  })
+})
