@@ -7,10 +7,14 @@ import {
   limitHint,
   submitBlocker,
   focusTrapTarget,
+  startingHint,
+  STARTING_HINT_MS,
   type HandoffState
 } from './handoff-flow'
 
-const start = (): HandoffState => reduceHandoff(initialHandoff(), { type: 'spawned', terminalId: 't2' })
+const spawned = (): HandoffState => reduceHandoff(initialHandoff(), { type: 'spawned', terminalId: 't2', agentId: 'claude-code' })
+/** Spawned, and the CLI's own session hook arrived for generation 0. */
+const start = (): HandoffState => reduceHandoff(spawned(), { type: 'session', terminalId: 't2', agentId: 'claude-code', generation: 0 })
 
 describe('handoff state machine', () => {
   it('waits for the new pane to run before asking for confirmation', () => {
@@ -110,15 +114,28 @@ describe('usage', () => {
 })
 
 describe('agent readiness (review P1)', () => {
-  it('a running shell is not agent readiness: waits until the agent reports idle', () => {
-    let s = reduceHandoff(start(), { type: 'status', kind: 'running', generation: 0, agent: undefined })
-    expect(s.phase).toBe('starting')
-    s = reduceHandoff(s, { type: 'status', kind: 'running', generation: 0, agent: 'unknown' })
-    expect(s.phase).toBe('starting')
-    s = reduceHandoff(s, { type: 'status', kind: 'running', generation: 0, agent: 'blocked' })
-    expect(s.phase).toBe('starting')
+  it('detector idle is never readiness: without the session hook the handoff keeps waiting', () => {
+    // "command not found" / a CLI back at the shell: the detector falls back
+    // to idle for an unrecognised screen.
+    let s = spawned()
+    for (const agent of [undefined, 'unknown', 'blocked', 'idle'] as const) {
+      s = reduceHandoff(s, { type: 'status', kind: 'running', generation: 0, agent })
+      expect(s.phase).toBe('starting')
+    }
+  })
+
+  it('ready only after the target CLI reported its session for the live generation', () => {
+    let s = reduceHandoff(spawned(), { type: 'session', terminalId: 't2', agentId: 'claude-code', generation: 0 })
     s = reduceHandoff(s, { type: 'status', kind: 'running', generation: 0, agent: 'idle' })
-    expect(s.phase).toBe('ready')
+    expect(s).toMatchObject({ phase: 'ready', generation: 0 })
+  })
+
+  it('ignores session hooks from another pane, another CLI or an older generation', () => {
+    const base = spawned()
+    expect(reduceHandoff(base, { type: 'session', terminalId: 't9', agentId: 'claude-code', generation: 0 })).toBe(base)
+    expect(reduceHandoff(base, { type: 'session', terminalId: 't2', agentId: 'codex', generation: 0 })).toBe(base)
+    const old = reduceHandoff(base, { type: 'session', terminalId: 't2', agentId: 'claude-code', generation: 0 })
+    expect(reduceHandoff(old, { type: 'status', kind: 'running', generation: 1, agent: 'idle' }).phase).toBe('starting')
   })
 
   it('an agent that died back to the shell fails the handoff instead of typing into it', () => {
@@ -165,5 +182,14 @@ describe('focusTrapTarget', () => {
     expect(focusTrapTarget(3, 1, false)).toBeNull()
     expect(focusTrapTarget(3, -1, false)).toBe(0)
     expect(focusTrapTarget(0, -1, false)).toBeNull()
+  })
+})
+
+describe('startingHint (review round 2)', () => {
+  it('points at the pane only after the time limit and only while starting', () => {
+    expect(startingHint('starting', 1000, 1000 + STARTING_HINT_MS - 1)).toBeUndefined()
+    expect(startingHint('starting', 1000, 1000 + STARTING_HINT_MS)).toMatch(/answer its prompt/)
+    expect(startingHint('ready', 1000, 1000 + STARTING_HINT_MS * 2)).toBeUndefined()
+    expect(startingHint('starting', undefined, 99_999_999)).toBeUndefined()
   })
 })

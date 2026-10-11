@@ -112,3 +112,24 @@ export function selectableFolder(nav: {
   if (nav.pending || nav.error !== null || nav.listing === null) return null
   return nav.listing.path === '' ? null : nav.listing.path
 }
+
+/**
+ * The folder a typed/pasted input will navigate to, or null when it only
+ * filters (or names the folder already shown). The overlay marks the picker
+ * pending the moment this is non-null — before the listing debounce fires —
+ * so an immediate Select/Ctrl+Enter cannot return the previously shown folder.
+ */
+export function typedNavigation(input: string, current: string): string | null {
+  const { dir } = splitTypedPath(input)
+  return dir === null || samePath(dir, current) ? null : dir
+}
+
+/**
+ * Whether the dialog-level Enter handler may act. Only the path box and the
+ * folder list own Enter; on a button (Cancel, Windows dialog, favorites…)
+ * Enter must stay the browser's activation of that button.
+ */
+export function pickerOwnsEnter(target: { tagName: string; inListbox: boolean }): boolean {
+  if (target.tagName.toUpperCase() === 'BUTTON') return false
+  return target.tagName.toUpperCase() === 'INPUT' || target.inListbox
+}

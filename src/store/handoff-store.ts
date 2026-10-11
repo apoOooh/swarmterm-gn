@@ -19,20 +19,28 @@ export interface HandoffStore {
   source?: HandoffSource
   target?: HandoffTarget
   state: HandoffState
+  /** Dialog tucked away into a non-modal chip so the user can answer a
+   *  trust/login prompt in the new pane; the handoff itself keeps running. */
+  minimized: boolean
   begin: (source: HandoffSource) => void
   setTarget: (target: HandoffTarget) => void
   dispatch: (event: HandoffEvent) => void
   close: () => void
+  minimize: () => void
+  restore: () => void
 }
 
 export const useHandoffStore = create<HandoffStore>((set) => ({
   state: initialHandoff(),
-  begin: (source) => set({ source, target: undefined, state: initialHandoff() }),
+  minimized: false,
+  begin: (source) => set({ source, target: undefined, state: initialHandoff(), minimized: false }),
   setTarget: (target) => set({ target }),
   dispatch: (event) =>
     set((s) => {
       const next = reduceHandoff(s.state, event)
       return next === s.state ? s : { state: next }
     }),
-  close: () => set({ source: undefined, target: undefined, state: initialHandoff() })
+  close: () => set({ source: undefined, target: undefined, state: initialHandoff(), minimized: false }),
+  minimize: () => set((s) => (s.source ? { minimized: true } : s)),
+  restore: () => set({ minimized: false })
 }))

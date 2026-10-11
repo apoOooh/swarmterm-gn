@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  typedNavigation,
+  pickerOwnsEnter,
   selectableFolder,
   FAVORITES_STORAGE_KEY, readFavorites, storeFavorites, toggleFavorite, quickAccess,
   filterFolders, splitTypedPath, samePath, MAX_QUICK_RECENTS
@@ -87,5 +89,29 @@ describe('selectableFolder', () => {
   it('refuses the drive overview and an empty picker', () => {
     expect(selectableFolder({ listing: { path: '' }, pending: false, error: null })).toBeNull()
     expect(selectableFolder({ listing: null, pending: false, error: null })).toBeNull()
+  })
+})
+
+describe('typedNavigation (review round 2)', () => {
+  it('a typed absolute path to another folder navigates immediately (pending before the debounce)', () => {
+    expect(typedNavigation('D:/Other/', 'C:/Code')).toBe('D:/Other/')
+    expect(typedNavigation('D:/Other/sw', 'C:/Code')).toBe('D:/Other/')
+  })
+  it('a filter or the current folder does not navigate', () => {
+    expect(typedNavigation('sw', 'C:/Code')).toBeNull()
+    expect(typedNavigation('C:/Code/sw', 'C:/Code')).toBeNull()
+    expect(typedNavigation('', 'C:/Code')).toBeNull()
+  })
+})
+
+describe('pickerOwnsEnter (review round 2)', () => {
+  it('handles Enter in the path box and the folder list only', () => {
+    expect(pickerOwnsEnter({ tagName: 'INPUT', inListbox: false })).toBe(true)
+    expect(pickerOwnsEnter({ tagName: 'DIV', inListbox: true })).toBe(true)
+  })
+  it('leaves Enter on buttons to the button', () => {
+    expect(pickerOwnsEnter({ tagName: 'BUTTON', inListbox: false })).toBe(false)
+    expect(pickerOwnsEnter({ tagName: 'button', inListbox: true })).toBe(false)
+    expect(pickerOwnsEnter({ tagName: 'DIV', inListbox: false })).toBe(false)
   })
 })

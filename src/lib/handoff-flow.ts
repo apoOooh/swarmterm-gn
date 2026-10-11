@@ -3,7 +3,11 @@
  * dialog. A handoff opens a NEW pane (the old one stays untouched) and types
  * the SWA-21 brief into it as the first prompt — but only after three gates:
  *
- * 1. the new pane's pty reported `running` (a failed spawn never gets text),
+ * 1. the new pane's pty reported `running` AND the target CLI itself
+ *    announced its session through the `agent:session` hook for this pane's
+ *    current pty generation (a failed spawn, a missing CLI or a CLI that fell
+ *    back to the shell never gets text — the screen detector's `idle` is
+ *    NOT proof: it is also its fallback for an unrecognised screen),
  * 2. the pty generation captured at that moment is still the live one when
  *    the user confirms (a respawn in between means a different process —
  *    typing into it would hand the brief to something the user never saw),
@@ -39,7 +43,11 @@ export type HandoffPhase = 'choosing' | 'starting' | 'ready' | 'delivering' | 'd
 export interface HandoffState {
   phase: HandoffPhase
   terminalId?: string
-  /** Pty generation observed when the new pane first ran. */
+  /** CLI the new pane was started with; only its own session hook counts. */
+  agentId?: string
+  /** Pty generation live when that CLI's `agent:session` hook arrived. */
+  sessionGeneration?: number
+  /** Pty generation observed when the new pane became ready. */
   generation?: number
   held?: HoldReason
   deliveredAt?: number
@@ -47,7 +55,10 @@ export interface HandoffState {
 }
 
 export type HandoffEvent =
-  | { type: 'spawned'; terminalId: string }
+  | { type: 'spawned'; terminalId: string; agentId: string }
+  /** `agent:session` hook (Rust already matched it to the pane's spawn and
+   *  agent); `generation` is the renderer's pty generation at arrival. */
+  | { type: 'session'; terminalId: string; agentId: string; generation: number | undefined }
   | { type: 'status'; kind: PtyKind; generation: number | undefined; agent?: AgentEngineState; message?: string }
   | { type: 'confirm'; live: LivePty }
   | { type: 'held'; reason: HoldReason }
@@ -68,16 +79,21 @@ export function reduceHandoff(s: HandoffState, e: HandoffEvent): HandoffState {
   if (s.phase === 'delivered' || s.phase === 'pasted' || s.phase === 'failed' || s.phase === 'cancelled') return s
   switch (e.type) {
     case 'spawned':
-      return s.phase === 'choosing' ? { phase: 'starting', terminalId: e.terminalId } : s
+      return s.phase === 'choosing' ? { phase: 'starting', terminalId: e.terminalId, agentId: e.agentId } : s
+    case 'session':
+      if (s.phase !== 'starting' || e.terminalId !== s.terminalId || e.agentId !== s.agentId || e.generation === undefined) return s
+      return { ...s, sessionGeneration: e.generation }
     case 'status':
       if (s.phase === 'choosing') return s
       if (e.kind === 'error') return fail(s, e.message ?? 'The new pane failed to start.')
       if (e.kind === 'exited') return fail(s, 'The new pane exited before the brief was delivered.')
-      // Ready only once the agent sits idle at its own prompt: a shell whose
-      // CLI is missing or crashed is `running` too, and would execute the
-      // brief's lines as commands.
+      // Ready only on a positive, agent-specific signal: the CLI's own session
+      // hook for THIS pty generation. A shell whose CLI is missing or crashed
+      // is `running` too, and the detector reports `idle` for screens it
+      // does not recognise — either would run the brief's lines as commands.
       if (s.phase === 'starting') {
-        return e.kind === 'running' && e.agent === 'idle' ? { ...s, phase: 'ready', generation: e.generation } : s
+        const proven = e.kind === 'running' && s.sessionGeneration !== undefined && e.generation === s.sessionGeneration
+        return proven ? { ...s, phase: 'ready', generation: e.generation } : s
       }
       if (e.generation !== s.generation) return fail(s, 'The new pane restarted; the brief was not sent.')
       if (!agentAlive(e.agent)) return fail(s, 'The agent in the new pane is not running; a plain shell never receives the brief.')
@@ -181,4 +197,17 @@ export function focusTrapTarget(count: number, current: number, shift: boolean):
   if (shift && current === 0) return count - 1
   if (!shift && current === count - 1) return 0
   return null
+}
+
+/** How long "Starting…" may last before the dialog points the user at the pane. */
+export const STARTING_HINT_MS = 15_000
+
+/**
+ * A CLI waiting on a trust/login prompt never reports its session, so the
+ * handoff stays in `starting`. After a while the dialog says so — it never
+ * sends on its own; the user answers the prompt in the pane.
+ */
+export function startingHint(phase: HandoffPhase, startedAt: number | undefined, now: number): string | undefined {
+  if (phase !== 'starting' || startedAt === undefined || now - startedAt < STARTING_HINT_MS) return undefined
+  return 'Agent not ready yet — answer its prompt (trust, login) in the new pane. The handoff waits here.'
 }
