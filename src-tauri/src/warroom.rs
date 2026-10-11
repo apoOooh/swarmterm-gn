@@ -68,7 +68,16 @@ pub struct RoomMember {
     /// *pending*; messages are routed to connected members only.
     pub connected: bool,
     pub inbox: VecDeque<RoomMessage>,
+    /// Already-read messages, newest last, capped at `READ_HISTORY`. Reading
+    /// used to be destructive only: an agent that drained on its own when
+    /// nudged left a second, user-prompted `read_inbox` empty although the
+    /// sender saw `delivered` (SWA-29). Keeping a short tail lets the reader
+    /// re-fetch with `includeRead` instead of the message being gone.
+    pub read: VecDeque<RoomMessage>,
 }
+
+/// How many already-read messages a member keeps for `includeRead`.
+pub const READ_HISTORY: usize = 20;
 
 /// Snapshot for the renderer (war_room_rooms command / boot hydration).
 #[derive(Debug, Clone, Serialize)]
@@ -163,6 +172,7 @@ impl Default for WarRoom {
                 // and a pending Moderator could never become connected.
                 connected: true,
                 inbox: VecDeque::new(),
+                read: VecDeque::new(),
             },
         );
         Self { members, seq: 0 }
@@ -220,10 +230,10 @@ impl WarRoom {
         display_name: String,
         ts: u64,
     ) -> WarRoomEvent {
-        let (inbox, connected) = self
+        let (inbox, read, connected) = self
             .members
             .remove(&terminal_id)
-            .map(|m| (m.inbox, m.connected))
+            .map(|m| (m.inbox, m.read, m.connected))
             .unwrap_or_default();
         self.members.insert(
             terminal_id.clone(),
@@ -233,6 +243,7 @@ impl WarRoom {
                 display_name: display_name.clone(),
                 connected,
                 inbox,
+                read,
             },
         );
         let seq = self.next_seq();
@@ -411,9 +422,27 @@ impl WarRoom {
         Ok(SendOutcome { event, deliveries })
     }
 
+    /// Unread messages, now marked read (moved into the capped history).
     pub fn drain_inbox(&mut self, terminal_id: &str) -> Option<Vec<RoomMessage>> {
         let member = self.members.get_mut(terminal_id)?;
-        Some(member.inbox.drain(..).collect())
+        let unread: Vec<RoomMessage> = member.inbox.drain(..).collect();
+        member.read.extend(unread.iter().cloned());
+        while member.read.len() > READ_HISTORY {
+            member.read.pop_front();
+        }
+        Some(unread)
+    }
+
+    /// Already-read messages, oldest first — never consumes anything.
+    pub fn read_history(&self, terminal_id: &str) -> Option<Vec<RoomMessage>> {
+        Some(
+            self.members
+                .get(terminal_id)?
+                .read
+                .iter()
+                .cloned()
+                .collect(),
+        )
     }
 }
 
@@ -913,6 +942,45 @@ mod tests {
         assert!(err.contains("control"), "{err}");
         // Nothing leaked into an inbox on the refused probe.
         assert!(r.drain_inbox("t2").unwrap().is_empty());
+    }
+
+    #[test]
+    fn drained_messages_stay_in_read_history() {
+        // SWA-29: sender sees delivered:1, the agent drains on the nudge, a
+        // second read must still be able to show what arrived.
+        let mut r = room_with_two();
+        r.send("t1", Some("t2"), "hello", MessageMode::Probe, 3)
+            .unwrap();
+        assert_eq!(r.drain_inbox("t2").unwrap().len(), 1);
+        assert!(r.drain_inbox("t2").unwrap().is_empty());
+        let hist = r.read_history("t2").unwrap();
+        assert_eq!(hist.len(), 1);
+        assert_eq!(hist[0].content, "hello");
+        // A same-room re-join keeps the history too.
+        r.join(
+            "t2".into(),
+            Some("codex".into()),
+            "/w".into(),
+            "t2".into(),
+            4,
+        );
+        assert_eq!(r.read_history("t2").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn read_history_is_capped() {
+        let mut r = room_with_two();
+        for i in 0..(READ_HISTORY + 5) {
+            r.send("t1", Some("t2"), &format!("m{i}"), MessageMode::Probe, 3)
+                .unwrap();
+            r.drain_inbox("t2");
+        }
+        let hist = r.read_history("t2").unwrap();
+        assert_eq!(hist.len(), READ_HISTORY);
+        assert_eq!(
+            hist.last().unwrap().content,
+            format!("m{}", READ_HISTORY + 4)
+        );
     }
 
     #[test]

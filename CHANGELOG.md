@@ -7,6 +7,10 @@
   War Room. Codex session hooks start without a nested PowerShell, stale
   duplicate hook entries are removed, and Codex asks once to trust the
   updated hook.
+- War Room: reading the inbox no longer loses messages. Read messages stay in
+  a short history that `war_room.read_inbox` returns with `includeRead`, so a
+  probe reported as delivered is still visible after the agent read it on the
+  nudge.
 
 ## [1.5.2] - 2026-10-11
 
