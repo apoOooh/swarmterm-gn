@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { ArrowUp, Folder, FolderOpen, Search, Star } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { filterFolders, quickAccess, samePath, splitTypedPath } from '@/lib/folder-picker'
+import { filterFolders, quickAccess, samePath, selectableFolder, splitTypedPath } from '@/lib/folder-picker'
 import { folderName } from '@/lib/recent-folders'
 import { useFolderPickerStore } from '@/store/folder-picker-store'
 import { useRecentsStore } from '@/store/recents-store'
@@ -30,19 +30,34 @@ export function FolderPicker(): ReactElement | null {
   const [active, setActive] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   // Drops stale responses when the user types/navigates faster than Rust lists.
+  // Also bumped when a picker closes, so nothing in flight from an old opening
+  // can land in (or redirect) the next one.
   const seq = useRef(0)
+  // True while the latest navigation has not answered: the old listing stays
+  // visible, but Select must not hand it back as if it were the new folder.
+  const [pending, setPending] = useState(false)
+  const typeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const cancelTyping = (): void => {
+    if (typeTimer.current !== null) clearTimeout(typeTimer.current)
+    typeTimer.current = null
+  }
 
   const navigate = useCallback((path: string): void => {
     const mine = ++seq.current
+    setPending(true)
+    setError(null)
     listFolders(path)
       .then((l) => {
         if (mine !== seq.current) return
         setListing(l)
-        setError(null)
+        setPending(false)
         setActive(0)
       })
       .catch((e: unknown) => {
-        if (mine === seq.current) setError(String(e))
+        if (mine !== seq.current) return
+        setError(String(e))
+        setPending(false)
       })
   }, [])
 
@@ -51,9 +66,26 @@ export function FolderPicker(): ReactElement | null {
     setInput('')
     setListing(null)
     setError(null)
+    setPending(true)
     inputRef.current?.focus()
+    const opening = ++seq.current
     const start = request.startDir
-    void (start !== '' ? Promise.resolve(start) : getHomeDir()).then(navigate)
+    void (start !== '' ? Promise.resolve(start) : getHomeDir()).then(
+      (dir) => {
+        // A slow home lookup from a cancelled opening, or one overtaken by the
+        // user navigating, must not redirect the picker.
+        if (opening === seq.current) navigate(dir)
+      },
+      (e: unknown) => {
+        if (opening !== seq.current) return
+        setError(String(e))
+        setPending(false)
+      }
+    )
+    return () => {
+      seq.current++
+      cancelTyping()
+    }
   }, [request, navigate])
 
   if (!request) return null
@@ -63,15 +95,25 @@ export function FolderPicker(): ReactElement | null {
   const quick = quickAccess(favorites, recents, saved)
   const current = listing?.path ?? ''
   const isFavorite = current !== '' && favorites.some((f) => samePath(f, current))
+  const selectable = selectableFolder({ listing, pending, error })
 
   const onInput = (value: string): void => {
     setInput(value)
     setActive(0)
+    cancelTyping()
     const next = splitTypedPath(value)
-    if (next.dir !== null && !samePath(next.dir, current)) navigate(next.dir)
+    if (next.dir === null || samePath(next.dir, current)) return
+    // Debounced: every keystroke of a typed path would otherwise queue a
+    // directory listing (slow on network drives) in the Rust backend.
+    const dir = next.dir
+    typeTimer.current = setTimeout(() => {
+      typeTimer.current = null
+      navigate(dir)
+    }, 150)
   }
 
   const enter = (path: string): void => {
+    cancelTyping()
     setInput('')
     navigate(path)
     inputRef.current?.focus()
@@ -101,7 +143,7 @@ export function FolderPicker(): ReactElement | null {
       // Ctrl+Enter selects the folder being shown; Enter steps into the
       // highlighted subfolder (or selects when nothing matches).
       if (e.ctrlKey || visible.length === 0) {
-        if (current !== '') settle(current)
+        if (selectable !== null) settle(selectable)
       } else enter(visible[Math.min(active, visible.length - 1)])
     } else if (e.key === 'Backspace' && input === '' && listing?.parent != null) {
       e.preventDefault()
@@ -224,7 +266,7 @@ export function FolderPicker(): ReactElement | null {
           <Button size="sm" variant="outline" onClick={() => settle(null)}>
             Cancel
           </Button>
-          <Button size="sm" disabled={current === ''} onClick={() => settle(current)}>
+          <Button size="sm" disabled={selectable === null} onClick={() => selectable !== null && settle(selectable)}>
             Select folder
           </Button>
         </div>

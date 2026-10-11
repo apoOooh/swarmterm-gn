@@ -424,7 +424,7 @@ pub fn resolve_dir_link(cwd: String, candidate: String) -> Option<String> {
 /// roots. Async so a slow network drive never stalls the main thread.
 #[tauri::command]
 pub async fn list_folders(path: String) -> Result<crate::folder_list::FolderListing, String> {
-    crate::folder_list::list_folders(&path)
+    crate::folder_list::list_folders_blocking(path).await
 }
 
 /// First of `candidates` (an allowlisted editor id) found on PATH. The renderer

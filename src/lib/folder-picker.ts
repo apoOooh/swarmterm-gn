@@ -97,3 +97,18 @@ export function splitTypedPath(input: string): { dir: string | null; filter: str
   const cut = Math.max(text.lastIndexOf('\\'), text.lastIndexOf('/'))
   return { dir: text.slice(0, cut + 1), filter: text.slice(cut + 1) }
 }
+
+/**
+ * The folder "Select" may return, or null. Only a listing that belongs to the
+ * latest navigation counts: while a newer request is pending or has failed,
+ * the old listing is still on screen but no longer what the user asked for,
+ * so selecting it would silently hand back the previous folder.
+ */
+export function selectableFolder(nav: {
+  listing: { path: string } | null
+  pending: boolean
+  error: string | null
+}): string | null {
+  if (nav.pending || nav.error !== null || nav.listing === null) return null
+  return nav.listing.path === '' ? null : nav.listing.path
+}
