@@ -13,19 +13,8 @@ import { holdReasonCopy } from '@/lib/war-room-nudge'
 import { cn } from '@/lib/utils'
 import { ActivityDot } from '@/components/ActivityDot'
 import { StateDot } from '@/components/StateDot'
-import { templateById } from '@/lib/templates'
+import { useMemberConnection } from './useMemberConnection'
 import { Avatar, jumpToTerminal } from './Avatar'
-
-const MANUAL_HINT =
-  'To connect this pane manually, point its MCP config at $SWARMTERM_MCP_URL ' +
-  'with header "Authorization: Bearer $SWARMTERM_SESSION" ' +
-  "(both are set in this terminal's environment)."
-
-/** The manual-enrollment hint shows for plain shells AND for agents Swarmterm
- *  does not auto-enroll (only claude/codex/qwen get their MCP config written). */
-function needsManualHint(agentId: string | null): boolean {
-  return agentId === null || templateById(agentId).mcpAutoEnrolled !== true
-}
 
 const HELD_BADGE_CLASS = 'shrink-0 rounded bg-[#f97316]/15 px-1 py-0.5 text-[10px] text-[#f97316]'
 
@@ -37,6 +26,9 @@ function MemberRow({ member }: { member: WarRoomMember }): ReactElement {
   const heldCount = useWarRoomStore((s) =>
     reason !== undefined ? (s.queues[member.terminalId]?.length ?? 0) : 0
   )
+  const status = useMemberConnection(member.terminalId) ?? {
+    kind: 'waiting' as const, label: 'waiting', reason: ''
+  }
   const { setNodeRef, listeners, attributes, isDragging } = useDraggable({
     id: `${MEMBER_DRAG_PREFIX}${member.terminalId}`
   })
@@ -78,14 +70,14 @@ function MemberRow({ member }: { member: WarRoomMember }): ReactElement {
         )
       ) : (
         <span
-          className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-amber-400"
-          title={
-            'Waiting for the agent inside this pane to make its first war_room call. ' +
-            'Until then peers cannot message it.' +
-            (needsManualHint(member.agentId) ? ` ${MANUAL_HINT}` : '')
-          }
+          className={cn(
+            'shrink-0 rounded bg-muted px-1 py-0.5 text-[10px]',
+            status.kind === 'error' ? 'text-destructive' : 'text-amber-400'
+          )}
+          title={status.reason}
+          data-connection={status.kind}
         >
-          pending
+          {status.label}
         </span>
       )}
       {reason !== undefined &&

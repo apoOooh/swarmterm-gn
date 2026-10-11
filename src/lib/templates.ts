@@ -66,8 +66,8 @@ export interface WorkspaceTemplate {
    *  verified fine for claude/codex, but gemini-heritage CLIs treat a
    *  positional prompt as one-shot and exit. */
   spawnPromptFlag?: string
-  /** Swarmterm writes this CLI's MCP config automatically at boot (L3).
-   *  Everything else gets the manual hint in the War Room members list. */
+  /** Swarmterm connects this CLI to its MCP server itself (config file or,
+   *  for OpenCode, per-pane env). Everything else gets the manual hint. */
   mcpAutoEnrolled?: boolean
   /** Selectable launch modes; the first entry is the default. Absent ⇒ the
    *  command runs as-is. A mode switch respawns the pane with the new args. */
@@ -133,7 +133,9 @@ export const TEMPLATES: WorkspaceTemplate[] = [
     executable: 'opencode',
     icon: opencodeIcon,
     resume: { idPattern: OPENCODE_RE, buildCommand: (base, id) => `${base} --session ${id}` },
-    sessionScanner: 'opencode-cli'
+    sessionScanner: 'opencode-cli',
+    // Per pane via OPENCODE_CONFIG_CONTENT (pty.rs), no config file written.
+    mcpAutoEnrolled: true
   },
   {
     id: 'copilot',

@@ -19,6 +19,7 @@ import { contextBand, contextUsageTitle, formatContextUsage, type ContextBand } 
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { accountLabel } from '@/lib/agent-accounts'
 import { cn } from '@/lib/utils'
+import type { ConnectionStatus } from '@/lib/war-room-connection'
 
 interface PaneHeaderProps {
   /** Resolved agent id (leaf override already applied). */
@@ -67,6 +68,8 @@ interface PaneHeaderProps {
   worktreeBranch?: string
   /** Context-window % from Claude Code's status line (S15); absent ⇒ no chip. */
   ctxPct?: number
+  /** War Room connection of this pane; absent ⇒ not in a room, no chip. */
+  warRoom?: ConnectionStatus | null
 }
 
 // Band → colour. Amber is VS Code Dark Modern `editorWarning.foreground`, red is
@@ -276,6 +279,20 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {props.warRoom && (
+        <span
+          data-warroom-status={props.warRoom.kind}
+          title={`War Room: ${props.warRoom.label}. ${props.warRoom.reason}`}
+          aria-label={`War Room: ${props.warRoom.label}`}
+          className={cn(
+            'h-1.5 w-1.5 shrink-0 rounded-full',
+            props.warRoom.kind === 'connected' && 'bg-emerald-500',
+            props.warRoom.kind === 'waiting' && 'bg-amber-400',
+            props.warRoom.kind === 'error' && 'bg-destructive'
+          )}
+        />
+      )}
 
       {/* Worktree — lowest priority: full name → truncated → icon-only → hidden. */}
       {worktreeBranch && level.worktree !== 'hidden' && (

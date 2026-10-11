@@ -160,6 +160,12 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `mode: "execute"` pastes + runs a full prompt and is server-rejected toward
   plain-shell members. Codex enrollment rewrites `~/.codex/config.toml` with
   the concrete URL on every boot (`mcp/config.rs::register_codex`).
+  "Connected" is set by the first inbound MCP request carrying the pane's
+  bearer (`record_client` middleware → `connect_war_room_member`) and again
+  on join if that client was already seen — no tool call needed. The
+  Settings → MCP switch (`mcp/toggle.rs`) is an opt-out set every MCP writer
+  consults (`register_*`, `accounts::enroll`, the Codex `-c` pin); removal
+  only touches entries recognisably ours.
   The user has a seat: `MODERATOR_ID` (`"__moderator__"`) is seeded into the
   members map at construction — never joins or leaves, is excluded from
   `members_info()` (the renderer roster) but present in `peers()` (MCP

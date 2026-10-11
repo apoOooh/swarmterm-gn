@@ -464,6 +464,7 @@ pub fn war_room_join(
     cwd: String,
     display_name: String,
 ) -> Result<(), String> {
+    let joined_id = terminal_id.clone();
     // TOCTOU: this liveness check and the `war_rooms.join` insert below take
     // two separate mutexes with no lock held across both, so a pane that dies
     // in the gap between them still gets inserted as a member. Accepted: it's
@@ -496,7 +497,32 @@ pub fn war_room_join(
         "warroom:event",
         &crate::warroom::scoped(&room_id, outcome.joined),
     );
+    // The agent's MCP client usually connected long before the drag — then the
+    // pane is ready the moment it joins, no first tool call needed.
+    if state.mcp_clients.lock().unwrap().has_seen(&joined_id) {
+        connect_war_room_member(&app, &joined_id);
+    }
     Ok(())
+}
+
+/// Flip a room member to connected and emit the transcript event on the
+/// false→true edge. No-op for non-members and already-connected members.
+/// Lock order: `war_rooms` alone, released before emitting.
+pub(crate) fn connect_war_room_member(app: &AppHandle, terminal_id: &str) {
+    let scoped = {
+        let state = app.state::<AppState>();
+        let mut rooms = state.war_rooms.lock().unwrap();
+        rooms.find_room_of(terminal_id).and_then(|entry| {
+            let id = entry.id.clone();
+            entry
+                .room
+                .mark_connected(terminal_id, crate::warroom::now_ms())
+                .map(|ev| crate::warroom::scoped(&id, ev))
+        })
+    };
+    if let Some(ev) = scoped {
+        let _ = app.emit("warroom:event", &ev);
+    }
 }
 
 /// Full rooms snapshot for renderer hydration (boot / dev reload).
@@ -716,4 +742,133 @@ pub async fn inspect_account_mcp(
     })
     .await
     .map_err(|_| "MCP configuration inspection interrupted")?
+}
+
+/// One row of Settings → MCP's Swarmterm switch list.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwarmtermMcpProfile {
+    agent_id: String,
+    account_id: Option<String>,
+    account_name: Option<String>,
+    enabled: bool,
+    entry: crate::mcp::toggle::EntryState,
+    config_path: String,
+    url: Option<String>,
+}
+
+fn swarmterm_mcp_path(
+    app: &AppHandle,
+    agent_id: &str,
+    account_id: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    if agent_id != "qwen" {
+        return account_mcp_path(app, agent_id, account_id);
+    }
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|_| "Cannot resolve home directory")?;
+    let qwen_home = std::env::var("QWEN_HOME").ok();
+    Ok(crate::mcp::config::resolve_qwen_settings_path(
+        &home,
+        qwen_home.as_deref(),
+    ))
+}
+
+#[tauri::command]
+pub async fn swarmterm_mcp_profiles(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+) -> Result<Vec<SwarmtermMcpProfile>, String> {
+    files_main_only(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let url = app.state::<AppState>().mcp_url.get().map(|u| u.to_string());
+        let mut rows: Vec<(String, Option<String>, Option<String>)> = vec![
+            ("claude-code".into(), None, None),
+            ("codex".into(), None, None),
+        ];
+        if crate::agents::find_agent_binary("qwen").is_some() {
+            rows.push(("qwen".into(), None, None));
+        }
+        if crate::agents::find_agent_binary("opencode").is_some() {
+            rows.push(("opencode".into(), None, None));
+        }
+        for a in crate::accounts::list(&app)? {
+            rows.push((a.agent_id, Some(a.id), Some(a.name)));
+        }
+        rows.into_iter()
+            .map(|(agent_id, account_id, account_name)| {
+                if agent_id == "opencode" {
+                    return Ok(SwarmtermMcpProfile {
+                        enabled: crate::mcp::toggle::is_enabled("opencode", None),
+                        entry: crate::mcp::toggle::EntryState::PerPane,
+                        config_path: "OPENCODE_CONFIG_CONTENT (per pane)".into(),
+                        url: url.clone(),
+                        agent_id,
+                        account_id,
+                        account_name,
+                    });
+                }
+                let path = swarmterm_mcp_path(&app, &agent_id, account_id.as_deref())?;
+                Ok(SwarmtermMcpProfile {
+                    enabled: crate::mcp::toggle::is_enabled(&agent_id, account_id.as_deref()),
+                    entry: crate::mcp::toggle::entry_state_of_file(&path, agent_id == "codex"),
+                    config_path: path.to_string_lossy().into_owned(),
+                    url: url.clone(),
+                    agent_id,
+                    account_id,
+                    account_name,
+                })
+            })
+            .collect()
+    })
+    .await
+    .map_err(|_| "MCP profile inspection interrupted")?
+}
+
+/// Switch Swarmterm's own MCP entry for one profile. Off removes only our
+/// entry (a user's own `swarmterm` server survives); on writes it back now,
+/// so the next pane of that profile connects without a restart.
+#[tauri::command]
+pub async fn set_swarmterm_mcp(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    agent_id: String,
+    account_id: Option<String>,
+    enabled: bool,
+) -> Result<(), String> {
+    files_main_only(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(id) = account_id.as_deref() {
+            crate::accounts::resolve(&app, id, Some(&agent_id))?;
+        } else if agent_id == "opencode" {
+            // Nothing on disk: the flag alone gates the per-pane env.
+            return crate::mcp::toggle::set_enabled("opencode", None, enabled);
+        } else if !matches!(agent_id.as_str(), "claude-code" | "codex" | "qwen") {
+            return Err("Unsupported agent".into());
+        }
+        let path = swarmterm_mcp_path(&app, &agent_id, account_id.as_deref())?;
+        crate::mcp::toggle::set_enabled(&agent_id, account_id.as_deref(), enabled)?;
+        let _lock = crate::accounts::CONFIG_WRITE
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if !enabled {
+            return crate::mcp::toggle::remove_from_file(&path, agent_id == "codex");
+        }
+        match agent_id.as_str() {
+            "claude-code" => crate::mcp::config::write_mcp_config_to_file(&path),
+            "qwen" => crate::mcp::config::write_qwen_settings_to_file(&path),
+            // Dev builds pin Codex per process; only the installed app owns
+            // the URL in config.toml (see mcp::start).
+            _ => match app.state::<AppState>().mcp_url.get() {
+                Some(url) if !cfg!(debug_assertions) => {
+                    crate::mcp::config::write_codex_config_to_file(&path, url)
+                }
+                _ => Ok(()),
+            },
+        }
+    })
+    .await
+    .map_err(|_| "MCP switch interrupted")?
 }

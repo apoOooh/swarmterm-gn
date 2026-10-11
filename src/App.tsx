@@ -274,8 +274,9 @@ export default function App(): ReactElement {
       displayName: member.name
     })
       .then(() => {
-        // A move resets the handshake (new room, new pending state); the intro
-        // tells the agent to call list_peers, which reconnects it immediately.
+        // A move resets the handshake (new room, new pending state); the
+        // backend reconnects it on join when the pane's MCP client was
+        // already seen, and the intro introduces the new peers.
         //
         // Ordering note — the first place in this file where event-vs-response
         // ordering is load-bearing, hence written down: the backend emits this

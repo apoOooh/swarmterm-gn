@@ -1,3 +1,4 @@
+import { useMemberConnection } from '@/components/WarRoom/useMemberConnection'
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, RotateCw } from 'lucide-react'
 import { useDraggable, useDroppable } from '@dnd-kit/core'
@@ -114,6 +115,7 @@ export function TerminalPane({
   // Per-terminal selector: only this pane wakes when ITS number changes, and the
   // store returns the same state on a no-change sample, so streaming stays quiet.
   const ctxPct = useContextUsageStore((s) => s.byId[terminalId])
+  const warRoomStatus = useMemberConnection(terminalId)
   // Narrow boolean selector: only THIS pane re-renders when the find overlay
   // opens/closes for it, not every pane on every keystroke in some other one
   // (the overlay owns its own query/toggle state, not the store).
@@ -408,6 +410,7 @@ export function TerminalPane({
         worktreeBranch={leaf.worktreeBranch}
         agentTitle={agentTitle}
         ctxPct={ctxPct}
+        warRoom={warRoomStatus}
       />
 
       <ClearWorktreeDialog

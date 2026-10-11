@@ -15,6 +15,22 @@ pub fn swarmterm_entry() -> Value {
     })
 }
 
+/// Inline OpenCode config for one pane. Concrete URL and bearer: the value
+/// lives only in this pane's environment, like `SWARMTERM_SESSION` itself.
+pub fn opencode_config_content(url: &str, session: &str) -> String {
+    json!({
+        "mcp": {
+            "swarmterm": {
+                "type": "remote",
+                "url": url,
+                "headers": { "Authorization": format!("Bearer {session}") },
+                "enabled": true
+            }
+        }
+    })
+    .to_string()
+}
+
 /// The MCP entry Swarmterm writes into qwen's `settings.json`. Qwen Code
 /// resolves `$VAR`/`${VAR}` in settings strings from the process environment
 /// (packages/core envVarResolver), so — like Claude Code and unlike Codex —
@@ -224,6 +240,9 @@ pub fn write_qwen_settings_to_file(path: &Path) -> Result<(), String> {
 /// writes identical bytes. Log-only: a failure here must never block boot, and
 /// leaves Swarmterm fully usable minus the agent-facing MCP tools.
 pub fn register_user_scope(app: &AppHandle) {
+    if !crate::mcp::toggle::is_enabled("claude-code", None) {
+        return;
+    }
     let home = match app.path().home_dir() {
         Ok(h) => h,
         Err(e) => {
@@ -385,6 +404,17 @@ pub fn register_codex(app: &AppHandle, url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_inline_config_targets_this_pane() {
+        let v: Value =
+            serde_json::from_str(&opencode_config_content("http://127.0.0.1:5/mcp", "t-1"))
+                .unwrap();
+        let e = &v["mcp"]["swarmterm"];
+        assert_eq!(e["type"], "remote");
+        assert_eq!(e["url"], "http://127.0.0.1:5/mcp");
+        assert_eq!(e["headers"]["Authorization"], "Bearer t-1");
+    }
 
     fn parse(s: &str) -> Value {
         serde_json::from_str(s).unwrap()

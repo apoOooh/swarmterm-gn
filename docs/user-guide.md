@@ -223,6 +223,8 @@ You are a member too — the **Moderator**. The composer at the bottom of the Di
 
 Deliveries never interrupt you: if the target pane has a half-typed — or pasted but not yet sent — command, the message is **held** — a pill in the pane, `⏸N` on the room tab — retries by itself once the pane is free, and "Deliver now" releases it immediately. The same hold applies while the agent is still working or is waiting on a permission/question prompt (so a delivery can never answer a prompt for you); those holds release on their own once the agent is idle and have no "Deliver now". Held messages are never dropped.
 
+No setup is needed: Claude Code, Codex, OpenCode and Qwen Code panes connect to Swarmterm when the agent starts, so a dragged-in agent is ready immediately. Each member chip — and a dot in the pane header — shows **connected**, **waiting** (the agent is still starting) or an error with the reason when the pane has not reached Swarmterm after 15 seconds, for example a plain shell, an agent Swarmterm cannot configure, or a switched-off profile in **Settings → MCP**. An agent can re-read messages it already consumed with `war_room.read_inbox` and `includeRead`.
+
 Drag a member chip out (or press its `✕`) and the agent instantly loses access. Closing a pane removes it automatically — and so does restarting one (switching its agent, shell or folder); just drag it back in.
 
 A full walkthrough — Claude Code and Codex negotiating an API contract — is in [`war-room-demo.md`](war-room-demo.md).
@@ -349,6 +351,10 @@ dropped, never retried loudly, and never blocks the app.
 Every pane is automatically connected to the app over MCP for exactly as long as it lives — nothing to configure for Claude Code, Codex and Qwen Code, which Swarmterm enrolls automatically; other MCP-capable CLIs can be pointed at the per-pane URL by hand (the War Room panel shows the hint). Enrolled agents can drive Swarmterm themselves: **open a web preview** beside their own pane, **spawn / list / remove worktrees** to hand tasks to fresh parallel agents (removal refuses uncommitted changes), and use the **War Room** — list peers, message them in probe or execute mode, read their inbox and reply, wait for a peer to need input or finish (`wait_peer`) and peek at what its screen shows (`read_peer`). An execute hand-off to a peer that is sitting on a prompt is refused until that prompt is answered — the sender is told to wait first.
 
 War Room abilities only work for panes you dragged into a room, worktree abilities only in workspaces with isolation enabled — and removing a pane from a room revokes its access instantly.
+
+## Swarmterm MCP
+
+The top of **Settings → MCP** has one switch per agent and account for Swarmterm's own server (War Room, browser and worktree tools). On is the default. Off removes only Swarmterm's entry from that profile's configuration and keeps it from being written again; restart running panes afterwards. A server of your own that happens to be called `swarmterm` is never changed. **Details** shows the configuration file and the server address.
 
 ## MCP catalogue
 
