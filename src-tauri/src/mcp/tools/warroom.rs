@@ -152,9 +152,21 @@ pub struct WarRoomSendResult {
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadInboxResult {
     pub messages: Vec<RoomMessage>,
+    /// Recently read messages (oldest first); only filled with includeRead.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub previously_read: Vec<RoomMessage>,
     pub note: String,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadInboxArgs {
+    /// Also return the last already-read messages — use when an earlier read
+    /// (e.g. on a nudge) already consumed what you are looking for.
+    pub include_read: Option<bool>,
 }
 
 #[tool_router(router = tool_router_warroom, vis = "pub")]
@@ -308,17 +320,18 @@ impl SwarmtermMcpServer {
 
     #[tool(
         name = "war_room.read_inbox",
-        description = "Read and clear your pending War Room messages. Call this when nudged; reply with war_room.send."
+        description = "Read your unread War Room messages and mark them read. Call this when nudged; reply with war_room.send. Pass includeRead true to also see the last messages you already read."
     )]
     pub async fn war_room_read_inbox(
         &self,
         rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
             axum::http::request::Parts,
         >,
+        Parameters(args): Parameters<ReadInboxArgs>,
     ) -> Result<Json<ReadInboxResult>, rmcp::ErrorData> {
         let terminal = self.caller(&parts)?;
         let state = self.app.state::<AppState>();
-        let (room_id, connected_ev, messages) = {
+        let (room_id, connected_ev, messages, previously_read) = {
             let mut rooms = state.war_rooms.lock().unwrap();
             let entry = rooms
                 .find_room_of(&terminal.0)
@@ -326,8 +339,14 @@ impl SwarmtermMcpServer {
             let room_id = entry.id.clone();
             let room = &mut entry.room;
             let connected_ev = room.mark_connected(&terminal.0, now_ms());
+            // History is taken BEFORE draining so the two lists never overlap.
+            let previously_read = if args.include_read.unwrap_or(false) {
+                room.read_history(&terminal.0).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             let messages = room.drain_inbox(&terminal.0).unwrap_or_default();
-            (room_id, connected_ev, messages)
+            (room_id, connected_ev, messages, previously_read)
         };
         if let Some(ev) = connected_ev {
             let _ = self
@@ -335,11 +354,16 @@ impl SwarmtermMcpServer {
                 .emit("warroom:event", &crate::warroom::scoped(&room_id, ev));
         }
         let note = if messages.is_empty() {
-            "No pending messages.".into()
+            "No unread messages. If a sender reported delivery, an earlier read may have              consumed it — call again with includeRead true."
+                .into()
         } else {
             "Reply with war_room.send — keep the conversation in the tools, not the terminal."
                 .to_string()
         };
-        Ok(Json(ReadInboxResult { messages, note }))
+        Ok(Json(ReadInboxResult {
+            messages,
+            previously_read,
+            note,
+        }))
     }
 }
