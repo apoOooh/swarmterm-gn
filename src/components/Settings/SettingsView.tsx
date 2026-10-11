@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react'
-import { Bell, FileText, Keyboard, Palette, Terminal, X } from 'lucide-react'
+import { Bell, FileText, Keyboard, Palette, Terminal, Users, Plug, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { AppearancePanel } from './AppearancePanel'
@@ -7,8 +7,10 @@ import { TerminalPanel } from './TerminalPanel'
 import { NotificationsPanel } from './NotificationsPanel'
 import { KeyboardShortcutsPanel } from './KeyboardShortcutsPanel'
 import { FilesPanel } from './FilesPanel'
+import { AccountsPanel } from './AccountsPanel'
+import { MCPPanel } from './MCPPanel'
 
-export type CategoryId = 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts'
+export type CategoryId = 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts' | 'accounts' | 'mcp'
 
 interface Category {
   id: CategoryId
@@ -18,6 +20,8 @@ interface Category {
 
 const CATEGORIES: Category[] = [
   { id: 'appearance', label: 'Appearance', Icon: Palette },
+  { id: 'accounts', label: 'Accounts', Icon: Users },
+  { id: 'mcp', label: 'MCP', Icon: Plug },
   { id: 'terminal', label: 'Terminal', Icon: Terminal },
   { id: 'files', label: 'Files', Icon: FileText },
   { id: 'notifications', label: 'Notifications', Icon: Bell },
@@ -39,7 +43,7 @@ export function SettingsView({ onClose, initialCategory }: SettingsViewProps): R
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape' && !e.defaultPrevented) onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
@@ -101,11 +105,13 @@ export function SettingsView({ onClose, initialCategory }: SettingsViewProps): R
 
           <div className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-3xl px-8 py-8">
+              {activeCategory === 'accounts' && <AccountsPanel onLogin={onClose} />}
               {activeCategory === 'appearance' && <AppearancePanel />}
               {activeCategory === 'terminal' && <TerminalPanel />}
               {activeCategory === 'files' && <FilesPanel />}
               {activeCategory === 'notifications' && <NotificationsPanel />}
               {activeCategory === 'shortcuts' && <KeyboardShortcutsPanel />}
+              {activeCategory === 'mcp' && <MCPPanel />}
             </div>
           </div>
         </div>

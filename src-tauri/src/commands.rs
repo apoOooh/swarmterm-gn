@@ -85,14 +85,25 @@ pub fn files_unwatch(
 }
 
 #[tauri::command]
-pub fn create_terminal(
+pub async fn create_terminal(
     app: AppHandle,
-    state: State<'_, AppState>,
     id: String,
     options: CreateTerminalOptions,
     on_data: Channel<PtyOut>,
 ) -> CreateTerminalResult {
-    crate::pty::spawn_terminal(&app, &state, id, options, on_data)
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Preserve serialized creation/duplicate-id checks while keeping config
+        // reads, profile enrollment and OS process startup off the UI thread.
+        static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let Ok(_guard) = SPAWN_LOCK.lock() else {
+            return CreateTerminalResult::err("Terminal creation interrupted");
+        };
+        let state = app.state::<AppState>();
+        crate::pty::spawn_terminal(&app, &state, id, options, on_data)
+    })
+    .await
+    .unwrap_or_else(|_| CreateTerminalResult::err("Terminal creation interrupted"))
 }
 
 #[tauri::command]
@@ -220,8 +231,30 @@ pub fn list_available_agents() -> Vec<crate::agents::AgentEntry> {
 }
 
 #[tauri::command]
-pub async fn list_agent_sessions(folder: String) -> Vec<crate::sessions::SessionEntry> {
-    crate::sessions::list_all(folder).await
+pub async fn list_agent_sessions(
+    app: AppHandle,
+    folder: String,
+    account_id: Option<String>,
+) -> Vec<crate::sessions::SessionEntry> {
+    crate::sessions::list_all(
+        folder,
+        crate::accounts::list(&app).unwrap_or_default(),
+        account_id,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn inspect_saved_workspace(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    cwd: String,
+    panes: Vec<crate::sessions::SavedPane>,
+) -> Result<crate::sessions::SavedInspection, String> {
+    files_main_only(&window)?;
+    // A broken/unreadable account store is not evidence of deleted accounts.
+    // Refuse restoration instead of clearing valid profile/session references.
+    crate::sessions::inspect_saved(cwd, panes, crate::accounts::list(&app)?).await
 }
 
 /// Install or remove Claude Code's `statusLine` entry. Driven from the renderer
@@ -230,8 +263,27 @@ pub async fn list_agent_sessions(folder: String) -> Vec<crate::sessions::Session
 /// ordering is fine: the status line only matters once a Claude pane exists,
 /// which is strictly after the renderer has mounted.
 #[tauri::command]
-pub fn set_claude_statusline(app: AppHandle, enabled: bool) -> Result<(), String> {
-    crate::statusline::install::apply(&app, enabled)
+pub async fn set_claude_statusline(app: AppHandle, enabled: bool) -> Result<(), String> {
+    crate::accounts::STATUSLINE_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    tauri::async_runtime::spawn_blocking(move || {
+        // Blocking tasks may start out of order when the preference is toggled
+        // quickly. Each serialized update applies the latest requested value.
+        static STATUSLINE_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = STATUSLINE_WRITE
+            .lock()
+            .map_err(|_| "Status line configuration update interrupted")?;
+        let enabled =
+            crate::accounts::STATUSLINE_ENABLED.load(std::sync::atomic::Ordering::Relaxed);
+        crate::statusline::install::apply(&app, enabled)?;
+        for account in crate::accounts::list(&app)? {
+            if account.agent_id == "claude-code" {
+                crate::accounts::enroll(&account, None)?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| "Status line configuration update interrupted")?
 }
 
 #[tauri::command]
@@ -547,4 +599,111 @@ pub fn war_room_moderator_send(
         let _ = app.emit("warroom:deliver", &d);
     }
     Ok(delivered)
+}
+
+#[tauri::command]
+pub async fn list_agent_accounts(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+) -> Result<Vec<crate::accounts::AgentAccount>, String> {
+    files_main_only(&window)?;
+    tauri::async_runtime::spawn_blocking(move || crate::accounts::list(&app))
+        .await
+        .map_err(|_| "Account profile listing interrupted")?
+}
+#[tauri::command]
+pub async fn save_agent_account(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    account: crate::accounts::AccountInput,
+) -> Result<crate::accounts::AgentAccount, String> {
+    files_main_only(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        crate::accounts::save(&app, account, state.mcp_url.get().map(|url| url.as_ref()))
+    })
+    .await
+    .map_err(|_| "Account profile save interrupted")?
+}
+#[tauri::command]
+pub async fn delete_agent_account(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    id: String,
+) -> Result<(), String> {
+    files_main_only(&window)?;
+    tauri::async_runtime::spawn_blocking(move || crate::accounts::delete(&app, &id))
+        .await
+        .map_err(|_| "Account profile deletion interrupted")?
+}
+
+fn account_mcp_path(
+    app: &AppHandle,
+    agent_id: &str,
+    account_id: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    if !matches!(agent_id, "claude-code" | "codex") {
+        return Err("MCP catalogue supports Claude and Codex profiles".into());
+    }
+    if let Some(id) = account_id {
+        let account = crate::accounts::resolve(app, id, Some(agent_id))?;
+        return Ok(
+            std::path::Path::new(&account.config_dir).join(if agent_id == "codex" {
+                "config.toml"
+            } else {
+                ".claude.json"
+            }),
+        );
+    }
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|_| "Cannot resolve default account directory")?;
+    if agent_id == "codex" {
+        let config_dir = std::env::var("CODEX_HOME").ok();
+        Ok(crate::mcp::config::resolve_codex_config_path(
+            &home,
+            config_dir.as_deref(),
+        ))
+    } else {
+        let config_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
+        Ok(crate::mcp::config::resolve_global_config_path(
+            &home,
+            config_dir.as_deref(),
+        ))
+    }
+}
+
+#[tauri::command]
+pub async fn configure_account_mcp(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    agent_id: String,
+    account_id: Option<String>,
+    entry_id: String,
+    directories: Vec<String>,
+) -> Result<(), String> {
+    files_main_only(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = account_mcp_path(&app, &agent_id, account_id.as_deref())?;
+        crate::mcp::catalog::configure_catalog(&path, &agent_id, &entry_id, &directories)
+    })
+    .await
+    .map_err(|_| "MCP configuration update interrupted")?
+}
+
+#[tauri::command]
+pub async fn inspect_account_mcp(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    agent_id: String,
+    account_id: Option<String>,
+) -> Result<crate::mcp::catalog::CatalogStatus, String> {
+    files_main_only(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = account_mcp_path(&app, &agent_id, account_id.as_deref())?;
+        crate::mcp::catalog::inspect_catalog(&path, &agent_id)
+    })
+    .await
+    .map_err(|_| "MCP configuration inspection interrupted")?
 }

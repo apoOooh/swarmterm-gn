@@ -66,7 +66,7 @@ export function CodeEditor({ doc, paneId, viewRef, onScroll }: { doc: FileDocume
     const cached = cache.get(cacheKey)
     const extensions = [basicSetup, editorTheme, highlighting, EditorView.lineWrapping,
       languageConfig.current.of([]), readOnly.current.of([EditorState.readOnly.of(doc.readOnly), EditorView.editable.of(!doc.readOnly)]),
-      keymap.of([{ key: 'Mod-s', run: () => { void useDocumentStore.getState().save(doc.key); return true } }, indentWithTab]),
+      keymap.of([indentWithTab]),
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !sync.current) useDocumentStore.getState().update(doc.key, update.state.doc.toString())
       }),

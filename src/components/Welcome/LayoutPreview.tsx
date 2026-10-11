@@ -3,6 +3,7 @@ import { paneLayoutFor, type LayoutNode } from '@/lib/layout-tree'
 import { templateById } from '@/lib/templates'
 import { AgentIcon } from '@/components/AgentIcon'
 import { cn } from '@/lib/utils'
+import type { SavedNode } from '@/lib/saved-workspaces'
 
 interface LayoutPreviewProps {
   /** Number of terminal panes; drives the layout tree shape. */
@@ -41,7 +42,11 @@ export function LayoutPreview({ terminalCount, agents }: LayoutPreviewProps): Re
 }
 
 interface PreviewNodeProps {
-  node: LayoutNode
+  node: LayoutNode | SavedNode
+}
+
+export function SavedLayoutPreview({ node }: { node: SavedNode }): ReactElement {
+  return <div className="h-full w-full overflow-hidden rounded border border-border bg-background p-1"><PreviewNode node={node} /></div>
 }
 
 /** Recursively render a layout node: a leaf as an icon cell, a split as a

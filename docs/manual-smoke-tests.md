@@ -241,6 +241,41 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Switch a pane's agent (respawns the pty under the same id) → the line
       drops to `mcp …` until the new Claude connects.
 
+## Saved workspaces
+
+Automated checks: `npm run test:e2e -- tests/e2e/saved-workspaces.spec.ts`
+uses IPC mocks. With an already running Dev app on CDP port 9333,
+`node scripts/check-saved-workspaces-native.mjs <existing folder>` exercises
+real terminal creation and restore. `python scripts/check-session-hooks.py
+src-tauri/target/release/swarmterm.exe` checks built hook CLIs with a loopback
+server. The full Quit/restart and conversation checks below require real CLIs.
+
+- [ ] Create four panes (two Claude Code, two Codex) in the same working folder.
+      Review/trust Swarmterm's Codex hooks through `/hooks`, send a distinct
+      message in every pane, and verify the Saved card reports four sessions.
+      Capture must leave every existing terminal running without a respawn.
+- [ ] Resize both split directions, rename the workspace, change a Codex launch
+      mode and use a worktree in one pane. Quit from the tray and restart.
+      Open the card: exact split sizes, agents, shells, folders, launch mode,
+      worktree badge and each distinct conversation are restored.
+- [ ] Open the same card while its workspace is live: focus the existing one,
+      with no duplicate workspace or terminal. Rename and cancel with Escape.
+- [ ] Forget an open workspace: terminals stay alive, the card disappears,
+      and later layout changes, closing and restarting do not recreate it.
+- [ ] Close a workspace immediately after creating/resizing it (before 500 ms),
+      then reopen: the final snapshot is retained. Close one pane: the saved
+      tree contains the remaining panes.
+- [ ] Remove a saved pane/worktree folder or agent session, then reopen:
+      show a notice and start fresh; missing pane folders use the root folder.
+      Temporarily move the root folder: reopening stops with a notice.
+- [ ] Use an old Codex CLI or disable hooks: no unsupported flags are added;
+      layout restore works and new session capture remains unavailable.
+- [ ] Keep foreign Claude/Codex hooks (including inline TOML and comments).
+      App restarts retain them, repair only Swarmterm's command after a move,
+      perform no steady-state config writes, and never change hook trust.
+- [ ] Check saved storage: no terminal text, prompt, startup command, runtime
+      terminal id, file tab, unsaved buffer or broadcast group is persisted.
+
 ## Session resume (composer)
 
 - [ ] Pick a folder with prior Claude Code activity → "Resume sessions"
@@ -350,3 +385,50 @@ machine that never built Swarmterm. Details in
 - [ ] Settings → Notifications: Sound off → banner still works; System off → chime still works; per-agent off → that agent is fully silent.
 - [ ] macOS: first banner triggers the system permission prompt; denying it keeps chimes working.
 - [ ] Plain Terminal pane never notifies.
+
+
+## Account profiles (SWA-9)
+
+- Add one Claude Code and one Codex profile through Settings > Accounts; verify their names and configuration folders survive an app restart.
+- Create multiple panes using a fixed profile, then using Round robin. Verify each CLI rotates independently through Default and its own profiles, with matching header and terminal-list labels.
+- Use Log in only with a dedicated test profile. Verify the pane runs the normal CLI login command with that profile's configuration; never enter credentials in Swarmterm settings.
+- Resume a recorded conversation from each profile and confirm its history belongs to the selected profile. Filter the sessions dialog by account.
+- Save a workspace with an exact profile-bound session, quit, restart and restore. Verify both its account and conversation identity survive.
+- Remove a profile, then restore its saved workspace. Verify a warning appears and its pane starts a fresh conversation using Default. Configuration files and already running panes must remain intact.
+- Change a pane's account. Verify the agent restarts and no old conversation is resumed under the new profile.
+
+## MCP catalogue (SWA-11)
+
+- Open Settings > MCP. Select each Default account and a dedicated named Claude Code/Codex profile; verify configuration additions target only the selected account.
+- Add Playwright and verify its generated argument list contains `--headless`. Adding a definition must not launch a process, download a package or open a login/browser window.
+- Add GitHub or Context7. Verify the configuration contains the official remote endpoint without a token. Authenticate separately in the agent CLI when testing connectivity.
+- Add a definition twice through the typed command; verify the second call leaves file contents unchanged and the UI shows Configured. This status means configuration is present, not that a connection was tested.
+- Put a different definition under the same server name in an isolated test profile. Verify Existing configuration appears and an attempted add preserves the existing definition. Foreign servers, unrelated fields and TOML comments must remain intact.
+- Filesystem: try a missing directory, a relative path and a path containing shell metacharacters. Verify an error appears and the file remains unchanged. Then choose existing absolute directories, including one containing spaces; verify the saved argument list matches them.
+- Create a malformed JSON/TOML test config. Verify inspection/addition reports an error without modifying it. Test only a dedicated profile's files.
+- Verify settings contain no password/token inputs and inspect responses expose only catalogue IDs, statuses and version, never headers or foreign environment values.
+- Start a new pane only when intentionally testing the configured MCP server. Use the agent CLI to check connectivity, manage authentication or remove definitions. Package downloads by `npx`/`uvx` at this stage are separate from adding configuration in Swarmterm.
+
+Automated native config/UI check against an already running Dev app: `node scripts/check-mcp-catalog-native.mjs`. It creates isolated test profiles, preserves foreign entries, checks idempotence/conflicts/directory validation and removes only its own profile metadata. It does not start MCP servers or authenticate.
+
+## Custom shortcuts and actions (SWA-10)
+
+- Record a new sidebar chord, close Settings and press it in a terminal. Check
+  that it toggles once without sending control bytes. The old chord should reach
+  the shell again. Hold the new chord: no repeated toggles or leaked input.
+- Record a chord already used by another action. Check the conflict error;
+  Escape cancels recording while keeping Settings open. Unbind and Reset, then
+  restart and verify the persisted choice. A conflicting Reset is rejected.
+- Create a four-pane mixed Claude/Codex recipe using Auto accounts. Verify
+  per-agent rotation and account badges; run from its shortcut and its Run button.
+- Save an action containing workspace and split steps. Verify step order. An
+  unavailable recipe folder or CLI aborts before any workspace is created.
+- Leave a dirty file open, open the composer and type in its folder field.
+  File save/Markdown chords must not change the hidden document. Return to the
+  editor and check its current save and preview bindings.
+- Verify action persistence contains only names, chords and recipe/action steps,
+  with no startup commands, prompt text, terminal output or credentials.
+
+Native check against a stable, running Dev app:
+`node scripts/check-custom-shortcuts-native.mjs <existing isolated test folder>`.
+It restores previous shortcut settings and removes only its own workspaces.

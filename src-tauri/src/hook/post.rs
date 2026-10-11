@@ -37,6 +37,18 @@ pub fn build_request(authority: &str, token: &str, body: &str) -> String {
 /// anyway; the bool exists for tests. Deliberately `let … else` rather than `?`:
 /// there is no error to propagate, only "did the signal land".
 pub fn post_signal(mcp_url: &str, token: &str, signal: Signal, timeout: Duration) -> bool {
+    post_body(
+        mcp_url,
+        token,
+        &HookBody {
+            signal,
+            session: None,
+        },
+        timeout,
+    )
+}
+
+pub fn post_body(mcp_url: &str, token: &str, body: &HookBody, timeout: Duration) -> bool {
     // A garbage SWARMTERM_MCP_URL is an env problem: bail before any socket work.
     let Some((_host, authority)) = status_addr(mcp_url) else {
         return false;
@@ -55,7 +67,7 @@ pub fn post_signal(mcp_url: &str, token: &str, signal: Signal, timeout: Duration
 
     // Serialising an enum cannot fail, but the contract is "never panic": a
     // panic is a non-zero exit, which Claude Code surfaces as a hook failure.
-    let Ok(body) = serde_json::to_string(&HookBody { signal }) else {
+    let Ok(body) = serde_json::to_string(body) else {
         return false;
     };
     let req = build_request(&authority, token, &body);

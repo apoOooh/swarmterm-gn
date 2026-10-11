@@ -46,6 +46,7 @@ pub(crate) fn parse_session_list(json: &str) -> Vec<SessionEntry> {
                 })
                 .unwrap_or(0);
             Some(SessionEntry {
+                account_id: None,
                 agent_id: "opencode".into(),
                 session_id: id.to_owned(),
                 title: title.chars().take(80).collect(),
