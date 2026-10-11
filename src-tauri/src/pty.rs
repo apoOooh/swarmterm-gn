@@ -148,6 +148,8 @@ impl CreateTerminalResult {
 /// every descendant, not just the shell.
 pub struct ManagedTerminal {
     pub spawn_id: String,
+    /// Shell process id; root of the tree `terminal_agent_alive` searches.
+    pub pid: Option<u32>,
     pub agent_id: Option<String>,
     /// Configured spawn cwd; OSC 7 shell navigation must not change the explorer's root.
     pub cwd: std::path::PathBuf,
@@ -532,6 +534,7 @@ pub fn spawn_terminal(
         id.clone(),
         ManagedTerminal {
             spawn_id,
+            pid,
             agent_id: options.agent_id,
             writer,
             master: pair.master,

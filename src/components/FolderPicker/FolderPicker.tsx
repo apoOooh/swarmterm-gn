@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { ArrowUp, Folder, FolderOpen, Search, Star } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { filterFolders, pickerOwnsEnter, quickAccess, samePath, selectableFolder, splitTypedPath, typedNavigation } from '@/lib/folder-picker'
+import { enterAction, filterEditVoidsNavigation, filterFolders, pickerOwnsEnter, quickAccess, samePath, selectableFolder, splitTypedPath, typedNavigation } from '@/lib/folder-picker'
 import { folderName } from '@/lib/recent-folders'
 import { useFolderPickerStore } from '@/store/folder-picker-store'
 import { useRecentsStore } from '@/store/recents-store'
@@ -37,6 +37,10 @@ export function FolderPicker(): ReactElement | null {
   // visible, but Select must not hand it back as if it were the new folder.
   const [pending, setPending] = useState(false)
   const typeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // True from the moment a typed-path listing is requested until another
+  // navigation supersedes it; editing back to a filter must void it even
+  // after the debounce already fired.
+  const typedInFlight = useRef(false)
 
   const cancelTyping = (): void => {
     if (typeTimer.current !== null) clearTimeout(typeTimer.current)
@@ -68,6 +72,7 @@ export function FolderPicker(): ReactElement | null {
     setError(null)
     setPending(true)
     inputRef.current?.focus()
+    typedInFlight.current = false
     const opening = ++seq.current
     const start = request.startDir
     void (start !== '' ? Promise.resolve(start) : getHomeDir()).then(
@@ -106,7 +111,8 @@ export function FolderPicker(): ReactElement | null {
     if (dir === null) {
       // The typed path was edited back to a filter: the scheduled listing is
       // void, so the folder on screen is the selectable one again.
-      if (wasTyping) {
+      if (filterEditVoidsNavigation({ timerScheduled: wasTyping, typedRequestInFlight: typedInFlight.current })) {
+        typedInFlight.current = false
         seq.current++
         setPending(false)
       }
@@ -122,12 +128,14 @@ export function FolderPicker(): ReactElement | null {
     // directory listing (slow on network drives) in the Rust backend.
     typeTimer.current = setTimeout(() => {
       typeTimer.current = null
+      typedInFlight.current = true
       navigate(dir)
     }, 150)
   }
 
   const enter = (path: string): void => {
     cancelTyping()
+    typedInFlight.current = false
     setInput('')
     navigate(path)
     inputRef.current?.focus()
@@ -159,9 +167,25 @@ export function FolderPicker(): ReactElement | null {
       e.preventDefault()
       // Ctrl+Enter selects the folder being shown; Enter steps into the
       // highlighted subfolder (or selects when nothing matches).
-      if (e.ctrlKey || visible.length === 0) {
-        if (selectable !== null) settle(selectable)
-      } else enter(visible[Math.min(active, visible.length - 1)])
+      // While a navigation is pending the list is the OLD folder's: Enter
+      // then resolves the typed path instead (see enterAction).
+      const action = enterAction({
+        ctrl: e.ctrlKey,
+        pending,
+        typedDir: typedNavigation(input, current),
+        visibleCount: visible.length,
+        active,
+        selectable
+      })
+      if (action.kind === 'select') settle(action.path)
+      else if (action.kind === 'open') enter(visible[action.index])
+      else if (action.kind === 'navigate') {
+        // Skip the debounce, but keep the typed text: the user did not pick
+        // a list entry, and the filter part still applies to the new folder.
+        cancelTyping()
+        typedInFlight.current = true
+        navigate(action.dir)
+      }
     } else if (e.key === 'Backspace' && input === '' && listing?.parent != null) {
       e.preventDefault()
       navigate(listing.parent)

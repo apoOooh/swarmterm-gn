@@ -43,3 +43,10 @@ export const resizeTerminal = (id: string, cols: number, rows: number): Promise<
   invoke('resize_terminal', { id, cols, rows })
 
 export const killTerminal = (id: string): Promise<void> => invoke('kill_terminal', { id })
+
+/**
+ * Screen-independent liveness proof: true only if a process matching the
+ * pane's agent runs below its shell. Any doubt answers false (fail closed).
+ */
+export const isTerminalAgentAlive = (id: string): Promise<boolean> =>
+  invoke<boolean>('terminal_agent_alive', { id })

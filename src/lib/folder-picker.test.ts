@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  enterAction,
+  filterEditVoidsNavigation,
   typedNavigation,
   pickerOwnsEnter,
   selectableFolder,
@@ -113,5 +115,37 @@ describe('pickerOwnsEnter (review round 2)', () => {
     expect(pickerOwnsEnter({ tagName: 'BUTTON', inListbox: false })).toBe(false)
     expect(pickerOwnsEnter({ tagName: 'button', inListbox: true })).toBe(false)
     expect(pickerOwnsEnter({ tagName: 'DIV', inListbox: false })).toBe(false)
+  })
+})
+
+describe('enterAction (review round 3)', () => {
+  const base = { ctrl: false, pending: false, typedDir: null, visibleCount: 3, active: 1, selectable: 'C:/a' }
+  it('never opens from the stale list while a navigation is pending', () => {
+    expect(enterAction({ ...base, pending: true })).toEqual({ kind: 'none' })
+  })
+  it('resolves the typed path immediately while pending', () => {
+    expect(enterAction({ ...base, pending: true, typedDir: 'D:/x' })).toEqual({ kind: 'navigate', dir: 'D:/x' })
+  })
+  it('Ctrl+Enter while pending selects nothing', () => {
+    expect(enterAction({ ...base, pending: true, ctrl: true, typedDir: 'D:/x' })).toEqual({ kind: 'none' })
+  })
+  it('opens the highlighted subfolder when settled', () => {
+    expect(enterAction(base)).toEqual({ kind: 'open', index: 1 })
+  })
+  it('selects the shown folder on Ctrl+Enter or an empty list', () => {
+    expect(enterAction({ ...base, ctrl: true })).toEqual({ kind: 'select', path: 'C:/a' })
+    expect(enterAction({ ...base, visibleCount: 0 })).toEqual({ kind: 'select', path: 'C:/a' })
+  })
+})
+
+describe('filterEditVoidsNavigation (review round 3)', () => {
+  it('voids a typed request already in flight after the debounce', () => {
+    expect(filterEditVoidsNavigation({ timerScheduled: false, typedRequestInFlight: true })).toBe(true)
+  })
+  it('voids a still-scheduled debounce', () => {
+    expect(filterEditVoidsNavigation({ timerScheduled: true, typedRequestInFlight: false })).toBe(true)
+  })
+  it('leaves other navigations alone', () => {
+    expect(filterEditVoidsNavigation({ timerScheduled: false, typedRequestInFlight: false })).toBe(false)
   })
 })

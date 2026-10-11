@@ -192,6 +192,24 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     state.peer_wake.notify_waiters();
 }
 
+/// Screen-independent proof that the pane's agent CLI is still running: a
+/// process matching its agent id lives below the pane's shell. Used by the
+/// handoff delivery right before paste and before Enter. Any doubt (unknown
+/// pane, no pid, snapshot failure, non-Windows) answers `false`.
+#[tauri::command]
+pub fn terminal_agent_alive(state: State<'_, AppState>, id: String) -> bool {
+    // Copy what we need and drop the lock before the (slower) OS snapshot.
+    let (pid, agent_id) = match state.terminals.lock().unwrap().get(&id) {
+        Some(t) => (t.pid, t.agent_id.clone()),
+        None => return false,
+    };
+    let Some(pid) = pid else { return false };
+    match crate::agent_process::snapshot() {
+        Some(procs) => crate::agent_process::agent_alive_in(&procs, pid, agent_id.as_deref()),
+        None => false,
+    }
+}
+
 /// Renderer → Rust mirror of a pane's agent display state (`working` /
 /// `blocked` / `idle` / `done` / `unknown`), fed by `lib/agent-state-mirror`.
 /// Rust cannot derive this itself (the heuristics run over xterm's buffer in
