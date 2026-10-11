@@ -119,7 +119,14 @@ describe('pickerOwnsEnter (review round 2)', () => {
 })
 
 describe('enterAction (review round 3)', () => {
-  const base = { ctrl: false, pending: false, typedDir: null, visibleCount: 3, active: 1, selectable: 'C:/a' }
+  const base = { ctrl: false, pending: false, failed: false, typedDir: null, visibleCount: 3, active: 1, selectable: 'C:/a' }
+  it('never opens from the stale list after a failed navigation (round 4)', () => {
+    expect(enterAction({ ...base, failed: true, selectable: null })).toEqual({ kind: 'none' })
+    expect(enterAction({ ...base, failed: true, selectable: null, ctrl: true })).toEqual({ kind: 'none' })
+  })
+  it('a failed navigation still lets Enter resolve a new typed path (round 4)', () => {
+    expect(enterAction({ ...base, failed: true, selectable: null, typedDir: 'D:/y' })).toEqual({ kind: 'navigate', dir: 'D:/y' })
+  })
   it('never opens from the stale list while a navigation is pending', () => {
     expect(enterAction({ ...base, pending: true })).toEqual({ kind: 'none' })
   })
