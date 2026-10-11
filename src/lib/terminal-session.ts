@@ -113,11 +113,13 @@ export class TerminalSession {
 
     this.deps
       .createTerminal(this.id, options, (msg) => {
+        // Track this generation's death even after disposal, so a delayed
+        // create acknowledgement cannot kill a later PTY using the same id.
+        if (msg.type === 'exit') exited = true
         if (!fresh()) return
         if (msg.type === 'data') {
           this.sink.write(msg.payload)
         } else {
-          exited = true
           if (this.pendingRespawn) {
             const next = this.pendingRespawn
             this.pendingRespawn = null
@@ -128,9 +130,28 @@ export class TerminalSession {
         }
       })
       .then((result) => {
-        if (!fresh()) return
-        if (!result.ok) this.emit({ kind: 'error', message: result.error ?? 'Unknown error' })
-        else if (!exited) this.emit({ kind: 'running' })
+        if (!fresh()) {
+          // dispose may have killed before the asynchronous spawn inserted a
+          // PTY. Only a disposed session owns this cleanup: a superseded live
+          // generation may already have a replacement using the same id.
+          if (this.disposed && result.ok && !exited) void this.deps.killTerminal(this.id)
+          return
+        }
+        if (!result.ok) {
+          // A newer profile/configuration selected during a failed start can
+          // proceed immediately: the failed creation owns no native PTY.
+          if (this.pendingRespawn) {
+            const next = this.pendingRespawn
+            this.pendingRespawn = null
+            this.retry(next)
+          } else this.emit({ kind: 'error', message: result.error ?? 'Unknown error' })
+        }
+        else if (!exited) {
+          // An agent/profile switch can request a kill while creation is still
+          // pending. Repeat it now that the native PTY actually exists.
+          if (this.pendingRespawn) void this.deps.killTerminal(this.id)
+          else this.emit({ kind: 'running' })
+        }
       })
       .catch((err: unknown) => {
         if (!fresh()) return

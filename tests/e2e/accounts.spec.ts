@@ -1,0 +1,47 @@
+import { expect, test } from '@playwright/test'
+
+test('profile management drives account-aware composition and isolated login', async ({ page }) => {
+  await page.goto('/tests/fixtures/app.html?welcome=1')
+  await expect(page.getByRole('heading', { name: 'Compose' })).toBeVisible()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Accounts', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Account name', exact: true }).fill('Team account')
+  await page.getByRole('button', { name: 'Add profile', exact: true }).click()
+  await expect(page.getByText('Claude Code · Team account', { exact: true })).toBeVisible()
+  const profile = await page.evaluate(() => (window as any).fixture.accounts[0])
+  expect(Object.keys(profile).sort()).toEqual(['agentId', 'configDir', 'id', 'name'])
+  await page.getByRole('button', { name: 'Close settings', exact: true }).click()
+  await page.getByRole('button', { name: '4', exact: true }).click()
+  await page.getByRole('spinbutton', { name: 'Claude Code count', exact: true }).fill('4')
+  await page.getByRole('combobox', { name: 'Claude Code account', exact: true }).selectOption('__round-robin__')
+  await page.getByRole('button', { name: /^Create workspace/ }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.counters.created)).toBe(4)
+  expect(await page.evaluate(() => (window as any).fixture.counters.spawns.map((spawn: any) => spawn.accountId))).toEqual([undefined, profile.id, undefined, profile.id])
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Accounts', exact: true }).click()
+  await page.getByText('Claude Code · Team account', { exact: true }).locator('..').getByRole('button', { name: 'Log in', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).toHaveCount(0)
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.counters.created)).toBe(5)
+  expect(await page.evaluate(() => (window as any).fixture.counters.spawns.at(-1))).toMatchObject({ accountId: profile.id, agentId: 'claude-code', initialCommand: 'claude auth login' })
+})
+
+test('removed account restores fresh with warning and retains no wrong-account session', async ({ page }) => {
+  await page.goto('/tests/fixtures/app.html?welcome=1')
+  await expect(page.getByRole('heading', { name: 'Compose' })).toBeVisible()
+  await page.evaluate(async () => {
+    const account = { id: 'profile-test', name: 'Test', agentId: 'codex', configDir: '/accounts/test' }
+    ;(window as any).fixture.accounts.push(account)
+    const app = (window as any).fixture.useAppStore.getState()
+    app.createWorkspace({ cwd: '/project', terminalCount: 1, agentIds: ['codex'], accountIds: [account.id] })
+    const workspace = (window as any).fixture.useAppStore.getState().workspaces[0]
+    app.renameWorkspace(workspace.id, 'Account conversation')
+    app.recordPaneSession(workspace.layout.terminalId, 'codex', '11111111-2222-4333-8444-555555555555')
+    app.closeWorkspace(workspace.id)
+    ;(window as any).fixture.accounts.splice(0)
+  })
+  await page.getByRole('button', { name: 'Open saved workspace Account conversation', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('saved account is no longer available')
+  const spawn = await page.evaluate(() => (window as any).fixture.counters.spawns.at(-1))
+  expect(spawn.accountId).toBeUndefined()
+  expect(spawn.initialCommand).not.toContain('resume')
+})

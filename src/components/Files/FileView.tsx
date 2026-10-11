@@ -20,6 +20,8 @@ import { shellFlavor } from '@/lib/agent-spawn-command'
 import { isWindowsPlatform } from '@/lib/platform'
 import { useDocumentStore } from '@/store/document-store'
 import { useAppStore } from '@/store/app-store'
+import { matchConfiguredShortcut } from '@/store/shortcut-store'
+import { isMacPlatform } from '@/lib/platform'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useMarkdownPrefStore } from '@/store/markdown-pref-store'
 import { previewKind } from '@/lib/files/preview-kind'
@@ -118,9 +120,10 @@ export function FileView({ doc, leaf, focused }: { doc: FileDocument; leaf: Leaf
   const previewPane = markdown ? rendered : kind === 'svg' ? <SvgPreview content={doc.content} /> : kind === 'html' ? <HtmlPreview doc={doc} /> : null
   return <div data-keyboard-owner="editor" data-file-active={focused} className="flex h-full min-h-0 flex-col bg-background" onMouseDown={() => useAppStore.getState().setFocusedLeaf(leaf.id)} onKeyDown={(e) => {
     if (e.defaultPrevented) return
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); e.stopPropagation(); void store.save(doc.key) }
+    const action = matchConfiguredShortcut(e, isMacPlatform())
+    if (action === 'save-file') { e.preventDefault(); e.stopPropagation(); void store.save(doc.key) }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); e.stopPropagation(); find() }
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v' && kind) { e.preventDefault(); e.stopPropagation(); store.mode(doc.key, doc.mode === 'editor' ? 'split' : doc.mode === 'split' ? 'preview' : 'editor') }
+    if (action === 'cycle-markdown' && kind) { e.preventDefault(); e.stopPropagation(); store.mode(doc.key, doc.mode === 'editor' ? 'split' : doc.mode === 'split' ? 'preview' : 'editor') }
   }}>
     <div className="flex shrink-0 items-center gap-1 border-b border-border bg-card px-2 py-1 text-[11px]">
       <span className="min-w-0 flex-1 truncate text-muted-foreground" title={doc.path}>{doc.path}</span>

@@ -1,0 +1,46 @@
+import { expect, test } from '@playwright/test'
+
+test('catalogue configures only the selected account and preserves conflicts', async ({ page }) => {
+  await page.goto('/tests/fixtures/app.html?welcome=1')
+  await expect(page.getByRole('heading', { name: 'Compose' })).toBeVisible()
+  await page.evaluate(() => {
+    const fixture = (window as any).fixture
+    fixture.accounts.push({ id: 'catalog-profile', agentId: 'codex', name: 'Catalogue test', configDir: '/accounts/catalog' })
+    fixture.mcpConfigurations['codex:catalog-profile'] = { github: 'conflict' }
+  })
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'MCP', exact: true }).click()
+  await page.getByRole('combobox', { name: 'MCP account' }).selectOption('codex:catalog-profile')
+  const github = page.locator('[data-mcp-entry="github"]')
+  await expect(github.getByRole('button', { name: 'Existing configuration' })).toBeDisabled()
+  await expect(github).toContainText('Swarmterm will preserve it')
+  const playwright = page.locator('[data-mcp-entry="playwright"]')
+  await playwright.getByRole('button', { name: 'Add configuration' }).click()
+  await expect(playwright.getByRole('button', { name: 'Configured' })).toBeDisabled()
+  expect(await page.evaluate(() => (window as any).fixture.mcpWrites)).toEqual([{ agentId: 'codex', accountId: 'catalog-profile', entryId: 'playwright', directories: [] }])
+  await expect(page.getByRole('status').filter({ hasText: 'Configuration added.' })).toContainText('Start a new pane')
+  await page.getByRole('combobox', { name: 'MCP account' }).selectOption('codex:')
+  await expect(playwright.getByRole('button', { name: 'Add configuration' })).toBeEnabled()
+  expect(await page.evaluate(() => (window as any).fixture.counters.created)).toBe(0)
+  expect(await page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('textbox').count()).toBe(1)
+  expect(await page.evaluate(() => Object.values(localStorage).some(value => typeof value === 'string' && value.includes('catalog-profile')))).toBe(false)
+})
+
+test('Filesystem surfaces missing directories and accepts multiline existing directories', async ({ page }) => {
+  await page.goto('/tests/fixtures/app.html?welcome=1')
+  await expect(page.getByRole('heading', { name: 'Compose' })).toBeVisible()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'MCP', exact: true }).click()
+  const card = page.locator('[data-mcp-entry="filesystem"]')
+  const add = card.getByRole('button', { name: 'Add configuration' })
+  await expect(add).toBeDisabled()
+  await page.getByRole('textbox', { name: 'Filesystem allowed directories' }).fill('/missing')
+  await add.click()
+  await expect(page.getByRole('alert')).toContainText('existing absolute directories')
+  expect(await page.evaluate(() => (window as any).fixture.mcpWrites)).toEqual([])
+  await page.getByRole('textbox', { name: 'Filesystem allowed directories' }).fill('/project\n/worktree')
+  await add.click()
+  await expect(card.getByRole('button', { name: 'Configured' })).toBeDisabled()
+  expect(await page.evaluate(() => (window as any).fixture.mcpWrites.at(-1))).toMatchObject({ agentId: 'claude-code', accountId: null, entryId: 'filesystem', directories: ['/project', '/worktree'] })
+  await expect(page.getByRole('alert')).toHaveCount(0)
+})

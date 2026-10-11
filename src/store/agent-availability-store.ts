@@ -11,20 +11,33 @@ import type { AgentAvailabilityMap } from '@/lib/templates'
  * picked up without a restart.
  */
 interface AgentAvailabilityState {
+  codexSessionHooks: boolean
   availability: AgentAvailabilityMap
   refresh: () => Promise<void>
 }
 
-export const useAgentAvailabilityStore = create<AgentAvailabilityState>((set) => ({
+let pendingRefresh: Promise<void> | null = null
+export const useAgentAvailabilityStore = create<AgentAvailabilityState>((set, get) => ({
+  codexSessionHooks: false,
   availability: {},
-  refresh: async () => {
-    try {
-      const entries = await listAvailableAgents()
-      const next: AgentAvailabilityMap = {}
-      for (const e of entries) next[e.id] = e.available
-      set({ availability: next })
-    } catch {
-      // Probe failure ⇒ keep the previous (optimistic) map rather than disabling anything.
-    }
+  refresh: () => {
+    if (pendingRefresh) return pendingRefresh
+    pendingRefresh = (async () => {
+      try {
+        const entries = await listAvailableAgents()
+        const next: AgentAvailabilityMap = {}
+        for (const e of entries) next[e.id] = e.available
+        const codexSessionHooks = entries.find(e => e.id === 'codex')?.sessionHooks === true
+        const previous = get()
+        const changed = Object.keys(next).length !== Object.keys(previous.availability).length ||
+          Object.keys(next).some(id => next[id] !== previous.availability[id])
+        if (changed || previous.codexSessionHooks !== codexSessionHooks) {
+          set({ availability: changed ? next : previous.availability, codexSessionHooks })
+        }
+      } catch {
+        // Probe failure ⇒ keep the previous (optimistic) map rather than disabling anything.
+      }
+    })().finally(() => { pendingRefresh = null })
+    return pendingRefresh
   }
 }))

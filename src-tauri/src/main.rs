@@ -2,6 +2,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == "--codex-session-hook")
+    {
+        swarmterm_lib::hook::run_agent_cli("codex");
+        return;
+    }
     // `swarmterm --statusline` is Claude Code's status line command: read its
     // JSON from stdin, print one line, exit. Handled here, before `run()`, so
     // the Tauri builder / single-instance plugin / tray / AppKit are never

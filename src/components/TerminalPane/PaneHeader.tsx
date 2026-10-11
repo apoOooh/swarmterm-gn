@@ -16,11 +16,15 @@ import { KNOWN_SHELLS, visibleShells, type ShellId } from '@/lib/terminal-pref'
 import { useShellAvailabilityStore } from '@/store/shell-availability-store'
 import { resolveHeaderLevel, shortenPath, type HeaderLevel } from '@/lib/header-layout'
 import { contextBand, contextUsageTitle, formatContextUsage, type ContextBand } from '@/lib/context-usage'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { accountLabel } from '@/lib/agent-accounts'
 import { cn } from '@/lib/utils'
 
 interface PaneHeaderProps {
   /** Resolved agent id (leaf override already applied). */
   agentId: string
+  accountId?: string
+  onAccountChange?: (accountId?: string) => void
   /** Resolved shell id (leaf override already applied). */
   shellId: ShellId
   /** Resolved cwd, shown in the folder tooltip + collapsed label. */
@@ -79,6 +83,7 @@ const CTX_BAND_CLASS: Record<ContextBand, string> = {
  */
 export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   const { agentId, shellId, resolvedCwd, hasCwdOverride, worktreeBranch, ctxPct } = props
+  const accounts = useAgentAccountsStore(s => s.accounts)
   const agent = templateById(agentId)
   const mode = launchMode(agentId, props.launchModeId)
   const agentLabel = agent.name
@@ -197,6 +202,10 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
       </div>
 
       {/* Title — the star. flex-1 soaks free space; truncates last. Draggable. */}
+      {(agentId === 'claude-code' || agentId === 'codex') && <DropdownMenu>
+        <DropdownMenuTrigger asChild><button className="max-w-24 truncate rounded border border-border px-1 text-[10px] text-muted-foreground" title={`Account: ${accountLabel(props.accountId, accounts)}`} aria-label={`Account: ${accountLabel(props.accountId, accounts)}`}>{accountLabel(props.accountId, accounts)}</button></DropdownMenuTrigger>
+        <DropdownMenuContent><DropdownMenuItem onSelect={() => props.onAccountChange?.(undefined)}>Default</DropdownMenuItem>{accounts.filter(account => account.agentId === agentId).map(account => <DropdownMenuItem key={account.id} onSelect={() => props.onAccountChange?.(account.id)}>{account.name}</DropdownMenuItem>)}</DropdownMenuContent>
+      </DropdownMenu>}
       <span className="min-w-0 flex-1 truncate px-1 text-xs text-foreground" title={titleTooltip}>
         {displayTitle}
       </span>

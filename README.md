@@ -76,7 +76,7 @@ For checks, run `npm test`, `npm run build`, and `npx playwright install chromiu
 
 Swarmterm opens on the composer: pick a folder, choose how many terminals, assign **Claude Code**, **Codex** or **OpenCode** to some of them, switch on **Isolate features in git worktrees**, and press `⌘/Ctrl + Enter`. Your panes open with the agents already starting up; the right panel gives you the web preview, the git view, and the War Room.
 
-Two things worth knowing up front: **nothing is saved between launches** (a clean slate every start is deliberate — Settings do persist), and **closing the window hides the app to the tray** with everything still running; tray → **Quit** is what actually exits.
+Workspace layouts save automatically and appear under **Saved workspaces** on Welcome. Claude Code and Codex hooks record each pane's conversation for reopening; review Codex's hooks through `/hooks`. Terminal output and unsaved editor buffers are not saved. **Closing the window hides the app to the tray** with everything still running; tray → **Quit** is what actually exits.
 
 From here, the **[user guide](docs/user-guide.md)** covers the rest.
 
@@ -86,7 +86,7 @@ From here, the **[user guide](docs/user-guide.md)** covers the rest.
 
 The Astera port adds seven dark themes, file management and editing to the upstream 1.0.4 baseline. Current limits:
 
-- you want workspaces to **survive a restart** — nothing persists between launches yet, by design;
+- you need terminal scrollback or unsaved editor buffers to survive a restart;
 - the embedded text editor supports **UTF-8 files up to 1 MiB**; binary and larger files are read only;
 - native file clipboard and media codecs need platform smoke tests; Linux/macOS CI checks compilation and Rust tests;
 - deletion history covers **explorer deletions**, not deletions made by shell commands.

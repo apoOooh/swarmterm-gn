@@ -7,6 +7,8 @@ export type PtyOut =
   | { type: 'exit'; payload: { exitCode: number } }
 
 export interface CreateTerminalOptions {
+  agentId?: string
+  accountId?: string
   cwd?: string
   shellId?: ShellId
   initialCommand?: string
