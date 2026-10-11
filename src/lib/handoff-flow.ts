@@ -1,0 +1,184 @@
+/**
+ * Account/agent handoff (SWA-22): pure state machine behind the Handoff
+ * dialog. A handoff opens a NEW pane (the old one stays untouched) and types
+ * the SWA-21 brief into it as the first prompt — but only after three gates:
+ *
+ * 1. the new pane's pty reported `running` (a failed spawn never gets text),
+ * 2. the pty generation captured at that moment is still the live one when
+ *    the user confirms (a respawn in between means a different process —
+ *    typing into it would hand the brief to something the user never saw),
+ * 3. the user pressed Send.
+ *
+ * Delivery itself is one shot. `failed` and `delivered` are terminal: there is
+ * no automatic retry, because the body write may already have reached the
+ * pty and a second attempt would paste the brief twice. The user can copy the
+ * brief by hand instead. The typing hold (war-room-nudge) only delays the
+ * single attempt; it never repeats it.
+ */
+import type { AgentAccount } from '@/tauri/accounts'
+import type { HoldReason } from '@/lib/war-room-nudge'
+import type { AgentEngineState } from '@/lib/agent-state/types'
+import { templateById } from '@/lib/templates'
+
+export type PtyKind = 'connecting' | 'running' | 'exited' | 'error'
+
+export interface LivePty {
+  kind: PtyKind
+  generation: number | undefined
+  /** Agent-state engine verdict for the pane. A running pty only proves the
+   *  SHELL started; the target CLI may be missing or may have died back to the
+   *  prompt. `unknown`/absent = no agent detected = plain shell. */
+  agent: AgentEngineState | undefined
+}
+
+/** Agent detected in the pane (any engine verdict other than "no agent"). */
+const agentAlive = (agent: AgentEngineState | undefined): boolean => agent !== undefined && agent !== 'unknown'
+
+export type HandoffPhase = 'choosing' | 'starting' | 'ready' | 'delivering' | 'delivered' | 'pasted' | 'failed' | 'cancelled'
+
+export interface HandoffState {
+  phase: HandoffPhase
+  terminalId?: string
+  /** Pty generation observed when the new pane first ran. */
+  generation?: number
+  held?: HoldReason
+  deliveredAt?: number
+  error?: string
+}
+
+export type HandoffEvent =
+  | { type: 'spawned'; terminalId: string }
+  | { type: 'status'; kind: PtyKind; generation: number | undefined; agent?: AgentEngineState; message?: string }
+  | { type: 'confirm'; live: LivePty }
+  | { type: 'held'; reason: HoldReason }
+  | { type: 'delivered'; at: number }
+  /** Body pasted but Enter withheld: something changed in the submit window. */
+  | { type: 'pasted'; reason: string }
+  | { type: 'failed'; error: string }
+  | { type: 'cancel' }
+
+export function initialHandoff(): HandoffState {
+  return { phase: 'choosing' }
+}
+
+const fail = (s: HandoffState, error: string): HandoffState => ({ ...s, phase: 'failed', held: undefined, error })
+
+/** Returns the SAME object when the event does not apply, so callers can detect no-ops. */
+export function reduceHandoff(s: HandoffState, e: HandoffEvent): HandoffState {
+  if (s.phase === 'delivered' || s.phase === 'pasted' || s.phase === 'failed' || s.phase === 'cancelled') return s
+  switch (e.type) {
+    case 'spawned':
+      return s.phase === 'choosing' ? { phase: 'starting', terminalId: e.terminalId } : s
+    case 'status':
+      if (s.phase === 'choosing') return s
+      if (e.kind === 'error') return fail(s, e.message ?? 'The new pane failed to start.')
+      if (e.kind === 'exited') return fail(s, 'The new pane exited before the brief was delivered.')
+      // Ready only once the agent sits idle at its own prompt: a shell whose
+      // CLI is missing or crashed is `running` too, and would execute the
+      // brief's lines as commands.
+      if (s.phase === 'starting') {
+        return e.kind === 'running' && e.agent === 'idle' ? { ...s, phase: 'ready', generation: e.generation } : s
+      }
+      if (e.generation !== s.generation) return fail(s, 'The new pane restarted; the brief was not sent.')
+      if (!agentAlive(e.agent)) return fail(s, 'The agent in the new pane is not running; a plain shell never receives the brief.')
+      return s
+    case 'confirm':
+      if (s.phase !== 'ready') return s
+      if (e.live.kind !== 'running') return fail(s, 'The new pane is no longer running.')
+      if (e.live.generation !== s.generation) return fail(s, 'The new pane restarted; the brief was not sent.')
+      if (!agentAlive(e.live.agent)) return fail(s, 'The agent in the new pane is not running; a plain shell never receives the brief.')
+      return { ...s, phase: 'delivering' }
+    case 'held':
+      return s.phase === 'delivering' ? { ...s, held: e.reason } : s
+    case 'delivered':
+      return s.phase === 'delivering' ? { ...s, phase: 'delivered', held: undefined, deliveredAt: e.at } : s
+    case 'pasted':
+      return s.phase === 'delivering' ? { ...s, phase: 'pasted', held: undefined, error: e.reason } : s
+    case 'failed':
+      return s.phase === 'choosing' ? s : fail(s, e.error)
+    case 'cancel':
+      return s.phase === 'delivering' ? s : { ...s, phase: 'cancelled' }
+  }
+}
+
+export interface HandoffTarget {
+  agentId: AgentAccount['agentId']
+  accountId?: string
+  label: string
+}
+
+/** Default configuration first, then saved profiles (SWA-9), per CLI. With
+ *  `available` (ids the backend probe found), CLIs not installed are hidden —
+ *  starting them would leave a plain shell. */
+export function handoffTargets(accounts: readonly AgentAccount[], available?: ReadonlySet<string>): HandoffTarget[] {
+  return (['claude-code', 'codex'] as const).filter((id) => !available || available.has(id)).flatMap((agentId) => {
+    const name = templateById(agentId).name
+    return [
+      { agentId, label: `${name} · Default` },
+      ...accounts.filter((a) => a.agentId === agentId).map((a) => ({ agentId, accountId: a.id, label: `${name} · ${a.name}` }))
+    ]
+  })
+}
+
+/** A usage reading taken from structured CLI output (JSON/status payload) — never scraped text. */
+export interface UsageSample {
+  usedPercent: number
+  source: string
+  at: number
+}
+
+export interface UsageView {
+  known: boolean
+  text: string
+  checkedAt: number
+}
+
+export function describeUsage(sample: UsageSample | undefined, now: number): UsageView {
+  if (!sample || !Number.isFinite(sample.usedPercent) || sample.usedPercent < 0 || sample.usedPercent > 100) {
+    return { known: false, text: 'Usage unknown', checkedAt: now }
+  }
+  return { known: true, text: `Usage ${Math.round(sample.usedPercent)}% (${sample.source})`, checkedAt: sample.at }
+}
+
+const LIMIT_PATTERN = /(usage limit|rate limit|limit reached|out of (?:credits|usage)|try again (?:at|in))/i
+
+/**
+ * Terminal text is unreliable (truncated, redrawn), so a limit message is
+ * shown as a hint only — it never counts as usage data and never decides
+ * anything.
+ */
+export function limitHint(terminalText: string): string | undefined {
+  return LIMIT_PATTERN.test(terminalText) ? 'Hint: the source pane output mentions a usage limit (not verified).' : undefined
+}
+
+export interface SubmitSnapshot {
+  running: boolean
+  generation: number | undefined
+  expectedGeneration: number | undefined
+  hold: HoldReason | null
+  agent: AgentEngineState | undefined
+}
+
+/**
+ * Re-check right before the delayed Enter. Anything that changed since the
+ * body was pasted — user typing, a permission prompt, a restart, the agent
+ * gone — means Enter would submit something else (or approve a prompt), so it
+ * is withheld. Returns the reason, or null when Enter is safe.
+ */
+export function submitBlocker(s: SubmitSnapshot): string | null {
+  if (!s.running || s.generation !== s.expectedGeneration) return 'the new pane stopped or restarted'
+  if (!agentAlive(s.agent)) return 'the agent in the new pane is no longer running'
+  if (s.hold === 'typing') return 'you typed in the new pane'
+  if (s.hold === 'agent-blocked') return 'the agent is showing a permission or question prompt'
+  if (s.hold === 'agent-working') return 'the agent started working'
+  return null
+}
+
+/** Focus trap: index to move focus to on Tab, or null to let the browser move it. */
+export function focusTrapTarget(count: number, current: number, shift: boolean): number | null {
+  if (count === 0) return null
+  if (current < 0) return shift ? count - 1 : 0
+  if (shift && current === 0) return count - 1
+  if (!shift && current === count - 1) return 0
+  return null
+}

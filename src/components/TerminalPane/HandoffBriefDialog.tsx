@@ -4,11 +4,15 @@ import { buildHandoffBrief, EMPTY_DRAFT, type HandoffDraft, type HandoffGit } fr
 import { readTerminalText } from '@/lib/terminal-registry'
 import { getChangedFiles, getCommitInfo } from '@/tauri/git'
 import { writeClipboard } from '@/tauri/clipboard'
+import { useHandoffStore } from '@/store/handoff-store'
+import { useModalFocus } from '@/components/ui/use-modal-focus'
 
 interface HandoffBriefDialogProps {
   open: boolean
   onClose: () => void
   terminalId: string
+  /** Source leaf for "Hand off…" (SWA-22): the new pane is split from it. */
+  leafId: string
   agentName: string
   accountLabel?: string
   cwd: string
@@ -26,9 +30,9 @@ const FIELDS: Array<{ key: keyof HandoffDraft; label: string; placeholder: strin
 ]
 
 /**
- * Editable preview of a pane's handoff brief (SWA-21). Deliberately has no
- * "send": the only way out is Copy, so nothing reaches another pane without the
- * user pasting it. Git state is read once on open; a failed lookup just drops
+ * Editable preview of a pane's handoff brief (SWA-21). It never sends by
+ * itself: Copy, or "Hand off…" which passes the text to the SWA-22 handoff
+ * dialog, where a new pane is started and the brief sent only on confirmation. Git state is read once on open; a failed lookup just drops
  * the git section (non-repo folders are normal). The excerpt is captured on
  * open too but stays out of the brief unless the checkbox is ticked. Once the
  * user edits the preview directly, field edits stop overwriting it until they
@@ -63,14 +67,9 @@ export function HandoffBriefDialog(props: HandoffBriefDialogProps): React.ReactE
     }
   }, [open, terminalId, cwd])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+  // Hand off… opens the next dialog; focus then belongs to it, not the pane.
+  const handingOff = useHandoffStore((st) => st.source !== undefined)
+  const root = useModalFocus(open, onClose, handingOff ? undefined : terminalId)
 
   const generated = useMemo(
     () =>
@@ -92,6 +91,7 @@ export function HandoffBriefDialog(props: HandoffBriefDialogProps): React.ReactE
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onMouseDown={onClose}>
       <div
+        ref={root}
         role="dialog"
         aria-modal="true"
         aria-label="Handoff brief"
@@ -128,6 +128,17 @@ export function HandoffBriefDialog(props: HandoffBriefDialogProps): React.ReactE
           {manual !== null && <span className="mr-auto text-xs text-muted-foreground">Preview edited by hand — field changes are not applied.</span>}
           {manual !== null && <Button variant="ghost" size="sm" onClick={() => setManual(null)}>Regenerate</Button>}
           <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
+          <Button
+            variant="outline"
+            size="sm"
+            title="Start another agent or account in a new pane and send this brief after you confirm"
+            onClick={() => {
+              useHandoffStore.getState().begin({ leafId: props.leafId, terminalId, cwd, brief: text })
+              onClose()
+            }}
+          >
+            Hand off…
+          </Button>
           <Button size="sm" onClick={copy}>{copied ? 'Copied' : 'Copy'}</Button>
         </div>
       </div>

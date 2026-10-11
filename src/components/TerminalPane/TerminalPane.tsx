@@ -432,6 +432,7 @@ export function TerminalPane({
         open={handoffOpen}
         onClose={() => setHandoffOpen(false)}
         terminalId={terminalId}
+        leafId={leaf.id}
         agentName={templateById(resolvedAgentId).name}
         accountLabel={leaf.accountId === undefined ? undefined : accountLabel(leaf.accountId, accounts)}
         cwd={resolvedCwd}

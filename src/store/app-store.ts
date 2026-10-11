@@ -167,6 +167,11 @@ export interface AppActions {
   /** `agentId` is the resolved split agent (lib/agent-pref resolveSplitAgent);
    *  absent or 'terminal' ⇒ a plain shell. */
   splitPane: (leafId: string, direction: Direction, agentId?: string) => void
+  /** Account/agent handoff (SWA-22): split `leafId` into a new pane running
+   *  `agentId` with `accountId` in `cwd`. The source pane is left untouched.
+   *  No initialPrompt: the brief is delivered later, after confirmation.
+   *  Returns the new terminalId, or undefined when the leaf is not found. */
+  handoffPane: (leafId: string, target: { agentId: string; accountId?: string; cwd: string }) => string | undefined
   /** Set (or clear with undefined) a workspace's default split agent. */
   setWorkspaceDefaultAgent: (workspaceId: string, agentId: string | undefined) => void
   closePane: (leafId: string) => void
@@ -453,6 +458,24 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         }
       })
     ),
+
+  handoffPane: (leafId, target) => {
+    let terminalId: string | undefined
+    set((s) =>
+      mapActive(s, (w) => {
+        if (!findLeaf(w.layout, leafId) || isDrawered(w, leafId)) return w
+        const newLeaf: LeafNode = { ...makeLeaf(), agentId: target.agentId, accountId: target.accountId, cwd: target.cwd }
+        terminalId = newLeaf.terminalId
+        return {
+          ...w,
+          layout: splitLeaf(w.layout, leafId, 'horizontal', newLeaf, uid()),
+          focusedLeafId: newLeaf.id,
+          zoomedLeafId: undefined
+        }
+      })
+    )
+    return terminalId
+  },
 
   setWorkspaceDefaultAgent: (workspaceId, agentId) =>
     set((s) => ({
