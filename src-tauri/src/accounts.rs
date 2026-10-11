@@ -261,7 +261,9 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
             }
         }
         "codex" => {
-            if let Some(url) = url {
+            // Dev builds leave the Codex URL to the installed app even in a
+            // shared configDir; their panes are pinned per process instead.
+            if let Some(url) = url.filter(|_| !cfg!(debug_assertions)) {
                 crate::mcp::config::write_codex_config_to_file(&dir.join("config.toml"), url)?;
             }
             // Same rule as the default profile: a dev build must not swap the

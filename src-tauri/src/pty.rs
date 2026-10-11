@@ -363,14 +363,9 @@ pub fn spawn_terminal(
     let account = match options.account_id.as_deref() {
         Some(id) => match crate::accounts::resolve(app, id, options.agent_id.as_deref()) {
             Ok(account) => {
-                // Dev builds leave the shared Codex URL to the installed app;
-                // their panes get it per process (`with_mcp_url`).
-                let shared_url = state
-                    .mcp_url
-                    .get()
-                    .map(|url| url.as_ref())
-                    .filter(|_| !cfg!(debug_assertions));
-                if let Err(e) = crate::accounts::enroll(&account, shared_url) {
+                if let Err(e) =
+                    crate::accounts::enroll(&account, state.mcp_url.get().map(|url| url.as_ref()))
+                {
                     return CreateTerminalResult::err(e);
                 }
                 Some(account)
