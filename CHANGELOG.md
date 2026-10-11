@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Account and agent handoff: from the Handoff brief, pick a Claude Code or
+  Codex account profile and start a new pane in the same folder; the brief
+  is sent as its first prompt only after the pane runs, its process is
+  unchanged and you confirm. One attempt, typing/agent hold respected, no
+  retry, old pane untouched, outcome listed in the notification bell. Usage
+  shows "unknown" with a timestamp unless a CLI reports structured data.
 - Handoff brief: a pane header button opens an editable brief with task,
   status, open items, tests, agent/account/folder/session and branch, HEAD
   and a diff reference. User-written fields are labelled as unverified, an

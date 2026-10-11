@@ -271,6 +271,27 @@ describe('moveWorkspace', () => {
   })
 })
 
+// --- handoffPane ----------------------------------------------------------
+
+describe('handoffPane', () => {
+  it('adds a new pane with the target agent, account and cwd and keeps the old one', () => {
+    const store = storeWithWorkspace({ cwd: 'C:/work', terminalCount: 1, agentIds: ['claude-code'] })
+    const original = collectLeaves(activeWorkspace(store).layout)[0]
+    const terminalId = store.getState().handoffPane(original.id, { agentId: 'codex', accountId: 'acc1', cwd: 'C:/work/sub' })
+    const leaves = collectLeaves(activeWorkspace(store).layout)
+    expect(leaves).toHaveLength(2)
+    expect(leaves[0]).toEqual(original)
+    expect(leaves[1]).toMatchObject({ terminalId, agentId: 'codex', accountId: 'acc1', cwd: 'C:/work/sub' })
+    expect(leaves[1].initialPrompt).toBeUndefined()
+    expect(activeWorkspace(store).focusedLeafId).toBe(leaves[1].id)
+  })
+
+  it('returns undefined for an unknown leaf', () => {
+    const store = storeWithWorkspace()
+    expect(store.getState().handoffPane('nope', { agentId: 'codex', cwd: 'C:/x' })).toBeUndefined()
+  })
+})
+
 // --- splitPane ------------------------------------------------------------
 
 describe('splitPane', () => {

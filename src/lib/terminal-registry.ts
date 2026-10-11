@@ -1361,6 +1361,15 @@ export function awaitTerminalRelocated(id: string, timeoutMs = 4000): Promise<vo
   })
 }
 
+/**
+ * Pty generation of a live terminal (undefined when unknown). Callers that
+ * type into a pane after an await capture it first and re-check before the
+ * write, so a respawn in between never receives text meant for its predecessor.
+ */
+export function getTerminalGeneration(id: string): number | undefined {
+  return entries.get(id)?.session.getGeneration()
+}
+
 export function getTerminalStatus(id: string): TerminalStatus {
   return entries.get(id)?.session.getStatus() ?? NO_STATUS
 }

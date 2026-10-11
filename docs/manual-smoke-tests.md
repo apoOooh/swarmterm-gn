@@ -486,6 +486,21 @@ machine that never built Swarmterm. Details in
 - Remove a profile, then restore its saved workspace. Verify a warning appears and its pane starts a fresh conversation using Default. Configuration files and already running panes must remain intact.
 - Change a pane's account. Verify the agent restarts and no old conversation is resumed under the new profile.
 
+## Account and agent handoff (SWA-22)
+
+- Open a Claude pane's Handoff brief, click **Hand off…**, pick a Codex
+  profile and **Start pane**. A new Codex pane opens in the same folder; the
+  old pane is unchanged. **Send brief** stays disabled until it runs.
+- Press **Send brief** while typing in the new pane: the dialog shows the
+  typing hold; after you stop and clear the line, the brief arrives once and
+  is submitted. The bell lists "Handoff brief delivered". Double-clicking
+  Send never pastes twice.
+- Start a handoff with an account whose CLI fails to start (or close the new
+  pane before sending): the dialog shows "Not sent", the bell lists the
+  failure, and nothing is retried.
+- Usage reads "Usage unknown" with a time; a limit message in the old pane
+  shows only as an unverified hint.
+
 ## MCP catalogue (SWA-11)
 
 - Open Settings > MCP. Select each Default account and a dedicated named Claude Code/Codex profile; verify configuration additions target only the selected account.
