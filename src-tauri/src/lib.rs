@@ -7,6 +7,7 @@ mod git;
 mod json_style;
 mod links;
 mod mcp;
+mod paste_image;
 mod preview;
 mod pty;
 mod sessions;
@@ -115,6 +116,7 @@ pub fn run() {
             devlog::dev_log,
             commands::files_open_context,
             commands::confirm_quit,
+            commands::save_clipboard_image,
             commands::files_request,
             commands::files_watch,
             commands::files_unwatch,

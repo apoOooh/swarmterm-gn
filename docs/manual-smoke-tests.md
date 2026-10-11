@@ -145,6 +145,9 @@ Do not mark them passed from the in-memory fixture alone.
       compositions.
 - [ ] **Copy/paste:** with a selection `Ctrl/⌘+C` copies; with no selection
       `Ctrl+C` still sends SIGINT; `Ctrl/⌘+V` pastes exactly once.
+- [ ] **Screenshot paste:** `Win+Shift+S`, then `Ctrl+V` in a Claude Code and a Codex
+      pane → a `%TEMP%\swarmterm-paste\paste-*.png` path is inserted once and the
+      agent attaches it as an image. Same in a plain shell → nothing happens.
 - [ ] **File drop:** drop a file on a pane → the path is inserted, quoted for
       that pane's shell.
 - [ ] **Shell switch:** pick another shell in the pane header → that pane

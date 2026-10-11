@@ -1,4 +1,4 @@
-mod clipboard;
+pub(crate) mod clipboard;
 mod git;
 mod history;
 mod marktext;

@@ -1,4 +1,5 @@
-use clipboard_rs::{Clipboard, ClipboardContext};
+use clipboard_rs::common::RustImage;
+use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 use std::sync::{Mutex, OnceLock};
 
 // Retain the context: X11 clipboard ownership must outlive an individual IPC call.
@@ -26,5 +27,20 @@ pub fn write(paths: Vec<String>) -> Result<(), String> {
     with(|c| {
         c.set_files(paths)
             .map_err(|e| format!("Could not copy files to the native clipboard: {e}"))
+    })
+}
+/// PNG bytes of the clipboard image, or `None` when it holds no image.
+pub fn image_png() -> Result<Option<Vec<u8>>, String> {
+    with(|c| {
+        if !c.has(ContentFormat::Image) {
+            return Ok(None);
+        }
+        let image = c
+            .get_image()
+            .map_err(|e| format!("Could not read the clipboard image: {e}"))?;
+        let png = image
+            .to_png()
+            .map_err(|e| format!("Could not encode the clipboard image: {e}"))?;
+        Ok(Some(png.get_bytes().to_vec()))
     })
 }

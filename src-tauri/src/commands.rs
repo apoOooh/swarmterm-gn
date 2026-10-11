@@ -548,3 +548,13 @@ pub fn war_room_moderator_send(
     }
     Ok(delivered)
 }
+
+/// Save a clipboard screenshot to a temp PNG and return its path (`None` when
+/// the clipboard holds no image). Off the main thread: encoding a 4K capture
+/// to PNG takes long enough to stall the UI.
+#[tauri::command]
+pub async fn save_clipboard_image() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(crate::paste_image::save_clipboard_image)
+        .await
+        .map_err(|e| e.to_string())?
+}

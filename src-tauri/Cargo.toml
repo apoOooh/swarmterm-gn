@@ -50,7 +50,7 @@ axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "sync", "time"] }
 toml_edit = "0.22"
 notify = "8.2"
-clipboard-rs = { version = "0.3.5", default-features = false }
+clipboard-rs = { version = "0.3.5", default-features = false, features = ["image"] }
 dunce = "1"
 sha2 = "0.10"
 tempfile = "3"
