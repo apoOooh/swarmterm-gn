@@ -195,7 +195,7 @@ pub fn install(home: &Path, command: &str) -> Result<(), String> {
     };
     let (path, contents) = if inline {
         let Some(next) = merge_toml(config.as_deref().unwrap(), command)? else {
-            return Ok(());
+            return remove_ours_from_json(&json_path);
         };
         (config_path.clone(), next)
     } else {
@@ -223,7 +223,7 @@ pub fn install(home: &Path, command: &str) -> Result<(), String> {
     })
 }
 
-fn has_ours(home: &Path) -> bool {
+pub fn has_ours(home: &Path) -> bool {
     ["config.toml", "hooks.json"].iter().any(|f| {
         fs::read_to_string(home.join(f)).is_ok_and(|s| {
             s.lines().any(|l| {
@@ -345,6 +345,22 @@ mod tests {
         assert!(fs::read_to_string(dir.path().join("config.toml"))
             .unwrap()
             .contains("--codex-session-hook"));
+    }
+    #[test]
+    fn current_toml_still_drops_a_stale_json_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.toml"),
+            "[hooks]
+",
+        )
+        .unwrap();
+        install(dir.path(), OURS).unwrap();
+        let stale = r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"& 'D:/dev/swarmterm.exe' --codex-session-hook","timeout":5}]}]}}"#;
+        fs::write(dir.path().join("hooks.json"), stale).unwrap();
+        install(dir.path(), OURS).unwrap();
+        let json = fs::read_to_string(dir.path().join("hooks.json")).unwrap();
+        assert!(!json.contains("codex-session-hook"));
     }
     #[test]
     fn json_is_additive_and_idempotent() {

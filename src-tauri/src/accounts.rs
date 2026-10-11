@@ -264,7 +264,11 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
             if let Some(url) = url {
                 crate::mcp::config::write_codex_config_to_file(&dir.join("config.toml"), url)?;
             }
-            if crate::hook::codex::supported() {
+            // Same rule as the default profile: a dev build must not swap the
+            // exe path under the installed app's hook and trigger re-trust.
+            if crate::hook::codex::supported()
+                && !(cfg!(debug_assertions) && crate::hook::codex::has_ours(dir))
+            {
                 crate::hook::codex::install(
                     dir,
                     &crate::hook::codex::format_command(&exe, cfg!(windows)),
