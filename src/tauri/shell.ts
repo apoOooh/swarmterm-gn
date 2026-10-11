@@ -11,3 +11,7 @@ export interface AvailableShell {
 
 export const listAvailableShells = (): Promise<AvailableShell[]> =>
   invoke('list_available_shells')
+
+/** Windows `CurrentBuildNumber`, or null off Windows / when unreadable. */
+export const getWindowsBuildNumber = (): Promise<number | null> =>
+  invoke('windows_build_number')

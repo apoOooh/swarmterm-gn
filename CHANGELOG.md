@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Resizing a pane quickly no longer scrambles Claude Code and Codex output.
+  xterm now knows it runs on ConPTY (with the Windows build number, like
+  VS Code), and the pty hears only the final size once a resize settles,
+  so the agent redraws once instead of for every intermediate step.
 - Float a pane above the layout, move and resize it freely, and dock it
   onto any pane by dragging its header.
 - Resize panes from the corner: drag the handle where a horizontal and a

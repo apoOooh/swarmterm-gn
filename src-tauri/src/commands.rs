@@ -226,6 +226,11 @@ pub fn list_available_shells() -> Vec<crate::shell::ShellEntry> {
 }
 
 #[tauri::command]
+pub fn windows_build_number() -> Option<u32> {
+    crate::shell::windows_build_number()
+}
+
+#[tauri::command]
 pub fn list_available_agents() -> Vec<crate::agents::AgentEntry> {
     crate::agents::list_agents()
 }
