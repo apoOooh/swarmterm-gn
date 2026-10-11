@@ -354,7 +354,7 @@ impl SwarmtermMcpServer {
                 .emit("warroom:event", &crate::warroom::scoped(&room_id, ev));
         }
         let note = if messages.is_empty() {
-            "No unread messages. If a sender reported delivery, an earlier read may have              consumed it — call again with includeRead true."
+            "No unread messages. If a sender reported delivery, an earlier read may have consumed it — call again with includeRead true."
                 .into()
         } else {
             "Reply with war_room.send — keep the conversation in the tools, not the terminal."
