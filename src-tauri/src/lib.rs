@@ -140,6 +140,7 @@ pub fn run() {
             commands::war_room_moderator_send,
             commands::report_agent_state,
             commands::list_available_shells,
+            commands::windows_build_number,
             commands::list_available_agents,
             commands::list_agent_accounts,
             commands::save_agent_account,

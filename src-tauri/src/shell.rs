@@ -508,3 +508,58 @@ mod tests {
         assert_eq!(parse_wsl_distros("Alpine\nKali\n"), vec!["Alpine", "Kali"]);
     }
 }
+
+/// Windows build number (`CurrentBuildNumber`), handed to xterm.js as
+/// `windowsPty.buildNumber`. Read from the registry rather than
+/// `GetVersionEx`, which lies to unmanifested callers.
+#[cfg(windows)]
+pub fn windows_build_number() -> Option<u32> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+
+    let subkey: Vec<u16> = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0"
+        .encode_utf16()
+        .collect();
+    let value: Vec<u16> = "CurrentBuildNumber\0".encode_utf16().collect();
+    let mut buf = [0u16; 32];
+    let mut len = (buf.len() * 2) as u32;
+    let rc = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            subkey.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+        )
+    };
+    if rc != ERROR_SUCCESS {
+        return None;
+    }
+    let end = buf.iter().position(|&w| w == 0).unwrap_or(buf.len());
+    parse_build_number(&String::from_utf16_lossy(&buf[..end]))
+}
+
+#[cfg(not(windows))]
+pub fn windows_build_number() -> Option<u32> {
+    None
+}
+
+fn parse_build_number(raw: &str) -> Option<u32> {
+    raw.trim().parse().ok().filter(|&n| n > 0)
+}
+
+#[cfg(test)]
+mod build_number_tests {
+    use super::parse_build_number;
+
+    #[test]
+    fn parses_registry_string() {
+        assert_eq!(parse_build_number("26200"), Some(26200));
+        assert_eq!(parse_build_number(" 19045 "), Some(19045));
+        assert_eq!(parse_build_number(""), None);
+        assert_eq!(parse_build_number("abc"), None);
+        assert_eq!(parse_build_number("0"), None);
+    }
+}
