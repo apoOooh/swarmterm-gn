@@ -157,7 +157,7 @@ Claude Code and Codex panes run in a **launch mode** that sets how much the agen
 
 ### Claude Code
 
-A Claude Code pane starts in **Default** (`--permission-mode default`, Claude asks before edits and commands). The menu also offers **Accept edits** (`--permission-mode acceptEdits`), **Plan** (`--permission-mode plan`) and **Bypass permissions** (`--dangerously-skip-permissions`). Earlier versions always started Claude with bypass; choose **Bypass permissions** as the default launch mode to keep that behaviour.
+A Claude Code pane starts in **Default** (`--permission-mode default`, Claude asks before edits and commands). The menu also offers **Accept edits** (`--permission-mode acceptEdits`), **Plan** (`--permission-mode plan`), **Auto** (`--permission-mode auto`, a classifier approves safe actions and blocks risky ones) and **Bypass permissions** (`--dangerously-skip-permissions`). Earlier versions always started Claude with bypass; choose **Bypass permissions** as the default launch mode to keep that behaviour.
 
 ### Codex
 

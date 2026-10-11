@@ -65,6 +65,7 @@ describe('claude launch modes', () => {
   it('maps each mode onto its CLI flag', () => {
     expect(withLaunchMode('claude', 'claude-code', 'acceptEdits')).toBe('claude --permission-mode acceptEdits')
     expect(withLaunchMode('claude', 'claude-code', 'plan')).toBe('claude --permission-mode plan')
+    expect(withLaunchMode('claude', 'claude-code', 'auto')).toBe('claude --permission-mode auto')
     expect(withLaunchMode('claude', 'claude-code', 'bypass')).toBe('claude --dangerously-skip-permissions')
   })
   it('resume and continue carry the mode', () => {

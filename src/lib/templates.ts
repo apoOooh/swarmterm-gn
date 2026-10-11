@@ -97,6 +97,7 @@ export const TEMPLATES: WorkspaceTemplate[] = [
       { id: 'default', label: 'Default', args: '--permission-mode default' },
       { id: 'acceptEdits', label: 'Accept edits', args: '--permission-mode acceptEdits' },
       { id: 'plan', label: 'Plan', args: '--permission-mode plan' },
+      { id: 'auto', label: 'Auto', args: '--permission-mode auto' },
       { id: 'bypass', label: 'Bypass permissions', args: '--dangerously-skip-permissions' }
     ],
     // --continue is scoped to the pane's cwd by claude itself; bare --resume
