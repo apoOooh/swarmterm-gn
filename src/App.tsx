@@ -45,10 +45,12 @@ import {
   focusTerminal,
   getTerminalAgentId,
   getTerminalCwd,
+  getTerminalGeneration,
   isAnyTerminalFocused,
   noteAgentHook,
   refitAttachedTerminals
 } from '@/lib/terminal-registry'
+import { useHandoffStore } from '@/store/handoff-store'
 import {
   describeFocusedElement,
   shouldReturnFocus,
@@ -150,7 +152,12 @@ export default function App(): ReactElement {
   const macroRunning = useRef(false)
   useEffect(() => wireSavedWorkspaces(), [])
   useEffect(() => {
-    const listener = onAgentSession(e => useAppStore.getState().recordPaneSession(e.terminalId, e.agentId, e.sessionId))
+    const listener = onAgentSession(e => {
+      useAppStore.getState().recordPaneSession(e.terminalId, e.agentId, e.sessionId)
+      // The handoff's readiness proof: the target CLI itself reported in for
+      // this pane (Rust matched spawn + agent); tagged with the live generation.
+      useHandoffStore.getState().dispatch({ type: 'session', terminalId: e.terminalId, agentId: e.agentId, generation: getTerminalGeneration(e.terminalId) })
+    })
     return () => { void listener.then(off => off()) }
   }, [])
   useEffect(() => {

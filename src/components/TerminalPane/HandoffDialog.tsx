@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { describeUsage, handoffTargets, limitHint, type HandoffPhase } from '@/lib/handoff-flow'
+import { describeUsage, handoffTargets, limitHint, startingHint, type HandoffPhase } from '@/lib/handoff-flow'
 import { deliverHandoffBrief } from '@/lib/handoff-delivery'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { getTerminalGeneration, getTerminalStatus, readTerminalText } from '@/lib/terminal-registry'
@@ -25,11 +25,14 @@ const STATUS_POLL_MS = 250
  * role="dialog" is what overlay-watch and terminal-focus key on.
  */
 export function HandoffDialog(): React.ReactElement | null {
-  const { source, target, state, setTarget, dispatch, close } = useHandoffStore()
+  const { source, target, state, minimized, setTarget, dispatch, close, minimize, restore } = useHandoffStore()
   const accounts = useAgentAccountsStore((s) => s.accounts)
   const [openedAt, setOpenedAt] = useState(0)
   const [hint, setHint] = useState<string | undefined>()
   const started = useRef(false)
+  // When the new pane was started, and a clock for the "not ready" hint.
+  const [startedAt, setStartedAt] = useState<number | undefined>()
+  const [now, setNow] = useState(0)
   // Ids of installed CLIs; undefined until the probe answers (nothing selectable yet).
   const [available, setAvailable] = useState<ReadonlySet<string> | undefined>()
 
@@ -40,6 +43,7 @@ export function HandoffDialog(): React.ReactElement | null {
     setOpenedAt(Date.now())
     setHint(limitHint(readTerminalText(source.terminalId, 40)))
     setAvailable(undefined)
+    setStartedAt(undefined)
     let alive = true
     listAvailableAgents()
       .then((list) => alive && setAvailable(new Set(list.filter((a) => a.available).map((a) => a.id))))
@@ -68,6 +72,12 @@ export function HandoffDialog(): React.ReactElement | null {
     const h = window.setInterval(poll, STATUS_POLL_MS)
     return () => window.clearInterval(h)
   }, [terminalId, waiting, dispatch])
+  useEffect(() => {
+    if (phase !== 'starting') return
+    setNow(Date.now())
+    const h = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(h)
+  }, [phase])
 
   const dismiss = (): void => {
     // A confirmed (possibly held) delivery keeps running after close — it is
@@ -77,7 +87,9 @@ export function HandoffDialog(): React.ReactElement | null {
   }
 
   // Focus goes back to the new pane once one exists, else to the source pane.
-  const root = useModalFocus(source !== undefined, dismiss, terminalId ?? source?.terminalId)
+  // Minimized = non-modal: no focus trap, and the cleanup hands focus to the
+  // new pane so a trust/login prompt there can be answered.
+  const root = useModalFocus(source !== undefined && !minimized, dismiss, terminalId ?? source?.terminalId)
 
   if (!source) return null
   const targets = available ? handoffTargets(accounts, available) : []
@@ -92,7 +104,10 @@ export function HandoffDialog(): React.ReactElement | null {
       .getState()
       .handoffPane(source.leafId, { agentId: selected.agentId, accountId: selected.accountId, cwd: source.cwd })
     if (id === undefined) dispatch({ type: 'failed', error: 'The source pane is gone.' })
-    else dispatch({ type: 'spawned', terminalId: id })
+    else {
+      setStartedAt(Date.now())
+      dispatch({ type: 'spawned', terminalId: id, agentId: selected.agentId })
+    }
   }
 
   const send = (): void => {
@@ -143,7 +158,7 @@ export function HandoffDialog(): React.ReactElement | null {
 
   const statusText: Record<HandoffPhase, string> = {
     choosing: 'Choose who takes over. A new pane starts in the same folder; this pane keeps running.',
-    starting: 'Starting the new pane… waiting for the agent to reach its prompt.',
+    starting: 'Starting the new pane… waiting for the agent to report its session.',
     ready: 'The agent in the new pane is ready. Send the brief as its first prompt?',
     delivering: state.held ? `Waiting to send (${HOLD_REASON_COPY[state.held]})…` : 'Sending once the pane is quiet…',
     delivered: 'Brief delivered.',
@@ -153,6 +168,23 @@ export function HandoffDialog(): React.ReactElement | null {
   }
   const finished = phase === 'delivered' || phase === 'pasted' || phase === 'failed' || phase === 'delivering'
   const key = (t: { agentId: string; accountId?: string }): string => `${t.agentId}:${t.accountId ?? ''}`
+  const notReady = startingHint(phase, startedAt, now)
+
+  if (minimized) {
+    // Non-modal chip: no role="dialog", so overlay-watch and terminal-focus
+    // treat the app as unobstructed while the user works in the new pane.
+    return (
+      <div className="theme-elevated fixed bottom-4 right-4 z-40 flex max-w-[360px] items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-foreground shadow-lg">
+        <div role="status" className="min-w-0 flex-1">
+          <div>Handoff: {phase === 'ready' ? 'agent ready, brief not sent yet' : statusText[phase]}</div>
+          {notReady && <div className="mt-1 text-[#E5C07B]">{notReady}</div>}
+        </div>
+        <Button size="sm" variant="outline" onClick={restore}>
+          Open
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onMouseDown={dismiss}>
@@ -194,11 +226,17 @@ export function HandoffDialog(): React.ReactElement | null {
         <div className="break-all text-xs text-muted-foreground">Folder: {source.cwd}</div>
         <div role="status" className="text-xs">
           {statusText[phase]}
+          {notReady && <div className="mt-1 text-[#E5C07B]">{notReady}</div>}
         </div>
         <div className="flex justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={dismiss}>
             {finished ? 'Close' : 'Cancel'}
           </Button>
+          {terminalId && (phase === 'starting' || phase === 'ready' || phase === 'delivering') && (
+            <Button variant="outline" size="sm" onClick={minimize}>
+              Go to pane
+            </Button>
+          )}
           {phase === 'choosing' && (
             <Button size="sm" disabled={!selected} onClick={startPane}>
               Start pane

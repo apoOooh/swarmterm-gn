@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { ArrowUp, Folder, FolderOpen, Search, Star } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { filterFolders, quickAccess, samePath, selectableFolder, splitTypedPath } from '@/lib/folder-picker'
+import { filterFolders, pickerOwnsEnter, quickAccess, samePath, selectableFolder, splitTypedPath, typedNavigation } from '@/lib/folder-picker'
 import { folderName } from '@/lib/recent-folders'
 import { useFolderPickerStore } from '@/store/folder-picker-store'
 import { useRecentsStore } from '@/store/recents-store'
@@ -100,12 +100,26 @@ export function FolderPicker(): ReactElement | null {
   const onInput = (value: string): void => {
     setInput(value)
     setActive(0)
+    const wasTyping = typeTimer.current !== null
     cancelTyping()
-    const next = splitTypedPath(value)
-    if (next.dir === null || samePath(next.dir, current)) return
+    const dir = typedNavigation(value, current)
+    if (dir === null) {
+      // The typed path was edited back to a filter: the scheduled listing is
+      // void, so the folder on screen is the selectable one again.
+      if (wasTyping) {
+        seq.current++
+        setPending(false)
+      }
+      return
+    }
+    // Pending NOW, not after the debounce: an immediate Select/Ctrl+Enter
+    // would otherwise return the folder still on screen. The seq bump also
+    // voids any listing still in flight for an older path.
+    seq.current++
+    setPending(true)
+    setError(null)
     // Debounced: every keystroke of a typed path would otherwise queue a
     // directory listing (slow on network drives) in the Rust backend.
-    const dir = next.dir
     typeTimer.current = setTimeout(() => {
       typeTimer.current = null
       navigate(dir)
@@ -139,6 +153,9 @@ export function FolderPicker(): ReactElement | null {
       e.preventDefault()
       setActive((i) => Math.max(i - 1, 0))
     } else if (e.key === 'Enter') {
+      // Enter on a button is that button's activation, not "select folder".
+      const el = e.target as HTMLElement
+      if (!pickerOwnsEnter({ tagName: el.tagName, inListbox: el.closest('[role="listbox"]') !== null })) return
       e.preventDefault()
       // Ctrl+Enter selects the folder being shown; Enter steps into the
       // highlighted subfolder (or selects when nothing matches).
