@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Keep terminal creation and account configuration off the UI thread, combine
+  concurrent profile/agent refreshes, and delay project scans until folder
+  typing settles. Workspace macros share a single fresh metadata probe.
+
 - Manage separate Claude Code and Codex account profiles, select or rotate
   accounts when composing panes, and restore conversations with their owning
   profile. Credentials stay in the agent CLI's configuration.

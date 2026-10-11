@@ -14,7 +14,7 @@ add('/project/photo.png', 'image fixture')
 for (let i = 0; i < 2000; i++) add(`/project/many/file-${i}.ts`, `export const n = ${i}\n`)
 const contexts = new Map<string, string>()
 const terminals = new Map<string, { cwd: string; channel: unknown }>()
-const counters = { created: 0, killed: 0, spawns: [] as Record<string, any>[], writes: [] as string[], unknown: [] as string[], watched: 0, mediaStats: 0, openedMedia: [] as string[], marktext: [] as string[] }
+const counters = { created: 0, killed: 0, spawns: [] as Record<string, any>[], writes: [] as string[], unknown: [] as string[], watched: 0, mediaStats: 0, openedMedia: [] as string[], marktext: [] as string[], sessionFolders: [] as string[], gitFolders: [] as string[], accountReads: 0, agentReads: 0 }
 const missingSessions = new Set<string>()
 const unavailableAgents = new Set<string>()
 const unavailableAccountDirs = new Set<string>()
@@ -31,7 +31,7 @@ mockIPC(async (command, raw) => {
   if (command === 'plugin:path|resolve_directory') return '/project'
   if (command === 'create_terminal') { counters.created++; counters.spawns.push({ ...args.options, terminalId: args.id }); terminals.set(args.id, { cwd: args.options.cwd, channel: args.onData }); return { ok: true, pid: counters.created, shell: '/bin/bash' } }
   if (command === 'inspect_saved_workspace') return { rootAvailable: !!files[args.cwd]?.dir, panes: args.panes.map((p: any) => ({ directoryAvailable: !!files[p.cwd]?.dir, sessionAvailable: !missingSessions.has(p.sessionId), accountAvailable: !p.accountId || !unavailableAccountDirs.has(p.accountId) && accounts.some(account => account.id === p.accountId && account.agentId === p.agentId) })) }
-  if (command === 'list_agent_accounts') return accounts.map(account => ({ ...account }))
+  if (command === 'list_agent_accounts') { counters.accountReads++; return accounts.map(account => ({ ...account })) }
   if (command === 'save_agent_account') { const input = args.account; const account = { ...input, id: input.id ?? crypto.randomUUID(), configDir: input.configDir ?? '/accounts/' + input.name }; const index = accounts.findIndex(a => a.id === account.id); if (index < 0) accounts.push(account); else accounts[index] = account; return account }
   if (command === 'delete_agent_account') { const index = accounts.findIndex(account => account.id === args.id); if (index >= 0) accounts.splice(index, 1); return }
   if (command === 'inspect_account_mcp') { const configured = mcpConfigurations[`${args.agentId}:${args.accountId ?? ''}`] ?? {}; return { version: 1, entries: ['playwright', 'github', 'context7', 'filesystem', 'memory', 'sequential-thinking', 'fetch'].map(id => ({ id, status: configured[id] ?? 'available' })) } }
@@ -41,7 +41,7 @@ mockIPC(async (command, raw) => {
     if (args.entryId === 'filesystem' && (!args.directories.length || args.directories.some((path: string) => !files[path]?.dir))) throw new Error('Filesystem requires existing absolute directories')
     mcpWrites.push({ ...args }); configured[args.entryId] = 'configured'; return
   }
-  if (command === 'list_agent_sessions') return []
+  if (command === 'list_agent_sessions') { counters.sessionFolders.push(args.folder); return [] }
   if (command === 'kill_terminal') { counters.killed++; terminals.delete(args.id); return }
   if (command === 'plugin:dialog|message') return
   if (command === 'write_terminal') { counters.writes.push(args.data); return }
@@ -80,8 +80,8 @@ mockIPC(async (command, raw) => {
   if (command === 'plugin:notification|is_permission_granted') return true
   if (command.includes('is_maximized') || command.includes('is_fullscreen')) return false
   if (command === 'list_available_shells') return [{ id: 'default', name: 'System default', available: true }]
-  if (command === 'list_available_agents') return ['claude-code', 'codex'].map(id => ({ id, available: !unavailableAgents.has(id), sessionHooks: true }))
-  if (command === 'git_list_worktrees') return []
+  if (command === 'list_available_agents') { counters.agentReads++; return ['claude-code', 'codex'].map(id => ({ id, available: !unavailableAgents.has(id), sessionHooks: true })) }
+  if (command === 'git_list_worktrees') { counters.gitFolders.push(args.cwd); return [] }
   if (command === 'war_room_rooms') return [{ roomId: 'lobby', name: 'Lobby', members: [] }]
   if (command === 'set_claude_statusline') return { installed: false }
   if (command.startsWith('plugin:window|') || command.startsWith('plugin:webview|') || command.startsWith('plugin:app|') || command.startsWith('plugin:store|') || command.startsWith('plugin:opener|')) return

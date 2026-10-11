@@ -372,10 +372,15 @@ export default function App(): ReactElement {
         if (!macro) return
         macroRunning.current = true
         setSettingsOpen(false)
+        let probes: Promise<void> | undefined
         void runWorkspaceMacro(macro, {
           prepare: async step => {
-            await useAgentAvailabilityStore.getState().refresh()
-            await useAgentAccountsStore.getState().refresh()
+            // All recipes share one fresh metadata probe; each proposed pane
+            // still gets its own folder/profile inspection before any action.
+            await (probes ??= Promise.all([
+              useAgentAvailabilityStore.getState().refresh(),
+              useAgentAccountsStore.getState().refresh()
+            ]).then(() => {}))
             const accounts = useAgentAccountsStore.getState()
             if (accounts.error) throw new Error(accounts.error)
             const st = useAppStore.getState()

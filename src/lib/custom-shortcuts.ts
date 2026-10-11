@@ -32,6 +32,9 @@ export function reservedBinding(binding: string, isMac: boolean): boolean {
 }
 export interface ShortcutTarget { id: string; defaultBinding?: string }
 export function resolveShortcut(e: ShortcutKeyEvent, isMac: boolean, overrides: ShortcutOverrides, extra: ShortcutTarget[] = []): string | null {
+  // Every valid binding has a command modifier. Ordinary terminal text should
+  // bypass the action list without allocating or parsing binding strings.
+  if (!e.ctrlKey && !e.metaKey && !e.altKey) return null
   return [...APP_ACTIONS, ...extra].find(a => bindingMatches(overrides[a.id] ?? a.defaultBinding ?? '', e, isMac))?.id ?? null
 }
 export function bindingConflict(id: string, binding: string, overrides: ShortcutOverrides, extra: ShortcutTarget[] = [], isMac = false): string | null {

@@ -131,7 +131,8 @@ export function Welcome(): ReactElement {
       return
     }
     let cancelled = false
-    void listWorktrees(trimmedFolder)
+    setIsGitRepo(false)
+    const timer = window.setTimeout(() => { void listWorktrees(trimmedFolder)
       .then((trees) => {
         if (cancelled) return
         // A repo with an unborn HEAD (fresh `git init`, zero commits) lists
@@ -146,9 +147,10 @@ export function Welcome(): ReactElement {
         if (!cancelled) {
           setIsGitRepo(false)
         }
-      })
+      }) }, 250)
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [trimmedFolder])
 
@@ -163,15 +165,18 @@ export function Welcome(): ReactElement {
     setSessionsDialogOpen(false)
     if (trimmedFolder === '') return
     let cancelled = false
-    void listAgentSessions(trimmedFolder)
+    // A full CLI history scan is expensive, especially across account profiles.
+    // Wait until folder editing settles; obsolete timers never start native work.
+    const timer = window.setTimeout(() => { void listAgentSessions(trimmedFolder)
       .then((entries) => {
         if (!cancelled) setSessions(mergeSessions(entries, availability))
       })
       .catch(() => {
         if (!cancelled) setSessions([])
-      })
+      }) }, 250)
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [trimmedFolder, availability, accounts])
 
