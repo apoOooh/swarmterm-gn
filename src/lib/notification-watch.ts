@@ -2,6 +2,8 @@ import {
   coalesceNotifications,
   diffAgentStates,
   diffCommands,
+  isStillCurrent,
+  notificationCopy,
   resolveFire,
   type FiredNotification,
   type NotificationKind,
@@ -39,6 +41,8 @@ export interface NotificationWatchDeps {
   getPaneTitle: (terminalId: string) => string
   playChime: (kind: NotificationKind) => void
   sendSystemNotification: (opts: { title: string; body: string }) => void
+  /** Notification-center feed: every still-current fact on an unwatched pane, regardless of prefs. */
+  record?: (entry: { kind: NotificationKind; terminalId: string; title: string; detail: string; at: number }) => void
   setTimer: (fn: () => void, ms: number) => unknown
   clearTimer: (handle: unknown) => void
   now: () => number
@@ -90,13 +94,24 @@ export function startNotificationWatch(deps: NotificationWatchDeps): () => void 
     const windowFocused = deps.isWindowFocused()
     const prefs = deps.getPrefs()
     const survivors = batch.flatMap((pending) => {
-      const verdict = resolveFire(pending, {
+      const ctx = {
         current: states[pending.terminalId],
         command: commands[pending.terminalId],
         paneWatched: deps.isPaneWatched(pending.terminalId),
         windowFocused,
         prefs
-      })
+      }
+      if (deps.record !== undefined && !ctx.paneWatched && isStillCurrent(pending, ctx)) {
+        const paneTitle = deps.getPaneTitle(pending.terminalId)
+        const { title } = notificationCopy(
+          pending.kind,
+          templateById(pending.agentId).name,
+          paneTitle,
+          pending.kind === 'command' ? ctx.command?.last : undefined
+        )
+        deps.record({ kind: pending.kind, terminalId: pending.terminalId, title, detail: paneTitle, at: now })
+      }
+      const verdict = resolveFire(pending, ctx)
       return verdict.sound || verdict.system ? [{ pending, verdict }] : []
     })
     const group = coalesceNotifications(

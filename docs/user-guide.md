@@ -151,6 +151,12 @@ A system notification (banner) only appears while the Swarmterm window is **unfo
 
 Turn channels on or off in **Settings → Notifications**: **Sound** and **System notifications** apply everywhere, and a **per-agent** toggle below silences one CLI without touching the others — every agent with a state dot gets a row, and all default to on. A plain Terminal pane has no agent state, but once its shell has **shell integration** set up (see below) it chimes the same way when a command that ran for more than 10 seconds finishes while you were elsewhere — the banner reads "Command finished (42s)" or "Command failed (exit 1 · 42s)" — and the **Terminal** row in the per-agent list turns that off.
 
+### Notification center
+
+The **bell** in the title bar keeps a list of what happened while you looked elsewhere, across every workspace: a pane that needs your input, an agent that finished, a long command that finished, a pane whose process exited (with its exit code), and a War Room message held for a pane. The red counter shows unread entries. Click an entry to jump to its pane — Swarmterm switches workspace or brings the pane back from the drawer — and the entry is marked read. Looking at a pane marks its entries read as well; a held War Room message resolves itself once it is delivered. Repeated events of the same pane collapse into one entry. **Mark all read** and **Clear** sit at the top of the list.
+
+The list records independently of the sound and banner settings above, so muting chimes keeps the history. It lasts for the app session and is not saved on quit. Entries of a closed pane stay visible but can no longer be opened.
+
 ## Launch modes
 
 Claude Code and Codex panes run in a **launch mode** that sets how much the agent may do without asking. The current mode is shown next to the agent icon, and the agent menu in the pane header switches it: the pane restarts the CLI with the new flags and continues the conversation (the pane's own session id or the folder's latest session). **Resume previous chat…** in the same menu restarts the pane into the CLI's own session picker (current mode kept), so an older conversation can be taken over.

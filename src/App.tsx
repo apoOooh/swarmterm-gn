@@ -89,6 +89,8 @@ import { useShellAvailabilityStore } from '@/store/shell-availability-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useNotificationPrefStore } from '@/store/notification-pref-store'
 import { startNotificationWatch } from '@/lib/notification-watch'
+import { useNotificationCenterStore } from '@/store/notification-center-store'
+import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { startAgentStateMirror } from '@/lib/agent-state-mirror'
 import { startGitRefreshWatch } from '@/lib/git-refresh'
 import { reportAgentState, onAgentHook, onAgentContext } from '@/tauri/agent-state'
@@ -837,10 +839,52 @@ export default function App(): ReactElement {
       getPaneTitle: (id) => useTerminalTitleStore.getState().titles[id] ?? '',
       playChime,
       sendSystemNotification: (opts) => void sendSystemNotification(opts),
+      record: (entry) => useNotificationCenterStore.getState().add(entry),
       now: Date.now,
       setTimer: (fn, ms) => window.setTimeout(fn, ms),
       clearTimer: (h) => window.clearTimeout(h as number)
     })
+  }, [])
+
+  // Notification center, the two feeds that are not agent/command transitions:
+  // a War Room delivery being held (released ⇒ the entry resolves itself), and
+  // the user looking at a pane (focused pane + focused window ⇒ its entries
+  // are read). Outside the render path like the watch above.
+  useEffect(() => {
+    const center = (): ReturnType<typeof useNotificationCenterStore.getState> =>
+      useNotificationCenterStore.getState()
+    const unsubHeld = useWarRoomStore.subscribe((cur, prev) => {
+      if (cur.held === prev.held) return
+      for (const [id, reason] of Object.entries(cur.held)) {
+        if (prev.held[id] !== undefined) continue
+        // The pane in front of the user already shows its in-pane hold pill.
+        if (document.hasFocus() && selectFocusedTerminalId(useAppStore.getState()) === id) continue
+        center().add({
+          kind: 'hold',
+          terminalId: id,
+          title: `War Room message held (${HOLD_REASON_COPY[reason]})`,
+          detail: useTerminalTitleStore.getState().titles[id] ?? '',
+          at: Date.now()
+        })
+      }
+      for (const id of Object.keys(prev.held)) {
+        if (!(id in cur.held)) center().markTerminalRead(id, ['hold'])
+      }
+    })
+    const markWatched = (): void => {
+      if (!document.hasFocus()) return
+      const id = selectFocusedTerminalId(useAppStore.getState())
+      if (id !== undefined) center().markTerminalRead(id, ['attention', 'completion', 'command', 'exit'])
+    }
+    const unsubFocus = useAppStore.subscribe((cur, prev) => {
+      if (selectFocusedTerminalId(cur) !== selectFocusedTerminalId(prev)) markWatched()
+    })
+    window.addEventListener('focus', markWatched)
+    return () => {
+      unsubHeld()
+      unsubFocus()
+      window.removeEventListener('focus', markWatched)
+    }
   }, [])
 
   // Git panel self-refresh: an agent pane leaving `working` (or exiting) inside
