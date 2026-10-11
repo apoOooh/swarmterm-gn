@@ -224,6 +224,9 @@ pub fn write_qwen_settings_to_file(path: &Path) -> Result<(), String> {
 /// writes identical bytes. Log-only: a failure here must never block boot, and
 /// leaves Swarmterm fully usable minus the agent-facing MCP tools.
 pub fn register_user_scope(app: &AppHandle) {
+    if !crate::mcp::toggle::is_enabled("claude-code", None) {
+        return;
+    }
     let home = match app.path().home_dir() {
         Ok(h) => h,
         Err(e) => {

@@ -240,9 +240,12 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
     let dir = Path::new(&account.config_dir);
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe = exe.to_string_lossy();
+    let mcp_on = crate::mcp::toggle::is_enabled(&account.agent_id, Some(&account.id));
     match account.agent_id.as_str() {
         "claude-code" => {
-            crate::mcp::config::write_mcp_config_to_file(&dir.join(".claude.json"))?;
+            if mcp_on {
+                crate::mcp::config::write_mcp_config_to_file(&dir.join(".claude.json"))?;
+            }
             crate::hook::install::write_hooks_to_file(
                 &dir.join("settings.json"),
                 Some(&crate::hook::install::format_command(&exe, cfg!(windows))),
@@ -263,7 +266,7 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
         "codex" => {
             // Dev builds leave the Codex URL to the installed app even in a
             // shared configDir; their panes are pinned per process instead.
-            if let Some(url) = url.filter(|_| !cfg!(debug_assertions)) {
+            if let Some(url) = url.filter(|_| mcp_on && !cfg!(debug_assertions)) {
                 crate::mcp::config::write_codex_config_to_file(&dir.join("config.toml"), url)?;
             }
             // Same rule as the default profile: a dev build must not swap the

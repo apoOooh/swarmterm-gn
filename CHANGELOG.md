@@ -11,6 +11,13 @@
   a short history that `war_room.read_inbox` returns with `includeRead`, so a
   probe reported as delivered is still visible after the agent read it on the
   nudge.
+- War Room: agents connect without setup. A pane counts as connected as soon
+  as its agent's MCP client reaches Swarmterm, not after its first War Room
+  call. Member chips and the pane header show connected, waiting or an error
+  with the reason.
+- Settings → MCP: an on/off switch per agent and account for Swarmterm's own
+  MCP entry. Off removes only Swarmterm's entry and leaves other servers
+  untouched; details are collapsed.
 
 ## [1.5.2] - 2026-10-11
 

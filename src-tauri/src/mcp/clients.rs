@@ -27,12 +27,14 @@ impl McpClients {
     /// a header-less request can never manufacture a `connected` verdict.
     /// Trimming matches `auth::resolve`, which is the function that decides
     /// whether the same string is a live terminal.
-    pub fn touch(&mut self, token: &str) {
+    /// Returns true only on the first sighting, so the caller can run the
+    /// War Room auto-connect once per pane instead of on every request.
+    pub fn touch(&mut self, token: &str) -> bool {
         let t = token.trim();
         if t.is_empty() {
-            return;
+            return false;
         }
-        self.seen.insert(t.to_owned());
+        self.seen.insert(t.to_owned())
     }
 
     /// Has any MCP client ever called in with this token during the pane's life?
@@ -68,8 +70,8 @@ mod tests {
     #[test]
     fn touch_is_idempotent() {
         let mut c = McpClients::default();
-        c.touch("abc-123");
-        c.touch("abc-123");
+        assert!(c.touch("abc-123"));
+        assert!(!c.touch("abc-123"));
         assert!(c.has_seen("abc-123"));
     }
 

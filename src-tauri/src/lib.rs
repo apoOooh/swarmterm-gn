@@ -83,6 +83,11 @@ pub fn run() {
             // Register the MCP server at Claude's user scope (~/.claude.json)
             // instead of dropping a .mcp.json into every project. One-shot,
             // idempotent, log-only.
+            // The Settings → MCP opt-outs must be known before the first
+            // writer runs, or a switched-off profile is re-enrolled at boot.
+            if let Ok(dir) = app.path().app_data_dir() {
+                crate::mcp::toggle::load(dir.join("swarmterm-mcp-disabled.json"));
+            }
             crate::mcp::config::register_user_scope(app.handle());
             // Register `swarmterm --hook` under Claude Code's hook events in
             // ~/.claude/settings.json so Claude Code panes report exact
@@ -140,6 +145,8 @@ pub fn run() {
             commands::save_agent_account,
             commands::delete_agent_account,
             commands::configure_account_mcp,
+            commands::swarmterm_mcp_profiles,
+            commands::set_swarmterm_mcp,
             commands::inspect_account_mcp,
             commands::list_agent_sessions,
             commands::inspect_saved_workspace,

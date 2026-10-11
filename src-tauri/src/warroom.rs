@@ -62,9 +62,10 @@ pub struct RoomMember {
     pub agent_id: Option<String>,
     pub cwd: String,
     pub display_name: String,
-    /// False until the process inside the pane makes its first successful
-    /// war_room.* call — the MCP handshake proving an agent (not a bare
-    /// shell) is actually listening. Dragging a pane in only makes it
+    /// False until an MCP client from inside the pane has reached the server
+    /// (any request carrying its bearer, normally `initialize`) or made a
+    /// war_room.* call — the handshake proving an agent (not a bare shell)
+    /// is actually listening. Dragging a pane in only makes it
     /// *pending*; messages are routed to connected members only.
     pub connected: bool,
     pub inbox: VecDeque<RoomMessage>,
@@ -259,7 +260,7 @@ impl WarRoom {
     }
 
     /// The MCP handshake: flips a pending member to connected on its first
-    /// successful tool call. Returns the transcript event only on the
+    /// inbound MCP request or tool call. Returns the transcript event only on the
     /// false→true edge (repeat calls are silent), None for non-members.
     pub fn mark_connected(&mut self, terminal_id: &str, ts: u64) -> Option<WarRoomEvent> {
         let member = self.members.get_mut(terminal_id)?;

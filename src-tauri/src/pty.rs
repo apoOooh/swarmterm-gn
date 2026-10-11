@@ -493,10 +493,18 @@ pub fn spawn_terminal(
             options.agent_id.as_deref(),
             options.agent_id.as_deref() == Some("codex") && crate::hook::codex::supported(),
         );
+        // A switched-off profile gets no per-process pin either.
+        let mcp_on = options.agent_id.as_deref().is_none_or(|agent| {
+            crate::mcp::toggle::is_enabled(agent, options.account_id.as_deref())
+        });
         let ic = crate::hook::codex::with_mcp_url(
             &ic,
             options.agent_id.as_deref(),
-            state.mcp_url.get().map(|url| url.as_ref()),
+            state
+                .mcp_url
+                .get()
+                .map(|url| url.as_ref())
+                .filter(|_| mcp_on),
         );
         let line = if resolved.is_some() {
             format!("{ic}\r")

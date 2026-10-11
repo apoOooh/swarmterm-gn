@@ -233,11 +233,19 @@ async fn record_client(
         .and_then(|h| h.to_str().ok())
     {
         let token = auth::bearer(header).to_owned();
-        app.state::<AppState>()
+        let first = app
+            .state::<AppState>()
             .mcp_clients
             .lock()
             .unwrap()
             .touch(&token);
+        // A client reaching us (usually `initialize`) is the handshake: a
+        // member dragged in earlier flips to connected without first having
+        // to call a war_room tool (SWA-30). The token is only trusted as a
+        // room member id, and only live panes are members.
+        if first {
+            crate::commands::connect_war_room_member(&app, token.trim());
+        }
     }
     next.run(req).await
 }

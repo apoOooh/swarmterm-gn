@@ -5,6 +5,7 @@ import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { configureAccountMcp, inspectAccountMcp, type CatalogStatus } from '@/tauri/mcp-catalog'
 import { pickDirectory } from '@/tauri/dialog'
 import { openUrl } from '@/tauri/opener'
+import { SwarmtermMcpSwitches } from './SwarmtermMcpSwitches'
 
 export function MCPPanel(): React.ReactElement {
   const { accounts, error: accountError, refresh } = useAgentAccountsStore()
@@ -32,7 +33,7 @@ export function MCPPanel(): React.ReactElement {
     } catch (error) { setError(String(error)) }
     finally { setBusy(false) }
   }
-  return <section className="space-y-5">
+  return <div className="space-y-8"><SwarmtermMcpSwitches /><section className="space-y-5">
     <h2 className="text-lg font-semibold">MCP catalogue</h2>
     <p className="text-sm text-muted-foreground">Add reviewed server definitions to an account's CLI configuration. Existing servers remain intact. Packages may download when the CLI starts them; authentication and credentials stay with the CLI.</p>
     <label className="block text-sm">Account<select aria-label="MCP account" value={selection} disabled={busy} onChange={event => setSelection(event.target.value)} className="mt-1 block w-full rounded border border-input bg-background p-2">
@@ -55,5 +56,5 @@ export function MCPPanel(): React.ReactElement {
       </article>
     })}</div>
     <p className="text-xs text-muted-foreground">Catalogue version {MCP_CATALOG_VERSION}. Configured means the definition exists, not that the server is connected. Use the agent CLI to authenticate, check connectivity or remove servers.</p>
-  </section>
+  </section></div>
 }
