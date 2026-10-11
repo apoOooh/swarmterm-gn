@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MEMBER_DRAG_PREFIX, ROOM_DROP_PREFIX, WAR_ROOM_DROP_ID, DragEndContext, memberDisplayName, resolveDragEnd } from './war-room-drop'
+import { MEMBER_DRAG_PREFIX, ROOM_DROP_PREFIX, WAR_ROOM_DROP_ID, DragEndContext, dockDropId, memberDisplayName, resolveDragEnd, snapDropId } from './war-room-drop'
 
 const ctx = (activeRoomId: string | null, roomOf: Record<string, string> = {}): DragEndContext => ({
   activeRoomId,
@@ -87,5 +87,38 @@ describe('memberDisplayName', () => {
 
   it('skips the append when the title already names the folder', () => {
     expect(memberDisplayName('NotifyMe', '/Users/dev/projects/NotifyMe')).toBe('NotifyMe')
+  })
+})
+
+describe('resolveDragEnd: dock and snap targets', () => {
+  it('pane on a dock tile of another pane docks beside it', () => {
+    expect(resolveDragEnd('leaf1', dockDropId('leaf2', 'bottom'), ctx('room-1')))
+      .toEqual({ kind: 'dock', fromLeafId: 'leaf1', toLeafId: 'leaf2', side: 'bottom' })
+  })
+
+  it('leaf ids containing colons survive the round trip', () => {
+    expect(resolveDragEnd('a:b', dockDropId('c:d', 'left'), ctx('room-1')))
+      .toEqual({ kind: 'dock', fromLeafId: 'a:b', toLeafId: 'c:d', side: 'left' })
+  })
+
+  it('docking onto itself or with a bogus side is a no-op', () => {
+    expect(resolveDragEnd('leaf1', dockDropId('leaf1', 'top'), ctx('room-1'))).toEqual({ kind: 'none' })
+    expect(resolveDragEnd('leaf1', 'dock:leaf2:middle', ctx('room-1'))).toEqual({ kind: 'none' })
+  })
+
+  it('pane on a snap slot applies that preset', () => {
+    expect(resolveDragEnd('leaf1', snapDropId('main-left', 2), ctx('room-1')))
+      .toEqual({ kind: 'snap', leafId: 'leaf1', presetId: 'main-left', slot: 2 })
+  })
+
+  it('malformed snap ids are a no-op, never a reorder', () => {
+    expect(resolveDragEnd('leaf1', 'snap:rows:x', ctx('room-1'))).toEqual({ kind: 'none' })
+    expect(resolveDragEnd('leaf1', 'snap:rows', ctx('room-1'))).toEqual({ kind: 'none' })
+  })
+
+  it('member chips ignore dock and snap targets (they still leave)', () => {
+    const chip = `${MEMBER_DRAG_PREFIX}term-1`
+    expect(resolveDragEnd(chip, dockDropId('leaf2', 'left'), ctx('room-1'))).toEqual({ kind: 'leave', terminalId: 'term-1' })
+    expect(resolveDragEnd(chip, snapDropId('rows', 0), ctx('room-1'))).toEqual({ kind: 'leave', terminalId: 'term-1' })
   })
 })

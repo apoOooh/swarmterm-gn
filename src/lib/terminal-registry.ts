@@ -20,7 +20,8 @@ import type { TerminalTextPref } from '@/lib/terminal-text'
 import { decideClipboardAction, isMacPlatform } from '@/lib/terminal-clipboard'
 import { isWindowsPlatform } from '@/lib/platform'
 import { matchConfiguredShortcut } from '@/store/shortcut-store'
-import { readClipboard, writeClipboard } from '@/tauri/clipboard'
+import { readClipboard, saveClipboardImage, writeClipboard } from '@/tauri/clipboard'
+import { imagePasteText, supportsImagePaste } from '@/lib/clipboard-image'
 import {
   isDragNotClick,
   shouldFollowLink,
@@ -928,9 +929,17 @@ function getOrCreate(id: string): Entry {
     if (action === 'paste') {
       event.preventDefault()
       // Async read; fire-and-forget and suppress xterm's default handling now.
+      // Text wins; only a text-less clipboard on a Claude Code/Codex pane is
+      // tried as a screenshot (saved to a temp PNG whose path we paste — the
+      // CLIs can't read the image off the clipboard here). Agent id is read
+      // at paste time because a respawn can switch it.
       readClipboard()
-        .then((text) => {
-          if (text) term.paste(text)
+        .then(async (text) => {
+          if (text) return term.paste(text)
+          if (!supportsImagePaste(entries.get(id)?.config.agentId)) return
+          const path = await saveClipboardImage()
+          const ref = path === null ? '' : imagePasteText(path)
+          if (ref) term.paste(ref)
         })
         .catch(console.warn)
       return false

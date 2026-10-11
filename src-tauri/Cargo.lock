@@ -602,6 +602,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1c988a897ea030e32f0668c90b0192800e0c561b3d941fc366f9ad5a1bf26ba"
 dependencies = [
  "clipboard-win",
+ "image",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -2015,6 +2016,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -4299,7 +4302,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "swarmterm"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "axum",
  "clipboard-rs",

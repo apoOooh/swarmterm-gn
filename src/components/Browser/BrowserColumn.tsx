@@ -1,7 +1,6 @@
 import { useEffect, useRef, type ReactElement } from 'react'
-import { useAppStore } from '@/store/app-store'
+import { useAppStore, focusedVisibleLeaf } from '@/store/app-store'
 import { useBrowserStore } from '@/store/browser-store'
-import { findLeaf } from '@/lib/layout-tree'
 import { watchOverlays } from '@/lib/overlay-watch'
 import { setPreviewVisible, syncPreviewBounds } from '@/lib/preview-registry'
 import { AddressBar } from './AddressBar'
@@ -18,7 +17,7 @@ export function BrowserColumn(): ReactElement {
   const focusedTerminalId = useAppStore((s) => {
     const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId)
     if (!ws) return null
-    return findLeaf(ws.layout, ws.focusedLeafId)?.terminalId ?? null
+    return focusedVisibleLeaf(ws)?.terminalId ?? null
   })
   const preview = useBrowserStore((s) =>
     focusedTerminalId ? (s.previews[focusedTerminalId] ?? null) : null

@@ -12,6 +12,7 @@ import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { allocateAccounts, type AccountSelection } from '@/lib/agent-accounts'
 import { useAppStore } from '@/store/app-store'
+import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { AgentIcon } from '@/components/AgentIcon'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -66,6 +67,9 @@ export function Welcome(): ReactElement {
   const accounts = useAgentAccountsStore(s => s.accounts)
   const [accountSelections, setAccountSelections] = useState<Record<string, AccountSelection>>({})
   const [terminalCount, setTerminalCount] = useState<number>(DEFAULT_TERMINAL_COUNT)
+  // '' ⇒ follow the Settings default (no per-workspace override).
+  const [splitAgent, setSplitAgent] = useState<string>('')
+  const globalSplitAgent = useAgentPrefStore((s) => s.defaultAgentId)
   // Optimistic seed: 1 Claude Code assigned until the probe says it's not installed.
   const [counts, setCounts] = useState<Record<string, number>>({ 'claude-code': 1 })
   const seededRef = useRef(false)
@@ -181,7 +185,7 @@ export function Welcome(): ReactElement {
   }, [trimmedFolder, availability, accounts])
 
   const browse = async (): Promise<void> => {
-    const picked = await pickDirectory()
+    const picked = await pickDirectory(trimmedFolder)
     if (picked) setFolder(picked)
   }
 
@@ -245,7 +249,8 @@ export function Welcome(): ReactElement {
         accountIds: allocateAccounts(agentIds, accounts, accountSelections),
         worktreeMode: isolate,
         paneWorktrees,
-        resumePanes: resumePanes.length > 0 ? resumePanes : undefined
+        resumePanes: resumePanes.length > 0 ? resumePanes : undefined,
+        defaultAgentId: splitAgent === '' ? undefined : splitAgent
       })
     } finally {
       setIsSubmitting(false)
@@ -654,6 +659,29 @@ export function Welcome(): ReactElement {
                 Each agent pane starts in its own worktree and branch.
               </span>
             </span>
+          </label>
+
+          {/* Per-workspace default for the pane header's Split buttons */}
+          <label className="mb-3 flex items-center justify-between gap-3">
+            <span>
+              <span className="block text-sm font-medium text-foreground">Split opens</span>
+              <span className="block text-xs text-muted-foreground">
+                What a new split pane starts with in this workspace.
+              </span>
+            </span>
+            <select
+              value={splitAgent}
+              onChange={(e) => setSplitAgent(e.target.value)}
+              className="h-8 rounded-md border border-pane-border bg-card px-2 text-sm text-foreground"
+            >
+              <option value="">Settings default ({templateById(globalSplitAgent).name})</option>
+              {TEMPLATES.map((t) => (
+                <option key={t.id} value={t.id} disabled={!isTemplateAvailable(t, availability)}>
+                  {t.name}
+                  {isTemplateAvailable(t, availability) ? '' : ' (not installed)'}
+                </option>
+              ))}
+            </select>
           </label>
 
           {/* Create workspace button */}

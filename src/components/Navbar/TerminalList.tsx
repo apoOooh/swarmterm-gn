@@ -1,8 +1,10 @@
 import type { ReactElement } from 'react'
+import { Archive, ArchiveRestore } from 'lucide-react'
+import type { LeafNode } from '@/lib/layout-tree'
 import { collectLeaves } from '@/lib/layout-tree'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { resolvePaneTitle } from '@/lib/pane-title'
-import { useAppStore } from '@/store/app-store'
+import { useAppStore, isDrawered } from '@/store/app-store'
 import { useDocumentStore } from '@/store/document-store'
 import { useExplorerStore } from '@/store/explorer-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
@@ -22,6 +24,11 @@ import { cn } from '@/lib/utils'
  * `setFocusedLeaf`, which both highlights the pane and (via TerminalPane's
  * `isFocused` effect) pulls keyboard focus into its xterm. Hidden on the Welcome
  * screen, since it mirrors the foreground workspace and there is none there.
+ *
+ * Drawered panes sit in their own "Drawer" subgroup below the open ones. One
+ * click restores — the same gesture as on an open row ("take me to this
+ * terminal"), which for a parked pane means bring it back first. Their state
+ * dot stays live, so an agent finishing in the drawer still flags itself.
  */
 export function TerminalList(): ReactElement | null {
   const workspaces = useAppStore((s) => s.workspaces)
@@ -39,6 +46,66 @@ export function TerminalList(): ReactElement | null {
   if (welcomeFocused || !active) return null
 
   const leaves = collectLeaves(active.layout)
+  // Drawer order (oldest parked first), not layout order — it is a stack of
+  // things set aside, and the newest one belongs at the bottom.
+  const openLeaves = leaves.filter((l) => !isDrawered(active, l.id))
+  const drawered = (active.drawerLeafIds ?? [])
+    .map((id) => leaves.find((l) => l.id === id))
+    .filter((l): l is LeafNode => l !== undefined)
+
+  function renderRow(leaf: LeafNode, inDrawer: boolean): ReactElement {
+    const agentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
+    const template = templateById(agentId)
+    const title = resolvePaneTitle(agentId, titles[leaf.terminalId])
+    const focused = !inDrawer && leaf.id === active!.focusedLeafId
+    const dot = paneDot(displayState(agentStates[leaf.terminalId]), activity[leaf.terminalId] === true)
+    return (
+      <li key={leaf.id}>
+        <div
+          onClick={() => {
+            useDocumentStore.getState().select(leaf.id, null)
+            useExplorerStore.setState({ visible: true })
+            // setFocusedLeaf also pulls a drawered pane back into its slot.
+            setFocusedLeaf(leaf.id)
+          }}
+          title={inDrawer ? `${title} — in drawer, click to restore` : title}
+          className={cn(
+            'theme-row group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
+            focused
+              ? 'bg-accent text-accent-foreground'
+              : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+            inDrawer && 'italic opacity-70 hover:opacity-100'
+          )}
+        >
+          <AgentIcon template={template} className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1 truncate">{title}</span>
+          {(agentId === 'claude-code' || agentId === 'codex') && <span className="max-w-20 truncate text-[10px]" title={`Account: ${accountLabel(leaf.accountId, accounts)}`}>{accountLabel(leaf.accountId, accounts)}</span>}
+          {dot !== null && (dot === 'activity'
+            ? <ActivityDot />
+            : <StateDot state={dot} sinceMs={agentStates[leaf.terminalId]?.sinceMs} />)}
+          {/* Hover affordance; the row click does the same for drawered rows,
+              so this mainly signals what a click will do. */}
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label={inDrawer ? 'Restore from drawer' : 'Move to drawer'}
+            title={inDrawer ? 'Restore from drawer' : 'Move to drawer'}
+            onClick={(e) => {
+              e.stopPropagation()
+              const st = useAppStore.getState()
+              if (inDrawer) st.restorePane(leaf.id)
+              else st.drawerPane(leaf.id)
+            }}
+            className="hidden shrink-0 rounded p-0.5 hover:bg-accent group-hover:block"
+          >
+            {inDrawer
+              ? <ArchiveRestore className="h-3.5 w-3.5" />
+              : <Archive className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+      </li>
+    )
+  }
 
   // Its own bounded pane that splits the rail's non-footer height with the
   // Workspaces pane above (`flex-1 + min-h-0`). A FIXED header (never scrolls,
@@ -51,46 +118,17 @@ export function TerminalList(): ReactElement | null {
         Terminals
       </p>
       <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-        {leaves.map((leaf) => {
-          const agentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
-          const template = templateById(agentId)
-          const title = resolvePaneTitle(agentId, titles[leaf.terminalId])
-          const focused = leaf.id === active.focusedLeafId
-          return (
-            <li key={leaf.id}>
-              <div
-                onClick={() => {
-                  useDocumentStore.getState().select(leaf.id, null)
-                  useExplorerStore.setState({ visible: true })
-                  setFocusedLeaf(leaf.id)
-                }}
-                title={title}
-                className={cn(
-                  'theme-row flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
-                  focused
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
-                )}
-              >
-                <AgentIcon template={template} className="h-3.5 w-3.5 shrink-0" />
-                <span className="flex-1 truncate">{title}</span>
-                {(agentId === 'claude-code' || agentId === 'codex') && <span className="max-w-20 truncate text-[10px]" title={`Account: ${accountLabel(leaf.accountId, accounts)}`}>{accountLabel(leaf.accountId, accounts)}</span>}
-                {(() => {
-                  const dot = paneDot(
-                    displayState(agentStates[leaf.terminalId]),
-                    activity[leaf.terminalId] === true
-                  )
-                  if (dot === null) return null
-                  return dot === 'activity' ? (
-                    <ActivityDot />
-                  ) : (
-                    <StateDot state={dot} sinceMs={agentStates[leaf.terminalId]?.sinceMs} />
-                  )
-                })()}
-              </div>
-            </li>
-          )
-        })}
+        {openLeaves.map((leaf) => renderRow(leaf, false))}
+        {drawered.length > 0 && (
+          <li
+            aria-hidden="true"
+            className="mt-2 flex items-center gap-1.5 border-t border-border px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
+          >
+            <Archive className="h-3 w-3" />
+            Drawer ({drawered.length})
+          </li>
+        )}
+        {drawered.map((leaf) => renderRow(leaf, true))}
       </ul>
     </div>
   )

@@ -12,6 +12,61 @@ GN's automated browser tests are headless and mock native IPC. The following
 platform checks require an intentional desktop launch and disposable test files.
 Do not mark them passed from the in-memory fixture alone.
 
+## Drag to split and snap layouts
+
+- [ ] Two panes on top, one full-width below; drag a top pane's header onto the
+      bottom pane → the picker appears; hover each side tile → the matching half
+      is shaded; drop on **left** → the other top pane widens, the bottom slot
+      is split side by side with the dragged pane on the left. Shells keep
+      running (a `ping -t localhost` keeps counting).
+- [ ] Drop on the picker's **Swap** centre → the two panes swap, layout shape
+      unchanged.
+- [ ] Two side-by-side panes: drag one → the snap bar shows **Side by side** and
+      **Stacked**; drop on the bottom slot of **Stacked** → stacked, dragged pane
+      at the bottom. With 3+ panes the bar also offers grid, main-left and
+      main-top, and hovering a slot outlines the resulting layout.
+- [ ] Snap/dock a zoomed pane (zoom ends), with a pane in the drawer (it stays
+      parked and restores at the end), and drop a pane on a War Room tab while
+      the bar is showing (still joins the room).
+
+## Pane drawer
+
+- [ ] In a 3-pane workspace run `ping -t localhost` in one pane, click its
+      archive button: it vanishes, the others fill the gap, it is listed under
+      Drawer in the sidebar and the workspace row shows the archive count.
+- [ ] Wait, click the drawer row: the pane returns to the same slot and size,
+      the ping kept counting, scrollback is intact, keyboard focus is in it.
+- [ ] `Ctrl+Shift+D` parks the focused pane; bare `Ctrl+D` still reaches the
+      shell. Park every pane: the workspace shows the empty drawer message.
+- [ ] Park a zoomed pane, a broadcast member and a pane with an open web
+      preview; restore each. Park a Claude pane mid-task: its state dot still
+      updates in the drawer row and `Ctrl+Shift+J` restores it when it needs you.
+
+## Default launch mode
+
+- [ ] Fresh profile: a new Claude Code pane starts in normal mode (header shows
+      "Default"; Claude asks before an edit).
+- [ ] Settings → Terminal → Default launch mode → Claude Code = Bypass permissions:
+      a new Claude pane starts bypassed; an already running pane is not restarted
+      and keeps its mode. Restart the app: the choice is kept.
+- [ ] Pane header → Plan on a Claude pane: Claude restarts in plan mode and
+      continues the conversation.
+- [ ] Codex default = Safe: a new Codex pane runs `-s read-only -a on-request`.
+
+## Default AI provider for splits
+
+- [ ] Fresh profile: split right/down opens a plain shell; tooltip just "Split right".
+- [ ] Settings → Terminal → Default AI provider = Codex: split opens Codex, the
+      tooltip says "Split right (Codex)". Restart the app: the choice is kept.
+- [ ] Alt+click a split button: a plain shell opens.
+- [ ] Workspace ⋮ → Split opens… → Claude Code: splits there open Claude while
+      another workspace still opens Codex. "Settings default" reverts it.
+- [ ] Composer "Split opens" = Claude Code: the new workspace's ⋮ menu shows it ticked.
+- [ ] Pick an agent whose CLI is not installed (rename it off PATH, re-probe):
+      it is greyed out; a stale default falls back to a plain shell on split.
+- [ ] Worktree isolation on: a default-agent split starts in the workspace
+      folder, no new `swarm/*` branch appears.
+
 ## Astera themes and Files (GN)
 
 - [ ] Select each of Vega, Orion, Umbra, Aurora, Antares, Quasar and Sirius;
@@ -90,6 +145,9 @@ Do not mark them passed from the in-memory fixture alone.
       compositions.
 - [ ] **Copy/paste:** with a selection `Ctrl/⌘+C` copies; with no selection
       `Ctrl+C` still sends SIGINT; `Ctrl/⌘+V` pastes exactly once.
+- [ ] **Screenshot paste:** `Win+Shift+S`, then `Ctrl+V` in a Claude Code and a Codex
+      pane → a `%TEMP%\swarmterm-paste\paste-*.png` path is inserted once and the
+      agent attaches it as an image. Same in a plain shell → nothing happens.
 - [ ] **File drop:** drop a file on a pane → the path is inserted, quoted for
       that pane's shell.
 - [ ] **Shell switch:** pick another shell in the pane header → that pane

@@ -302,6 +302,45 @@ describe('splitPane', () => {
     const created = collectLeaves(activeWorkspace(store).layout).find((l) => l.id !== original)
     expect(created?.agentId).toBeUndefined()
   })
+
+  it('starts the split pane with the given agent', () => {
+    const store = storeWithWorkspace()
+    const original = activeWorkspace(store).focusedLeafId
+    store.getState().splitPane(original, 'horizontal', 'codex')
+    const created = collectLeaves(activeWorkspace(store).layout).find((l) => l.id !== original)
+    expect(created?.agentId).toBe('codex')
+    expect(created?.cwd).toBeUndefined()
+  })
+
+  it("treats agent 'terminal' as a plain shell", () => {
+    const store = storeWithWorkspace()
+    const original = activeWorkspace(store).focusedLeafId
+    store.getState().splitPane(original, 'horizontal', 'terminal')
+    const created = collectLeaves(activeWorkspace(store).layout).find((l) => l.id !== original)
+    expect(created?.agentId).toBeUndefined()
+  })
+})
+
+// --- workspace default agent ---------------------------------------------
+
+describe('workspace default agent', () => {
+  it('is taken from the create config', () => {
+    const store = storeWithWorkspace({ ...SINGLE_TERMINAL, defaultAgentId: 'claude-code' })
+    expect(activeWorkspace(store).defaultAgentId).toBe('claude-code')
+  })
+
+  it('is absent unless configured', () => {
+    expect(activeWorkspace(storeWithWorkspace()).defaultAgentId).toBeUndefined()
+  })
+
+  it('can be set and cleared', () => {
+    const store = storeWithWorkspace()
+    const id = activeWorkspace(store).id
+    store.getState().setWorkspaceDefaultAgent(id, 'codex')
+    expect(activeWorkspace(store).defaultAgentId).toBe('codex')
+    store.getState().setWorkspaceDefaultAgent(id, undefined)
+    expect('defaultAgentId' in activeWorkspace(store)).toBe(false)
+  })
 })
 
 // --- closePane ------------------------------------------------------------
@@ -341,6 +380,105 @@ describe('closePane', () => {
   })
 })
 
+// --- pane drawer ----------------------------------------------------------
+
+describe('pane drawer', () => {
+  function threePanes(): StoreApi<AppStore> {
+    return storeWithWorkspace({ cwd: 'C:/work', terminalCount: 3, agentIds: panes(3) })
+  }
+
+  it('parks a pane without removing it from the layout and moves focus on', () => {
+    const store = threePanes()
+    const before = activeWorkspace(store).layout
+    const [a, b] = collectLeaves(before)
+    store.getState().setFocusedLeaf(a.id)
+    store.getState().drawerPane(a.id)
+    const ws = activeWorkspace(store)
+    expect(ws.layout).toBe(before)
+    expect(ws.drawerLeafIds).toEqual([a.id])
+    expect(ws.focusedLeafId).toBe(b.id)
+  })
+
+  it('restores into the original slot, focused', () => {
+    const store = threePanes()
+    const [, b] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().drawerPane(b.id)
+    store.getState().restorePane(b.id)
+    const ws = activeWorkspace(store)
+    expect(ws.drawerLeafIds).toEqual([])
+    expect(ws.focusedLeafId).toBe(b.id)
+    expect(collectLeaves(ws.layout)[1].id).toBe(b.id)
+  })
+
+  it('restores from another workspace by activating it', () => {
+    const store = threePanes()
+    const firstId = store.getState().activeWorkspaceId
+    const [a] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().drawerPane(a.id)
+    store.getState().createWorkspace(SINGLE_TERMINAL)
+    store.getState().restorePane(a.id)
+    expect(store.getState().activeWorkspaceId).toBe(firstId)
+    expect(activeWorkspace(store).focusedLeafId).toBe(a.id)
+  })
+
+  it('setFocusedLeaf on a drawered pane restores it', () => {
+    const store = threePanes()
+    const [a] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().drawerPane(a.id)
+    store.getState().setFocusedLeaf(a.id)
+    expect(activeWorkspace(store).drawerLeafIds).toEqual([])
+    expect(activeWorkspace(store).focusedLeafId).toBe(a.id)
+  })
+
+  it('keeps focus on the last leaf when every pane is drawered, but nothing counts as focused', () => {
+    const store = storeWithWorkspace()
+    const only = activeWorkspace(store).focusedLeafId
+    expect(selectFocusedTerminalId(store.getState())).toBeDefined()
+    store.getState().drawerPane(only)
+    expect(store.getState().workspaces).toHaveLength(1)
+    expect(activeWorkspace(store).focusedLeafId).toBe(only)
+    expect(selectFocusedTerminalId(store.getState())).toBeUndefined()
+  })
+
+  it('ends a zoom on the parked pane and drops it from broadcast', () => {
+    const store = threePanes()
+    const [a] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().toggleZoom(a.id)
+    store.getState().toggleBroadcast()
+    store.getState().drawerPane(a.id)
+    const ws = activeWorkspace(store)
+    expect(ws.zoomedLeafId).toBeUndefined()
+    expect(ws.broadcastLeafIds).not.toContain(a.id)
+  })
+
+  it('ignores zoom, split and broadcast membership on a drawered pane', () => {
+    const store = threePanes()
+    const [a] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().drawerPane(a.id)
+    store.getState().toggleZoom(a.id)
+    store.getState().splitPane(a.id, 'horizontal')
+    store.getState().toggleBroadcastMember(a.id)
+    store.getState().selectAllBroadcast()
+    const ws = activeWorkspace(store)
+    expect(ws.zoomedLeafId).toBeUndefined()
+    expect(collectLeaves(ws.layout)).toHaveLength(3)
+    expect(ws.broadcastLeafIds).not.toContain(a.id)
+  })
+
+  it('closing a pane prunes stale drawer ids and focuses a visible survivor', () => {
+    const store = threePanes()
+    const [a, b, c] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().drawerPane(a.id)
+    store.getState().closePane(a.id)
+    expect(activeWorkspace(store).drawerLeafIds).toEqual([])
+    store.getState().drawerPane(b.id)
+    store.getState().setFocusedLeaf(c.id)
+    store.getState().closePane(c.id)
+    // Only the drawered b survives: focus falls back to it, workspace stays.
+    expect(activeWorkspace(store).focusedLeafId).toBe(b.id)
+  })
+})
+
 // --- resizeSplitNode ------------------------------------------------------
 
 describe('resizeSplitNode', () => {
@@ -362,6 +500,28 @@ describe('setPaneAgent', () => {
     store.getState().setPaneAgent(leafId, 'codex')
     const leaf = collectLeaves(activeWorkspace(store).layout).find((l) => l.id === leafId)
     expect(leaf?.agentId).toBe('codex')
+  })
+})
+
+describe('seedPaneLaunchMode', () => {
+  it('pins the mode without triggering a continue respawn', () => {
+    const store = storeWithWorkspace()
+    const leafId = activeWorkspace(store).focusedLeafId
+    store.getState().setPaneAgent(leafId, 'claude-code')
+    store.getState().seedPaneLaunchMode(leafId, 'bypass')
+    const leaf = collectLeaves(activeWorkspace(store).layout).find((l) => l.id === leafId)
+    expect(leaf?.launchMode).toBe('bypass')
+    expect(leaf?.continueSession).toBeUndefined()
+  })
+
+  it('never overwrites a mode the pane already has', () => {
+    const store = storeWithWorkspace()
+    const leafId = activeWorkspace(store).focusedLeafId
+    store.getState().setPaneAgent(leafId, 'claude-code')
+    store.getState().seedPaneLaunchMode(leafId, 'plan')
+    store.getState().seedPaneLaunchMode(leafId, 'bypass')
+    const leaf = collectLeaves(activeWorkspace(store).layout).find((l) => l.id === leafId)
+    expect(leaf?.launchMode).toBe('plan')
   })
 })
 
@@ -736,6 +896,25 @@ describe('worktree panes', () => {
     expect(after.focusedLeafId).toBe(worker.id)
   })
 
+  it('spawnWorktreePane inherits the requester launch mode for the same agent only', () => {
+    const store = workspaceWithWorktrees()
+    const requester = collectLeaves(store.getState().workspaces[0].layout)[0]
+    store.getState().seedPaneLaunchMode(requester.id, 'bypass')
+    const spawn = (branch: string, agentId?: string): void =>
+      store.getState().spawnWorktreePane({
+        requesterTerminalId: requester.terminalId,
+        path: `C:/dev/myapp.worktrees/${branch}`,
+        branch,
+        prompt: 'x',
+        ...(agentId ? { agentId } : {})
+      })
+    spawn('same')
+    spawn('other', 'codex')
+    const leaves = collectLeaves(store.getState().workspaces[0].layout)
+    expect(leaves.find((l) => l.worktreeBranch === 'same')?.launchMode).toBe('bypass')
+    expect(leaves.find((l) => l.worktreeBranch === 'other')?.launchMode).toBeUndefined()
+  })
+
   it('spawnWorktreePane is a no-op when worktreeMode is off or requester unknown', () => {
     const store = freshStore()
     store.getState().createWorkspace({ cwd: 'x', terminalCount: 1, agentIds: ['claude-code'] })
@@ -913,6 +1092,51 @@ describe('revealTerminal', () => {
     const before = store.getState().activeWorkspaceId
     store.getState().revealTerminal('nope')
     expect(store.getState().activeWorkspaceId).toBe(before)
+  })
+})
+
+// --- dockPane / applySnapLayout ---------------------------------------------
+
+describe('dockPane', () => {
+  it('docks a pane beside another, focuses it and ends the zoom', () => {
+    const store = storeWithWorkspace(FOUR_PANES)
+    const ids = collectLeaves(activeWorkspace(store).layout).map((l) => l.id)
+    store.getState().toggleZoom(ids[3])
+    store.getState().dockPane(ids[0], ids[3], 'bottom')
+    const ws = activeWorkspace(store)
+    expect(collectLeaves(ws.layout).map((l) => l.id)).toEqual([ids[1], ids[2], ids[3], ids[0]])
+    expect(ws.focusedLeafId).toBe(ids[0])
+    expect(ws.zoomedLeafId).toBeUndefined()
+  })
+
+  it('ignores drawered panes and self-drops', () => {
+    const store = storeWithWorkspace(FOUR_PANES)
+    const ids = collectLeaves(activeWorkspace(store).layout).map((l) => l.id)
+    store.getState().drawerPane(ids[1])
+    const before = activeWorkspace(store).layout
+    store.getState().dockPane(ids[0], ids[1], 'left')
+    store.getState().dockPane(ids[0], ids[0], 'left')
+    expect(activeWorkspace(store).layout).toBe(before)
+  })
+})
+
+describe('applySnapLayout', () => {
+  it('rebuilds the layout with the dragged pane in the chosen slot', () => {
+    const store = storeWithWorkspace(TWO_PANES)
+    const [a, b] = collectLeaves(activeWorkspace(store).layout)
+    store.getState().applySnapLayout(a.id, 'rows', 1)
+    const ws = activeWorkspace(store)
+    expect(ws.layout.type === 'split' && ws.layout.direction).toBe('vertical')
+    expect(collectLeaves(ws.layout).map((l) => l.id)).toEqual([b.id, a.id])
+    expect(ws.focusedLeafId).toBe(a.id)
+  })
+
+  it('leaves the workspace untouched for a preset that does not fit', () => {
+    const store = storeWithWorkspace(TWO_PANES)
+    const [a] = collectLeaves(activeWorkspace(store).layout)
+    const before = activeWorkspace(store).layout
+    store.getState().applySnapLayout(a.id, 'grid', 0)
+    expect(activeWorkspace(store).layout).toBe(before)
   })
 })
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2 } from 'lucide-react'
+import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2, Archive } from 'lucide-react'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 import { AgentIcon } from '@/components/AgentIcon'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem
 } from '@/components/ui/dropdown-menu'
-import { TEMPLATES, templateById, isTemplateAvailable, launchMode } from '@/lib/templates'
+import { DEFAULT_TEMPLATE_ID, TEMPLATES, templateById, isTemplateAvailable, launchMode } from '@/lib/templates'
 import { resolvePaneTitle } from '@/lib/pane-title'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { KNOWN_SHELLS, visibleShells, type ShellId } from '@/lib/terminal-pref'
@@ -43,9 +43,14 @@ interface PaneHeaderProps {
   onShellChange: (id: ShellId) => void
   onChoosePath: () => void
   onResetPath: () => void
-  onSplitRight: () => void
-  onSplitDown: () => void
+  /** `plain` = Alt held: open a plain shell instead of the default agent. */
+  onSplitRight: (plain: boolean) => void
+  onSplitDown: (plain: boolean) => void
+  /** Name of the agent a split opens (resolved default), for the tooltip. */
+  splitAgentName: string
   onClose: () => void
+  /** Park the pane in the workspace drawer (hidden, kept running). */
+  onDrawer: () => void
   isZoomed: boolean
   onToggleZoom: () => void
   /** Whether broadcast mode is armed for this workspace. */
@@ -321,14 +326,17 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
             <Radio className="h-3.5 w-3.5" />
           </Button>
         )}
-        <Button variant="ghost" size="icon-sm" title="Split right" aria-label="Split right" onClick={props.onSplitRight}>
+        <Button variant="ghost" size="icon-sm" title={splitTitle('Split right', props.splitAgentName)} aria-label="Split right" onClick={(e) => props.onSplitRight(e.altKey)}>
           <Columns2 className="h-3.5 w-3.5" />
         </Button>
-        <Button variant="ghost" size="icon-sm" title="Split down" aria-label="Split down" onClick={props.onSplitDown}>
+        <Button variant="ghost" size="icon-sm" title={splitTitle('Split down', props.splitAgentName)} aria-label="Split down" onClick={(e) => props.onSplitDown(e.altKey)}>
           <Rows2 className="h-3.5 w-3.5" />
         </Button>
         <Button variant="ghost" size="icon-sm" title={props.isZoomed ? 'Restore pane (Ctrl+Shift+Enter)' : 'Maximize pane (Ctrl+Shift+Enter)'} aria-label={props.isZoomed ? 'Restore pane' : 'Maximize pane'} aria-pressed={props.isZoomed} onClick={props.onToggleZoom}>
           {props.isZoomed ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+        </Button>
+        <Button variant="ghost" size="icon-sm" title="Move to drawer — keeps running (Ctrl+Shift+D)" aria-label="Move to drawer" onClick={props.onDrawer}>
+          <Archive className="h-3.5 w-3.5" />
         </Button>
         <Button variant="ghost" size="icon-sm" title="Close pane" aria-label="Close pane" onClick={props.onClose}>
           <X className="h-3.5 w-3.5" />
@@ -336,4 +344,12 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
       </div>
     </div>
   )
+}
+
+/** Split tooltip: names the agent a split opens, and the Alt escape hatch
+ *  only when there is something to escape from. */
+function splitTitle(action: string, agentName: string): string {
+  return agentName === templateById(DEFAULT_TEMPLATE_ID).name
+    ? action
+    : `${action} (${agentName}) — Alt+click: plain terminal`
 }

@@ -16,7 +16,11 @@ Agent detection re-runs every time the composer opens, so installing a CLI needs
 ## Panes
 
 - **Split** from the pane header, drag the separator to resize, and drag a header onto another pane to swap the two — shells keep running.
+- **Drag to split:** while you drag a pane over another one, a small picker appears in its middle. Drop on the **left, right, top or bottom** tile and the two panes share that slot, split that way — the dragged pane takes the highlighted half and its old spot closes up. The **Swap** tile in the centre (or anywhere else on the pane) swaps them as before.
+- **Snap layouts:** while a pane is dragged, a bar of layout previews appears at the top of the workspace (like Windows 11's snap layouts): side by side and stacked, plus grid, main-left and main-top from three panes up. Each preview is split into slots — drop on one and every visible pane is rearranged into that layout, the dragged pane in the slot you chose and the others in their current order. Hovering a slot outlines the result first. Split sizes come out even; drawered panes stay in the drawer.
+- **Default AI provider for splits:** by default a split opens a plain terminal. Pick an agent under **Settings → Terminal → Default AI provider** (for example Claude Code or Codex) and both split buttons open that agent instead; the split tooltip names it. A workspace can override the setting: choose **Split opens** in the composer when you create it, or later from the workspace's **⋮ → Split opens…** menu in the sidebar (**Settings default** follows the global choice). **Alt+click** a split button for a plain terminal. If the chosen agent's CLI is not installed, the split falls back to a plain terminal. Split panes start in the workspace folder, also with worktree isolation on — they never create a new worktree.
 - Closing a pane closes the gap; closing the last pane closes the workspace.
+- **Drawer:** the archive button just left of ✕ (or `⌘/Ctrl + Shift + D`) parks a pane for later. It leaves the screen like a close and the other panes fill the gap, but the shell, agent session, scrollback and any preview keep running. Parked panes are listed under **Drawer** at the bottom of the sidebar's terminal list (dimmed, state dots still live) and the workspace row shows how many are parked; one click on a row puts the pane back in its original spot. Jumping to a pane that needs attention restores it too. Drawers are not kept across restarts.
 - The left navbar lists workspaces (add, rename, reorder) and the current workspace's terminals — click one to jump to it. `⌘/Ctrl + B` hides the sidebar.
 - A pane can switch to a different agent, shell or folder from its header menu — note this restarts the shell.
 
@@ -145,9 +149,19 @@ A system notification (banner) only appears while the Swarmterm window is **unfo
 
 Turn channels on or off in **Settings → Notifications**: **Sound** and **System notifications** apply everywhere, and a **per-agent** toggle below silences one CLI without touching the others — every agent with a state dot gets a row, and all default to on. A plain Terminal pane has no agent state, but once its shell has **shell integration** set up (see below) it chimes the same way when a command that ran for more than 10 seconds finishes while you were elsewhere — the banner reads "Command finished (42s)" or "Command failed (exit 1 · 42s)" — and the **Terminal** row in the per-agent list turns that off.
 
-## Codex launch modes
+## Launch modes
 
-A Codex pane starts in **Auto** (`-s workspace-write -a on-request`). The agent menu in the pane header also offers **Safe** (`-s read-only -a on-request`) and **YOLO** (`--dangerously-bypass-approvals-and-sandbox`); the current mode is shown next to the agent icon. Switching restarts Codex with the new flags and continues the conversation (`codex resume`, the pane's own session id or the folder's latest session). **Resume previous chat…** in the same menu restarts the pane into Codex's own session picker (current mode kept), so an older conversation can be taken over. Plan mode is not a Codex CLI flag — use `/plan` inside the session.
+Claude Code and Codex panes run in a **launch mode** that sets how much the agent may do without asking. The current mode is shown next to the agent icon, and the agent menu in the pane header switches it: the pane restarts the CLI with the new flags and continues the conversation (the pane's own session id or the folder's latest session). **Resume previous chat…** in the same menu restarts the pane into the CLI's own session picker (current mode kept), so an older conversation can be taken over.
+
+**Settings → Terminal → Default launch mode** picks, per provider, the mode new panes start in. It applies to new panes only — running panes keep the mode they started with. Worker panes spawned by an agent (`worktree.spawn`) inherit the spawning pane's mode when they run the same agent.
+
+### Claude Code
+
+A Claude Code pane starts in **Default** (`--permission-mode default`, Claude asks before edits and commands). The menu also offers **Accept edits** (`--permission-mode acceptEdits`), **Plan** (`--permission-mode plan`) and **Bypass permissions** (`--dangerously-skip-permissions`). Earlier versions always started Claude with bypass; choose **Bypass permissions** as the default launch mode to keep that behaviour.
+
+### Codex
+
+A Codex pane starts in **Auto** (`-s workspace-write -a on-request`). The agent menu in the pane header also offers **Safe** (`-s read-only -a on-request`) and **YOLO** (`--dangerously-bypass-approvals-and-sandbox`); switching continues the conversation via `codex resume`. Plan mode is not a Codex CLI flag — use `/plan` inside the session.
 
 ## Resume past agent sessions
 
@@ -231,6 +245,7 @@ The pane header mirrors the percentage as a small `ctx 63%` chip (same amber / r
 
 - **Real PTYs with 24-bit truecolor** — agent CLIs, emoji and box drawing render exactly as in your normal terminal, and IMEs (Vietnamese Telex, CJK) work without dropped characters.
 - `⌘/Ctrl + C` copies when text is selected and otherwise interrupts; `⌘/Ctrl + V` pastes — like VS Code.
+- **Paste a screenshot** into a Claude Code or Codex pane with `Ctrl + V`: when the clipboard holds an image and no text, Swarmterm saves it as a PNG under your temp folder (`%TEMP%\swarmterm-paste`, pruned after a day) and pastes its path, which the agent attaches as an image. Other panes paste text only.
 - **Programs can copy to your clipboard** — nvim `"+y`, tmux `set -s set-clipboard on`, yazi and `gh` copy through OSC 52, exactly as in VS Code's terminal. Only writes are honoured: a program can never read your clipboard.
 - **Click a URL** to open it in your browser; `⌘/Ctrl + click` a file path (`src/foo.ts:42:9`, `src/foo.ts(42,9)`, `File "x.py", line 42`) to open project files in the integrated editor at that line; the file is also selected in **Files**, with its folders expanded and the row scrolled into view. Hold `⌘/Ctrl` on a detected path and drag it onto another pane to insert it there (as a path, or an `@` mention in Claude Code). Paths outside the configured project retain the external-editor behavior.
 - **Drop a file or folder** onto a pane — from your OS file manager or from **Files** (several selected entries at once) — to insert its path, quoted for that pane's shell. While dragging from **Files** a label follows the pointer and the cursor shows what a release does: insert into a terminal, move into a folder (hold `Ctrl` to copy), or nothing; `Esc` cancels. Dragged from **Files** onto a Claude Code pane, entries become `@` mentions relative to the pane's folder (`@src/foo.ts`), so Claude attaches them; paths with spaces stay quoted.
@@ -382,6 +397,7 @@ the file editor owns the keyboard.
 | `⌘/Ctrl + Click` | Open a file path in your editor, at that line, and select it in Files |
 | `⌘/Ctrl + F` | Find in the focused editor/Markdown preview or terminal |
 | `⌘/Ctrl + Shift + Enter` | Maximize / restore the focused pane (also the header button or a double-click on the header). Hidden panes keep running; focusing one from the sidebar restores the layout |
+| `⌘/Ctrl + Shift + D` | Move the focused pane to the drawer (keeps running; click it in the sidebar to restore) |
 | `⌘/Ctrl + Shift + Backspace` | Clear the pending input line of the focused terminal (e.g. after a submit hook refused a prompt). Agents get one Ctrl+C, shells their line-kill; a second press within 2 s is ignored so an agent never quits |
 | `⌘/Ctrl + Shift + J` | Jump to the next pane needing attention (longest-waiting blocked → done → working → idle) |
 

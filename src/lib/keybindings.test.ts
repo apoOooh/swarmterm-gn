@@ -226,3 +226,11 @@ describe('toggle-zoom shortcut', () => {
     expect(matchAppShortcut(ev(false), false)).toBeNull()
   })
 })
+
+describe('drawer-pane shortcut', () => {
+  it('maps Ctrl+Shift+D (key arrives as "D" with Shift) and leaves bare Ctrl+D (EOF) to the shell', () => {
+    const ev = (key: string, shiftKey: boolean) => ({ key, ctrlKey: true, metaKey: false, shiftKey, altKey: false })
+    expect(matchAppShortcut(ev('D', true), false)).toBe('drawer-pane')
+    expect(matchAppShortcut(ev('d', false), false)).toBeNull()
+  })
+})

@@ -3,13 +3,17 @@ import { Group, Panel, Separator } from 'react-resizable-panels'
 import {
   DndContext,
   DragOverlay,
+  MeasuringStrategy,
   pointerWithin,
+  type CollisionDetection,
+  type Modifier,
   useSensor,
   useSensors
 } from '@dnd-kit/core'
 import {
   useAppStore,
   selectFocusedTerminalId,
+  focusedVisibleLeaf,
   selectWorkspaceByTerminalId,
   type Workspace as WorkspaceModel
 } from '@/store/app-store'
@@ -51,6 +55,8 @@ import {
   FOCUS_RETURN_ATTR
 } from '@/lib/terminal-focus'
 import { GuardedPointerSensor } from '@/lib/dnd-sensors'
+import { preferLayoutTargets } from '@/lib/layout-collision'
+import { ghostBesideCursor } from '@/lib/drag-ghost'
 import { resolveDragEnd, memberDisplayName, MEMBER_DRAG_PREFIX } from '@/lib/war-room-drop'
 import { buildIntroText } from '@/lib/war-room-nudge'
 import { startWarRoomDelivery } from '@/lib/war-room-delivery'
@@ -118,6 +124,23 @@ function liveTerminalIds(workspaces: WorkspaceModel[]): Set<string> {
   }
   return ids
 }
+
+// Dock tiles and snap slots sit on top of panes; let them win the hit test
+// (lib/layout-collision.ts) so a drop on a tile splits instead of reordering.
+const collisionDetection: CollisionDetection = (args) => preferLayoutTargets(pointerWithin(args))
+
+// The dock picker and snap bar mount when a drag starts, i.e. after dnd-kit's
+// drag-start measurement; re-measure while dragging so their droppables have
+// real rects by the time the pointer reaches them.
+const DND_MEASURING = { droppable: { strategy: MeasuringStrategy.Always } }
+
+// Pane ghost rides beside the cursor instead of over the drop targets.
+const ghostModifier: Modifier = ({ transform, activatorEvent, draggingNodeRect }) =>
+  ghostBesideCursor(
+    transform,
+    activatorEvent && 'clientX' in activatorEvent ? (activatorEvent as PointerEvent) : null,
+    draggingNodeRect
+  )
 
 export default function App(): ReactElement {
   const macroRunning = useRef(false)
@@ -293,6 +316,8 @@ export default function App(): ReactElement {
     }
     restorePanelIfNoDrop()
     if (action.kind === 'reorder') reorderPane(action.activeLeafId, action.overLeafId)
+    else if (action.kind === 'dock') useAppStore.getState().dockPane(action.fromLeafId, action.toLeafId, action.side)
+    else if (action.kind === 'snap') useAppStore.getState().applySnapLayout(action.leafId, action.presetId, action.slot)
     else if (action.kind === 'leave') void warRoomLeave(action.terminalId)
   }
 
@@ -469,6 +494,17 @@ export default function App(): ReactElement {
         if (!ws || st.welcomeFocused) return
         e.preventDefault()
         st.toggleZoom(ws.focusedLeafId)
+        return
+      }
+      if (action === 'drawer-pane') {
+        // Same gate as toggle-zoom: only when the keyboard belongs to a
+        // terminal (or bare chrome), never while typing in an input.
+        if (!isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
+        const st = useAppStore.getState()
+        const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
+        if (!ws || st.welcomeFocused) return
+        e.preventDefault()
+        st.drawerPane(ws.focusedLeafId)
         return
       }
       if (action === 'clear-input') {
@@ -703,7 +739,7 @@ export default function App(): ReactElement {
       openPreview(e.terminalId, e.url)
       const st = useAppStore.getState()
       const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
-      const focused = ws ? findLeaf(ws.layout, ws.focusedLeafId)?.terminalId : undefined
+      const focused = ws ? focusedVisibleLeaf(ws)?.terminalId : undefined
       if (focused === e.terminalId) {
         useGitStore.getState().setMode('browser')
         // Creating a native webview can grab OS focus out from under the
@@ -942,7 +978,8 @@ export default function App(): ReactElement {
                   panel sitting beside it — see lib/war-room-drop.ts. */}
               <DndContext
                 sensors={dndSensors}
-                collisionDetection={pointerWithin}
+                collisionDetection={collisionDetection}
+                measuring={DND_MEASURING}
                 onDragStart={(e) => handleDragStart(String(e.active.id))}
                 onDragEnd={(e) => handleDragEnd(String(e.active.id), e.over ? String(e.over.id) : null)}
                 onDragCancel={() => {
@@ -979,7 +1016,7 @@ export default function App(): ReactElement {
                     </>
                   )}
                 </Group>
-                <DragOverlay>
+                <DragOverlay modifiers={draggingLeaf ? [ghostModifier] : undefined}>
                   {draggingLeaf ? <PaneDragGhost leaf={draggingLeaf} /> : null}
                 </DragOverlay>
               </DndContext>

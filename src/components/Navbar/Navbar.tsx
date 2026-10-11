@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { ArrowDownToLine, GripHorizontal, MoreVertical, Pencil, Plus, Settings, X } from 'lucide-react'
+import { Archive, ArrowDownToLine, Check, Columns2, GripHorizontal, MoreVertical, Pencil, Plus, Settings, X } from 'lucide-react'
 import {
   DndContext,
   DragOverlay,
@@ -27,8 +27,16 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import { AgentIcon } from '@/components/AgentIcon'
+import { TEMPLATES, isTemplateAvailable, templateById } from '@/lib/templates'
+import { useAgentPrefStore } from '@/store/agent-pref-store'
+import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { cn } from '@/lib/utils'
 import { TerminalList } from '@/components/Navbar/TerminalList'
 import { Group, Panel, Separator } from 'react-resizable-panels'
@@ -256,6 +264,7 @@ function WorkspaceItem({
   })
   const style = { transform: CSS.Transform.toString(transform), transition }
   const paneCount = collectLeaves(workspace.layout).length
+  const drawerCount = workspace.drawerLeafIds?.length ?? 0
 
   if (renaming) {
     return (
@@ -290,7 +299,16 @@ function WorkspaceItem({
         )}
       >
         <span className="flex-1 truncate">{workspace.name}</span>
-        <span className="text-xs tabular-nums text-muted-foreground">{paneCount}</span>
+        {drawerCount > 0 && (
+          <span
+            className="flex items-center gap-0.5 text-xs tabular-nums text-muted-foreground"
+            title={`${drawerCount} in drawer`}
+          >
+            <Archive className="h-3 w-3" aria-hidden="true" />
+            {drawerCount}
+          </span>
+        )}
+        <span className="text-xs tabular-nums text-muted-foreground" title={`${paneCount} terminals`}>{paneCount}</span>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -307,6 +325,8 @@ function WorkspaceItem({
               <Pencil className="h-3.5 w-3.5" />
               Rename
             </DropdownMenuItem>
+            <WorkspaceDefaultAgentMenu workspace={workspace} />
+            <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={onClose}
               className="text-destructive focus:bg-destructive/10 focus:text-destructive"
@@ -318,6 +338,45 @@ function WorkspaceItem({
         </DropdownMenu>
       </div>
     </li>
+  )
+}
+
+/**
+ * "Split opens…" submenu: the per-workspace default agent for split panes.
+ * "Settings default" clears the override so the workspace follows the global
+ * choice live, instead of freezing a copy of it.
+ */
+function WorkspaceDefaultAgentMenu({ workspace }: { workspace: Workspace }): ReactElement {
+  const setDefault = useAppStore((s) => s.setWorkspaceDefaultAgent)
+  const globalDefault = useAgentPrefStore((s) => s.defaultAgentId)
+  const availability = useAgentAvailabilityStore((s) => s.availability)
+  const current = workspace.defaultAgentId
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <Columns2 className="h-3.5 w-3.5" />
+        Split opens…
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto">
+        <DropdownMenuItem onSelect={() => setDefault(workspace.id, undefined)}>
+          <Check aria-hidden="true" className={cn('h-3.5 w-3.5', current === undefined ? 'opacity-100' : 'opacity-0')} />
+          <span>Settings default</span>
+          <span className="ml-auto pl-3 text-xs text-muted-foreground">{templateById(globalDefault).name}</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {TEMPLATES.map((t) => {
+          const available = isTemplateAvailable(t, availability)
+          return (
+            <DropdownMenuItem key={t.id} disabled={!available} onSelect={() => setDefault(workspace.id, t.id)}>
+              <Check aria-hidden="true" className={cn('h-3.5 w-3.5', current === t.id ? 'opacity-100' : 'opacity-0')} />
+              <AgentIcon template={t} className="h-4 w-4 shrink-0" />
+              <span>{t.name}</span>
+              {!available && <span className="ml-auto pl-3 text-xs text-muted-foreground">Not installed</span>}
+            </DropdownMenuItem>
+          )
+        })}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   )
 }
 

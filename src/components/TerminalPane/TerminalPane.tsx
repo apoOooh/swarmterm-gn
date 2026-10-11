@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, RotateCw } from 'lucide-react'
 import { useDraggable, useDroppable } from '@dnd-kit/core'
+import { DockPicker } from '@/components/TerminalPane/DockPicker'
 import type { LeafNode } from '@/lib/layout-tree'
 import { collectLeaves } from '@/lib/layout-tree'
 import { useAppStore, type ClearTarget } from '@/store/app-store'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
+import { useAgentPrefStore } from '@/store/agent-pref-store'
+import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
+import { resolveLaunchMode, resolveSplitAgent } from '@/lib/agent-pref'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useTerminalSearchStore } from '@/store/terminal-search-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
@@ -83,12 +87,26 @@ export function TerminalPane({
   const setPaneAccount = useAppStore(s => s.setPaneAccount)
   const setPaneAgent = useAppStore((s) => s.setPaneAgent)
   const setPaneLaunchMode = useAppStore((s) => s.setPaneLaunchMode)
+  const seedPaneLaunchMode = useAppStore((s) => s.seedPaneLaunchMode)
+  const defaultLaunchModes = useAgentPrefStore((s) => s.defaultLaunchModes)
   const pickPaneSession = useAppStore((s) => s.pickPaneSession)
   const setPaneCwd = useAppStore((s) => s.setPaneCwd)
   const setPaneShell = useAppStore((s) => s.setPaneShell)
   const clearWorktrees = useAppStore((s) => s.clearWorktrees)
   const globalShellId = useTerminalPrefStore((s) => s.shellId)
   const isDropTarget = useAppStore((s) => s.dropTargetTerminalId === leaf.terminalId)
+  const workspaceDefaultAgent = useAppStore(
+    (s) => s.workspaces.find((w) => collectLeaves(w.layout).some((l) => l.id === leaf.id))?.defaultAgentId
+  )
+  const globalDefaultAgent = useAgentPrefStore((s) => s.defaultAgentId)
+  const agentAvailability = useAgentAvailabilityStore((s) => s.availability)
+  const splitAgentFor = (plain: boolean): string =>
+    resolveSplitAgent({
+      workspaceDefault: workspaceDefaultAgent,
+      globalDefault: globalDefaultAgent,
+      availability: agentAvailability,
+      forcePlain: plain
+    })
 
   const { id: leafId, terminalId } = leaf
 
@@ -127,17 +145,20 @@ export function TerminalPane({
   const resolvedShellId = leaf.shellId ?? globalShellId
   const resolvedAgentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
   const rawCommand = agentCommand(resolvedAgentId)
+  // Pane choice → Settings default → template default; seeded into the leaf
+  // below so the pane keeps it when the Settings default changes later.
+  const resolvedLaunchMode = resolveLaunchMode(resolvedAgentId, leaf.launchMode, defaultLaunchModes)
   // Launch-mode args ride on every spawn form (fresh, brief, resume, continue).
   const baseCommand =
-    rawCommand === undefined ? undefined : withLaunchMode(rawCommand, resolvedAgentId, leaf.launchMode)
+    rawCommand === undefined ? undefined : withLaunchMode(rawCommand, resolvedAgentId, resolvedLaunchMode)
   // A resume pane re-enters a session the CLI recorded on disk; the resume
   // line wins over the worker-brief path (a resume leaf never carries
   // initialPrompt — see createWorkspace).
   const resumeCommand =
     leaf.resumeSessionId !== undefined
-      ? buildResumeCommand(resolvedAgentId, leaf.resumeSessionId, leaf.launchMode)
+      ? buildResumeCommand(resolvedAgentId, leaf.resumeSessionId, resolvedLaunchMode)
       : leaf.continueSession !== undefined
-        ? buildContinueCommand(resolvedAgentId, leaf.launchMode, leaf.continueSession)
+        ? buildContinueCommand(resolvedAgentId, resolvedLaunchMode, leaf.continueSession)
         : undefined
   // Worker panes carry a one-shot task brief; quote it for the shell the pty
   // actually types into (initialCommand is a typed line, not an exec).
@@ -152,6 +173,11 @@ export function TerminalPane({
           templateById(resolvedAgentId).spawnPromptFlag
         )
       : baseCommand)
+  useEffect(() => {
+    if (leaf.launchMode === undefined && resolvedLaunchMode !== undefined) {
+      seedPaneLaunchMode(leaf.id, resolvedLaunchMode)
+    }
+  }, [leaf.id, leaf.launchMode, resolvedLaunchMode, seedPaneLaunchMode])
   // Published to the DOM so the app-level file-drop listener can quote paths
   // for this pane's shell without re-deriving the resolution chain.
   const paneShellFlavor = shellFlavor(resolvedShellId, isWindowsPlatform())
@@ -234,7 +260,8 @@ export function TerminalPane({
   }, [isFocused, terminalId])
 
   async function handleChoosePath(): Promise<void> {
-    const dir = await pickDirectory()
+    // Start in the workspace folder, not the OS default (home).
+    const dir = await pickDirectory(cwd)
     if (dir) setPaneCwd(leafId, dir)
   }
 
@@ -358,16 +385,18 @@ export function TerminalPane({
         shellId={resolvedShellId}
         resolvedCwd={resolvedCwd}
         hasCwdOverride={leaf.cwd !== undefined}
-        launchModeId={leaf.launchMode}
+        launchModeId={resolvedLaunchMode}
         onAgentChange={(id) => setPaneAgent(leafId, id)}
         onLaunchModeChange={(id) => setPaneLaunchMode(leafId, id)}
         onPickSession={() => pickPaneSession(leafId)}
         onShellChange={(id) => setPaneShell(leafId, id)}
         onChoosePath={() => void handleChoosePath()}
         onResetPath={() => setPaneCwd(leafId, undefined)}
-        onSplitRight={() => splitPane(leafId, 'horizontal')}
-        onSplitDown={() => splitPane(leafId, 'vertical')}
+        onSplitRight={(plain) => splitPane(leafId, 'horizontal', splitAgentFor(plain))}
+        onSplitDown={(plain) => splitPane(leafId, 'vertical', splitAgentFor(plain))}
+        splitAgentName={templateById(splitAgentFor(false)).name}
         onClose={() => closePane(leafId)}
+        onDrawer={() => useAppStore.getState().drawerPane(leafId)}
         isZoomed={isZoomed}
         onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
         broadcastActive={broadcastActive}
@@ -392,6 +421,7 @@ export function TerminalPane({
         <div ref={containerRef} className="absolute inset-0" />
 
         <HeldDeliveryPill terminalId={terminalId} />
+        <DockPicker leafId={leafId} />
         {searchOpen && <SearchOverlay terminalId={terminalId} />}
 
         {status.kind === 'error' && (

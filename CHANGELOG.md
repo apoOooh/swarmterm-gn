@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-11
+
+- Park terminals in a per-workspace drawer (archive button or Ctrl+Shift+D);
+  their shells keep running and one click in the sidebar restores them.
+- Open splits with a configurable default AI provider, globally or per
+  workspace; Alt+click forces a plain shell.
+- Pick a default launch mode per provider. Claude Code gains Default, Accept
+  edits, Plan and Bypass permissions modes instead of always bypassing.
+- Drag a pane onto another to split beside it, or drop it on a snap layout
+  preset (side by side, stacked, grid, main-left, main-top).
+- Paste clipboard screenshots into Claude Code and Codex panes with Ctrl+V.
+- Choose folder now starts in the workspace folder.
+
 ## [1.4.0] - 2026-10-11
 
 - Keep terminal creation and account configuration off the UI thread, combine
