@@ -1,10 +1,11 @@
-import type { ReactElement } from 'react'
-import { Group, Panel, Separator } from 'react-resizable-panels'
+import { useRef, type ReactElement } from 'react'
+import { Group, Panel, Separator, type GroupImperativeHandle } from 'react-resizable-panels'
 import type { LayoutNode, LeafNode } from '@/lib/layout-tree'
 import { useAppStore, type Workspace as WorkspaceModel } from '@/store/app-store'
 import { PaneWorkbench } from '@/components/Files/PaneWorkbench'
 import { BroadcastBanner } from '@/components/Workspace/BroadcastBanner'
 import { SnapBar } from '@/components/Workspace/SnapBar'
+import { CornerHandles } from '@/components/Workspace/CornerHandles'
 import { AgentIcon } from '@/components/AgentIcon'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
@@ -19,6 +20,8 @@ interface WorkspaceProps {
 /** Render one workspace: its binary split-tree of resizable terminal panes. */
 export function Workspace({ workspace }: WorkspaceProps): ReactElement {
   const resizeSplitNode = useAppStore((s) => s.resizeSplitNode)
+  // Live Group handles so CornerHandles can move two splits in one drag.
+  const groups = useRef(new Map<string, GroupImperativeHandle>())
 
   function renderNode(node: LayoutNode): ReactElement {
     if (node.type === 'leaf') {
@@ -44,6 +47,10 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
       <Group
         key={node.id}
         orientation={node.direction}
+        groupRef={(handle) => {
+          if (handle) groups.current.set(node.id, handle)
+          else groups.current.delete(node.id)
+        }}
         className="h-full w-full"
         defaultLayout={{ [leftId]: node.sizes[0], [rightId]: node.sizes[1] }}
         onLayoutChanged={(layout) => {
@@ -78,13 +85,15 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
   // terminal-registry and reattach on restore/unzoom.
   const visible = visibleLayout(workspace.layout, workspace.drawerLeafIds ?? [])
   const drawerCount = workspace.drawerLeafIds?.length ?? 0
+  const zoomed = visible ? zoomedLeaf(visible, workspace.zoomedLeafId) : null
   return (
     <div data-focus-return className="flex h-full w-full flex-col bg-canvas">
       <BroadcastBanner workspace={workspace} />
       <div className="relative min-h-0 flex-1 p-2">
         {visible
-          ? renderNode(zoomedLeaf(visible, workspace.zoomedLeafId) ?? visible)
+          ? renderNode(zoomed ?? visible)
           : <EmptyDrawerState count={drawerCount} />}
+        {visible && !zoomed && <CornerHandles layout={visible} groups={groups} inset={8} />}
         <SnapBar layout={workspace.layout} drawerLeafIds={workspace.drawerLeafIds ?? []} />
       </div>
     </div>

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Resize panes from the corner: drag the handle where a horizontal and a
+  vertical separator meet to change width and height in one move.
 - Pin each Codex pane to its own app's MCP server, so a development build
   running next to the installed app no longer redirects Codex away from the
   War Room. Codex session hooks start without a nested PowerShell, stale
