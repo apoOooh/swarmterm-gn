@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-10-11
+
+- Add an Auto launch mode for Claude Code (`--permission-mode auto`).
+
 ## [1.5.1] - 2026-10-11
 
 - Release 1.5.0 again; its release checks failed on two browser tests still
