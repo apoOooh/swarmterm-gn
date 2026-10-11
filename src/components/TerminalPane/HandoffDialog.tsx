@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { describeUsage, handoffTargets, limitHint, startingHint, type HandoffPhase } from '@/lib/handoff-flow'
+import { describeUsage, handoffTargets, sessionHookGaps, limitHint, startingHint, type HandoffPhase } from '@/lib/handoff-flow'
 import { deliverHandoffBrief } from '@/lib/handoff-delivery'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { getTerminalGeneration, getTerminalStatus, readTerminalText } from '@/lib/terminal-registry'
@@ -35,6 +35,8 @@ export function HandoffDialog(): React.ReactElement | null {
   const [now, setNow] = useState(0)
   // Ids of installed CLIs; undefined until the probe answers (nothing selectable yet).
   const [available, setAvailable] = useState<ReadonlySet<string> | undefined>()
+  // Installed CLIs without session-hook support: hidden, with an explanation.
+  const [hookless, setHookless] = useState<ReadonlySet<string>>(new Set())
 
   useEffect(() => {
     if (!source) return
@@ -46,7 +48,11 @@ export function HandoffDialog(): React.ReactElement | null {
     setStartedAt(undefined)
     let alive = true
     listAvailableAgents()
-      .then((list) => alive && setAvailable(new Set(list.filter((a) => a.available).map((a) => a.id))))
+      .then((list) => {
+        if (!alive) return
+        setAvailable(new Set(list.filter((a) => a.available).map((a) => a.id)))
+        setHookless(sessionHookGaps(list))
+      })
       .catch(() => alive && setAvailable(new Set()))
     return () => {
       alive = false
@@ -92,7 +98,7 @@ export function HandoffDialog(): React.ReactElement | null {
   const root = useModalFocus(source !== undefined && !minimized, dismiss, terminalId ?? source?.terminalId)
 
   if (!source) return null
-  const targets = available ? handoffTargets(accounts, available) : []
+  const targets = available ? handoffTargets(accounts, available, hookless) : []
   const selected = target && targets.some((t) => t.agentId === target.agentId && t.accountId === target.accountId) ? target : targets[0]
   // No CLI exposes per-account usage as structured data yet, so this stays
   // "unknown" with the time it was checked — never a number scraped from text.
@@ -159,7 +165,9 @@ export function HandoffDialog(): React.ReactElement | null {
   const statusText: Record<HandoffPhase, string> = {
     choosing: 'Choose who takes over. A new pane starts in the same folder; this pane keeps running.',
     starting: 'Starting the new pane… waiting for the agent to report its session.',
-    ready: 'The agent in the new pane is ready. Send the brief as its first prompt?',
+    ready: state.agentSeen
+      ? 'The agent in the new pane is ready. Send the brief as its first prompt?'
+      : 'The agent reported its session… waiting for it to settle.',
     delivering: state.held ? `Waiting to send (${HOLD_REASON_COPY[state.held]})…` : 'Sending once the pane is quiet…',
     delivered: 'Brief delivered.',
     pasted: `Pasted, not submitted: ${state.error ?? 'something changed'}. Check the new pane and press Enter there yourself.`,
@@ -216,6 +224,11 @@ export function HandoffDialog(): React.ReactElement | null {
             ))}
           </select>
         </label>
+        {hookless.has('codex') && (
+          <div className="text-xs text-muted-foreground">
+            Codex is not offered: this Codex version cannot report its session, so the handoff could never confirm it is ready.
+          </div>
+        )}
         {available && targets.length === 0 && (
           <div className="text-xs text-[#E5C07B]">No supported agent CLI (Claude Code, Codex) was found on this machine.</div>
         )}
@@ -243,7 +256,7 @@ export function HandoffDialog(): React.ReactElement | null {
             </Button>
           )}
           {(phase === 'starting' || phase === 'ready') && (
-            <Button size="sm" disabled={phase !== 'ready'} onClick={send}>
+            <Button size="sm" disabled={phase !== 'ready' || !state.agentSeen} onClick={send}>
               Send brief
             </Button>
           )}

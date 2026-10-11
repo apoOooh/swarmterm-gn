@@ -38,10 +38,12 @@ import { cn } from '@/lib/utils'
 import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
 import { insertExplorerPaths } from '@/components/FileDropListener'
 import { devLog } from '@/lib/dev-log'
+import { handoffCwd } from '@/lib/handoff-brief'
 import {
   attachTerminal,
   detachTerminal,
   focusTerminal,
+  getTerminalCwd,
   getTerminalStatus,
   getHoveredPathLink,
   openPathLink,
@@ -274,6 +276,8 @@ export function TerminalPane({
   }
 
   const [handoffOpen, setHandoffOpen] = useState(false)
+  // Live shell cwd captured when the brief opens (see handoffCwd).
+  const [briefCwd, setBriefCwd] = useState(resolvedCwd)
   const accounts = useAgentAccountsStore((st) => st.accounts)
   const [dialog, setDialog] = useState<{ targets: DialogTarget[]; clears: ClearTarget[] } | null>(null)
   // Lazily computed when the context menu opens (see the ContextMenu wrapper
@@ -406,7 +410,10 @@ export function TerminalPane({
         onSplitDown={(plain) => splitPane(leafId, 'vertical', splitAgentFor(plain))}
         splitAgentName={templateById(splitAgentFor(false)).name}
         onClose={() => closePane(leafId)}
-        onHandoff={() => setHandoffOpen(true)}
+        onHandoff={() => {
+          setBriefCwd(handoffCwd(getTerminalCwd(terminalId), resolvedCwd))
+          setHandoffOpen(true)
+        }}
         onDrawer={() => useAppStore.getState().drawerPane(leafId)}
         isZoomed={isZoomed}
         onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
@@ -435,7 +442,7 @@ export function TerminalPane({
         leafId={leaf.id}
         agentName={templateById(resolvedAgentId).name}
         accountLabel={leaf.accountId === undefined ? undefined : accountLabel(leaf.accountId, accounts)}
-        cwd={resolvedCwd}
+        cwd={briefCwd}
         sessionId={leaf.sessionId}
       />
 

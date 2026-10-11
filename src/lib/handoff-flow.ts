@@ -49,6 +49,10 @@ export interface HandoffState {
   sessionGeneration?: number
   /** Pty generation observed when the new pane became ready. */
   generation?: number
+  /** The detector has recognised the agent at least once since ready. Until
+   *  then `unknown` is its startup grace (the session hook can beat it), not
+   *  a dead agent; Send waits for it. */
+  agentSeen?: boolean
   held?: HoldReason
   deliveredAt?: number
   error?: string
@@ -93,13 +97,15 @@ export function reduceHandoff(s: HandoffState, e: HandoffEvent): HandoffState {
       // does not recognise — either would run the brief's lines as commands.
       if (s.phase === 'starting') {
         const proven = e.kind === 'running' && s.sessionGeneration !== undefined && e.generation === s.sessionGeneration
-        return proven ? { ...s, phase: 'ready', generation: e.generation } : s
+        return proven ? { ...s, phase: 'ready', generation: e.generation, agentSeen: agentAlive(e.agent) } : s
       }
       if (e.generation !== s.generation) return fail(s, 'The new pane restarted; the brief was not sent.')
-      if (!agentAlive(e.agent)) return fail(s, 'The agent in the new pane is not running; a plain shell never receives the brief.')
+      if (agentAlive(e.agent)) return s.agentSeen ? s : { ...s, agentSeen: true }
+      // Only a loss AFTER the detector settled on the agent is a death.
+      if (s.agentSeen) return fail(s, 'The agent in the new pane is not running; a plain shell never receives the brief.')
       return s
     case 'confirm':
-      if (s.phase !== 'ready') return s
+      if (s.phase !== 'ready' || !s.agentSeen) return s
       if (e.live.kind !== 'running') return fail(s, 'The new pane is no longer running.')
       if (e.live.generation !== s.generation) return fail(s, 'The new pane restarted; the brief was not sent.')
       if (!agentAlive(e.live.agent)) return fail(s, 'The agent in the new pane is not running; a plain shell never receives the brief.')
@@ -125,15 +131,30 @@ export interface HandoffTarget {
 
 /** Default configuration first, then saved profiles (SWA-9), per CLI. With
  *  `available` (ids the backend probe found), CLIs not installed are hidden —
- *  starting them would leave a plain shell. */
-export function handoffTargets(accounts: readonly AgentAccount[], available?: ReadonlySet<string>): HandoffTarget[] {
-  return (['claude-code', 'codex'] as const).filter((id) => !available || available.has(id)).flatMap((agentId) => {
+ *  starting them would leave a plain shell. CLIs in `noSessionHooks` are
+ *  hidden too: readiness is proven only by the CLI's session hook, so such a
+ *  pane would wait in "starting" forever (see `sessionHookGaps`). */
+export function handoffTargets(
+  accounts: readonly AgentAccount[],
+  available?: ReadonlySet<string>,
+  noSessionHooks?: ReadonlySet<string>
+): HandoffTarget[] {
+  return (['claude-code', 'codex'] as const)
+    .filter((id) => (!available || available.has(id)) && !noSessionHooks?.has(id))
+    .flatMap((agentId) => {
     const name = templateById(agentId).name
     return [
       { agentId, label: `${name} · Default` },
       ...accounts.filter((a) => a.agentId === agentId).map((a) => ({ agentId, accountId: a.id, label: `${name} · ${a.name}` }))
     ]
   })
+}
+
+/** Installed CLIs that cannot report their session to Swarmterm. Claude Code
+ *  hooks are always written; Codex only when the probe confirms hook support
+ *  (older Codex builds lack it). */
+export function sessionHookGaps(entries: readonly { id: string; available: boolean; sessionHooks?: boolean }[]): Set<string> {
+  return new Set(entries.filter((e) => e.available && e.id === 'codex' && e.sessionHooks !== true).map((e) => e.id))
 }
 
 /** A usage reading taken from structured CLI output (JSON/status payload) — never scraped text. */

@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { focusTrapTarget } from '@/lib/handoff-flow'
 import { focusTerminal } from '@/lib/terminal-registry'
+import { ownsKeyboard, pushModal, removeModal, type ModalStack } from '@/lib/modal-stack'
+
+let stack: ModalStack = []
+let nextId = 1
 
 const FOCUSABLE = 'textarea, input, select, button, [tabindex]:not([tabindex="-1"])'
 
@@ -11,6 +15,7 @@ const FOCUSABLE = 'textarea, input, select, button, [tabindex]:not([tabindex="-1
  * first field is focused, Tab is trapped, Esc closes (captured before the
  * terminal sees it), and on close focus returns to `returnTo`'s terminal.
  * terminal-focus also stands down while an aria-modal dialog is open.
+ * Only the top modal (lib/modal-stack) traps focus and handles Esc.
  */
 export function useModalFocus(open: boolean, onClose: () => void, returnTo: string | undefined): React.RefObject<HTMLDivElement | null> {
   const root = useRef<HTMLDivElement>(null)
@@ -22,14 +27,23 @@ export function useModalFocus(open: boolean, onClose: () => void, returnTo: stri
 
   useEffect(() => {
     if (!open) return
+    const modalId = nextId++
+    stack = pushModal(stack, modalId)
+    const foreignOpen = (): boolean =>
+      Array.from(document.querySelectorAll('[aria-modal="true"]')).some(
+        (n) => root.current !== null && !root.current.contains(n) && !n.contains(root.current) && !n.hasAttribute('data-modal-stack')
+      )
+    const top = (): boolean => ownsKeyboard(stack, modalId, foreignOpen())
     const nodes = (): HTMLElement[] =>
       Array.from(root.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []).filter((n) => !n.hasAttribute('disabled'))
     const claim = (): void => {
+      if (!top()) return
       if (root.current && !root.current.contains(document.activeElement)) nodes()[0]?.focus()
     }
     // After the opening click's own focus work (App defers its return-focus).
     const timer = setTimeout(claim, 0)
     const onKey = (e: KeyboardEvent): void => {
+      if (!top()) return
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
@@ -48,10 +62,12 @@ export function useModalFocus(open: boolean, onClose: () => void, returnTo: stri
     const onFocusIn = (e: FocusEvent): void => {
       if (root.current && e.target instanceof Node && !root.current.contains(e.target)) claim()
     }
+    root.current?.setAttribute('data-modal-stack', '')
     document.addEventListener('keydown', onKey, true)
     document.addEventListener('focusin', onFocusIn)
     return () => {
       clearTimeout(timer)
+      stack = removeModal(stack, modalId)
       document.removeEventListener('keydown', onKey, true)
       document.removeEventListener('focusin', onFocusIn)
       const id = back.current
