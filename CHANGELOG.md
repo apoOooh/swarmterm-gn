@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-11
+
+- Release 1.5.0 again; its release checks failed on two browser tests still
+  expecting Claude Code to launch with bypassed permissions. 1.5.0 was never
+  published.
+
 ## [1.5.0] - 2026-10-11
 
 - Park terminals in a per-workspace drawer (archive button or Ctrl+Shift+D);
