@@ -1,6 +1,6 @@
 import { toggledZoom } from '@/lib/pane-zoom'
 import { drawerAfterRemoval, nextVisibleLeafId } from '@/lib/pane-drawer'
-import { clampFloatRect, floatingAfterRemoval, floatPane, isFloating, unfloatPane, type FloatRect } from '@/lib/floating-panes'
+import { clampFloatRect, floatingAfterRemoval, floatPane, hiddenLeafIds, isFloating, unfloatPane, type FloatRect } from '@/lib/floating-panes'
 import { create, type StateCreator } from 'zustand'
 import {
   paneLayoutFor,
@@ -11,6 +11,7 @@ import {
   splitLeaf,
   reorderLeaves,
   moveLeafBeside,
+  tidyLayout,
   updateLeaf,
   type Direction,
   type DockSide,
@@ -187,6 +188,8 @@ export interface AppActions {
   /** Snap layout: rebuild the active workspace as `presetId` with `leafId` in `slot`. */
   applySnapLayout: (leafId: string, presetId: string, slot: number) => void
   resizeSplitNode: (splitId: string, sizes: [number, number]) => void
+  /** Even out a workspace's panes by geometry (see `tidyLayout` in lib/layout-tree). */
+  tidyLayout: (workspaceId: string) => void
   setPaneAgent: (leafId: string, agentId: string) => void
   setPaneAccount: (leafId: string, accountId?: string) => void
   setPaneCwd: (leafId: string, cwd: string | undefined) => void
@@ -603,6 +606,19 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
 
   resizeSplitNode: (splitId, sizes) =>
     set((s) => mapActive(s, (w) => ({ ...w, layout: resizeSplit(w.layout, splitId, sizes) }))),
+
+  // Takes the workspace id rather than acting on the active one, so the sidebar
+  // menu can tidy any workspace without switching to it. Drawered and floating
+  // panes take no room in the split view, so they stay out of the maths. A zoom
+  // ends: the user asked to see an even layout, and a zoomed pane would hide it.
+  tidyLayout: (workspaceId) =>
+    set((s) => {
+      const ws = s.workspaces.find((w) => w.id === workspaceId)
+      if (!ws) return {}
+      const layout = tidyLayout(ws.layout, hiddenLeafIds(ws.drawerLeafIds ?? [], ws.floating ?? []))
+      if (layout === ws.layout && ws.zoomedLeafId === undefined) return {}
+      return { workspaces: s.workspaces.map((w) => (w.id === ws.id ? { ...w, layout, zoomedLeafId: undefined } : w)) }
+    }),
 
   // An agent switch respawns the pty; replaying a brief written for another
   // agent would be wrong, so a pending prompt is dropped along with it. A

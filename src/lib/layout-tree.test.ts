@@ -15,7 +15,8 @@ import {
   buildGridLayout,
   paneLayoutFor,
   layoutSummary,
-  moveLeafBeside
+  moveLeafBeside,
+  tidyLayout
 } from './layout-tree'
 
 // --- helpers ---------------------------------------------------------------
@@ -530,5 +531,164 @@ describe('splitLeaf position', () => {
     expect(splitLeaf(leaf('A'), 'A', 'vertical', leaf('B'), 'N', 'before')).toEqual(
       split('N', 'vertical', [leaf('B'), leaf('A')])
     )
+  })
+})
+
+// --- tidyLayout -------------------------------------------------------------
+
+/** Split by id, or throw: keeps assertions on nested sizes terse. */
+function splitById(tree: LayoutNode, id: string): SplitNode {
+  if (tree.type === 'split') {
+    if (tree.id === id) return tree
+    for (const child of tree.children) {
+      try {
+        return splitById(child, id)
+      } catch {
+        /* keep looking in the sibling */
+      }
+    }
+  }
+  throw new Error(`no split ${id}`)
+}
+
+describe('tidyLayout', () => {
+  it('returns a lone leaf unchanged', () => {
+    const t = leaf('A')
+    expect(tidyLayout(t)).toBe(t)
+  })
+
+  it('splits two panes evenly', () => {
+    const out = tidyLayout(split('S', 'horizontal', [leaf('A'), leaf('B')], [70, 30])) as SplitNode
+    expect(out.sizes).toEqual([50, 50])
+  })
+
+  it('gives [A | [B | C]] a third each: outer 33.3 %, inner 50 %', () => {
+    const t = split('S1', 'horizontal', [leaf('A'), split('S2', 'horizontal', [leaf('B'), leaf('C')], [20, 80])], [50, 50])
+    const out = tidyLayout(t)
+    expect(splitById(out, 'S1').sizes[0]).toBeCloseTo(100 / 3, 6)
+    expect(splitById(out, 'S1').sizes[1]).toBeCloseTo(200 / 3, 6)
+    expect(splitById(out, 'S2').sizes).toEqual([50, 50])
+  })
+
+  it('weighs the left side too: [[A | B] | C]', () => {
+    const t = split('S1', 'horizontal', [split('S2', 'horizontal', [leaf('A'), leaf('B')]), leaf('C')], [10, 90])
+    const out = tidyLayout(t)
+    expect(splitById(out, 'S1').sizes[0]).toBeCloseTo(200 / 3, 6)
+    expect(splitById(out, 'S1').sizes[1]).toBeCloseTo(100 / 3, 6)
+  })
+
+  it('walks a long same-direction chain: 25 / 33.3 / 50', () => {
+    const t = split('S1', 'vertical', [
+      leaf('A'),
+      split('S2', 'vertical', [leaf('B'), split('S3', 'vertical', [leaf('C'), leaf('D')])])
+    ])
+    const out = tidyLayout(t)
+    expect(splitById(out, 'S1').sizes[0]).toBeCloseTo(25, 6)
+    expect(splitById(out, 'S2').sizes[0]).toBeCloseTo(100 / 3, 6)
+    expect(splitById(out, 'S3').sizes).toEqual([50, 50])
+  })
+
+  it('counts a perpendicular subtree as a single unit', () => {
+    // A beside a column of B over C: two columns, however tall the right one is.
+    const t = split('S1', 'horizontal', [leaf('A'), split('S2', 'vertical', [leaf('B'), leaf('C')], [80, 20])], [30, 70])
+    const out = tidyLayout(t)
+    expect(splitById(out, 'S1').sizes).toEqual([50, 50])
+    expect(splitById(out, 'S2').sizes).toEqual([50, 50])
+  })
+
+  it('counts a perpendicular subtree as one unit even when it holds a whole row', () => {
+    // Rows [A|B|C] over [D|E]: the two rows share the height, each row its own widths.
+    const t = split(
+      'V',
+      'vertical',
+      [
+        split('R1', 'horizontal', [split('R1a', 'horizontal', [leaf('A'), leaf('B')]), leaf('C')]),
+        split('R2', 'horizontal', [leaf('D'), leaf('E')])
+      ],
+      [75, 25]
+    )
+    const out = tidyLayout(t)
+    expect(splitById(out, 'V').sizes).toEqual([50, 50])
+    expect(splitById(out, 'R1').sizes[0]).toBeCloseTo(200 / 3, 6)
+    expect(splitById(out, 'R1a').sizes).toEqual([50, 50])
+    expect(splitById(out, 'R2').sizes).toEqual([50, 50])
+  })
+
+  it('tidies a generated grid to equal rows and columns', () => {
+    let n = 0
+    const grid = buildGridLayout(6, () => leaf(`L${n++}`), () => `S${n++}`)
+    const messy = resizeSplit(grid, (grid as SplitNode).id, [90, 10])
+    const out = tidyLayout(messy) as SplitNode
+    expect(out.sizes).toEqual([50, 50])
+    for (const row of out.children as SplitNode[]) {
+      expect(row.sizes[0]).toBeCloseTo(200 / 3, 6)
+    }
+  })
+
+  it('keeps ids, directions, leaves and their order', () => {
+    const t = nestedTree()
+    const out = tidyLayout(t)
+    expect(collectLeaves(out)).toEqual(collectLeaves(t))
+    expect(splitById(out, 'S1').direction).toBe('horizontal')
+    expect(splitById(out, 'S2').direction).toBe('vertical')
+  })
+
+  it('never mutates its input', () => {
+    const t = split('S1', 'horizontal', [leaf('A'), split('S2', 'horizontal', [leaf('B'), leaf('C')], [10, 90])], [5, 95])
+    const snapshot = JSON.parse(JSON.stringify(t))
+    tidyLayout(t)
+    expect(t).toEqual(snapshot)
+  })
+
+  it('returns the same reference when the layout is already tidy', () => {
+    const t = split('S1', 'horizontal', [leaf('A'), leaf('B')])
+    expect(tidyLayout(t)).toBe(t)
+    const once = tidyLayout(
+      split('S1', 'horizontal', [leaf('A'), split('S2', 'horizontal', [leaf('B'), leaf('C')])], [10, 90])
+    )
+    expect(tidyLayout(once)).toBe(once)
+  })
+
+  it('reuses untouched subtrees', () => {
+    const inner = split('S2', 'vertical', [leaf('B'), leaf('C')])
+    const out = tidyLayout(split('S1', 'horizontal', [leaf('A'), inner], [20, 80])) as SplitNode
+    expect(out.children[1]).toBe(inner)
+  })
+
+  describe('with hidden panes (drawer or floating)', () => {
+    it('ignores a hidden pane when weighing: [A | [B | C]] without B is two columns', () => {
+      const t = split('S1', 'horizontal', [leaf('A'), split('S2', 'horizontal', [leaf('B'), leaf('C')], [30, 70])], [20, 80])
+      expect(splitById(tidyLayout(t, ['B']), 'S1').sizes).toEqual([50, 50])
+    })
+
+    it('leaves a split with a hidden side alone so a restore finds its old sizes', () => {
+      const t = split('S1', 'horizontal', [leaf('A'), split('S2', 'horizontal', [leaf('B'), leaf('C')], [30, 70])], [20, 80])
+      expect(splitById(tidyLayout(t, ['B']), 'S2').sizes).toEqual([30, 70])
+    })
+
+    it('sees through a collapsed perpendicular split: [A | (X over [B | C])] without X', () => {
+      const t = split('S1', 'horizontal', [
+        leaf('A'),
+        split('S2', 'vertical', [leaf('X'), split('S3', 'horizontal', [leaf('B'), leaf('C')])])
+      ])
+      const out = tidyLayout(t, ['X'])
+      expect(splitById(out, 'S1').sizes[0]).toBeCloseTo(100 / 3, 6)
+      expect(splitById(out, 'S3').sizes).toEqual([50, 50])
+    })
+
+    it('counts a perpendicular split that keeps both sides as one unit', () => {
+      const t = split(
+        'S1',
+        'horizontal',
+        [leaf('A'), split('S2', 'vertical', [leaf('X'), split('S3', 'horizontal', [leaf('B'), leaf('C')])])],
+        [10, 90]
+      )
+      expect(splitById(tidyLayout(t, []), 'S1').sizes).toEqual([50, 50])
+    })
+
+    it('returns the same reference when every pane is hidden', () => {
+      const t = split('S1', 'horizontal', [leaf('A'), leaf('B')], [30, 70])
+      expect(tidyLayout(t, ['A', 'B'])).toBe(t)
+    })
   })
 })

@@ -1,6 +1,7 @@
 import { describe,it,expect } from 'vitest'
 import { bindingConflict,bindingFromEvent,normalizeBinding,reservedBinding,resolveShortcut } from './custom-shortcuts'
 import { readShortcutSettings,validateMacro } from './workspace-macros'
+import { APP_ACTIONS } from './app-actions'
 const ctrl = (key:string,shiftKey=false) => ({key,ctrlKey:true,metaKey:false,altKey:false,shiftKey})
 describe('configurable shortcut ownership',()=>{
   it('replaces old shortcuts and shares current bindings with the terminal gate',()=>{
@@ -30,6 +31,22 @@ describe('configurable shortcut ownership',()=>{
     expect(resolveShortcut(ctrl('k'),false,{[id]:'Mod+K'},[{id}])).toBe(id)
     expect(readShortcutSettings('{')).toEqual({bindings:{},macros:[]})
     expect(readShortcutSettings(JSON.stringify({version:1,bindings:{unknown:'Mod+K'},macros:[]})).bindings).toEqual({})
+  })
+})
+describe('tidy-layout action',()=>{
+  it('is registered without a default key, so it claims nothing from the shell',()=>{
+    const action=APP_ACTIONS.find(a=>a.id==='tidy-layout')
+    expect(action).toMatchObject({group:'Panes',macro:true})
+    expect(action?.defaultBinding).toBeUndefined()
+    expect(resolveShortcut(ctrl('t',true),false,{})).toBeNull()
+  })
+  it('resolves for the window handler and the terminal gate once a key is bound',()=>{
+    expect(resolveShortcut(ctrl('T',true),false,{'tidy-layout':'Mod+Shift+T'})).toBe('tidy-layout')
+    expect(bindingConflict('new-workspace','Mod+Shift+T',{'tidy-layout':'Mod+Shift+T'})).toBe('tidy-layout')
+  })
+  it('can be a step of a workspace recipe',()=>{
+    const macro={id:'macro:11111111-2222-4333-8444-555555555555',name:'Tidy up',steps:[{type:'action',actionId:'tidy-layout'}]}
+    expect(validateMacro(macro)).toBe(true)
   })
 })
 describe('workspace action recipes',()=>{
