@@ -14,7 +14,8 @@ import {
   buildBalancedTree,
   buildGridLayout,
   paneLayoutFor,
-  layoutSummary
+  layoutSummary,
+  moveLeafBeside
 } from './layout-tree'
 
 // --- helpers ---------------------------------------------------------------
@@ -466,5 +467,68 @@ describe('layoutSummary', () => {
   it('omits the grid shape for non-grid counts', () => {
     expect(layoutSummary(3)).toBe('3 panes')
     expect(layoutSummary(5)).toBe('5 panes')
+  })
+})
+
+// --- moveLeafBeside --------------------------------------------------------
+
+describe('moveLeafBeside', () => {
+  // The user's case: [A | B] on top, C full-width below.
+  //   R (vertical)
+  //   ├─ T (horizontal) [A, B]
+  //   └─ C
+  function threePane(): SplitNode {
+    return split('R', 'vertical', [split('T', 'horizontal', [leaf('A'), leaf('B')]), leaf('C')])
+  }
+
+  it('docks A left of C: B widens, C slot splits side by side with A first', () => {
+    expect(moveLeafBeside(threePane(), 'A', 'C', 'left', 'N')).toEqual(
+      split('R', 'vertical', [leaf('B'), split('N', 'horizontal', [leaf('A'), leaf('C')])])
+    )
+  })
+
+  it('docks A below C: stacked with A second', () => {
+    expect(moveLeafBeside(threePane(), 'A', 'C', 'bottom', 'N')).toEqual(
+      split('R', 'vertical', [leaf('B'), split('N', 'vertical', [leaf('C'), leaf('A')])])
+    )
+  })
+
+  it('maps right → horizontal after and top → vertical before', () => {
+    const two = split('S', 'horizontal', [leaf('A'), leaf('B')])
+    expect(moveLeafBeside(two, 'A', 'B', 'right', 'N')).toEqual(
+      split('N', 'horizontal', [leaf('B'), leaf('A')])
+    )
+    expect(moveLeafBeside(two, 'A', 'B', 'top', 'N')).toEqual(
+      split('N', 'vertical', [leaf('A'), leaf('B')])
+    )
+  })
+
+  it('keeps unrelated split sizes', () => {
+    const out = moveLeafBeside(nestedTree(), 'B', 'A', 'top', 'N') as SplitNode
+    expect(out.sizes).toEqual([50, 50])
+    expect(out.children[0]).toEqual(split('N', 'vertical', [leaf('B'), leaf('A')]))
+    expect(out.children[1]).toEqual(leaf('C'))
+  })
+
+  it('returns the same reference for self-drops and unknown ids', () => {
+    const t = threePane()
+    expect(moveLeafBeside(t, 'A', 'A', 'left', 'N')).toBe(t)
+    expect(moveLeafBeside(t, 'Z', 'C', 'left', 'N')).toBe(t)
+    expect(moveLeafBeside(t, 'A', 'Z', 'left', 'N')).toBe(t)
+  })
+
+  it('never mutates its input', () => {
+    const t = threePane()
+    const snapshot = JSON.parse(JSON.stringify(t))
+    moveLeafBeside(t, 'A', 'C', 'right', 'N')
+    expect(t).toEqual(snapshot)
+  })
+})
+
+describe('splitLeaf position', () => {
+  it("'before' puts the new leaf first", () => {
+    expect(splitLeaf(leaf('A'), 'A', 'vertical', leaf('B'), 'N', 'before')).toEqual(
+      split('N', 'vertical', [leaf('B'), leaf('A')])
+    )
   })
 })

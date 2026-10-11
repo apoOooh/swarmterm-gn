@@ -12,6 +12,23 @@ GN's automated browser tests are headless and mock native IPC. The following
 platform checks require an intentional desktop launch and disposable test files.
 Do not mark them passed from the in-memory fixture alone.
 
+## Drag to split and snap layouts
+
+- [ ] Two panes on top, one full-width below; drag a top pane's header onto the
+      bottom pane → the picker appears; hover each side tile → the matching half
+      is shaded; drop on **left** → the other top pane widens, the bottom slot
+      is split side by side with the dragged pane on the left. Shells keep
+      running (a `ping -t localhost` keeps counting).
+- [ ] Drop on the picker's **Swap** centre → the two panes swap, layout shape
+      unchanged.
+- [ ] Two side-by-side panes: drag one → the snap bar shows **Side by side** and
+      **Stacked**; drop on the bottom slot of **Stacked** → stacked, dragged pane
+      at the bottom. With 3+ panes the bar also offers grid, main-left and
+      main-top, and hovering a slot outlines the resulting layout.
+- [ ] Snap/dock a zoomed pane (zoom ends), with a pane in the drawer (it stays
+      parked and restores at the end), and drop a pane on a War Room tab while
+      the bar is showing (still joins the room).
+
 ## Pane drawer
 
 - [ ] In a 3-pane workspace run `ping -t localhost` in one pane, click its

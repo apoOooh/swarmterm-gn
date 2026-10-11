@@ -1,8 +1,42 @@
+import type { DockSide } from '@/lib/layout-tree'
+
 /** Shared dnd-kit ids + the one rule for what a finished drag means. Pure so
- *  the join/leave/reorder decision is testable without dnd-kit. */
+ *  the join/leave/reorder/dock/snap decision is testable without dnd-kit. */
 export const WAR_ROOM_DROP_ID = 'war-room-dropzone'
 export const MEMBER_DRAG_PREFIX = 'warroom-member:'
 export const ROOM_DROP_PREFIX = 'war-room-room:'
+export const DOCK_DROP_PREFIX = 'dock:'
+export const SNAP_DROP_PREFIX = 'snap:'
+
+const DOCK_SIDES: readonly DockSide[] = ['left', 'right', 'top', 'bottom']
+
+/** Drop id of one dock-picker tile. The side goes LAST so a leaf id holding a
+ *  colon still parses (split on the final separator). */
+export function dockDropId(leafId: string, side: DockSide): string {
+  return `${DOCK_DROP_PREFIX}${leafId}:${side}`
+}
+
+/** Drop id of one slot of a snap-bar preset. */
+export function snapDropId(presetId: string, slot: number): string {
+  return `${SNAP_DROP_PREFIX}${presetId}:${slot}`
+}
+
+function parseDock(overId: string): { leafId: string; side: DockSide } | null {
+  const rest = overId.slice(DOCK_DROP_PREFIX.length)
+  const cut = rest.lastIndexOf(':')
+  if (cut <= 0) return null
+  const side = rest.slice(cut + 1) as DockSide
+  return DOCK_SIDES.includes(side) ? { leafId: rest.slice(0, cut), side } : null
+}
+
+function parseSnap(overId: string): { presetId: string; slot: number } | null {
+  const rest = overId.slice(SNAP_DROP_PREFIX.length)
+  const cut = rest.lastIndexOf(':')
+  if (cut <= 0) return null
+  const raw = rest.slice(cut + 1)
+  const slot = Number(raw)
+  return /^\d+$/.test(raw) ? { presetId: rest.slice(0, cut), slot } : null
+}
 
 export interface DragEndContext {
   /** Room shown in the panel — what a body drop means. Null before hydration. */
@@ -15,6 +49,8 @@ export type DragEndAction =
   | { kind: 'move'; terminalId: string; roomId: string }
   | { kind: 'leave'; terminalId: string }
   | { kind: 'reorder'; activeLeafId: string; overLeafId: string }
+  | { kind: 'dock'; fromLeafId: string; toLeafId: string; side: DockSide }
+  | { kind: 'snap'; leafId: string; presetId: string; slot: number }
   | { kind: 'none' }
 
 export function resolveDragEnd(
@@ -45,6 +81,17 @@ export function resolveDragEnd(
     // Pre-hydration body drop: no room to join yet — swallow rather than
     // falling through to a bogus reorder against the drop-zone id.
     return targetRoomId === null ? { kind: 'none' } : { kind: 'join', leafId: activeId, roomId: targetRoomId }
+  }
+  // Layout targets are checked before the reorder fallback: a malformed one
+  // must never be read as a leaf id and turn into a bogus reorder.
+  if (overId !== null && overId.startsWith(DOCK_DROP_PREFIX)) {
+    const dock = parseDock(overId)
+    if (!dock || dock.leafId === activeId) return { kind: 'none' }
+    return { kind: 'dock', fromLeafId: activeId, toLeafId: dock.leafId, side: dock.side }
+  }
+  if (overId !== null && overId.startsWith(SNAP_DROP_PREFIX)) {
+    const snap = parseSnap(overId)
+    return snap ? { kind: 'snap', leafId: activeId, ...snap } : { kind: 'none' }
   }
   if (overId !== null && overId !== activeId)
     return { kind: 'reorder', activeLeafId: activeId, overLeafId: overId }

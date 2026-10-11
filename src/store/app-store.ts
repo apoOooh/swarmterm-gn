@@ -9,8 +9,10 @@ import {
   resizeSplit,
   splitLeaf,
   reorderLeaves,
+  moveLeafBeside,
   updateLeaf,
   type Direction,
+  type DockSide,
   type LayoutNode,
   type LeafNode
 } from '@/lib/layout-tree'
@@ -21,6 +23,7 @@ import { clearWorktree } from '@/tauri/git'
 import { isTransientLock } from '@/lib/worktree-cleanup'
 import { awaitTerminalRelocated } from '@/lib/terminal-registry'
 import { workspaceNameFor } from '@/lib/workspace-name'
+import { applyPreset } from '@/lib/layout-presets'
 
 /** A workspace: a named binary split-tree of terminal panes. */
 export interface Workspace {
@@ -158,6 +161,10 @@ export interface AppActions {
   restorePane: (leafId: string) => void
   runFileInPane: (leafId: string, cwd: string, command: string) => void
   reorderPane: (fromLeafId: string, toLeafId: string) => void
+  /** Drag-to-split: dock `fromLeafId` onto `side` of `toLeafId` (active workspace). */
+  dockPane: (fromLeafId: string, toLeafId: string, side: DockSide) => void
+  /** Snap layout: rebuild the active workspace as `presetId` with `leafId` in `slot`. */
+  applySnapLayout: (leafId: string, presetId: string, slot: number) => void
   resizeSplitNode: (splitId: string, sizes: [number, number]) => void
   setPaneAgent: (leafId: string, agentId: string) => void
   setPaneCwd: (leafId: string, cwd: string | undefined) => void
@@ -491,6 +498,30 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         if (fromLeafId === toLeafId) return w
         if (!findLeaf(w.layout, fromLeafId) || !findLeaf(w.layout, toLeafId)) return w
         return { ...w, layout: reorderLeaves(w.layout, fromLeafId, toLeafId) }
+      })
+    ),
+
+  // Both layout drags move whole leaf nodes (like reorderPane), so focus,
+  // broadcast and drawer ids stay valid. Each ends the zoom — the user just
+  // arranged several panes and must see the result — and focuses the dragged
+  // pane. Drawered panes cannot be dragged (they are not on screen); the guard
+  // only protects against a stale drag landing after a drawer action.
+  dockPane: (fromLeafId, toLeafId, side) =>
+    set((s) =>
+      mapActive(s, (w) => {
+        if (isDrawered(w, fromLeafId) || isDrawered(w, toLeafId)) return w
+        const layout = moveLeafBeside(w.layout, fromLeafId, toLeafId, side, uid())
+        if (layout === w.layout) return w
+        return { ...w, layout, focusedLeafId: fromLeafId, zoomedLeafId: undefined }
+      })
+    ),
+
+  applySnapLayout: (leafId, presetId, slot) =>
+    set((s) =>
+      mapActive(s, (w) => {
+        const layout = applyPreset(w.layout, w.drawerLeafIds ?? [], presetId, leafId, slot, uid)
+        if (layout === null) return w
+        return { ...w, layout, focusedLeafId: leafId, zoomedLeafId: undefined }
       })
     ),
 
