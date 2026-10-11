@@ -1,5 +1,6 @@
 import { toggledZoom } from '@/lib/pane-zoom'
 import { drawerAfterRemoval, nextVisibleLeafId } from '@/lib/pane-drawer'
+import { clampFloatRect, floatingAfterRemoval, floatPane, isFloating, unfloatPane, type FloatRect } from '@/lib/floating-panes'
 import { create, type StateCreator } from 'zustand'
 import {
   paneLayoutFor,
@@ -49,6 +50,10 @@ export interface Workspace {
    *  `layout`, so their pty/xterm keep running (see lib/pane-drawer.ts).
    *  Absent ⇒ empty. Order = drawer order (oldest first). */
   drawerLeafIds?: string[]
+  /** Leaves shown as floating windows above the split view; like the drawer
+   *  they stay in `layout` (see lib/floating-panes.ts). Absent ⇒ none.
+   *  Order = stacking order (last on top). Not persisted. */
+  floating?: FloatRect[]
   /** Agent a split pane starts with in this workspace (template id).
    *  Absent ⇒ inherit the global default from Settings (agent-pref-store). */
   defaultAgentId?: string
@@ -167,6 +172,12 @@ export interface AppActions {
   toggleZoom: (leafId: string) => void
   /** Park a pane in its workspace's drawer: hidden like a close, but kept alive. */
   drawerPane: (leafId: string) => void
+  /** Detach a pane from the split view into a floating window. */
+  floatPane: (leafId: string) => void
+  /** Return a floating pane to its original slot in the split view. */
+  dockFloatingPane: (leafId: string) => void
+  /** Move/resize a floating pane; also raises it to the top. */
+  setFloatRect: (rect: FloatRect) => void
   /** Bring a drawered pane back into its original slot and focus it. */
   restorePane: (leafId: string) => void
   runFileInPane: (leafId: string, cwd: string, command: string) => void
@@ -462,7 +473,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   toggleZoom: (leafId) =>
     set((s) => {
       const ws = s.workspaces.find((w) => findLeaf(w.layout, leafId))
-      if (!ws || isDrawered(ws, leafId)) return {}
+      if (!ws || isDrawered(ws, leafId) || isFloating(ws.floating, leafId)) return {}
       return { workspaces: s.workspaces.map((w) => w.id === ws.id ? { ...w, zoomedLeafId: toggledZoom(w.zoomedLeafId, leafId), focusedLeafId: leafId } : w) }
     }),
 
@@ -481,12 +492,36 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         ...w,
         drawerLeafIds,
         focusedLeafId,
+        floating: w.floating && unfloatPane(w.floating, leafId),
         // A zoom on the parked pane lapses; a zoom on another pane survives.
         zoomedLeafId: w.zoomedLeafId === leafId ? undefined : w.zoomedLeafId,
         // Keystrokes must never fan out into a pane nobody can see.
         broadcastLeafIds: w.broadcastLeafIds.filter((id) => id !== leafId)
       }) }
     }),
+
+  floatPane: (leafId) =>
+    set((s) => {
+      const ws = s.workspaces.find((w) => findLeaf(w.layout, leafId))
+      if (!ws || isDrawered(ws, leafId)) return {}
+      return { workspaces: s.workspaces.map((w) => w.id !== ws.id ? w : {
+        ...w,
+        floating: floatPane(w.floating ?? [], leafId),
+        focusedLeafId: leafId,
+        // A zoom would hide the split view the float was just lifted from.
+        zoomedLeafId: undefined
+      }) }
+    }),
+
+  dockFloatingPane: (leafId) =>
+    set((s) => ({ workspaces: s.workspaces.map((w) => isFloating(w.floating, leafId)
+      ? { ...w, floating: unfloatPane(w.floating!, leafId), focusedLeafId: leafId }
+      : w) })),
+
+  setFloatRect: (rect) =>
+    set((s) => ({ workspaces: s.workspaces.map((w) => isFloating(w.floating, rect.leafId)
+      ? { ...w, floating: [...unfloatPane(w.floating!, rect.leafId), clampFloatRect(rect)] }
+      : w) })),
 
   restorePane: (leafId) =>
     set((s) => {
@@ -515,7 +550,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         // Prefer a pane still on screen; fall back to a drawered one only when
         // every survivor is parked (the workspace then shows its empty state).
         const fallback = leaves.find((l) => !drawerLeafIds.includes(l.id)) ?? leaves[0]
-        return { ...w, layout, drawerLeafIds, focusedLeafId: ids.has(w.focusedLeafId) ? w.focusedLeafId : fallback.id,
+        const floating = w.floating && floatingAfterRemoval(w.floating, layout)
+        return { ...w, layout, drawerLeafIds, floating, focusedLeafId: ids.has(w.focusedLeafId) ? w.focusedLeafId : fallback.id,
           broadcastLeafIds: w.broadcastLeafIds.filter((id) => ids.has(id)) }
       }) }))
     })
@@ -530,7 +566,10 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       mapActive(s, (w) => {
         if (fromLeafId === toLeafId) return w
         if (!findLeaf(w.layout, fromLeafId) || !findLeaf(w.layout, toLeafId)) return w
-        return { ...w, layout: reorderLeaves(w.layout, fromLeafId, toLeafId) }
+        // Dropping a floating pane onto a docked one docks it in that slot.
+        if (isFloating(w.floating, toLeafId)) return w
+        return { ...w, layout: reorderLeaves(w.layout, fromLeafId, toLeafId),
+          floating: w.floating && unfloatPane(w.floating, fromLeafId) }
       })
     ),
 
@@ -543,9 +582,12 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
     set((s) =>
       mapActive(s, (w) => {
         if (isDrawered(w, fromLeafId) || isDrawered(w, toLeafId)) return w
+        // Targets are docked panes only: a floating target has no visible slot.
+        if (isFloating(w.floating, toLeafId)) return w
         const layout = moveLeafBeside(w.layout, fromLeafId, toLeafId, side, uid())
         if (layout === w.layout) return w
-        return { ...w, layout, focusedLeafId: fromLeafId, zoomedLeafId: undefined }
+        return { ...w, layout, focusedLeafId: fromLeafId, zoomedLeafId: undefined,
+          floating: w.floating && unfloatPane(w.floating, fromLeafId) }
       })
     ),
 
@@ -554,7 +596,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       mapActive(s, (w) => {
         const layout = applyPreset(w.layout, w.drawerLeafIds ?? [], presetId, leafId, slot, uid)
         if (layout === null) return w
-        return { ...w, layout, focusedLeafId: leafId, zoomedLeafId: undefined }
+        // The preset arranges every non-drawered pane, floating ones included.
+        return { ...w, layout, focusedLeafId: leafId, zoomedLeafId: undefined, floating: undefined }
       })
     ),
 
