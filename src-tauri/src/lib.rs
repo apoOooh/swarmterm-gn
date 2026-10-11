@@ -4,6 +4,7 @@ mod analytics;
 mod commands;
 mod devlog;
 mod files;
+mod folder_list;
 mod git;
 mod json_style;
 mod links;
@@ -154,6 +155,7 @@ pub fn run() {
             commands::set_claude_statusline,
             commands::resolve_path_link,
             commands::resolve_dir_link,
+            commands::list_folders,
             commands::find_available_editor,
             commands::open_in_editor,
             commands::reveal_in_file_manager,

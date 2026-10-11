@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Choosing a folder now opens an in-app picker instead of the Windows
+  dialog: favorites you pin, recent and saved-workspace folders, type-to-filter
+  and path jumping, keyboard navigation, and a "Windows dialog" fallback.
 - Resizing a pane quickly no longer scrambles Claude Code and Codex output.
   xterm now knows it runs on ConPTY (with the Windows build number, like
   VS Code), and the pty hears only the final size once a resize settles,

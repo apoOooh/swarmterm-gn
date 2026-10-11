@@ -16,7 +16,8 @@ import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { AgentIcon } from '@/components/AgentIcon'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { pickDirectory, getHomeDir } from '@/tauri/dialog'
+import { getHomeDir } from '@/tauri/dialog'
+import { pickFolder } from '@/store/folder-picker-store'
 import { listWorktrees, createWorktree, ensureRepoWithCommit } from '@/tauri/git'
 import { listAgentSessions } from '@/tauri/sessions'
 import { planWorktreeBranches, provisionWorktrees } from '@/lib/worktree-naming'
@@ -185,7 +186,7 @@ export function Welcome(): ReactElement {
   }, [trimmedFolder, availability, accounts])
 
   const browse = async (): Promise<void> => {
-    const picked = await pickDirectory(trimmedFolder)
+    const picked = await pickFolder(trimmedFolder)
     if (picked) setFolder(picked)
   }
 
