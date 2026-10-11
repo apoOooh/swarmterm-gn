@@ -80,6 +80,31 @@ pub fn isolated_command(command: &str, agent: Option<&str>, supported: bool) -> 
     command.into()
 }
 
+/// Pin the pane's Codex to THIS app's MCP server via `-c` overrides. The
+/// shared `config.toml` holds one URL, and a second Swarmterm (the dev build
+/// next to the installed one) rewrites it on boot with its own port — every
+/// pane of the other app then talks to a server that does not know its
+/// bearer and silently never joins the War Room. A per-process override
+/// cannot be clobbered. The URL is our own loopback string; anything outside
+/// a plain URL charset is refused rather than quoted into a shell line.
+pub fn with_mcp_url(command: &str, agent: Option<&str>, url: Option<&str>) -> String {
+    let safe = |u: &str| {
+        u.starts_with("http://127.0.0.1:")
+            && u.chars()
+                .all(|c| c.is_ascii_alphanumeric() || ":/.".contains(c))
+    };
+    match (agent, url) {
+        (Some("codex"), Some(url)) if safe(url) => match command.strip_prefix("codex") {
+            Some(tail) if tail.is_empty() || tail.starts_with(' ') => format!(
+                "codex -c mcp_servers.swarmterm.url={url} \
+                 -c mcp_servers.swarmterm.bearer_token_env_var=SWARMTERM_SESSION{tail}"
+            ),
+            _ => command.into(),
+        },
+        _ => command.into(),
+    }
+}
+
 fn is_ours(command: &str) -> bool {
     let c = command.trim().to_ascii_lowercase();
     c.contains("swarmterm") && c.trim_end_matches('"').ends_with("--codex-session-hook")
@@ -87,8 +112,11 @@ fn is_ours(command: &str) -> bool {
 
 pub fn format_command(exe: &str, windows: bool) -> String {
     if windows {
+        // Codex on Windows already runs hook commands through PowerShell, so
+        // the call operator is enough; a nested powershell.exe doubled the
+        // startup cost and pushed cold starts past the 5 s hook timeout.
         let path = exe.replace('\\', "/").replace('\'', "''");
-        format!("powershell.exe -NoProfile -NonInteractive -Command \"& '{path}' --codex-session-hook\"")
+        format!("& '{path}' --codex-session-hook")
     } else {
         format!("\"{exe}\" --codex-session-hook")
     }
@@ -167,9 +195,9 @@ pub fn install(home: &Path, command: &str) -> Result<(), String> {
     };
     let (path, contents) = if inline {
         let Some(next) = merge_toml(config.as_deref().unwrap(), command)? else {
-            return Ok(());
+            return remove_ours_from_json(&json_path);
         };
-        (config_path, next)
+        (config_path.clone(), next)
     } else {
         let existing = match fs::read_to_string(&json_path) {
             Ok(s) => Some(s),
@@ -179,12 +207,45 @@ pub fn install(home: &Path, command: &str) -> Result<(), String> {
         let HooksWrite::Write(next) = merge_json(existing.as_deref(), command)? else {
             return Ok(());
         };
-        (json_path, next)
+        (json_path.clone(), next)
     };
+    // Codex reads both representations, so an entry left behind in the other
+    // one (written before `config.toml` gained a [hooks] table) fires twice.
+    if path == config_path {
+        remove_ours_from_json(&json_path)?;
+    }
     fs::create_dir_all(home).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("swarmterm-hooks.tmp");
     fs::write(&tmp, contents).map_err(|e| e.to_string())?;
     fs::rename(&tmp, &path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
+
+pub fn has_ours(home: &Path) -> bool {
+    ["config.toml", "hooks.json"].iter().any(|f| {
+        fs::read_to_string(home.join(f)).is_ok_and(|s| {
+            s.lines().any(|l| {
+                let l = l.to_ascii_lowercase();
+                l.contains("swarmterm") && l.contains("--codex-session-hook")
+            })
+        })
+    })
+}
+
+fn remove_ours_from_json(json_path: &Path) -> Result<(), String> {
+    let existing = match fs::read_to_string(json_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let HooksWrite::Write(next) = merge_events(Some(&existing), None, &EVENTS, is_ours)? else {
+        return Ok(());
+    };
+    let tmp = json_path.with_extension("swarmterm-hooks.tmp");
+    fs::write(&tmp, next).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, json_path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         e.to_string()
     })
@@ -202,6 +263,12 @@ pub fn register(app: &AppHandle) {
     let (Some(home), Ok(exe)) = (home, std::env::current_exe()) else {
         return;
     };
+    // A dev build next to the installed app would swap the exe path on every
+    // boot, and Codex re-asks for hook trust each time the command changes.
+    // The hook only reads env, so the installed app's entry serves dev panes.
+    if cfg!(debug_assertions) && has_ours(&home) {
+        return;
+    }
     let command = format_command(&exe.to_string_lossy(), cfg!(windows));
     if let Err(e) = install(&home, &command) {
         eprintln!("Codex session hook registration failed: {e}");
@@ -231,6 +298,69 @@ mod tests {
             isolated_command("claude", Some("claude-code"), true),
             "claude"
         );
+    }
+    #[test]
+    fn pins_codex_to_this_apps_mcp_url() {
+        let url = Some("http://127.0.0.1:56330/mcp");
+        assert_eq!(
+            with_mcp_url("codex --no-daemon resume abc", Some("codex"), url),
+            "codex -c mcp_servers.swarmterm.url=http://127.0.0.1:56330/mcp \
+             -c mcp_servers.swarmterm.bearer_token_env_var=SWARMTERM_SESSION --no-daemon resume abc"
+        );
+        assert_eq!(with_mcp_url("codex", Some("codex"), None), "codex");
+        assert_eq!(with_mcp_url("claude", Some("claude-code"), url), "claude");
+        assert_eq!(
+            with_mcp_url("codex-helper", Some("codex"), url),
+            "codex-helper"
+        );
+        // Never splice anything shell-active into the typed line.
+        assert_eq!(
+            with_mcp_url("codex", Some("codex"), Some("http://127.0.0.1:1/mcp; rm x")),
+            "codex"
+        );
+        assert_eq!(
+            with_mcp_url("codex", Some("codex"), Some("http://evil.example/mcp")),
+            "codex"
+        );
+    }
+    #[test]
+    fn windows_hook_runs_in_codexs_own_powershell() {
+        let c = format_command(r"C:\Users\x\AppData\Local\Swarmterm GN\swarmterm.exe", true);
+        assert_eq!(
+            c,
+            "& 'C:/Users/x/AppData/Local/Swarmterm GN/swarmterm.exe' --codex-session-hook"
+        );
+        assert!(is_ours(&c));
+    }
+    #[test]
+    fn inline_install_drops_a_stale_json_copy_of_ours() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"notify"}]},{"hooks":[{"type":"command","command":"& 'D:/dev/swarmterm.exe' --codex-session-hook","timeout":5}]}]}}"#;
+        fs::write(dir.path().join("hooks.json"), stale).unwrap();
+        fs::write(dir.path().join("config.toml"), "[hooks]\n").unwrap();
+        install(dir.path(), OURS).unwrap();
+        let json = fs::read_to_string(dir.path().join("hooks.json")).unwrap();
+        assert!(json.contains("notify"));
+        assert!(!json.contains("codex-session-hook"));
+        assert!(fs::read_to_string(dir.path().join("config.toml"))
+            .unwrap()
+            .contains("--codex-session-hook"));
+    }
+    #[test]
+    fn current_toml_still_drops_a_stale_json_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.toml"),
+            "[hooks]
+",
+        )
+        .unwrap();
+        install(dir.path(), OURS).unwrap();
+        let stale = r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"& 'D:/dev/swarmterm.exe' --codex-session-hook","timeout":5}]}]}}"#;
+        fs::write(dir.path().join("hooks.json"), stale).unwrap();
+        install(dir.path(), OURS).unwrap();
+        let json = fs::read_to_string(dir.path().join("hooks.json")).unwrap();
+        assert!(!json.contains("codex-session-hook"));
     }
     #[test]
     fn json_is_additive_and_idempotent() {

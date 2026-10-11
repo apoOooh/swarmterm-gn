@@ -493,6 +493,11 @@ pub fn spawn_terminal(
             options.agent_id.as_deref(),
             options.agent_id.as_deref() == Some("codex") && crate::hook::codex::supported(),
         );
+        let ic = crate::hook::codex::with_mcp_url(
+            &ic,
+            options.agent_id.as_deref(),
+            state.mcp_url.get().map(|url| url.as_ref()),
+        );
         let line = if resolved.is_some() {
             format!("{ic}\r")
         } else {
