@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Pin each Codex pane to its own app's MCP server, so a development build
+  running next to the installed app no longer redirects Codex away from the
+  War Room. Codex session hooks start without a nested PowerShell, stale
+  duplicate hook entries are removed, and Codex asks once to trust the
+  updated hook.
+
 ## [1.4.0] - 2026-10-11
 
 - Keep terminal creation and account configuration off the UI thread, combine
