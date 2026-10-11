@@ -7,7 +7,7 @@ export interface SwarmtermMcpProfile {
   accountName: string | null
   enabled: boolean
   /** `foreign` = a user-defined `swarmterm` server Swarmterm never touches. */
-  entry: 'absent' | 'ours' | 'foreign'
+  entry: 'absent' | 'ours' | 'foreign' | 'perPane'
   configPath: string
   url: string | null
 }

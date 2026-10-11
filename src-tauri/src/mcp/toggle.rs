@@ -81,6 +81,8 @@ pub enum EntryState {
     Ours,
     /// A `swarmterm` server the user defined themselves — never removed.
     Foreign,
+    /// Injected per pane through the environment (OpenCode); no file.
+    PerPane,
 }
 
 fn json_is_ours(v: &Value) -> bool {

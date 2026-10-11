@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { setSwarmtermMcp, swarmtermMcpProfiles, type SwarmtermMcpProfile } from '@/tauri/swarmterm-mcp'
 
-const AGENT_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', qwen: 'Qwen Code' }
+const AGENT_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', qwen: 'Qwen Code', opencode: 'OpenCode' }
 
 const rowKey = (p: SwarmtermMcpProfile): string => `${p.agentId}:${p.accountId ?? 'default'}`
 
@@ -42,7 +42,7 @@ export function SwarmtermMcpSwitches(): React.ReactElement {
             <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
               <dt>Config</dt><dd className="break-all">{p.configPath}</dd>
               <dt>Server</dt><dd className="break-all">{p.url ?? 'not running'}</dd>
-              <dt>Entry</dt><dd>{p.entry === 'ours' ? 'written by Swarmterm' : p.entry === 'foreign' ? 'a different "swarmterm" server is configured — Swarmterm leaves it untouched' : 'not present'}</dd>
+              <dt>Entry</dt><dd>{p.entry === 'ours' ? 'written by Swarmterm' : p.entry === 'foreign' ? 'a different "swarmterm" server is configured — Swarmterm leaves it untouched' : p.entry === 'perPane' ? 'passed to each new pane; no configuration file is written' : 'not present'}</dd>
             </dl>
           </details>
         </li>

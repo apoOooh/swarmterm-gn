@@ -444,6 +444,18 @@ pub fn spawn_terminal(
     cmd.env("SWARMTERM_PTY_GENERATION", &spawn_id);
     if let Some(url) = state.mcp_url.get() {
         cmd.env("SWARMTERM_MCP_URL", url.as_ref());
+        // OpenCode gets the server per process via OPENCODE_CONFIG_CONTENT
+        // (merged over its own config files), so the user's opencode.json is
+        // never written. A value the user already exported wins.
+        if options.agent_id.as_deref() == Some("opencode")
+            && crate::mcp::toggle::is_enabled("opencode", None)
+            && std::env::var_os("OPENCODE_CONFIG_CONTENT").is_none()
+        {
+            cmd.env(
+                "OPENCODE_CONFIG_CONTENT",
+                crate::mcp::config::opencode_config_content(url.as_ref(), &id),
+            );
+        }
     }
     let cwd = options.cwd.clone().unwrap_or_else(|| {
         app.path()

@@ -18,6 +18,9 @@
 - Settings → MCP: an on/off switch per agent and account for Swarmterm's own
   MCP entry. Off removes only Swarmterm's entry and leaves other servers
   untouched; details are collapsed.
+- OpenCode panes join the War Room automatically. The server is passed to
+  each pane through `OPENCODE_CONFIG_CONTENT`, and `opencode.json` is never
+  written.
 
 ## [1.5.2] - 2026-10-11
 

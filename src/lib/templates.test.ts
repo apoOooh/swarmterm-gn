@@ -106,9 +106,9 @@ describe('resume catalog', () => {
 })
 
 describe('MCP auto-enrollment flags', () => {
-  it('marks exactly the CLIs Swarmterm writes config for', () => {
+  it('marks exactly the CLIs Swarmterm connects automatically', () => {
     const enrolled = TEMPLATES.filter((t) => t.mcpAutoEnrolled === true).map((t) => t.id)
-    expect(enrolled).toEqual(['claude-code', 'codex', 'qwen'])
+    expect(enrolled).toEqual(['claude-code', 'codex', 'opencode', 'qwen'])
   })
   it('gives gemini-heritage CLIs the stay-interactive prompt flag', () => {
     expect(templateById('qwen').spawnPromptFlag).toBe('-i')

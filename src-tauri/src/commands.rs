@@ -791,11 +791,25 @@ pub async fn swarmterm_mcp_profiles(
         if crate::agents::find_agent_binary("qwen").is_some() {
             rows.push(("qwen".into(), None, None));
         }
+        if crate::agents::find_agent_binary("opencode").is_some() {
+            rows.push(("opencode".into(), None, None));
+        }
         for a in crate::accounts::list(&app)? {
             rows.push((a.agent_id, Some(a.id), Some(a.name)));
         }
         rows.into_iter()
             .map(|(agent_id, account_id, account_name)| {
+                if agent_id == "opencode" {
+                    return Ok(SwarmtermMcpProfile {
+                        enabled: crate::mcp::toggle::is_enabled("opencode", None),
+                        entry: crate::mcp::toggle::EntryState::PerPane,
+                        config_path: "OPENCODE_CONFIG_CONTENT (per pane)".into(),
+                        url: url.clone(),
+                        agent_id,
+                        account_id,
+                        account_name,
+                    });
+                }
                 let path = swarmterm_mcp_path(&app, &agent_id, account_id.as_deref())?;
                 Ok(SwarmtermMcpProfile {
                     enabled: crate::mcp::toggle::is_enabled(&agent_id, account_id.as_deref()),
@@ -828,6 +842,9 @@ pub async fn set_swarmterm_mcp(
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(id) = account_id.as_deref() {
             crate::accounts::resolve(&app, id, Some(&agent_id))?;
+        } else if agent_id == "opencode" {
+            // Nothing on disk: the flag alone gates the per-pane env.
+            return crate::mcp::toggle::set_enabled("opencode", None, enabled);
         } else if !matches!(agent_id.as_str(), "claude-code" | "codex" | "qwen") {
             return Err("Unsupported agent".into());
         }
