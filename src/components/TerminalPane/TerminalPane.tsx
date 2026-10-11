@@ -33,7 +33,7 @@ import { agentCommand, DEFAULT_TEMPLATE_ID, templateById, withLaunchMode } from 
 import { buildAgentSpawnCommand, shellFlavor } from '@/lib/agent-spawn-command'
 import { buildContinueCommand, buildResumeCommand } from '@/lib/resume-command'
 import { isWindowsPlatform } from '@/lib/platform'
-import { pickDirectory } from '@/tauri/dialog'
+import { pickFolder } from '@/store/folder-picker-store'
 import { cn } from '@/lib/utils'
 import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
 import { insertExplorerPaths } from '@/components/FileDropListener'
@@ -269,7 +269,7 @@ export function TerminalPane({
 
   async function handleChoosePath(): Promise<void> {
     // Start in the workspace folder, not the OS default (home).
-    const dir = await pickDirectory(cwd)
+    const dir = await pickFolder(cwd)
     if (dir) setPaneCwd(leafId, dir)
   }
 

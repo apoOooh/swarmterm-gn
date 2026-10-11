@@ -73,6 +73,7 @@ import { confirmQuit, onQuitRequested } from '@/tauri/app'
 import { RightPanel } from '@/components/RightPanel/RightPanel'
 import { Navbar } from '@/components/Navbar/Navbar'
 import { SettingsView } from '@/components/Settings/SettingsView'
+import { FolderPicker } from '@/components/FolderPicker/FolderPicker'
 import { TitleBar } from '@/components/TitleBar/TitleBar'
 import { Workspace, PaneDragGhost } from '@/components/Workspace/Workspace'
 import { Welcome } from '@/components/Welcome/Welcome'
@@ -1083,6 +1084,7 @@ export default function App(): ReactElement {
             initialCategory={settingsTab}
           />
         )}
+        <FolderPicker />
       </div>
     </div>
   )

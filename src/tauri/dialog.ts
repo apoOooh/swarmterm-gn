@@ -11,8 +11,10 @@ export async function showMessage(
   await message(text, { title: opts?.title, kind: opts?.kind })
 }
 
-/** Open a native folder picker, starting in `startDir` (home when absent).
- * Resolves to the chosen path, or null if cancelled. */
+/** Open the native Windows folder dialog, starting in `startDir` (home when
+ * absent). Resolves to the chosen path, or null if cancelled. Callers use the
+ * in-app picker (`pickFolder` in store/folder-picker-store); this is its
+ * "Windows dialog" fallback. */
 export async function pickDirectory(startDir?: string): Promise<string | null> {
   const defaultPath = startDir !== undefined && startDir !== '' ? startDir : await homeDir()
   const picked = await open({ directory: true, defaultPath })

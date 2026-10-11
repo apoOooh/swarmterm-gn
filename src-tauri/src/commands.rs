@@ -420,6 +420,13 @@ pub fn resolve_dir_link(cwd: String, candidate: String) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// One level of subfolders for the in-app folder picker; `""` lists drive
+/// roots. Async so a slow network drive never stalls the main thread.
+#[tauri::command]
+pub async fn list_folders(path: String) -> Result<crate::folder_list::FolderListing, String> {
+    crate::folder_list::list_folders(&path)
+}
+
 /// First of `candidates` (an allowlisted editor id) found on PATH. The renderer
 /// asks once and caches; `None` means fall back to revealing in the file manager.
 #[tauri::command]

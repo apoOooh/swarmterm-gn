@@ -13,6 +13,10 @@ Swarmterm opens on the **composer**: pick a folder (the working directory for ev
 
 Agent detection re-runs every time the composer opens, so installing a CLI needs no restart. Workspace layouts and known agent conversations can be reopened from **Saved workspaces** on Welcome. Settings persist too; terminal output and unsaved editor buffers do not.
 
+### Choosing a folder
+
+Every **Browse** / **Choose path** button opens Swarmterm's own folder picker instead of the Windows dialog. The left column holds your **Favorites** (star the folder you are viewing to pin it; hover a favorite to unpin it) and **Recent** folders from the composer and your saved workspaces — click one to open it, double-click to select it straight away. The box on top filters the subfolders by name; type an absolute path such as `C:\Code\` to jump there. Arrow keys move the highlight, `Enter` opens the highlighted subfolder, `Ctrl + Enter` selects the folder being shown, `Backspace` in the empty box goes up, `Esc` cancels. **Windows dialog** falls back to the native picker.
+
 ## Panes
 
 - **Split** from the pane header, drag the separator to resize, and drag a header onto another pane to swap the two — shells keep running.

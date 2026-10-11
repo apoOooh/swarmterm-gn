@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { useAppStore } from '@/store/app-store'
-import { getHomeDir, pickDirectory } from '@/tauri/dialog'
+import { getHomeDir } from '@/tauri/dialog'
+import { pickFolder } from '@/store/folder-picker-store'
 import { Button } from '@/components/ui/button'
 import { templateById } from '@/lib/templates'
 import type { AgentAccount } from '@/tauri/accounts'
@@ -49,7 +50,7 @@ export function AccountsPanel({ onLogin }: { onLogin: () => void }): React.React
       <h3 className="text-sm font-medium">{editing ? 'Edit account profile' : 'Add account profile'}</h3>
       <label className="block text-sm">Agent<select aria-label="Account agent" value={agentId} disabled={!!editing} onChange={event => setAgentId(event.target.value as AgentAccount['agentId'])} className="mt-1 block w-full rounded border border-input bg-background p-2"><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></label>
       <label className="block text-sm">Name<input aria-label="Account name" value={name} maxLength={80} onChange={event => setName(event.target.value)} className="mt-1 block w-full rounded border border-input bg-background p-2" required /></label>
-      <label className="block text-sm">Configuration folder (optional)<div className="mt-1 flex gap-2"><input aria-label="Account configuration folder" value={configDir} onChange={event => setConfigDir(event.target.value)} placeholder="Create an isolated folder automatically" className="min-w-0 flex-1 rounded border border-input bg-background p-2" /><Button type="button" variant="outline" onClick={() => void pickDirectory().then(path => { if (path) setConfigDir(path) })}>Browse</Button></div></label>
+      <label className="block text-sm">Configuration folder (optional)<div className="mt-1 flex gap-2"><input aria-label="Account configuration folder" value={configDir} onChange={event => setConfigDir(event.target.value)} placeholder="Create an isolated folder automatically" className="min-w-0 flex-1 rounded border border-input bg-background p-2" /><Button type="button" variant="outline" onClick={() => void pickFolder().then(path => { if (path) setConfigDir(path) })}>Browse</Button></div></label>
       <p className="text-xs text-muted-foreground">Removing a profile leaves its configuration and credentials on disk. Existing panes keep running. Saved panes whose profile was removed start fresh with the default account.</p>
       <div className="flex gap-2"><Button disabled={busy || !name.trim()} type="submit">{editing ? 'Save profile' : 'Add profile'}</Button>{editing && <Button type="button" variant="ghost" onClick={reset}>Cancel</Button>}</div>
     </form>
