@@ -29,6 +29,19 @@ Do not mark them passed from the in-memory fixture alone.
       parked and restores at the end), and drop a pane on a War Room tab while
       the bar is showing (still joins the room).
 
+## Corner resize and floating panes
+
+- [ ] In a 2×2 grid, hover where the separators meet → a handle lights up;
+      dragging it resizes width and height together.
+- [ ] Float pane (header button) → the pane floats above the layout, its
+      shell keeps running; the grip bar moves it, edges and bottom corners
+      resize it.
+- [ ] Drag the floating pane's header onto another pane's dock tile → it
+      docks on that side. Float again, press the button → it returns to its
+      original slot.
+- [ ] Maximize another pane while one floats → the float hides; restore
+      brings it back.
+
 ## Pane drawer
 
 - [ ] In a 3-pane workspace run `ping -t localhost` in one pane, click its

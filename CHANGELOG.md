@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Float a pane above the layout, move and resize it freely, and dock it
+  onto any pane by dragging its header.
 - Resize panes from the corner: drag the handle where a horizontal and a
   vertical separator meet to change width and height in one move.
 - Pin each Codex pane to its own app's MCP server, so a development build

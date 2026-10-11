@@ -61,6 +61,8 @@ interface TerminalPaneProps {
   worktreeMode: boolean
   /** Whether this pane is zoomed to fill its workspace. */
   isZoomed?: boolean
+  /** Whether this pane floats above the split view. */
+  isFloating?: boolean
 }
 
 /**
@@ -77,7 +79,8 @@ export function TerminalPane({
   broadcastActive,
   isBroadcastMember,
   worktreeMode,
-  isZoomed = false
+  isZoomed = false,
+  isFloating = false
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -401,6 +404,12 @@ export function TerminalPane({
         onDrawer={() => useAppStore.getState().drawerPane(leafId)}
         isZoomed={isZoomed}
         onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
+        isFloating={isFloating}
+        onToggleFloat={() => {
+          const st = useAppStore.getState()
+          if (isFloating) st.dockFloatingPane(leafId)
+          else st.floatPane(leafId)
+        }}
         broadcastActive={broadcastActive}
         isBroadcastMember={isBroadcastMember}
         onToggleBroadcast={() => toggleBroadcastMember(leafId)}
