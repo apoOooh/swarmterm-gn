@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHandoffBrief, EMPTY_DRAFT, MAX_EXCERPT_LINES, trimExcerpt, type HandoffContext } from './handoff-brief'
+import { buildHandoffBrief, handoffCwd, EMPTY_DRAFT, MAX_EXCERPT_LINES, trimExcerpt, type HandoffContext } from './handoff-brief'
 
 const ctx: HandoffContext = {
   agentName: 'Claude Code',
@@ -74,5 +74,15 @@ describe('trimExcerpt', () => {
 
   it('strips escape sequences and control bytes', () => {
     expect(trimExcerpt('\x1b[31mred\x1b[0m\x07 ok\n\n').text).toBe('red ok')
+  })
+})
+
+describe('handoffCwd', () => {
+  it('prefers the live shell cwd over the configured folder', () => {
+    expect(handoffCwd('D:/repo/sub', 'D:/repo')).toBe('D:/repo/sub')
+  })
+  it('falls back to the configured folder when the live cwd is unknown', () => {
+    expect(handoffCwd(undefined, 'D:/repo')).toBe('D:/repo')
+    expect(handoffCwd('  ', 'D:/repo')).toBe('D:/repo')
   })
 })

@@ -3,6 +3,7 @@ import {
   initialHandoff,
   reduceHandoff,
   handoffTargets,
+  sessionHookGaps,
   describeUsage,
   limitHint,
   submitBlocker,
@@ -97,6 +98,17 @@ describe('handoffTargets', () => {
     ])
     expect(targets[1].label).toBe('Claude Code · Max')
   })
+
+  it('hides Codex when it cannot report its session (would wait in starting forever)', () => {
+    const gaps = sessionHookGaps([
+      { id: 'claude-code', available: true },
+      { id: 'codex', available: true, sessionHooks: false }
+    ])
+    expect([...gaps]).toEqual(['codex'])
+    const targets = handoffTargets([{ id: 'a1', agentId: 'codex', name: 'Work', configDir: 'x' }], new Set(['claude-code', 'codex']), gaps)
+    expect(targets.map((t) => t.agentId)).toEqual(['claude-code'])
+    expect(sessionHookGaps([{ id: 'codex', available: true, sessionHooks: true }]).size).toBe(0)
+  })
 })
 
 describe('usage', () => {
@@ -142,6 +154,25 @@ describe('agent readiness (review P1)', () => {
     const ready = reduceHandoff(start(), { type: 'status', kind: 'running', generation: 0, agent: 'idle' })
     expect(reduceHandoff(ready, { type: 'status', kind: 'running', generation: 0, agent: 'unknown' }).phase).toBe('failed')
     expect(reduceHandoff(ready, { type: 'confirm', live: { kind: 'running', generation: 0, agent: undefined } }).phase).toBe('failed')
+  })
+
+  it('a session hook that beats the detector grace is not a failure (review round 5)', () => {
+    // Hook arrives while the detector still reports unknown (3 s grace).
+    let s = reduceHandoff(start(), { type: 'status', kind: 'running', generation: 0, agent: 'unknown' })
+    expect(s.phase).toBe('ready')
+    s = reduceHandoff(s, { type: 'status', kind: 'running', generation: 0, agent: 'unknown' })
+    expect(s.phase).toBe('ready')
+    // Send waits until detection settled.
+    expect(reduceHandoff(s, { type: 'confirm', live: { kind: 'running', generation: 0, agent: 'unknown' } })).toBe(s)
+    s = reduceHandoff(s, { type: 'status', kind: 'running', generation: 0, agent: 'idle' })
+    expect(s).toMatchObject({ phase: 'ready', agentSeen: true })
+    expect(reduceHandoff(s, { type: 'confirm', live: { kind: 'running', generation: 0, agent: 'idle' } }).phase).toBe('delivering')
+  })
+
+  it('during the grace, real negative signals still fail', () => {
+    const s = reduceHandoff(start(), { type: 'status', kind: 'running', generation: 0, agent: 'unknown' })
+    expect(reduceHandoff(s, { type: 'status', kind: 'exited', generation: 0 }).phase).toBe('failed')
+    expect(reduceHandoff(s, { type: 'status', kind: 'running', generation: 1, agent: 'unknown' }).phase).toBe('failed')
   })
 
   it('pasted-but-not-submitted is its own terminal outcome, not success', () => {

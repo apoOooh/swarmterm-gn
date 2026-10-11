@@ -127,3 +127,11 @@ export function buildHandoffBrief(ctx: HandoffContext, draft: HandoffDraft, opts
   }
   return parts.join('\n\n') + '\n'
 }
+
+/** Folder a brief/handoff is about: the shell's live cwd (the user may have
+ *  `cd`'d since the pane started), else the configured one. Captured once when
+ *  the dialog opens so Git data and the new pane agree. */
+export function handoffCwd(live: string | undefined, configured: string): string {
+  const dir = live?.trim()
+  return dir ? dir : configured
+}
