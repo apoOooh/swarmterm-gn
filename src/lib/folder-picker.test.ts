@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  selectableFolder,
   FAVORITES_STORAGE_KEY, readFavorites, storeFavorites, toggleFavorite, quickAccess,
   filterFolders, splitTypedPath, samePath, MAX_QUICK_RECENTS
 } from './folder-picker'
@@ -69,5 +70,22 @@ describe('splitTypedPath', () => {
   })
   it('leaves plain text as a filter on the current folder', () => {
     expect(splitTypedPath('swarm')).toEqual({ dir: null, filter: 'swarm' })
+  })
+})
+
+describe('selectableFolder', () => {
+  const listing = { path: 'C:\A' }
+  it('returns the loaded folder when navigation settled', () => {
+    expect(selectableFolder({ listing, pending: false, error: null })).toBe('C:\A')
+  })
+  it('refuses while a newer navigation is still loading (A -> slow B)', () => {
+    expect(selectableFolder({ listing, pending: true, error: null })).toBeNull()
+  })
+  it('refuses when the current navigation failed', () => {
+    expect(selectableFolder({ listing, pending: false, error: 'denied' })).toBeNull()
+  })
+  it('refuses the drive overview and an empty picker', () => {
+    expect(selectableFolder({ listing: { path: '' }, pending: false, error: null })).toBeNull()
+    expect(selectableFolder({ listing: null, pending: false, error: null })).toBeNull()
   })
 })

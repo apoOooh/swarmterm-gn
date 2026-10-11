@@ -66,6 +66,23 @@ pub fn list_folders(path: &str) -> Result<FolderListing, String> {
     Ok(FolderListing { path: plain(&dir), parent, folders })
 }
 
+/// At most this many listings run at once. A typed path on a dead network
+/// share can stall `read_dir` for many seconds; without a cap each keystroke
+/// would park another blocking-pool thread on it.
+pub const MAX_CONCURRENT_LISTINGS: usize = 4;
+
+static LISTING_SLOTS: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(MAX_CONCURRENT_LISTINGS);
+
+/// Async entry for the command: the filesystem walk runs on the blocking pool
+/// so a slow drive never stalls an async runtime worker (and with it IPC).
+pub async fn list_folders_blocking(path: String) -> Result<FolderListing, String> {
+    let _slot = LISTING_SLOTS.acquire().await.map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || list_folders(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +128,23 @@ mod tests {
     #[test]
     fn plain_strips_verbatim_prefix() {
         assert_eq!(plain(Path::new(r"\\?\C:\x")), r"C:\x");
+    }
+
+    #[test]
+    fn blocking_entry_lists_off_the_runtime_and_reports_errors() {
+        let dir = std::env::temp_dir().join(format!("fl-async-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("child")).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let ok = rt
+            .block_on(list_folders_blocking(dir.to_string_lossy().into_owned()))
+            .unwrap();
+        assert_eq!(ok.folders.len(), 1);
+        let missing = rt.block_on(list_folders_blocking(
+            dir.join("nope").to_string_lossy().into_owned(),
+        ));
+        assert!(missing.is_err());
+        // Every permit came back: no slot leaks on success or error.
+        assert_eq!(LISTING_SLOTS.available_permits(), MAX_CONCURRENT_LISTINGS);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
