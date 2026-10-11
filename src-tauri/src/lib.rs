@@ -1,4 +1,5 @@
 mod accounts;
+mod agent_process;
 mod agents;
 mod analytics;
 mod commands;
@@ -140,6 +141,7 @@ pub fn run() {
             commands::war_room_delete,
             commands::war_room_moderator_send,
             commands::report_agent_state,
+            commands::terminal_agent_alive,
             commands::list_available_shells,
             commands::windows_build_number,
             commands::list_available_agents,

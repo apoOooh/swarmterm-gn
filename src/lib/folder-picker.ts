@@ -133,3 +133,37 @@ export function pickerOwnsEnter(target: { tagName: string; inListbox: boolean })
   if (target.tagName.toUpperCase() === 'BUTTON') return false
   return target.tagName.toUpperCase() === 'INPUT' || target.inListbox
 }
+
+export type EnterAction =
+  | { kind: 'select'; path: string }
+  | { kind: 'open'; index: number }
+  | { kind: 'navigate'; dir: string }
+  | { kind: 'none' }
+
+/**
+ * What Enter does in the path box / list. While a navigation is pending the
+ * visible list still belongs to the OLD folder, so a list-based Enter would
+ * open a subfolder of the wrong parent: instead Enter resolves the typed path
+ * right away (skipping the debounce), or does nothing.
+ */
+export function enterAction(s: {
+  ctrl: boolean
+  pending: boolean
+  typedDir: string | null
+  visibleCount: number
+  active: number
+  selectable: string | null
+}): EnterAction {
+  if (s.pending) return !s.ctrl && s.typedDir !== null ? { kind: 'navigate', dir: s.typedDir } : { kind: 'none' }
+  if (s.ctrl || s.visibleCount === 0) return s.selectable !== null ? { kind: 'select', path: s.selectable } : { kind: 'none' }
+  return { kind: 'open', index: Math.min(s.active, s.visibleCount - 1) }
+}
+
+/**
+ * Whether editing the input back to a plain filter must void a typed-path
+ * navigation: both while its debounce is still scheduled AND after the
+ * request already left — a late answer would otherwise redirect the picker.
+ */
+export function filterEditVoidsNavigation(s: { timerScheduled: boolean; typedRequestInFlight: boolean }): boolean {
+  return s.timerScheduled || s.typedRequestInFlight
+}
