@@ -21,6 +21,7 @@ const unavailableAccountDirs = new Set<string>()
 const accounts: { id: string; agentId: string; name: string; configDir: string }[] = []
 const mcpConfigurations: Record<string, Record<string, 'configured' | 'conflict'>> = {}
 const mcpWrites: Record<string, any>[] = []
+const swarmtermMcpOff = new Set<string>()
 let nativeFiles: string[] = []
 let textClipboard = ''
 const snapshots: { id: string; path: string; created: number; bytes: number; isDir: boolean; content: string }[] = []
@@ -35,6 +36,9 @@ mockIPC(async (command, raw) => {
   if (command === 'save_agent_account') { const input = args.account; const account = { ...input, id: input.id ?? crypto.randomUUID(), configDir: input.configDir ?? '/accounts/' + input.name }; const index = accounts.findIndex(a => a.id === account.id); if (index < 0) accounts.push(account); else accounts[index] = account; return account }
   if (command === 'delete_agent_account') { const index = accounts.findIndex(account => account.id === args.id); if (index >= 0) accounts.splice(index, 1); return }
   if (command === 'inspect_account_mcp') { const configured = mcpConfigurations[`${args.agentId}:${args.accountId ?? ''}`] ?? {}; return { version: 1, entries: ['playwright', 'github', 'context7', 'filesystem', 'memory', 'sequential-thinking', 'fetch'].map(id => ({ id, status: configured[id] ?? 'available' })) } }
+  // Settings → MCP renders Swarmterm's own switches above the catalogue (SWA-30).
+  if (command === 'swarmterm_mcp_profiles') return ['claude-code', 'codex'].map(agentId => ({ agentId, accountId: null, accountName: null, enabled: !swarmtermMcpOff.has(agentId), entry: 'perPane', configPath: `/home/.${agentId}`, url: null }))
+  if (command === 'set_swarmterm_mcp') { if (args.enabled) swarmtermMcpOff.delete(args.agentId); else swarmtermMcpOff.add(args.agentId); return }
   if (command === 'configure_account_mcp') {
     const key = `${args.agentId}:${args.accountId ?? ''}`; const configured = mcpConfigurations[key] ??= {}
     if (configured[args.entryId] === 'conflict') throw new Error('Existing configuration left unchanged')
