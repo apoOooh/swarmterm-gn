@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Handoff brief: a pane header button opens an editable brief with task,
+  status, open items, tests, agent/account/folder/session and branch, HEAD
+  and a diff reference. User-written fields are labelled as unverified, an
+  optional terminal excerpt is marked incomplete, and the brief is only
+  copied, never sent.
 - Resizing a pane quickly no longer scrambles Claude Code and Codex output.
   xterm now knows it runs on ConPTY (with the Windows build number, like
   VS Code), and the pty hears only the final size once a resize settles,

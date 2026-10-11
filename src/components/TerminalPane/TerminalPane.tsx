@@ -17,6 +17,9 @@ import { Button } from '@/components/ui/button'
 import { HeldDeliveryPill } from '@/components/TerminalPane/HeldDeliveryPill'
 import { SearchOverlay } from '@/components/TerminalPane/SearchOverlay'
 import { PaneHeader } from './PaneHeader'
+import { HandoffBriefDialog } from './HandoffBriefDialog'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { accountLabel } from '@/lib/agent-accounts'
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -270,6 +273,8 @@ export function TerminalPane({
     if (dir) setPaneCwd(leafId, dir)
   }
 
+  const [handoffOpen, setHandoffOpen] = useState(false)
+  const accounts = useAgentAccountsStore((st) => st.accounts)
   const [dialog, setDialog] = useState<{ targets: DialogTarget[]; clears: ClearTarget[] } | null>(null)
   // Lazily computed when the context menu opens (see the ContextMenu wrapper
   // below) rather than on every render of every pane.
@@ -401,6 +406,7 @@ export function TerminalPane({
         onSplitDown={(plain) => splitPane(leafId, 'vertical', splitAgentFor(plain))}
         splitAgentName={templateById(splitAgentFor(false)).name}
         onClose={() => closePane(leafId)}
+        onHandoff={() => setHandoffOpen(true)}
         onDrawer={() => useAppStore.getState().drawerPane(leafId)}
         isZoomed={isZoomed}
         onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
@@ -420,6 +426,16 @@ export function TerminalPane({
         agentTitle={agentTitle}
         ctxPct={ctxPct}
         warRoom={warRoomStatus}
+      />
+
+      <HandoffBriefDialog
+        open={handoffOpen}
+        onClose={() => setHandoffOpen(false)}
+        terminalId={terminalId}
+        agentName={templateById(resolvedAgentId).name}
+        accountLabel={leaf.accountId === undefined ? undefined : accountLabel(leaf.accountId, accounts)}
+        cwd={resolvedCwd}
+        sessionId={leaf.sessionId}
       />
 
       <ClearWorktreeDialog
