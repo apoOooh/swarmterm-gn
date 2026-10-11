@@ -443,6 +443,10 @@ machine that never built Swarmterm. Details in
 - [ ] Settings → Notifications: Sound off → banner still works; System off → chime still works; per-agent off → that agent is fully silent.
 - [ ] macOS: first banner triggers the system permission prompt; denying it keeps chimes working.
 - [ ] Plain Terminal pane never notifies.
+- [ ] Bell: an agent in another workspace blocks → bell counter rises; the entry names workspace and pane; clicking it switches workspace, focuses the pane and clears the counter.
+- [ ] Bell: type `exit 3` in a background shell pane → pane shows "Process exited", bell lists "Shell exited (code 3)".
+- [ ] Bell: a drawered pane's entry restores the pane from the drawer; a closed pane's entry is shown disabled.
+- [ ] Bell: Sound and System off → entries are still recorded.
 
 
 ## Account profiles (SWA-9)

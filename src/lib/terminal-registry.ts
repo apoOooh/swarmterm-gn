@@ -31,7 +31,7 @@ import {
 import { parseFileUrl } from '@/lib/file-url'
 import { parseOsc52 } from '@/lib/osc52'
 import { parseShellMark } from '@/lib/shell-marks'
-import { isPlainShellPane } from '@/lib/templates'
+import { isPlainShellPane, templateById } from '@/lib/templates'
 import { sanitizePromptText } from '@/lib/prompt-sanitize'
 import { detectPathCandidates, listingDirAbove, listingEntry, parsePathSuffix } from '@/lib/path-link-parse'
 import { classifyOscLink, openPathLocation } from '@/lib/terminal-link-actions'
@@ -50,6 +50,7 @@ import { displayPath } from '@/lib/files/paths'
 import { devLog } from '@/lib/dev-log'
 import { useShellMarkStore } from '@/store/shell-mark-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
+import { useNotificationCenterStore } from '@/store/notification-center-store'
 import {
   breaksSegment,
   diffToEdit,
@@ -175,6 +176,19 @@ interface Entry {
 
 /** Live terminals keyed by terminalId, owned outside React's render tree. */
 const entries = new Map<string, Entry>()
+
+function recordExit(id: string, exitCode: number): void {
+  if (document.hasFocus() && selectFocusedTerminalId(useAppStore.getState()) === id) return
+  const agentId = getTerminalAgentId(id)
+  const who = agentId === undefined || isPlainShellPane(agentId) ? 'Shell' : templateById(agentId).name
+  useNotificationCenterStore.getState().add({
+    kind: 'exit',
+    terminalId: id,
+    title: `${who} exited (code ${exitCode})`,
+    detail: useTerminalTitleStore.getState().titles[id] ?? '',
+    at: Date.now()
+  })
+}
 const terminalInitializers = createFrameTaskQueue(
   callback => requestAnimationFrame(callback),
   handle => cancelAnimationFrame(handle)
@@ -963,9 +977,15 @@ function getOrCreate(id: string): Entry {
   )
   // Mirror pty death into the detector: the session is the source of truth for
   // exit/error, and the detector has no pty visibility of its own.
+  let prevKind: TerminalStatus['kind'] = session.getStatus().kind
   session.subscribe(() => {
-    const kind = session.getStatus().kind
+    const status = session.getStatus()
+    const kind = status.kind
     const entry = entries.get(id)
+    // Notification center: a pane dying while the user looks elsewhere is a
+    // fact worth listing. Transition only — status repaints must not re-add.
+    if (status.kind === 'exited' && prevKind !== 'exited') recordExit(id, status.exitCode)
+    prevKind = kind
     // Stamped on the transition only, so later status repaints don't keep
     // re-opening the focus-report window.
     if (entry) {

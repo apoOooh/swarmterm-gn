@@ -29,6 +29,7 @@ if (import.meta.env.DEV) {
       terminalGeometry: (id: string) => reg.terminalGeometry(id),
       hoveredPathLink: (id: string) => reg.getHoveredPathLink(id) ?? null,
       workspaces: () => app.useAppStore.getState().workspaces.map((w) => ({ id: w.id, savedId: w.savedId, name: w.name, cwd: w.cwd, layout: w.layout, worktreeMode: w.worktreeMode, focusedLeafId: w.focusedLeafId, zoomedLeafId: w.zoomedLeafId })),
+      activeWorkspaceId: () => app.useAppStore.getState().activeWorkspaceId,
       // The one write: lets a scenario remove the workspace it created.
       closeWorkspace: (id: string) => app.useAppStore.getState().closeWorkspace(id),
       documents: () => Object.values(docs.useDocumentStore.getState().documents).map((d) => ({ path: d.path, mode: d.mode, dirty: d.dirty }))

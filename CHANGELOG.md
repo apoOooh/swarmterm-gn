@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Notification center: a bell in the title bar lists panes that need input,
+  finished agents and long commands, exited processes and held War Room
+  messages across all workspaces. Clicking an entry reveals and focuses its
+  pane (other workspace or drawer) and marks it read.
+- A shell that exits on its own (typed `exit`, crash) now ends the pane on
+  Windows. Previously ConPTY kept the output pipe open, so the pane never
+  showed "Process exited".
 - Pin each Codex pane to its own app's MCP server, so a development build
   running next to the installed app no longer redirects Codex away from the
   War Room. Codex session hooks start without a nested PowerShell, stale
