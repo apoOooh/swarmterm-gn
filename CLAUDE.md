@@ -10,7 +10,8 @@ disagree, **trust the code**.
 a binary split-tree of real terminal panes (xterm.js front, `portable-pty`
 shell back), plus an optional Chrome-style web-preview column. Built on
 **Tauri 2 + Rust** (frontend: **React 19 + TypeScript + Vite**). Ported from an
-earlier Electron app; no state is persisted between launches by design.
+earlier Electron app; workspace structures and known agent session references
+are persisted locally, while terminal output and unsaved buffers are transient.
 
 `README.md` is a short user-facing intro (the pitch, install, first run) and
 `docs/user-guide.md` is the detailed end-user guide — both English, no code
@@ -222,8 +223,16 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   from `.env.release`). Dev and source builds are no-ops; don't add runtime
   key lookups, and never send more than version + OS (the user-guide
   Telemetry section is the contract).
-- **No persistence.** Every launch starts fresh (one Welcome → one workspace).
-  Don't assume saved state.
+- **Saved workspaces.** Welcome lists up to 24 local snapshots. `saved-workspaces`
+  serializes structure only; `saved-workspace-sync` debounces meaningful changes
+  and flushes on close/quit. Restore verifies directories and exact session ids,
+  then allocates fresh runtime ids. Forget detaches a live instance from saving.
+  Never persist prompts, terminal output, startup commands or unsaved buffers.
+  `agent:session` hooks update `sessionId`, independently of `resumeSessionId`
+  (changing startup options on capture would respawn a live PTY). Rust checks
+  agent and PTY generation before emitting. Codex hook definitions are additive;
+  preserve user hooks, hook feature settings and trust. Supported Codex panes
+  use `--no-daemon` to keep the hook environment specific to each pane.
 - **Session resume.** The composer's "Resume sessions" list is read live from
   the CLIs' own stores (`sessions/` module scans Claude/Codex JSONL; OpenCode
   goes through `opencode session list --format json`). Discovery is fail-open

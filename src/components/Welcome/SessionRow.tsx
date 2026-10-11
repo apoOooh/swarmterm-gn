@@ -2,6 +2,8 @@ import type { ReactElement } from 'react'
 import { AgentIcon } from '@/components/AgentIcon'
 import { templateById } from '@/lib/templates'
 import { sessionTimeLabel, type AgentSessionEntry } from '@/lib/agent-sessions'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { accountLabel } from '@/lib/agent-accounts'
 import { cn } from '@/lib/utils'
 
 interface SessionRowProps {
@@ -20,6 +22,7 @@ export function SessionRow({
   disabled,
   onToggle
 }: SessionRowProps): ReactElement {
+  const accounts = useAgentAccountsStore(s => s.accounts)
   return (
     <label
       className={cn(
@@ -38,6 +41,7 @@ export function SessionRow({
       <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={session.title}>
         {session.title}
       </span>
+      {(session.agentId === 'claude-code' || session.agentId === 'codex') && <span className="max-w-24 truncate text-xs text-muted-foreground" title="Account">{accountLabel(session.accountId, accounts)}</span>}
       <span className="shrink-0 text-xs text-muted-foreground">
         {sessionTimeLabel(session.updatedAtMs, Date.now())}
       </span>

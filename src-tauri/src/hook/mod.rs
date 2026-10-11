@@ -20,10 +20,11 @@
 //!   permission *decision*; on other events it is shown to the user or fed
 //!   back as context. Silence is the only safe output.
 //!
-//! Only `hook_event_name` and `notification_type` are ever deserialised. The
+//! Only lifecycle names and the session identifier are deserialised. The
 //! rest of the payload (prompt text, `last_assistant_message`, tool input,
 //! cwd) must not leave the pane, so it is never even read into a struct.
 
+pub mod codex;
 pub mod install;
 pub mod post;
 
@@ -40,12 +41,14 @@ pub enum Signal {
     Forget,
 }
 
-/// The two stdin fields we read. Everything else (prompt, last_assistant_message,
+/// Lifecycle names and the session id. Everything else (prompt, last_assistant_message,
 /// tool_input, cwd) is deliberately never deserialised — it must not leave the
 /// pane. `#[serde(default)]` keeps `{}` and missing fields parseable so an
 /// unknown-shaped payload degrades to "no signal" rather than an error.
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct HookInput {
+    #[serde(default)]
+    pub session_id: Option<String>,
     #[serde(default)]
     pub hook_event_name: String,
     #[serde(default)]
@@ -62,11 +65,39 @@ pub struct AgentHookEvent {
     pub at_ms: u64,
 }
 
-/// Body of `POST /hook` — an enum only, never free text, so a compromised or
-/// confused hook process can at most flip a state, never inject content.
+/// Body of `POST /hook`: a state enum and optional session identity, never
+/// conversation content. Session metadata is validated against the live PTY.
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct HookBody {
     pub signal: Signal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionMetadata>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMetadata {
+    pub agent_id: String,
+    pub session_id: String,
+    pub spawn_id: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionEvent {
+    pub terminal_id: String,
+    pub agent_id: String,
+    pub session_id: String,
+    pub at_ms: u64,
+}
+
+impl SessionMetadata {
+    pub fn matches(&self, spawn_id: &str, agent_id: Option<&str>) -> bool {
+        self.spawn_id == spawn_id
+            && agent_id == Some(self.agent_id.as_str())
+            && matches!(self.agent_id.as_str(), "claude-code" | "codex")
+            && crate::sessions::is_uuid(&self.session_id)
+    }
 }
 
 /// The hook-event → signal table. Exact, case-sensitive: Claude Code spells
@@ -110,6 +141,10 @@ const POST_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
 /// runs — a plain CLI that reads stdin, maybe POSTs, and exits 0 no matter
 /// what (see the module doc for why both contracts are non-negotiable).
 pub fn run_cli() {
+    run_agent_cli("claude-code")
+}
+
+pub fn run_agent_cli(agent_id: &str) {
     use std::io::Read;
 
     // Env first: a Claude run outside Swarmterm has no session, so exit in
@@ -128,14 +163,85 @@ pub fn run_cli() {
     // Claude's writer side, and a hook error is a visible Claude Code warning.
     let mut raw = String::new();
     let _ = std::io::stdin().read_to_string(&mut raw);
-    if let Some(signal) = signal_from_stdin(&raw) {
-        let _ = post::post_signal(url.trim(), token.trim(), signal, POST_TIMEOUT);
-    }
+    let Ok(input) = serde_json::from_str::<HookInput>(&raw) else {
+        return;
+    };
+    let session = if matches!(
+        input.hook_event_name.as_str(),
+        "SessionStart" | "UserPromptSubmit"
+    ) {
+        input
+            .session_id
+            .filter(|id| crate::sessions::is_uuid(id))
+            .and_then(|session_id| {
+                std::env::var("SWARMTERM_PTY_GENERATION")
+                    .ok()
+                    .map(|spawn_id| SessionMetadata {
+                        agent_id: agent_id.into(),
+                        session_id,
+                        spawn_id,
+                    })
+            })
+    } else {
+        None
+    };
+    let signal = if agent_id == "codex" {
+        if session.is_none() {
+            return;
+        };
+        Signal::Forget
+    } else {
+        let Some(signal) = signal_for(&input.hook_event_name, input.notification_type.as_deref())
+        else {
+            return;
+        };
+        signal
+    };
+    let _ = post::post_body(
+        url.trim(),
+        token.trim(),
+        &HookBody { signal, session },
+        POST_TIMEOUT,
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_metadata_rejects_stale_generations_and_wrong_agents() {
+        let mut session = SessionMetadata {
+            agent_id: "codex".into(),
+            session_id: "11111111-2222-4333-8444-555555555555".into(),
+            spawn_id: "new".into(),
+        };
+        assert!(session.matches("new", Some("codex")));
+        assert!(!session.matches("old", Some("codex")));
+        assert!(!session.matches("new", Some("claude-code")));
+        session.session_id = "x; injected".into();
+        assert!(!session.matches("new", Some("codex")));
+    }
+
+    #[test]
+    fn session_input_and_event_carry_identity_without_conversation_content() {
+        let input: HookInput = serde_json::from_str(r#"{"hook_event_name":"SessionStart","session_id":"11111111-2222-4333-8444-555555555555","prompt":"private","cwd":"private"}"#).unwrap();
+        assert_eq!(
+            input.session_id.as_deref(),
+            Some("11111111-2222-4333-8444-555555555555")
+        );
+        let json = serde_json::to_string(&AgentSessionEvent {
+            terminal_id: "t".into(),
+            agent_id: "codex".into(),
+            session_id: input.session_id.unwrap(),
+            at_ms: 42,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"terminalId":"t","agentId":"codex","sessionId":"11111111-2222-4333-8444-555555555555","atMs":42}"#
+        );
+    }
 
     #[test]
     fn signal_for_maps_the_registered_events() {

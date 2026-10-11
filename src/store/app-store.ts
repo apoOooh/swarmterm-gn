@@ -24,10 +24,14 @@ import { isTransientLock } from '@/lib/worktree-cleanup'
 import { awaitTerminalRelocated } from '@/lib/terminal-registry'
 import { workspaceNameFor } from '@/lib/workspace-name'
 import { applyPreset } from '@/lib/layout-presets'
+import { fromSaved, type SavedWorkspace } from '@/lib/saved-workspaces'
+import { isValidSessionId } from '@/lib/resume-command'
 
 /** A workspace: a named binary split-tree of terminal panes. */
 export interface Workspace {
   id: string
+  /** Absent after Forget: this live instance must no longer auto-save. */
+  savedId?: string
   name: string
   /** Working directory every terminal in this workspace starts from. */
   cwd: string
@@ -91,6 +95,9 @@ export interface CreateWorkspaceConfig {
    *  DEFAULT_TEMPLATE_ID so `agentIds.length` need not equal `terminalCount`,
    *  but the caller should keep them in sync. */
   agentIds: string[]
+  accountIds?: (string | undefined)[]
+  /** Explicit shell commands for profile login; never saved in workspace snapshots. */
+  startupCommands?: (string | undefined)[]
   /** Enable MCP worktree tools for every terminal in this workspace. */
   worktreeMode?: boolean
   /** Per-pane worktree assignment, index-aligned with agentIds; null = pane
@@ -101,7 +108,7 @@ export interface CreateWorkspaceConfig {
    *  panes. `cwd` is the session's recorded directory — resume commands only
    *  find their session when run from where it was recorded, so these panes
    *  are exempt from worktree provisioning. */
-  resumePanes?: Array<{ agentId: string; sessionId: string; cwd: string }>
+  resumePanes?: Array<{ agentId: string; sessionId: string; cwd: string; accountId?: string }>
   /** Per-workspace default split agent; absent ⇒ the global default. */
   defaultAgentId?: string
 }
@@ -135,6 +142,9 @@ export interface AppState {
 
 export interface AppActions {
   createWorkspace: (config: CreateWorkspaceConfig) => void
+  restoreWorkspace: (saved: SavedWorkspace) => void
+  forgetWorkspace: (savedId: string) => void
+  recordPaneSession: (terminalId: string, agentId: string, sessionId: string) => void
   setWelcomeFolder: (path: string) => void
   openWelcome: () => void
   focusWelcome: () => void
@@ -167,6 +177,7 @@ export interface AppActions {
   applySnapLayout: (leafId: string, presetId: string, slot: number) => void
   resizeSplitNode: (splitId: string, sizes: [number, number]) => void
   setPaneAgent: (leafId: string, agentId: string) => void
+  setPaneAccount: (leafId: string, accountId?: string) => void
   setPaneCwd: (leafId: string, cwd: string | undefined) => void
   setPaneLaunchMode: (leafId: string, modeId: string) => void
   /** Pin the mode a pane spawned under without respawning it (no-op when set). */
@@ -285,7 +296,9 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
             id: uid(),
             terminalId: uid(),
             agentId: resume.agentId,
+            accountId: resume.accountId,
             resumeSessionId: resume.sessionId,
+            sessionId: resume.sessionId,
             cwd: resume.cwd
           }
         }
@@ -295,12 +308,15 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           id: uid(),
           terminalId: uid(),
           agentId: config.agentIds[i] ?? DEFAULT_TEMPLATE_ID,
+          accountId: config.accountIds?.[i],
+          startupCommand: config.startupCommands?.[i],
           ...(wt ? { cwd: wt.path, worktreeBranch: wt.branch } : {})
         }
       }
       const layout = paneLayoutFor(config.terminalCount + resumePanes.length, makeWizardLeaf, uid)
       const ws: Workspace = {
         id: uid(),
+        savedId: uid(),
         name: workspaceNameFor(
           config.cwd,
           s.workspaces.map((w) => w.name),
@@ -322,6 +338,23 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         welcomeFocused: false
       }
     }),
+
+  restoreWorkspace: (saved) => set((s) => {
+    const open = s.workspaces.find(w => w.savedId === saved.id)
+    if (open) return { activeWorkspaceId: open.id, welcomeFocused: false }
+    const ws = fromSaved(saved, uid)
+    return { workspaces: [...s.workspaces, ws], activeWorkspaceId: ws.id, welcomeFocused: false, welcomeOpen: false }
+  }),
+
+  forgetWorkspace: (savedId) => set((s) => ({ workspaces: s.workspaces.map(w => w.savedId === savedId ? { ...w, savedId: undefined } : w) })),
+
+  recordPaneSession: (terminalId, agentId, sessionId) => set((s) => {
+    if (!isValidSessionId(agentId, sessionId)) return s
+    const ws = selectWorkspaceByTerminalId(s, terminalId)
+    const leaf = ws && collectLeaves(ws.layout).find(l => l.terminalId === terminalId)
+    if (!ws || !leaf || leaf.agentId !== agentId || leaf.sessionId === sessionId) return s
+    return { workspaces: s.workspaces.map(w => w.id === ws.id ? { ...w, layout: updateLeaf(w.layout, leaf.id, { sessionId }) } : w) }
+  }),
 
   setWelcomeFolder: (path) => set({ welcomeFolder: path }),
 
@@ -531,14 +564,24 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   // An agent switch respawns the pty; replaying a brief written for another
   // agent would be wrong, so a pending prompt is dropped along with it. A
   // resume session id is meaningless under another agent too — clear it.
+  setPaneAccount: (leafId, accountId) => set(s => mapActive(s, w => {
+    const leaf = findLeaf(w.layout, leafId)
+    if (!leaf || leaf.accountId === accountId) return w
+    return { ...w, layout: updateLeaf(w.layout, leafId, { accountId, resumeSessionId: undefined, sessionId: undefined, continueSession: undefined, initialPrompt: undefined, startupCommand: undefined }) }
+  })),
+
+  // Agent changes also clear profile-specific login commands and conversations.
   setPaneAgent: (leafId, agentId) =>
     set((s) =>
       mapActive(s, (w) => ({
         ...w,
         layout: updateLeaf(w.layout, leafId, {
           agentId,
+          accountId: undefined,
+          startupCommand: undefined,
           initialPrompt: undefined,
           resumeSessionId: undefined,
+          sessionId: undefined,
           launchMode: undefined,
           continueSession: undefined
         })
@@ -557,7 +600,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           layout: updateLeaf(w.layout, leafId, {
             launchMode: modeId,
             initialPrompt: undefined,
-            continueSession: leaf?.resumeSessionId === undefined ? 'last' : undefined
+            resumeSessionId: leaf?.sessionId ?? leaf?.resumeSessionId,
+            continueSession: (leaf?.sessionId ?? leaf?.resumeSessionId) === undefined ? 'last' : undefined
           })
         }
       })
@@ -585,6 +629,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         layout: updateLeaf(w.layout, leafId, {
           continueSession: 'pick',
           resumeSessionId: undefined,
+          sessionId: undefined,
           initialPrompt: undefined
         })
       }))
@@ -604,6 +649,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           worktreeBranch: undefined,
           initialPrompt: undefined,
           resumeSessionId: undefined,
+          sessionId: undefined,
           continueSession: undefined
         })
       }))
@@ -632,6 +678,9 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         id: uid(),
         terminalId: uid(),
         agentId,
+        // A same-CLI worker shares the caller's profile, never its conversation.
+        // Profiles from a different CLI cannot authenticate the requested agent.
+        accountId: agentId === requester.agentId ? requester.accountId : undefined,
         cwd: p.path,
         worktreeBranch: p.branch,
         initialPrompt: p.prompt,
@@ -670,7 +719,10 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
           layout = updateLeaf(layout, leaf.id, {
             worktreeBranch: undefined,
             cwd: undefined,
-            initialPrompt: undefined
+            initialPrompt: undefined,
+            resumeSessionId: undefined,
+            sessionId: undefined,
+            continueSession: undefined
           })
         }
         return { ...w, layout }

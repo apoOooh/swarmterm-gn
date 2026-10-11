@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-11
+
+- Keep terminal creation and account configuration off the UI thread, combine
+  concurrent profile/agent refreshes, and delay project scans until folder
+  typing settles. Workspace macros share a single fresh metadata probe.
+
+- Manage separate Claude Code and Codex account profiles, select or rotate
+  accounts when composing panes, and restore conversations with their owning
+  profile. Credentials stay in the agent CLI's configuration.
+- Customize app shortcuts, detect conflicting bindings and save workspace
+  macros for common pane layouts without storing terminal commands.
+- Add reviewed MCP server definitions to default or named accounts through
+  Settings. Preserve existing configuration, show conflicts and complete
+  authentication in the agent CLI; Playwright runs headless.
+
+- Save up to 24 workspaces locally and reopen them from Welcome with their
+  split layout, shells, agents, folders, launch modes and worktree bindings.
+  Rename or forget saved entries without stopping an open workspace.
+- Capture exact Claude Code and Codex session identities through lifecycle
+  hooks so panes in the same folder reopen their own conversations. Codex
+  hooks use the normal `/hooks` trust flow and supported panes run with
+  `--no-daemon`. Missing folders, sessions or CLIs show a fallback notice.
+
 ## [1.3.1] - 2026-10-10
 
 - Release 1.3.0 again; its release checks failed on two browser tests still

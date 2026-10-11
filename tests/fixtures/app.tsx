@@ -14,7 +14,13 @@ add('/project/photo.png', 'image fixture')
 for (let i = 0; i < 2000; i++) add(`/project/many/file-${i}.ts`, `export const n = ${i}\n`)
 const contexts = new Map<string, string>()
 const terminals = new Map<string, { cwd: string; channel: unknown }>()
-const counters = { created: 0, killed: 0, writes: [] as string[], unknown: [] as string[], watched: 0, mediaStats: 0, openedMedia: [] as string[], marktext: [] as string[] }
+const counters = { created: 0, killed: 0, spawns: [] as Record<string, any>[], writes: [] as string[], unknown: [] as string[], watched: 0, mediaStats: 0, openedMedia: [] as string[], marktext: [] as string[], sessionFolders: [] as string[], gitFolders: [] as string[], accountReads: 0, agentReads: 0 }
+const missingSessions = new Set<string>()
+const unavailableAgents = new Set<string>()
+const unavailableAccountDirs = new Set<string>()
+const accounts: { id: string; agentId: string; name: string; configDir: string }[] = []
+const mcpConfigurations: Record<string, Record<string, 'configured' | 'conflict'>> = {}
+const mcpWrites: Record<string, any>[] = []
 let nativeFiles: string[] = []
 let textClipboard = ''
 const snapshots: { id: string; path: string; created: number; bytes: number; isDir: boolean; content: string }[] = []
@@ -22,8 +28,22 @@ const changes = async (id: string, paths: string[]): Promise<void> => { await em
 mockWindows('main'); mockConvertFileSrc('windows')
 mockIPC(async (command, raw) => {
   const args = raw as Record<string, any>
-  if (command === 'create_terminal') { counters.created++; terminals.set(args.id, { cwd: args.options.cwd, channel: args.onData }); return { ok: true, pid: counters.created, shell: '/bin/bash' } }
+  if (command === 'plugin:path|resolve_directory') return '/project'
+  if (command === 'create_terminal') { counters.created++; counters.spawns.push({ ...args.options, terminalId: args.id }); terminals.set(args.id, { cwd: args.options.cwd, channel: args.onData }); return { ok: true, pid: counters.created, shell: '/bin/bash' } }
+  if (command === 'inspect_saved_workspace') return { rootAvailable: !!files[args.cwd]?.dir, panes: args.panes.map((p: any) => ({ directoryAvailable: !!files[p.cwd]?.dir, sessionAvailable: !missingSessions.has(p.sessionId), accountAvailable: !p.accountId || !unavailableAccountDirs.has(p.accountId) && accounts.some(account => account.id === p.accountId && account.agentId === p.agentId) })) }
+  if (command === 'list_agent_accounts') { counters.accountReads++; return accounts.map(account => ({ ...account })) }
+  if (command === 'save_agent_account') { const input = args.account; const account = { ...input, id: input.id ?? crypto.randomUUID(), configDir: input.configDir ?? '/accounts/' + input.name }; const index = accounts.findIndex(a => a.id === account.id); if (index < 0) accounts.push(account); else accounts[index] = account; return account }
+  if (command === 'delete_agent_account') { const index = accounts.findIndex(account => account.id === args.id); if (index >= 0) accounts.splice(index, 1); return }
+  if (command === 'inspect_account_mcp') { const configured = mcpConfigurations[`${args.agentId}:${args.accountId ?? ''}`] ?? {}; return { version: 1, entries: ['playwright', 'github', 'context7', 'filesystem', 'memory', 'sequential-thinking', 'fetch'].map(id => ({ id, status: configured[id] ?? 'available' })) } }
+  if (command === 'configure_account_mcp') {
+    const key = `${args.agentId}:${args.accountId ?? ''}`; const configured = mcpConfigurations[key] ??= {}
+    if (configured[args.entryId] === 'conflict') throw new Error('Existing configuration left unchanged')
+    if (args.entryId === 'filesystem' && (!args.directories.length || args.directories.some((path: string) => !files[path]?.dir))) throw new Error('Filesystem requires existing absolute directories')
+    mcpWrites.push({ ...args }); configured[args.entryId] = 'configured'; return
+  }
+  if (command === 'list_agent_sessions') { counters.sessionFolders.push(args.folder); return [] }
   if (command === 'kill_terminal') { counters.killed++; terminals.delete(args.id); return }
+  if (command === 'plugin:dialog|message') return
   if (command === 'write_terminal') { counters.writes.push(args.data); return }
   if (command === 'resize_terminal' || command === 'report_agent_state') return
   if (command === 'files_open_context') { const t = terminals.get(args.terminalId); if (!t) throw new Error('Terminal is not ready'); const id = t.cwd === '/worktree' ? 'worktree' : 'project'; contexts.set(id, t.cwd); return { id, root: t.cwd } }
@@ -60,8 +80,8 @@ mockIPC(async (command, raw) => {
   if (command === 'plugin:notification|is_permission_granted') return true
   if (command.includes('is_maximized') || command.includes('is_fullscreen')) return false
   if (command === 'list_available_shells') return [{ id: 'default', name: 'System default', available: true }]
-  if (command === 'list_available_agents') return []
-  if (command === 'git_list_worktrees') return []
+  if (command === 'list_available_agents') { counters.agentReads++; return ['claude-code', 'codex'].map(id => ({ id, available: !unavailableAgents.has(id), sessionHooks: true })) }
+  if (command === 'git_list_worktrees') { counters.gitFolders.push(args.cwd); return [] }
   if (command === 'war_room_rooms') return [{ roomId: 'lobby', name: 'Lobby', members: [] }]
   if (command === 'set_claude_statusline') return { installed: false }
   if (command.startsWith('plugin:window|') || command.startsWith('plugin:webview|') || command.startsWith('plugin:app|') || command.startsWith('plugin:store|') || command.startsWith('plugin:opener|')) return
@@ -73,8 +93,8 @@ const { useExplorerStore } = await import('../../src/store/explorer-store')
 const { useAppearanceStore } = await import('../../src/store/appearance-store')
 const { applyVisualStyle } = await import('../../src/lib/theme-adapter')
 applyVisualStyle(useAppearanceStore.getState().style)
-useAppStore.getState().createWorkspace({ cwd: '/project', terminalCount: 2, agentIds: ['terminal', 'terminal'], paneWorktrees: [null, { path: '/worktree', branch: 'feature' }] })
-Object.assign(window, { fixture: { counters, files, useAppStore, useDocumentStore, useExplorerStore, useAppearanceStore,
+if (!new URLSearchParams(location.search).has('welcome')) useAppStore.getState().createWorkspace({ cwd: '/project', terminalCount: 2, agentIds: ['terminal', 'terminal'], paneWorktrees: [null, { path: '/worktree', branch: 'feature' }] })
+Object.assign(window, { fixture: { counters, accounts, mcpConfigurations, mcpWrites, files, missingSessions, unavailableAgents, unavailableAccountDirs, emit, useAppStore, useDocumentStore, useExplorerStore, useAppearanceStore,
   change: async (path: string, content: string) => { const e = files[path]; e.content = content; e.version!++; await changes(path.startsWith('/worktree/') ? 'worktree' : 'project', [path]) },
   setNativeFiles: (paths: string[]) => { nativeFiles = paths }, textClipboard: () => textClipboard } })
 const { default: App } = await import('../../src/App')

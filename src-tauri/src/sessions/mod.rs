@@ -13,9 +13,123 @@ use serde::Serialize;
 use std::io::Read;
 use std::path::Path;
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedPane {
+    pub account_id: Option<String>,
+    pub cwd: String,
+    pub agent_id: String,
+    pub session_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneInspection {
+    pub account_available: bool,
+    pub directory_available: bool,
+    pub session_available: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedInspection {
+    pub root_available: bool,
+    pub panes: Vec<PaneInspection>,
+}
+
+pub async fn inspect_saved(
+    cwd: String,
+    panes: Vec<SavedPane>,
+    accounts: Vec<crate::accounts::AgentAccount>,
+) -> Result<SavedInspection, String> {
+    if panes.len() > 1024
+        || cwd.len() > 32768
+        || panes
+            .iter()
+            .any(|p| p.cwd.len() > 32768 || p.session_id.as_ref().is_some_and(|s| s.len() > 128))
+    {
+        return Err("Saved workspace is too large".into());
+    }
+    let mut opencode_matches = std::collections::HashSet::new();
+    for pane in &panes {
+        if pane.agent_id == "opencode"
+            && pane.session_id.as_deref().is_some_and(|s| {
+                s.starts_with("ses_") && s[4..].chars().all(|c| c.is_ascii_alphanumeric())
+            })
+            && Path::new(&pane.cwd).is_dir()
+            && opencode::scan(&pane.cwd)
+                .await
+                .iter()
+                .any(|s| Some(&s.session_id) == pane.session_id.as_ref())
+        {
+            opencode_matches.insert((pane.cwd.clone(), pane.session_id.clone()));
+        }
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let root_available = Path::new(&cwd).is_dir();
+        let panes = panes
+            .into_iter()
+            .map(|pane| {
+                let directory_available = Path::new(&pane.cwd).is_dir();
+                let account = pane.account_id.as_deref().and_then(|id| {
+                    accounts
+                        .iter()
+                        .find(|a| a.id == id && a.agent_id == pane.agent_id)
+                });
+                let account_available = pane.account_id.is_none()
+                    || account.is_some_and(|a| Path::new(&a.config_dir).is_dir());
+                let session_available = directory_available
+                    && account_available
+                    && pane.session_id.as_deref().is_some_and(|id| {
+                        if pane.agent_id == "opencode" {
+                            return opencode_matches
+                                .contains(&(pane.cwd.clone(), pane.session_id.clone()));
+                        }
+                        if !is_uuid(id) {
+                            return false;
+                        }
+                        match pane.agent_id.as_str() {
+                            "claude-code" => account
+                                .map(|a| Path::new(&a.config_dir).join("projects"))
+                                .or_else(claude_projects_root)
+                                .is_some_and(|root| {
+                                    root.join(claude::encode_project_dir(&pane.cwd))
+                                        .join(format!("{id}.jsonl"))
+                                        .is_file()
+                                }),
+                            "codex" => account
+                                .map(|a| Path::new(&a.config_dir).join("sessions"))
+                                .or_else(codex_sessions_root)
+                                .is_some_and(|root| codex::session_exists(&root, &pane.cwd, id)),
+                            "qwen" => qwen_projects_root().is_some_and(|root| {
+                                qwen::scan(&root, &pane.cwd)
+                                    .iter()
+                                    .any(|s| s.session_id == id)
+                            }),
+                            _ => false,
+                        }
+                    });
+                PaneInspection {
+                    account_available,
+                    directory_available,
+                    session_available,
+                }
+            })
+            .collect();
+        SavedInspection {
+            root_available,
+            panes,
+        }
+    })
+    .await
+    .map_err(|_| "Could not inspect saved workspace".into())
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
     pub agent_id: String,
     pub session_id: String,
     pub title: String,
@@ -120,22 +234,102 @@ fn home_dir() -> Option<std::path::PathBuf> {
 /// Everything resumable for `folder`, all three stores, fail-open each.
 /// File scans run on a blocking thread (they touch possibly-cold disk);
 /// the OpenCode subprocess is already async.
-pub async fn list_all(folder: String) -> Vec<SessionEntry> {
+pub async fn list_all(
+    folder: String,
+    accounts: Vec<crate::accounts::AgentAccount>,
+    account_id: Option<String>,
+) -> Vec<SessionEntry> {
+    let include_opencode = account_id.is_none();
     let scan_folder = folder.clone();
     let files = tauri::async_runtime::spawn_blocking(move || {
         let mut out = Vec::new();
-        if let Some(root) = claude_projects_root() {
-            out.extend(claude::scan(&root, &scan_folder));
+        if account_id.is_none() {
+            if let Some(root) = claude_projects_root() {
+                out.extend(claude::scan(&root, &scan_folder));
+            }
+            if let Some(root) = codex_sessions_root() {
+                out.extend(codex::scan(&root, &scan_folder));
+            }
+            if let Some(root) = qwen_projects_root() {
+                out.extend(qwen::scan(&root, &scan_folder));
+            }
         }
-        if let Some(root) = codex_sessions_root() {
-            out.extend(codex::scan(&root, &scan_folder));
-        }
-        if let Some(root) = qwen_projects_root() {
-            out.extend(qwen::scan(&root, &scan_folder));
+        for account in accounts {
+            if account_id.as_deref().is_some_and(|id| id != account.id) {
+                continue;
+            }
+            let mut entries = match account.agent_id.as_str() {
+                "claude-code" => claude::scan(
+                    &Path::new(&account.config_dir).join("projects"),
+                    &scan_folder,
+                ),
+                "codex" => codex::scan(
+                    &Path::new(&account.config_dir).join("sessions"),
+                    &scan_folder,
+                ),
+                _ => vec![],
+            };
+            for entry in &mut entries {
+                entry.account_id = Some(account.id.clone());
+            }
+            out.extend(entries);
         }
         out
     });
     let mut entries = files.await.unwrap_or_default();
-    entries.extend(opencode::scan(&folder).await);
+    if include_opencode {
+        entries.extend(opencode::scan(&folder).await);
+    }
     entries
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+
+    #[test]
+    fn exact_session_inspection_is_bound_to_its_account_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("project");
+        std::fs::create_dir(&folder).unwrap();
+        let folder = folder.to_string_lossy().into_owned();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let accounts: Vec<_> = (0..2)
+            .map(|index| {
+                let dir = root.path().join(format!("account-{index}"));
+                std::fs::create_dir(&dir).unwrap();
+                crate::accounts::AgentAccount {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    agent_id: "claude-code".into(),
+                    name: format!("Account {index}"),
+                    config_dir: dir.to_string_lossy().into_owned(),
+                }
+            })
+            .collect();
+        let project = Path::new(&accounts[0].config_dir)
+            .join("projects")
+            .join(claude::encode_project_dir(&folder));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join(format!("{session_id}.jsonl")), "{}").unwrap();
+        let panes = accounts
+            .iter()
+            .map(|account| SavedPane {
+                cwd: folder.clone(),
+                agent_id: "claude-code".into(),
+                account_id: Some(account.id.clone()),
+                session_id: Some(session_id.clone()),
+            })
+            .chain(std::iter::once(SavedPane {
+                cwd: folder.clone(),
+                agent_id: "claude-code".into(),
+                account_id: Some(uuid::Uuid::new_v4().to_string()),
+                session_id: Some(session_id.clone()),
+            }))
+            .collect();
+        let result =
+            tauri::async_runtime::block_on(inspect_saved(folder, panes, accounts)).unwrap();
+        assert!(result.panes[0].account_available && result.panes[0].session_available);
+        assert!(result.panes[1].account_available && !result.panes[1].session_available);
+        assert!(!result.panes[2].account_available && !result.panes[2].session_available);
+    }
 }

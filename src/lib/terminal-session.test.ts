@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { PtyOut } from '@/tauri/terminal'
+import type { CreateTerminalResult, PtyOut } from '@/tauri/terminal'
 import { TerminalSession, type SessionDeps } from '@/lib/terminal-session'
 
 /** A fresh set of mocked tauri deps; createTerminal resolves ok by default. */
@@ -28,6 +28,94 @@ function makeDeps(): SessionDeps & {
 const OPTS = { cols: 80, rows: 24, cwd: '/tmp' }
 
 describe('TerminalSession', () => {
+  it('cleans up a successful creation that completes after disposal', async () => {
+    const deps = makeDeps()
+    let complete!: (result: CreateTerminalResult) => void
+    vi.mocked(deps.createTerminal).mockImplementation(() => new Promise(resolve => { complete = resolve }))
+    const write = vi.fn()
+    const session = new TerminalSession('t1', { write }, deps)
+    session.start(OPTS)
+    session.dispose()
+    expect(deps.killTerminal).toHaveBeenCalledTimes(1)
+
+    complete({ ok: true, pid: 1, shell: 'sh' })
+    await Promise.resolve()
+    expect(deps.killTerminal).toHaveBeenCalledTimes(2)
+    expect(session.getStatus().kind).toBe('connecting')
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('does not clean up a failed creation after disposal', async () => {
+    const deps = makeDeps()
+    let complete!: (result: CreateTerminalResult) => void
+    vi.mocked(deps.createTerminal).mockImplementation(() => new Promise(resolve => { complete = resolve }))
+    const session = new TerminalSession('t1', { write: vi.fn() }, deps)
+    session.start(OPTS)
+    session.dispose()
+    complete({ ok: false, error: 'Profile unavailable' })
+    await Promise.resolve()
+    expect(deps.killTerminal).toHaveBeenCalledTimes(1)
+  })
+
+  it('repeats a pending respawn kill when delayed creation becomes ready', async () => {
+    const deps = makeDeps()
+    let complete!: (result: CreateTerminalResult) => void
+    vi.mocked(deps.createTerminal).mockImplementationOnce((_id, _options, callback) => {
+      deps.channels.push(callback)
+      return new Promise(resolve => { complete = resolve })
+    })
+    const session = new TerminalSession('t1', { write: vi.fn() }, deps)
+    session.start(OPTS)
+    session.respawn({ ...OPTS, cwd: '/other', accountId: 'other-profile' })
+    expect(deps.killTerminal).toHaveBeenCalledTimes(1)
+    complete({ ok: true, pid: 1, shell: 'sh' })
+    await Promise.resolve()
+    expect(deps.killTerminal).toHaveBeenCalledTimes(2)
+    expect(deps.createTerminal).toHaveBeenCalledTimes(1)
+    expect(session.getStatus().kind).toBe('connecting')
+
+    deps.emit({ type: 'exit', payload: { exitCode: 0 } })
+    expect(deps.createTerminal).toHaveBeenCalledTimes(2)
+    expect(deps.createTerminal).toHaveBeenLastCalledWith('t1', { ...OPTS, cwd: '/other', accountId: 'other-profile' }, expect.any(Function))
+    await Promise.resolve()
+    expect(session.getStatus().kind).toBe('running')
+  })
+
+  it('does not kill a replacement when an older successful acknowledgement arrives', async () => {
+    const deps = makeDeps()
+    let complete!: (result: CreateTerminalResult) => void
+    vi.mocked(deps.createTerminal).mockImplementationOnce((_id, _options, callback) => {
+      deps.channels.push(callback)
+      return new Promise(resolve => { complete = resolve })
+    })
+    const session = new TerminalSession('t1', { write: vi.fn() }, deps)
+    session.start(OPTS)
+    deps.emit({ type: 'exit', payload: { exitCode: 0 } })
+    session.retry(OPTS)
+    await Promise.resolve()
+    expect(session.getStatus().kind).toBe('running')
+    complete({ ok: true, pid: 1, shell: 'sh' })
+    await Promise.resolve()
+    expect(deps.killTerminal).not.toHaveBeenCalled()
+    expect(session.getStatus().kind).toBe('running')
+  })
+
+  it('starts the newly selected profile if pending creation fails', async () => {
+    const deps = makeDeps()
+    let complete!: (result: CreateTerminalResult) => void
+    vi.mocked(deps.createTerminal).mockImplementationOnce(() => new Promise(resolve => { complete = resolve }))
+    const session = new TerminalSession('t1', { write: vi.fn() }, deps)
+    session.start({ ...OPTS, accountId: 'unavailable-profile' })
+    const next = { ...OPTS, accountId: 'available-profile' }
+    session.respawn(next)
+    complete({ ok: false, error: 'Profile unavailable' })
+    await Promise.resolve()
+    expect(deps.createTerminal).toHaveBeenCalledTimes(2)
+    expect(deps.createTerminal).toHaveBeenLastCalledWith('t1', next, expect.any(Function))
+    await Promise.resolve()
+    expect(session.getStatus().kind).toBe('running')
+  })
+
   it('spawns the pty only once across repeated start() calls (remounts)', () => {
     const deps = makeDeps()
     const session = new TerminalSession('t1', { write: vi.fn() }, deps)

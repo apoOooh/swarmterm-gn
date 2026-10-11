@@ -92,6 +92,7 @@ pub fn scan(projects_root: &Path, folder: &str) -> Vec<SessionEntry> {
             continue;
         };
         out.push(SessionEntry {
+            account_id: None,
             agent_id: "qwen".into(),
             session_id: stem.to_owned(),
             title,

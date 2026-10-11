@@ -9,6 +9,8 @@ import {
 import { TERMINAL_COUNTS, layoutSummary } from '@/lib/layout-tree'
 import { allocateAgents, clampCounts } from '@/lib/agent-allocation'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { allocateAccounts, type AccountSelection } from '@/lib/agent-accounts'
 import { useAppStore } from '@/store/app-store'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { AgentIcon } from '@/components/AgentIcon'
@@ -35,6 +37,8 @@ import { LayoutPreview } from './LayoutPreview'
 import { RecentsDialog } from './RecentsDialog'
 import { SessionRow } from './SessionRow'
 import { SessionsDialog } from './SessionsDialog'
+import { SavedWorkspaceCard } from './SavedWorkspaceCard'
+import { useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
 
 const DEFAULT_TERMINAL_COUNT = 2
 
@@ -57,7 +61,11 @@ export function Welcome(): ReactElement {
   const addRecentFolder = useRecentsStore((s) => s.add)
   const removeRecentFolder = useRecentsStore((s) => s.remove)
   const availability = useAgentAvailabilityStore((s) => s.availability)
+  const savedWorkspaces = useSavedWorkspacesStore(s => s.entries)
+  const codexSessionHooks = useAgentAvailabilityStore(s => s.codexSessionHooks)
 
+  const accounts = useAgentAccountsStore(s => s.accounts)
+  const [accountSelections, setAccountSelections] = useState<Record<string, AccountSelection>>({})
   const [terminalCount, setTerminalCount] = useState<number>(DEFAULT_TERMINAL_COUNT)
   // '' ⇒ follow the Settings default (no per-workspace override).
   const [splitAgent, setSplitAgent] = useState<string>('')
@@ -89,6 +97,7 @@ export function Welcome(): ReactElement {
   // while the app runs is picked up without a restart.
   useEffect(() => {
     void useAgentAvailabilityStore.getState().refresh()
+    void useAgentAccountsStore.getState().refresh()
   }, [])
 
   // Correct the seed once the availability probe resolves: if claude-code
@@ -126,7 +135,8 @@ export function Welcome(): ReactElement {
       return
     }
     let cancelled = false
-    void listWorktrees(trimmedFolder)
+    setIsGitRepo(false)
+    const timer = window.setTimeout(() => { void listWorktrees(trimmedFolder)
       .then((trees) => {
         if (cancelled) return
         // A repo with an unborn HEAD (fresh `git init`, zero commits) lists
@@ -141,9 +151,10 @@ export function Welcome(): ReactElement {
         if (!cancelled) {
           setIsGitRepo(false)
         }
-      })
+      }) }, 250)
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [trimmedFolder])
 
@@ -158,17 +169,20 @@ export function Welcome(): ReactElement {
     setSessionsDialogOpen(false)
     if (trimmedFolder === '') return
     let cancelled = false
-    void listAgentSessions(trimmedFolder)
+    // A full CLI history scan is expensive, especially across account profiles.
+    // Wait until folder editing settles; obsolete timers never start native work.
+    const timer = window.setTimeout(() => { void listAgentSessions(trimmedFolder)
       .then((entries) => {
         if (!cancelled) setSessions(mergeSessions(entries, availability))
       })
       .catch(() => {
         if (!cancelled) setSessions([])
-      })
+      }) }, 250)
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
-  }, [trimmedFolder, availability])
+  }, [trimmedFolder, availability, accounts])
 
   const browse = async (): Promise<void> => {
     const picked = await pickDirectory(trimmedFolder)
@@ -177,7 +191,7 @@ export function Welcome(): ReactElement {
 
   const resumePanes = sessions
     .filter((e) => tickedSessions.has(sessionKey(e)))
-    .map((e) => ({ agentId: e.agentId, sessionId: e.sessionId, cwd: e.cwd }))
+    .map((e) => ({ agentId: e.agentId, sessionId: e.sessionId, cwd: e.cwd, accountId: e.accountId }))
   // Ticks are kept against the FULL sessions list (above) so a selection made
   // under one filter still counts once the user switches tabs.
   const tabCounts = sessionTabCounts(sessions)
@@ -232,6 +246,7 @@ export function Welcome(): ReactElement {
         cwd: trimmedFolder,
         terminalCount,
         agentIds,
+        accountIds: allocateAccounts(agentIds, accounts, accountSelections),
         worktreeMode: isolate,
         paneWorktrees,
         resumePanes: resumePanes.length > 0 ? resumePanes : undefined,
@@ -254,7 +269,7 @@ export function Welcome(): ReactElement {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [trimmedFolder, terminalCount, counts, isolateWorktrees, isGitRepo, isSubmitting, tickedSessions, sessions]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [trimmedFolder, terminalCount, counts, isolateWorktrees, isGitRepo, isSubmitting, tickedSessions, sessions, accounts, accountSelections]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build caption: "4 panes · 2×2 · 2 AI agents · 2 Terminals"
   const aiCount = agentIds.filter((id) => id !== DEFAULT_TEMPLATE_ID).length
@@ -305,6 +320,14 @@ export function Welcome(): ReactElement {
               </Button>
             </div>
           </div>
+
+          {savedWorkspaces.length > 0 && <section aria-label="Saved workspaces" className="mt-5">
+            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Saved workspaces</h3>
+            <div className="max-h-80 space-y-2 overflow-y-auto">{savedWorkspaces.map(workspace => <SavedWorkspaceCard key={workspace.id} workspace={workspace} />)}</div>
+          </section>}
+          {availability.codex === true && <p className="mt-3 text-xs text-muted-foreground">{codexSessionHooks
+            ? 'To save Codex conversations, review and trust the Swarmterm session hooks in /hooks. Send a message after trusting them.'
+            : 'Update Codex CLI to a version with session hooks to save new conversations. Workspace layouts are saved now.'}</p>}
 
           {/* Recent folders — inline list capped at VISIBLE_RECENT_ROWS;
               "Show all" opens the searchable pick-one dialog over the full
@@ -504,6 +527,12 @@ export function Welcome(): ReactElement {
                   <div key={t.id} className="flex items-center gap-2">
                     <AgentIcon template={t} className="h-4 w-4 shrink-0" />
                     <span className="flex-1 text-sm text-foreground">{t.name}</span>
+                    {(t.id === 'claude-code' || t.id === 'codex') && <select aria-label={`${t.name} account`} className="max-w-36 rounded border border-input bg-background px-1 text-xs" value={accountSelections[t.id]?.mode === 'round-robin' ? '__round-robin__' : (accountSelections[t.id] as { accountId?: string } | undefined)?.accountId ?? ''} onChange={event => setAccountSelections(previous => ({ ...previous, [t.id]: event.target.value === '__round-robin__' ? { mode: 'round-robin' } : { mode: 'fixed', accountId: event.target.value || undefined } }))}>
+                      <option value="">Default account</option>
+                      {accounts.filter(account => account.agentId === t.id).map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
+                      <option value="__round-robin__">Round robin</option>
+                    </select>}
+
                     {available ? (
                       <div className="flex items-center gap-1">
                         <button

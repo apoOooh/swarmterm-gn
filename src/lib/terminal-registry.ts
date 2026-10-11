@@ -8,6 +8,8 @@ import { useAppearanceStore } from '@/store/appearance-store'
 import '@xterm/xterm/css/xterm.css'
 import { createTerminal, killTerminal, resizeTerminal, writeTerminal } from '@/tauri/terminal'
 import { TerminalSession, type TerminalStatus } from '@/lib/terminal-session'
+import { createFrameTaskQueue } from '@/lib/frame-task-queue'
+import { describeFocusedElement, OVERLAY_SELECTOR, shouldReturnFocus } from '@/lib/terminal-focus'
 import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { resolveBroadcastTargets } from '@/lib/broadcast-input'
@@ -17,7 +19,7 @@ import { collectLeaves } from '@/lib/layout-tree'
 import type { TerminalTextPref } from '@/lib/terminal-text'
 import { decideClipboardAction, isMacPlatform } from '@/lib/terminal-clipboard'
 import { isWindowsPlatform } from '@/lib/platform'
-import { matchAppShortcut } from '@/lib/keybindings'
+import { matchConfiguredShortcut } from '@/store/shortcut-store'
 import { readClipboard, saveClipboardImage, writeClipboard } from '@/tauri/clipboard'
 import { imagePasteText, supportsImagePaste } from '@/lib/clipboard-image'
 import {
@@ -113,6 +115,7 @@ export interface AttachConfig {
   worktreeMode?: boolean
   repoRoot?: string
   agentId?: string
+  accountId?: string
 }
 
 interface Entry {
@@ -136,6 +139,7 @@ interface Entry {
   /** Where the last press began, for the drag-vs-click guard. */
   lastMouseDown?: ClickPoint
   opened: boolean
+  pendingFocus?: boolean
   observer?: ResizeObserver
   /**
    * The running detection loop for this pane's agent, if any — absent for
@@ -171,6 +175,10 @@ interface Entry {
 
 /** Live terminals keyed by terminalId, owned outside React's render tree. */
 const entries = new Map<string, Entry>()
+const terminalInitializers = createFrameTaskQueue(
+  callback => requestAnimationFrame(callback),
+  handle => cancelAnimationFrame(handle)
+)
 
 /**
  * One activity tracker for every terminal. `notify(id)` fires on each decoded
@@ -891,7 +899,7 @@ function getOrCreate(id: string): Entry {
     // ctrl/alt/meta-held combo on its own (see its own
     // `(ev.ctrlKey || ev.altKey || ev.metaKey) && !thirdLevelShift` bail), so
     // there's nothing left for this handler to intercept at that stage.
-    if (event.type === 'keydown' && matchAppShortcut(event, isMac) !== null) {
+    if (event.type === 'keydown' && event.defaultPrevented && matchConfiguredShortcut(event, isMac) !== null) {
       event.preventDefault()
       return false
     }
@@ -962,7 +970,14 @@ function getOrCreate(id: string): Entry {
     // re-opening the focus-report window.
     if (entry) {
       if (kind !== 'running') entry.ptyStartedAt = undefined
-      else entry.ptyStartedAt ??= Date.now()
+      else {
+        entry.ptyStartedAt ??= Date.now()
+        // Layout fitting can finish before an asynchronous native spawn has
+        // inserted its PTY, so an earlier resize may have had no target.
+        // Reapply the current geometry once this generation is ready.
+        safeFit(entry)
+        resizeTerminal(id, entry.term.cols, entry.term.rows)
+      }
     }
     if (kind === 'exited' || kind === 'error') {
       entries.get(id)?.detector?.noteExit()
@@ -1016,10 +1031,26 @@ export function attachTerminal(id: string, container: HTMLElement, config: Attac
   container.appendChild(entry.host)
 
   if (!entry.opened) {
-    entry.term.open(entry.mount)
-    loadWebglRenderer(id, entry)
-    entry.opened = true
+    terminalInitializers.enqueue(id, () => {
+      if (entries.get(id) !== entry || !entry.host.isConnected || entry.host.parentElement !== container) return
+      entry.term.open(entry.mount)
+      loadWebglRenderer(id, entry)
+      entry.opened = true
+      finishTerminalAttach(id, entry, container)
+      const app = useAppStore.getState()
+      if (entry.pendingFocus && !app.welcomeFocused && selectFocusedTerminalId(app) === id
+        && !document.querySelector(OVERLAY_SELECTOR)
+        && (isAnyTerminalFocused() || shouldReturnFocus(describeFocusedElement(document.activeElement)))) {
+        entry.term.focus()
+      }
+      entry.pendingFocus = false
+    })
+    return
   }
+  finishTerminalAttach(id, entry, container)
+}
+
+function finishTerminalAttach(id: string, entry: Entry, container: HTMLElement): void {
   // The pty must end up at whatever size the pane (re)attached at. The fit
   // just above already moved xterm, so the observer's initial delivery goes
   // through refitEntry with NO cols/rows delta and would skip the push —
@@ -1038,6 +1069,7 @@ export function attachTerminal(id: string, container: HTMLElement, config: Attac
 
 /** Detach the terminal from the DOM without killing the pty (e.g. on remount). */
 export function detachTerminal(id: string): void {
+  terminalInitializers.cancel(id)
   const entry = entries.get(id)
   if (!entry) return
   entry.observer?.disconnect()
@@ -1047,6 +1079,7 @@ export function detachTerminal(id: string): void {
 
 /** Permanently destroy a terminal: kill the pty, dispose xterm, drop the entry. */
 export function disposeTerminal(id: string): void {
+  terminalInitializers.cancel(id)
   hoveredPaths.delete(id)
   pathFollowers.delete(id)
   const entry = entries.get(id)
@@ -1079,7 +1112,10 @@ export function disposeOrphanTerminals(keep: Set<string>): void {
 }
 
 export function focusTerminal(id: string): void {
-  entries.get(id)?.term.focus()
+  const entry = entries.get(id)
+  if (!entry) return
+  if (!entry.opened) entry.pendingFocus = true
+  else entry.term.focus()
 }
 
 /**
@@ -1180,6 +1216,7 @@ export function submitTerminalPrompt(id: string): void {
 export function retryTerminal(id: string): void {
   const entry = entries.get(id)
   if (!entry) return
+  if (!entry.opened) return
   entry.term.reset()
   // The pty this segment's committed baseline described is gone.
   entry.resetInputSegment()
@@ -1214,6 +1251,10 @@ export function respawnTerminal(id: string, config: AttachConfig): void {
   // that's actually about to watch the new pty, not a stale one for the
   // previous agent.
   refreshDetector(id, entry)
+  if (!entry.opened) {
+    entry.cwd = config.cwd ?? ''
+    return
+  }
   entry.term.reset()
   // The pty this segment's committed baseline described is gone.
   entry.resetInputSegment()

@@ -14,6 +14,7 @@ import {
 /** One resumable session as reported by `list_agent_sessions`. */
 export interface AgentSessionEntry {
   agentId: string
+  accountId?: string
   sessionId: string
   title: string
   cwd: string
@@ -22,7 +23,7 @@ export interface AgentSessionEntry {
 
 /** Stable identity for React keys and the ticked-set. */
 export function sessionKey(e: AgentSessionEntry): string {
-  return `${e.agentId}:${e.sessionId}`
+  return `${e.agentId}:${e.sessionId}${e.accountId ? `:${e.accountId}` : ''}`
 }
 
 /** Composer filter — 'all' or one agent template id. */
