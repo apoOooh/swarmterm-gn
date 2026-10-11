@@ -107,6 +107,7 @@ pub enum PtyOut {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTerminalOptions {
+    pub account_id: Option<String>,
     pub agent_id: Option<String>,
     pub cwd: Option<String>,
     pub shell_id: Option<String>,
@@ -359,6 +360,20 @@ pub fn spawn_terminal(
         return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
     }
 
+    let account = match options.account_id.as_deref() {
+        Some(id) => match crate::accounts::resolve(app, id, options.agent_id.as_deref()) {
+            Ok(account) => {
+                if let Err(e) =
+                    crate::accounts::enroll(&account, state.mcp_url.get().map(|url| url.as_ref()))
+                {
+                    return CreateTerminalResult::err(e);
+                }
+                Some(account)
+            }
+            Err(e) => return CreateTerminalResult::err(e),
+        },
+        None => None,
+    };
     let resolved = options
         .shell_id
         .as_deref()
@@ -384,6 +399,9 @@ pub fn spawn_terminal(
     // 24-bit color sequences that ConPTY forwards and xterm renders verbatim.
     for (k, v) in std::env::vars() {
         cmd.env(k, v);
+    }
+    if let Some(account) = &account {
+        crate::accounts::apply_environment(&mut cmd, account);
     }
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM", "xterm-256color");

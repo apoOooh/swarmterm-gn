@@ -18,7 +18,12 @@ import { useStatuslineStore } from '@/store/statusline-store'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import { useShellMarkStore } from '@/store/shell-mark-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
-import { matchAppShortcut } from '@/lib/keybindings'
+import { matchConfiguredShortcut, useShortcutStore } from '@/store/shortcut-store'
+import { ACTION_EVENT } from '@/lib/app-actions'
+import { runWorkspaceMacro } from '@/lib/run-workspace-macro'
+import { allocateAccounts } from '@/lib/agent-accounts'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { inspectSavedWorkspace } from '@/tauri/sessions'
 import { jumpToAttention } from '@/lib/attention-jump'
 import { collectLeaves, findLeaf } from '@/lib/layout-tree'
 import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
@@ -115,6 +120,7 @@ function liveTerminalIds(workspaces: WorkspaceModel[]): Set<string> {
 }
 
 export default function App(): ReactElement {
+  const macroRunning = useRef(false)
   useEffect(() => wireSavedWorkspaces(), [])
   useEffect(() => {
     const listener = onAgentSession(e => useAppStore.getState().recordPaneSession(e.terminalId, e.agentId, e.sessionId))
@@ -298,6 +304,8 @@ export default function App(): ReactElement {
   useEffect(() => {
     void showWindow()
     useRecentsStore.getState().hydrate()
+    useShortcutStore.getState().hydrate()
+    void useAgentAccountsStore.getState().refresh()
     void useAgentAvailabilityStore.getState().refresh()
     void useShellAvailabilityStore.getState().refresh()
     void useStatuslineStore.getState().sync()
@@ -314,7 +322,14 @@ export default function App(): ReactElement {
   }, [showWelcome, welcomeClosable, settingsOpen, closeWelcome])
 
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent): void => {
+    const onKeyDown = (e: KeyboardEvent, requestedAction?: string): void => {
+      if (!requestedAction && (e.isComposing || document.activeElement?.closest('[role="dialog"],[role="menu"]'))) return
+      if (!requestedAction && e.repeat) {
+        // Held app chords stay owned without repeating their action or leaking
+        // control bytes through xterm's gate into the focused shell.
+        if (isAnyTerminalFocused() && matchConfiguredShortcut(e, isMac)) e.preventDefault()
+        return
+      }
       // Esc exits broadcast mode (which clears the group).
       if (e.key === 'Escape') {
         // ModeratorComposer also treats Escape as its own gesture (blur, hand
@@ -347,7 +362,66 @@ export default function App(): ReactElement {
       // Cmd+B / Cmd+Shift+B / Cmd+F / Cmd+Shift+J on mac, Ctrl+B /
       // Ctrl+Shift+B / Ctrl+F / Ctrl+Shift+J elsewhere. If these bindings
       // change, update src/lib/keybindings.ts.
-      const action = matchAppShortcut(e, isMac)
+      const action = requestedAction ?? matchConfiguredShortcut(e, isMac)
+      if (!action) return
+      if (action.startsWith('macro:')) {
+        if (!requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
+        e.preventDefault()
+        if (macroRunning.current) return
+        const macro = useShortcutStore.getState().macros.find(m => m.id === action)
+        if (!macro) return
+        macroRunning.current = true
+        setSettingsOpen(false)
+        void runWorkspaceMacro(macro, {
+          prepare: async step => {
+            await useAgentAvailabilityStore.getState().refresh()
+            await useAgentAccountsStore.getState().refresh()
+            const accounts = useAgentAccountsStore.getState()
+            if (accounts.error) throw new Error(accounts.error)
+            const st = useAppStore.getState()
+            const cwd = step.cwd || st.workspaces.find(w => w.id === st.activeWorkspaceId)?.cwd || st.welcomeFolder
+            if (!cwd) throw new Error('Choose an existing folder for this custom action.')
+            if (step.agentIds.some(id => useAgentAvailabilityStore.getState().availability[id] === false)) throw new Error('A requested agent CLI is unavailable.')
+            const accountIds = allocateAccounts(step.agentIds, accounts.accounts, step.accounts === 'round-robin' ? { 'claude-code': { mode: 'round-robin' }, codex: { mode: 'round-robin' } } : {})
+            const inspection = await inspectSavedWorkspace(cwd, step.agentIds.map((agentId, i) => ({ cwd, agentId, accountId: accountIds[i] })))
+            if (!inspection.rootAvailable) throw new Error('Choose an existing folder for this custom action.')
+            if (inspection.panes.some(p => !p.directoryAvailable || p.accountAvailable === false)) throw new Error('A requested account profile or configuration folder is unavailable.')
+            return () => useAppStore.getState().createWorkspace({ cwd, agentIds: step.agentIds, terminalCount: step.agentIds.length, accountIds })
+          },
+          action: id => onKeyDown(new KeyboardEvent('keydown'), id)
+        }).catch(err => { useShortcutStore.setState({ error: String(err) }); void showMessage(String(err), { title: 'Custom action', kind: 'error' }) }).finally(() => { macroRunning.current = false })
+        return
+      }
+      if (action === 'open-settings') { e.preventDefault(); setSettingsOpen(true); return }
+      if (action === 'new-workspace') { e.preventDefault(); useAppStore.getState().openWelcome(); return }
+      const state = useAppStore.getState()
+      const workspace = state.workspaces.find(w => w.id === state.activeWorkspaceId)
+      if (['save-file','cycle-markdown'].includes(action)) {
+        const pane = workspace ? useDocumentStore.getState().panes[workspace.focusedLeafId] : undefined
+        const doc = pane?.active ? useDocumentStore.getState().documents[pane.active] : undefined
+        if (!doc || !requestedAction && (state.welcomeFocused || pane?.keyboard !== 'file' || !document.activeElement?.closest('[data-keyboard-owner="editor"]'))) return
+        e.preventDefault()
+        if (action === 'save-file') void useDocumentStore.getState().save(doc.key)
+        else if (/\.(md|markdown|svg|html?)$/i.test(doc.path)) useDocumentStore.getState().mode(doc.key, doc.mode === 'editor' ? 'split' : doc.mode === 'split' ? 'preview' : 'editor')
+        return
+      }
+      if (['next-workspace','previous-workspace'].includes(action)) {
+        if (!requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
+        if (!workspace) return
+        e.preventDefault(); const index = state.workspaces.indexOf(workspace)
+        state.setActiveWorkspace(state.workspaces[(index + (action === 'next-workspace' ? 1 : state.workspaces.length - 1)) % state.workspaces.length].id); return
+      }
+      if (['split-horizontal','split-vertical','close-pane','close-workspace','next-pane','previous-pane','select-all-broadcast','clear-broadcast'].includes(action)) {
+        if (!workspace || state.welcomeFocused || !requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
+        e.preventDefault()
+        if (action === 'split-horizontal' || action === 'split-vertical') state.splitPane(workspace.focusedLeafId, action === 'split-horizontal' ? 'horizontal' : 'vertical')
+        else if (action === 'close-pane') state.closePane(workspace.focusedLeafId)
+        else if (action === 'close-workspace') state.closeWorkspace(workspace.id)
+        else if (action === 'select-all-broadcast') state.selectAllBroadcast()
+        else if (action === 'clear-broadcast') state.clearBroadcast()
+        else { const leaves = collectLeaves(workspace.layout), index = leaves.findIndex(l => l.id === workspace.focusedLeafId); state.setFocusedLeaf(leaves[(index + (action === 'next-pane' ? 1 : leaves.length - 1)) % leaves.length].id) }
+        return
+      }
       if (action === 'focus-explorer') {
         e.preventDefault()
         useNavbarVisibilityStore.setState({ visible: true })
@@ -373,7 +447,7 @@ export default function App(): ReactElement {
         // where the overlay is already open but the user clicked back into
         // the terminal — open() below is idempotent, so this just re-focuses
         // the existing find input.
-        if (!isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) {
+        if (!requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) {
           return
         }
         const terminalId = selectFocusedTerminalId(useAppStore.getState())
@@ -384,7 +458,7 @@ export default function App(): ReactElement {
         }
       }
       if (action === 'toggle-zoom') {
-        if (!isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
+        if (!requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
         const st = useAppStore.getState()
         const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
         if (!ws || st.welcomeFocused) return
@@ -414,17 +488,20 @@ export default function App(): ReactElement {
       if (action === 'jump-to-attention') {
         // Same stand-down as find: never yank focus out of the composer, a
         // rename field, a menu, or the Settings overlay.
-        if (!isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) {
+        if (!requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) {
           return
         }
-        // No candidate → let the keystroke fall through (the registry gate
-        // already dropped it toward the pty, so nothing leaks either way).
-        if (jumpToAttention()) e.preventDefault()
+        // An owned chord remains claimed even without a target. A rebound
+        // Ctrl+J must never become a line feed that submits pending shell input.
+        e.preventDefault()
+        jumpToAttention()
         return
       }
     }
+    const onAction = (event: Event): void => { const id = (event as CustomEvent<unknown>).detail; if (typeof id === 'string') onKeyDown(new KeyboardEvent('keydown'), id) }
+    window.addEventListener(ACTION_EVENT, onAction)
     window.addEventListener('keydown', onKeyDown, { capture: true })
-    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
+    return () => { window.removeEventListener('keydown', onKeyDown, { capture: true }); window.removeEventListener(ACTION_EVENT, onAction) }
   }, [])
 
   // --- keyboard focus belongs to the terminal -----------------------------

@@ -17,7 +17,7 @@ import { collectLeaves } from '@/lib/layout-tree'
 import type { TerminalTextPref } from '@/lib/terminal-text'
 import { decideClipboardAction, isMacPlatform } from '@/lib/terminal-clipboard'
 import { isWindowsPlatform } from '@/lib/platform'
-import { matchAppShortcut } from '@/lib/keybindings'
+import { matchConfiguredShortcut } from '@/store/shortcut-store'
 import { readClipboard, writeClipboard } from '@/tauri/clipboard'
 import {
   isDragNotClick,
@@ -112,6 +112,7 @@ export interface AttachConfig {
   worktreeMode?: boolean
   repoRoot?: string
   agentId?: string
+  accountId?: string
 }
 
 interface Entry {
@@ -890,7 +891,7 @@ function getOrCreate(id: string): Entry {
     // ctrl/alt/meta-held combo on its own (see its own
     // `(ev.ctrlKey || ev.altKey || ev.metaKey) && !thirdLevelShift` bail), so
     // there's nothing left for this handler to intercept at that stage.
-    if (event.type === 'keydown' && matchAppShortcut(event, isMac) !== null) {
+    if (event.type === 'keydown' && event.defaultPrevented && matchConfiguredShortcut(event, isMac) !== null) {
       event.preventDefault()
       return false
     }

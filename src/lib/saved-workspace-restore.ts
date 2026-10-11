@@ -2,7 +2,7 @@ import type { SavedWorkspace, SavedNode, SavedLeaf } from './saved-workspaces'
 import { templateById, type AgentAvailabilityMap } from './templates'
 import type { ShellAvailabilityMap } from './terminal-pref'
 
-export interface SavedWorkspaceInspection { rootAvailable: boolean; panes: { directoryAvailable: boolean; sessionAvailable: boolean }[] }
+export interface SavedWorkspaceInspection { rootAvailable: boolean; panes: { directoryAvailable: boolean; sessionAvailable: boolean; accountAvailable?: boolean }[] }
 export function savedLeaves(node: SavedNode): SavedLeaf[] { return node.type === 'leaf' ? [node] : node.children.flatMap(savedLeaves) }
 
 /** A missing session is never silently substituted by another conversation. */
@@ -15,6 +15,10 @@ export function prepareSavedWorkspace(saved: SavedWorkspace, inspection: SavedWo
     const status = inspection.panes[i++]
     const next = { ...node }
     if (!status) throw new Error('Could not verify the saved workspace. Please try again.')
+    if (next.accountId && status.accountAvailable === false) {
+      delete next.accountId; delete next.sessionId
+      warnings.push('A saved account is no longer available; its agent starts fresh with the default account.')
+    }
     if (!status.directoryAvailable) {
       next.cwd = saved.cwd; delete next.worktreeBranch; delete next.sessionId
       warnings.push('A missing pane folder was replaced by the working folder; its agent starts fresh.')
@@ -23,7 +27,7 @@ export function prepareSavedWorkspace(saved: SavedWorkspace, inspection: SavedWo
       warnings.push('A saved session is no longer available; its agent starts fresh.')
     }
     if (templateById(next.agentId).id !== next.agentId || agents[next.agentId] === false) {
-      next.agentId = 'terminal'; delete next.sessionId; delete next.launchMode
+      next.agentId = 'terminal'; delete next.accountId; delete next.sessionId; delete next.launchMode
       warnings.push('An unavailable agent was replaced by a plain terminal.')
     }
     if (next.shellId !== 'default' && shells[next.shellId] === false) {

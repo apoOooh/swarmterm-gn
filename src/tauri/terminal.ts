@@ -8,6 +8,7 @@ export type PtyOut =
 
 export interface CreateTerminalOptions {
   agentId?: string
+  accountId?: string
   cwd?: string
   shellId?: ShellId
   initialCommand?: string

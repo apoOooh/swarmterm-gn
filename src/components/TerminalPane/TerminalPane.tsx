@@ -80,6 +80,7 @@ export function TerminalPane({
   const closePane = useAppStore((s) => s.closePane)
   const setFocusedLeaf = useAppStore((s) => s.setFocusedLeaf)
   const toggleBroadcastMember = useAppStore((s) => s.toggleBroadcastMember)
+  const setPaneAccount = useAppStore(s => s.setPaneAccount)
   const setPaneAgent = useAppStore((s) => s.setPaneAgent)
   const setPaneLaunchMode = useAppStore((s) => s.setPaneLaunchMode)
   const pickPaneSession = useAppStore((s) => s.pickPaneSession)
@@ -170,7 +171,8 @@ export function TerminalPane({
       initialCommand: resolvedCommand,
       worktreeMode: worktreeMode || undefined,
       repoRoot: worktreeMode ? cwd : undefined,
-      agentId: resolvedAgentId
+      agentId: resolvedAgentId,
+      accountId: leaf.accountId
     })
     setStatus(getTerminalStatus(terminalId))
     const unsubscribe = subscribeTerminalStatus(terminalId, () =>
@@ -191,7 +193,8 @@ export function TerminalPane({
     cwd: resolvedCwd,
     shellId: resolvedShellId,
     command: resolvedCommand,
-    agentId: resolvedAgentId
+    agentId: resolvedAgentId,
+    accountId: leaf.accountId
   })
   useEffect(() => {
     const prev = appliedRef.current
@@ -199,7 +202,8 @@ export function TerminalPane({
       prev.cwd === resolvedCwd &&
       prev.shellId === resolvedShellId &&
       prev.command === resolvedCommand &&
-      prev.agentId === resolvedAgentId
+      prev.agentId === resolvedAgentId &&
+      prev.accountId === leaf.accountId
     ) {
       return
     }
@@ -207,7 +211,8 @@ export function TerminalPane({
       cwd: resolvedCwd,
       shellId: resolvedShellId,
       command: resolvedCommand,
-      agentId: resolvedAgentId
+      agentId: resolvedAgentId,
+      accountId: leaf.accountId
     }
     respawnTerminal(terminalId, {
       cwd: resolvedCwd,
@@ -215,12 +220,13 @@ export function TerminalPane({
       initialCommand: resolvedCommand,
       worktreeMode: worktreeMode || undefined,
       repoRoot: worktreeMode ? cwd : undefined,
-      agentId: resolvedAgentId
+      agentId: resolvedAgentId,
+      accountId: leaf.accountId
     })
     // A same-id respawn (agent/cwd/shell switch) starts a new session; the old
     // agent's title no longer describes it. Clear it — the new agent re-titles.
     useTerminalTitleStore.getState().clearTitle(terminalId)
-  }, [terminalId, resolvedCwd, resolvedShellId, resolvedCommand, resolvedAgentId])
+  }, [terminalId, resolvedCwd, resolvedShellId, resolvedCommand, resolvedAgentId, leaf.accountId])
 
   // Pull keyboard focus into xterm when this pane becomes the focused one.
   useEffect(() => {
@@ -347,6 +353,8 @@ export function TerminalPane({
     >
       <PaneHeader
         agentId={resolvedAgentId}
+        accountId={leaf.accountId}
+        onAccountChange={accountId => setPaneAccount(leafId, accountId)}
         shellId={resolvedShellId}
         resolvedCwd={resolvedCwd}
         hasCwdOverride={leaf.cwd !== undefined}

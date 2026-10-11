@@ -9,6 +9,8 @@ import {
 import { TERMINAL_COUNTS, layoutSummary } from '@/lib/layout-tree'
 import { allocateAgents, clampCounts } from '@/lib/agent-allocation'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { allocateAccounts, type AccountSelection } from '@/lib/agent-accounts'
 import { useAppStore } from '@/store/app-store'
 import { AgentIcon } from '@/components/AgentIcon'
 import { Button } from '@/components/ui/button'
@@ -61,6 +63,8 @@ export function Welcome(): ReactElement {
   const savedWorkspaces = useSavedWorkspacesStore(s => s.entries)
   const codexSessionHooks = useAgentAvailabilityStore(s => s.codexSessionHooks)
 
+  const accounts = useAgentAccountsStore(s => s.accounts)
+  const [accountSelections, setAccountSelections] = useState<Record<string, AccountSelection>>({})
   const [terminalCount, setTerminalCount] = useState<number>(DEFAULT_TERMINAL_COUNT)
   // Optimistic seed: 1 Claude Code assigned until the probe says it's not installed.
   const [counts, setCounts] = useState<Record<string, number>>({ 'claude-code': 1 })
@@ -89,6 +93,7 @@ export function Welcome(): ReactElement {
   // while the app runs is picked up without a restart.
   useEffect(() => {
     void useAgentAvailabilityStore.getState().refresh()
+    void useAgentAccountsStore.getState().refresh()
   }, [])
 
   // Correct the seed once the availability probe resolves: if claude-code
@@ -168,7 +173,7 @@ export function Welcome(): ReactElement {
     return () => {
       cancelled = true
     }
-  }, [trimmedFolder, availability])
+  }, [trimmedFolder, availability, accounts])
 
   const browse = async (): Promise<void> => {
     const picked = await pickDirectory()
@@ -177,7 +182,7 @@ export function Welcome(): ReactElement {
 
   const resumePanes = sessions
     .filter((e) => tickedSessions.has(sessionKey(e)))
-    .map((e) => ({ agentId: e.agentId, sessionId: e.sessionId, cwd: e.cwd }))
+    .map((e) => ({ agentId: e.agentId, sessionId: e.sessionId, cwd: e.cwd, accountId: e.accountId }))
   // Ticks are kept against the FULL sessions list (above) so a selection made
   // under one filter still counts once the user switches tabs.
   const tabCounts = sessionTabCounts(sessions)
@@ -232,6 +237,7 @@ export function Welcome(): ReactElement {
         cwd: trimmedFolder,
         terminalCount,
         agentIds,
+        accountIds: allocateAccounts(agentIds, accounts, accountSelections),
         worktreeMode: isolate,
         paneWorktrees,
         resumePanes: resumePanes.length > 0 ? resumePanes : undefined
@@ -253,7 +259,7 @@ export function Welcome(): ReactElement {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [trimmedFolder, terminalCount, counts, isolateWorktrees, isGitRepo, isSubmitting, tickedSessions, sessions]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [trimmedFolder, terminalCount, counts, isolateWorktrees, isGitRepo, isSubmitting, tickedSessions, sessions, accounts, accountSelections]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build caption: "4 panes · 2×2 · 2 AI agents · 2 Terminals"
   const aiCount = agentIds.filter((id) => id !== DEFAULT_TEMPLATE_ID).length
@@ -511,6 +517,12 @@ export function Welcome(): ReactElement {
                   <div key={t.id} className="flex items-center gap-2">
                     <AgentIcon template={t} className="h-4 w-4 shrink-0" />
                     <span className="flex-1 text-sm text-foreground">{t.name}</span>
+                    {(t.id === 'claude-code' || t.id === 'codex') && <select aria-label={`${t.name} account`} className="max-w-36 rounded border border-input bg-background px-1 text-xs" value={accountSelections[t.id]?.mode === 'round-robin' ? '__round-robin__' : (accountSelections[t.id] as { accountId?: string } | undefined)?.accountId ?? ''} onChange={event => setAccountSelections(previous => ({ ...previous, [t.id]: event.target.value === '__round-robin__' ? { mode: 'round-robin' } : { mode: 'fixed', accountId: event.target.value || undefined } }))}>
+                      <option value="">Default account</option>
+                      {accounts.filter(account => account.agentId === t.id).map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
+                      <option value="__round-robin__">Round robin</option>
+                    </select>}
+
                     {available ? (
                       <div className="flex items-center gap-1">
                         <button

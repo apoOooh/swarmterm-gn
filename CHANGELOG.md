@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Manage separate Claude Code and Codex account profiles, select or rotate
+  accounts when composing panes, and restore conversations with their owning
+  profile. Credentials stay in the agent CLI's configuration.
+- Customize app shortcuts, detect conflicting bindings and save workspace
+  macros for common pane layouts without storing terminal commands.
+- Add reviewed MCP server definitions to default or named accounts through
+  Settings. Preserve existing configuration, show conflicts and complete
+  authentication in the agent CLI; Playwright runs headless.
+
 - Save up to 24 workspaces locally and reopen them from Welcome with their
   split layout, shells, agents, folders, launch modes and worktree bindings.
   Rename or forget saved entries without stopping an open workspace.

@@ -9,6 +9,7 @@ import {
   type Workspace
 } from './app-store'
 import { collectLeaves, type SplitNode } from '@/lib/layout-tree'
+import { toSaved } from '@/lib/saved-workspaces'
 
 function freshStore(): StoreApi<AppStore> {
   return createStore<AppStore>()(appStoreCreator)
@@ -913,4 +914,52 @@ describe('revealTerminal', () => {
     store.getState().revealTerminal('nope')
     expect(store.getState().activeWorkspaceId).toBe(before)
   })
+})
+
+describe('account session coupling', () => {
+  it('binds fresh and resumed panes to their own profiles and clears resume identity on account switch', () => {
+    const sessionId = '018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f'
+    const store = storeWithWorkspace({ cwd: 'C:/work', terminalCount: 1, agentIds: ['codex'], accountIds: ['new-profile'], resumePanes: [{ agentId: 'codex', sessionId, cwd: 'C:/work', accountId: 'saved-profile' }] })
+    const leaves = collectLeaves(activeWorkspace(store).layout)
+    expect(leaves.map(leaf => leaf.accountId)).toEqual(['new-profile', 'saved-profile'])
+    store.getState().setPaneAccount(leaves[1].id, 'new-profile')
+    const switched = collectLeaves(activeWorkspace(store).layout)[1]
+    expect(switched.accountId).toBe('new-profile')
+    expect(switched.sessionId).toBeUndefined()
+    expect(switched.resumeSessionId).toBeUndefined()
+  })
+})
+
+it('changing agent drops its account and one-shot profile login command', () => {
+  const store = storeWithWorkspace({ cwd: 'C:/work', terminalCount: 1, agentIds: ['claude-code'], accountIds: ['profile-a'], startupCommands: ['claude auth login'] })
+  const leaf = collectLeaves(activeWorkspace(store).layout)[0]
+  store.getState().setPaneAgent(leaf.id, 'codex')
+  const changed = collectLeaves(activeWorkspace(store).layout)[0]
+  expect(changed.accountId).toBeUndefined()
+  expect(changed.startupCommand).toBeUndefined()
+})
+
+it('worktree workers inherit only same-agent accounts while keeping conversations separate', () => {
+  const sessionId = '018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f'
+  for (const profile of [undefined, 'codex-profile']) {
+    for (const agentId of [undefined, 'codex', 'claude-code']) {
+      const store = storeWithWorkspace({ cwd: 'C:/work', terminalCount: 1, agentIds: ['codex'], accountIds: [profile], worktreeMode: true })
+      const requester = collectLeaves(activeWorkspace(store).layout)[0]
+      store.getState().recordPaneSession(requester.terminalId, 'codex', sessionId)
+      store.getState().spawnWorktreePane({ requesterTerminalId: requester.terminalId, path: 'C:/work.worktrees/test', branch: 'test', prompt: 'private worker brief', agentId })
+      const workspace = activeWorkspace(store)
+      const worker = collectLeaves(workspace.layout)[1]
+      expect(worker.accountId).toBe(agentId === 'claude-code' ? undefined : profile)
+      expect(worker.sessionId).toBeUndefined()
+      expect(worker.resumeSessionId).toBeUndefined()
+      const snapshot = toSaved(workspace, 'default', 1)!
+      expect(snapshot.layout.type).toBe('split')
+      if (snapshot.layout.type !== 'split') throw new Error('Expected worker split')
+      expect(snapshot.layout.children[1]).toMatchObject({ agentId: agentId ?? 'codex', cwd: 'C:/work.worktrees/test', worktreeBranch: 'test' })
+      if (snapshot.layout.children[1].type !== 'leaf') throw new Error('Expected worker leaf')
+      expect(snapshot.layout.children[1].accountId).toBe(worker.accountId)
+      expect(snapshot.layout.children[1].sessionId).toBeUndefined()
+      expect(JSON.stringify(snapshot)).not.toContain('private worker brief')
+    }
+  }
 })

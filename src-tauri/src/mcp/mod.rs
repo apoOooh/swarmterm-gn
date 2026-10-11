@@ -2,6 +2,7 @@
 //! drive Swarmterm (open a browser preview today; more tools later).
 
 pub mod auth;
+pub mod catalog;
 pub mod clients;
 pub mod config;
 pub mod context_usage;

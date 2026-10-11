@@ -1,3 +1,4 @@
+mod accounts;
 mod agents;
 mod analytics;
 mod commands;
@@ -133,6 +134,11 @@ pub fn run() {
             commands::report_agent_state,
             commands::list_available_shells,
             commands::list_available_agents,
+            commands::list_agent_accounts,
+            commands::save_agent_account,
+            commands::delete_agent_account,
+            commands::configure_account_mcp,
+            commands::inspect_account_mcp,
             commands::list_agent_sessions,
             commands::inspect_saved_workspace,
             commands::set_claude_statusline,

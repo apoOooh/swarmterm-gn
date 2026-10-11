@@ -12,6 +12,7 @@ import {
   type AgentSessionEntry,
   type SessionFilter
 } from '@/lib/agent-sessions'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { cn } from '@/lib/utils'
 import { SessionRow } from './SessionRow'
 
@@ -46,6 +47,8 @@ export function SessionsDialog({
 }: SessionsDialogProps): ReactElement | null {
   const [railFilter, setRailFilter] = useState<SessionFilter>('all')
   const [query, setQuery] = useState('')
+  const [accountFilter, setAccountFilter] = useState('all')
+  const accounts = useAgentAccountsStore(s => s.accounts)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // "Show all" means ALL: every visit restarts at the full list with the
@@ -55,6 +58,7 @@ export function SessionsDialog({
     if (open) {
       setRailFilter('all')
       setQuery('')
+      setAccountFilter('all')
       inputRef.current?.focus()
     }
   }, [open])
@@ -71,7 +75,7 @@ export function SessionsDialog({
   if (!open) return null
 
   const counts = sessionTabCounts(sessions)
-  const visible = searchSessions(filterSessions(sessions, railFilter), query)
+  const visible = searchSessions(filterSessions(sessions, railFilter).filter(session => accountFilter === 'all' || (accountFilter === 'default' ? !session.accountId : session.accountId === accountFilter)), query)
 
   return (
     <div
@@ -125,6 +129,10 @@ export function SessionsDialog({
 
         {/* Search + list + footer */}
         <div className="flex min-w-0 flex-1 flex-col">
+          <select aria-label="Session account" value={accountFilter} onChange={event => setAccountFilter(event.target.value)} className="mx-3 mt-3 rounded border border-input bg-background p-1 text-xs">
+            <option value="all">All accounts</option><option value="default">Default accounts</option>
+            {accounts.filter(account => railFilter === 'all' || account.agentId === railFilter).map(account => <option key={account.id} value={account.id}>{templateById(account.agentId).name} ? {account.name}</option>)}
+          </select>
           <div className="m-3 mb-2 flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 focus-within:ring-1 focus-within:ring-ring">
             <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
             <input

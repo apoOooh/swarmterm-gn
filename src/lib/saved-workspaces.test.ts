@@ -65,3 +65,11 @@ describe('saved workspace storage', () => {
     expect(list.filter(w => w.id === 'saved-10')).toHaveLength(1)
   })
 })
+
+it('retains a session together with its profile across storage and restore while legacy entries use defaults', () => {
+  const ws = { ...workspace, layout: { type: 'leaf' as const, id: 'a', terminalId: 'ta', agentId: 'codex', accountId: 'profile-a', sessionId: session } }
+  const snapshot = toSaved(ws, 'default', 20)!
+  const loaded = readSaved(storage(JSON.stringify({ version: 1, workspaces: [snapshot] })))[0]
+  expect(collectLeaves(fromSaved(loaded, () => crypto.randomUUID()).layout)[0]).toMatchObject({ accountId: 'profile-a', sessionId: session, resumeSessionId: session })
+  expect(collectLeaves(fromSaved(saved(), () => crypto.randomUUID()).layout)[0].accountId).toBeUndefined()
+})

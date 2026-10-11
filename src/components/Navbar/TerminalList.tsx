@@ -12,6 +12,8 @@ import { displayState, paneDot } from '@/lib/agent-state/rollup'
 import { AgentIcon } from '@/components/AgentIcon'
 import { ActivityDot } from '@/components/ActivityDot'
 import { StateDot } from '@/components/StateDot'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { accountLabel } from '@/lib/agent-accounts'
 import { cn } from '@/lib/utils'
 
 /**
@@ -26,6 +28,7 @@ export function TerminalList(): ReactElement | null {
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const welcomeFocused = useAppStore((s) => s.welcomeFocused)
   const setFocusedLeaf = useAppStore((s) => s.setFocusedLeaf)
+  const accounts = useAgentAccountsStore(s => s.accounts)
   const titles = useTerminalTitleStore((s) => s.titles)
   const activity = useTerminalActivityStore((s) => s.active)
   const agentStates = useAgentStateStore((s) => s.byId)
@@ -71,6 +74,7 @@ export function TerminalList(): ReactElement | null {
               >
                 <AgentIcon template={template} className="h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1 truncate">{title}</span>
+                {(agentId === 'claude-code' || agentId === 'codex') && <span className="max-w-20 truncate text-[10px]" title={`Account: ${accountLabel(leaf.accountId, accounts)}`}>{accountLabel(leaf.accountId, accounts)}</span>}
                 {(() => {
                   const dot = paneDot(
                     displayState(agentStates[leaf.terminalId]),

@@ -10,6 +10,7 @@ export const MAX_SAVED_WORKSPACES = 24
 export interface SavedLeaf {
   type: 'leaf'
   agentId: string
+  accountId?: string
   shellId: ShellId
   cwd: string
   launchMode?: string
@@ -31,6 +32,7 @@ export function toSaved(ws: Workspace, shell: ShellId, now: number): SavedWorksp
     const agentId = node.agentId ?? 'terminal'
     return {
       type: 'leaf', agentId, shellId: node.shellId ?? shell, cwd: node.cwd ?? ws.cwd,
+      ...(node.accountId ? { accountId: node.accountId } : {}),
       ...(node.launchMode ? { launchMode: node.launchMode } : {}),
       ...(node.worktreeBranch ? { worktreeBranch: node.worktreeBranch } : {}),
       ...(validSession(agentId, node.sessionId ?? node.resumeSessionId) ? { sessionId: validSession(agentId, node.sessionId ?? node.resumeSessionId) } : {})
@@ -44,7 +46,7 @@ export function fromSaved(saved: SavedWorkspace, uid: () => string): Workspace {
     if (node.type === 'split') return { type: 'split', id: uid(), direction: node.direction, sizes: [...node.sizes], children: [convert(node.children[0]), convert(node.children[1])] }
     const agentId = templateById(node.agentId).id
     const sessionId = validSession(agentId, node.sessionId)
-    return { type: 'leaf', id: uid(), terminalId: uid(), agentId, shellId: node.shellId, cwd: node.cwd, launchMode: node.launchMode, worktreeBranch: node.worktreeBranch, ...(sessionId ? { resumeSessionId: sessionId, sessionId } : {}) }
+    return { type: 'leaf', id: uid(), terminalId: uid(), agentId, accountId: node.accountId, shellId: node.shellId, cwd: node.cwd, launchMode: node.launchMode, worktreeBranch: node.worktreeBranch, ...(sessionId ? { resumeSessionId: sessionId, sessionId } : {}) }
   }
   const layout = convert(saved.layout)
   return { id: uid(), savedId: saved.id, name: saved.name, cwd: saved.cwd, layout, focusedLeafId: collectLeaves(layout)[0].id, broadcastActive: false, broadcastLeafIds: [], worktreeMode: saved.worktreeMode }
@@ -57,6 +59,7 @@ function parseNode(value: unknown, depth = 0): SavedNode | undefined {
   if (value.type === 'leaf') {
     if (!text(value.agentId) || !text(value.cwd) || !KNOWN_SHELLS.some(s => s.id === value.shellId)) return undefined
     return { type: 'leaf', agentId: value.agentId, cwd: value.cwd, shellId: value.shellId as ShellId,
+      ...(text(value.accountId) ? { accountId: value.accountId } : {}),
       ...(text(value.launchMode) ? { launchMode: value.launchMode } : {}),
       ...(text(value.worktreeBranch) ? { worktreeBranch: value.worktreeBranch } : {}),
       ...(text(value.sessionId) && isValidSessionId(value.agentId, value.sessionId) ? { sessionId: value.sessionId } : {}) }

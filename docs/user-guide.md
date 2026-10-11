@@ -335,7 +335,38 @@ Every pane is automatically connected to the app over MCP for exactly as long as
 
 War Room abilities only work for panes you dragged into a room, worktree abilities only in workspaces with isolation enabled — and removing a pane from a room revokes its access instantly.
 
+## MCP catalogue
+
+Open **Settings > MCP** and choose a Default account or a named Claude Code or Codex profile. The catalogue offers Playwright, GitHub, Context7, Filesystem, Memory, Sequential Thinking and Fetch. Each entry links to its official documentation and lists its requirements.
+
+Choose **Add configuration** to add the server to that account's CLI configuration. Start a new pane using the account to load it. **Configured** means the definition is present; check the agent CLI to confirm connectivity. A different existing definition appears as **Existing configuration** and remains untouched. Use the agent CLI to change or remove existing servers.
+
+For **Filesystem**, choose between one and sixteen existing absolute directories, or enter one directory per line. The server can read and write within those directories. Paths containing shell metacharacters are rejected. **Playwright** uses headless mode, so it does not open a browser window.
+
+GitHub and Context7 authentication happens separately in the agent CLI. Swarmterm has no token fields and stores no MCP credentials. Adding a definition does not install or start a server. When the CLI first starts a local server, `npx` or `uvx` may download its package; install the listed runtime separately if it is missing.
+
 ## Keyboard shortcuts
+
+Settings > Keyboard Shortcuts lists app actions and their current bindings.
+Click a binding button and press a modifier chord to record a replacement.
+Unbind removes it; Reset restores that action's default, and Reset all shortcuts
+restores every default. Conflicts are rejected, including a reset whose default
+is already used by another action. Escape cancels recording. Copy/paste, reload
+and Windows close-window chords stay reserved. The table below shows defaults.
+
+Custom actions combine up to 16 app-action steps and workspace recipes. Give an
+action a name, add steps in order, save it, then run it or assign a shortcut.
+A recipe accepts 1–12 comma-separated agent IDs (`terminal`, `claude-code`,
+`codex`), an optional folder and Default or Auto accounts. Auto rotates each
+CLI's profiles independently, including its default. An empty folder uses the
+current workspace or composer folder. All recipe folders and agent availability
+are checked before any workspace is created. Recipes store structure, not shell
+commands, prompts, terminal output or credentials.
+
+Bindings and up to 24 custom actions persist locally. Rebinding an app shortcut
+releases its old chord to the terminal. Holding a chord does not repeat the app
+action or send its control bytes to the shell. Editor actions apply only while
+the file editor owns the keyboard.
 
 | Shortcut | Action |
 |---|---|
@@ -387,3 +418,16 @@ Sirius from Astera, alongside the original VS Code Dark default. Each preview
 uses its own palette. A theme also changes UI fonts, density, corners and shadows.
 Switching themes keeps running shells and terminal scrollback intact. Terminal
 font preferences remain separate.
+
+
+## Account profiles
+
+Open **Settings > Accounts** to add separate Claude Code or Codex profiles. Give each profile a name and optionally select a dedicated CLI configuration folder. Leaving the folder blank creates an isolated folder automatically. The **Default** account uses the CLI's existing configuration.
+
+Choose **Log in** to open a regular terminal pane running the CLI's own login command with that profile's configuration. Complete the normal login flow there. Swarmterm never asks for passwords or stores access tokens; credentials remain in the CLI's configuration files. CLI login flows may request that you visit a URL outside Swarmterm.
+
+In the workspace composer, each supported agent has an account selector. Pick a fixed profile for every new pane of that agent, or choose **Round robin** to rotate through its Default account and named profiles independently of the other agents. Resumed conversations keep the account that owns them. The sessions dialog can filter conversations by account.
+
+Pane headers and the terminal list show account names. Changing the account from a pane header restarts that agent with a fresh conversation under the selected profile. Saved workspaces retain each pane's profile and exact session reference together.
+
+Removing a profile leaves its configuration folder and credentials on disk, and currently running panes keep running. If a saved workspace references a removed profile, restore reports the missing account and starts that pane fresh with the Default account; it never resumes the old account's conversation under another profile.

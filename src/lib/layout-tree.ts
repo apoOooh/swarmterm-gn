@@ -25,6 +25,8 @@ export interface LeafNode {
    * derived from this at spawn time.
    */
   agentId?: string
+  /** CLI configuration profile; absent uses its normal default configuration. */
+  accountId?: string
   /** Per-pane working-directory override. Absent means use the workspace cwd. */
   cwd?: string
   /** Per-pane shell override. Absent means use the global default shell. */
@@ -76,7 +78,9 @@ export function updateLeaf(
   patch: Partial<
     Pick<
       LeafNode,
+      | 'startupCommand'
       | 'agentId'
+      | 'accountId'
       | 'cwd'
       | 'shellId'
       | 'worktreeBranch'

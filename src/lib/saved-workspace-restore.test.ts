@@ -23,3 +23,11 @@ it('preserves a valid session and reports unavailable agents, shells and session
   expect(result.saved.layout.type === 'leaf' && result.saved.layout.sessionId).toBeUndefined()
   expect(result.warnings.length).toBeGreaterThan(0)
 })
+
+it('never resumes an account session under a default account after profile deletion', () => {
+  const snapshot = { ...saved, layout: { ...saved.layout, accountId: 'removed-profile' } }
+  const result = prepareSavedWorkspace(snapshot, { rootAvailable: true, panes: [{ directoryAvailable: true, sessionAvailable: true, accountAvailable: false }] }, {}, {})
+  expect(result.saved.layout.type === 'leaf' && result.saved.layout.accountId).toBeUndefined()
+  expect(result.saved.layout.type === 'leaf' && result.saved.layout.sessionId).toBeUndefined()
+  expect(result.warnings).toEqual(['A saved account is no longer available; its agent starts fresh with the default account.'])
+})

@@ -144,6 +144,7 @@ pub fn scan(sessions_root: &Path, folder: &str) -> Vec<SessionEntry> {
             .find_map(|raw| clean_title(&raw))
             .unwrap_or_else(|| format!("Codex session {}", id.chars().take(8).collect::<String>()));
         out.push(SessionEntry {
+            account_id: None,
             agent_id: "codex".into(),
             session_id: id.to_owned(),
             title,
