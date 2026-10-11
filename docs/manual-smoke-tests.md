@@ -29,6 +29,20 @@ Do not mark them passed from the in-memory fixture alone.
       parked and restores at the end), and drop a pane on a War Room tab while
       the bar is showing (still joins the room).
 
+## Tidy layout
+
+- [ ] Split a pane right, then split the new pane right again, so three panes
+      sit in a row with the first at half width. Sidebar **⋮ → Tidy layout** →
+      all three become equal thirds right away (the separators move, no
+      shell restarts).
+- [ ] In a 2×2 grid drag the separators to odd positions, then Tidy layout →
+      rows and columns are even again. Entry is greyed out in a one-pane
+      workspace.
+- [ ] Tidy a workspace you are not looking at, then switch to it → already
+      even. With a pane in the drawer or floating, Tidy sizes only the panes
+      on screen; after restoring the pane, Tidy layout again evens out all.
+- [ ] Zoom a pane, then Tidy layout → the zoom ends and the even layout shows.
+
 ## Corner resize and floating panes
 
 - [ ] In a 2×2 grid, hover where the separators meet → a handle lights up;

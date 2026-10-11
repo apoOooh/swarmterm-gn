@@ -444,12 +444,13 @@ export default function App(): ReactElement {
         e.preventDefault(); const index = state.workspaces.indexOf(workspace)
         state.setActiveWorkspace(state.workspaces[(index + (action === 'next-workspace' ? 1 : state.workspaces.length - 1)) % state.workspaces.length].id); return
       }
-      if (['split-horizontal','split-vertical','close-pane','close-workspace','next-pane','previous-pane','select-all-broadcast','clear-broadcast'].includes(action)) {
+      if (['split-horizontal','split-vertical','close-pane','close-workspace','tidy-layout','next-pane','previous-pane','select-all-broadcast','clear-broadcast'].includes(action)) {
         if (!workspace || state.welcomeFocused || !requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
         e.preventDefault()
         if (action === 'split-horizontal' || action === 'split-vertical') state.splitPane(workspace.focusedLeafId, action === 'split-horizontal' ? 'horizontal' : 'vertical')
         else if (action === 'close-pane') state.closePane(workspace.focusedLeafId)
         else if (action === 'close-workspace') state.closeWorkspace(workspace.id)
+        else if (action === 'tidy-layout') state.tidyLayout(workspace.id)
         else if (action === 'select-all-broadcast') state.selectAllBroadcast()
         else if (action === 'clear-broadcast') state.clearBroadcast()
         else { const leaves = collectLeaves(workspace.layout), index = leaves.findIndex(l => l.id === workspace.focusedLeafId); state.setFocusedLeaf(leaves[(index + (action === 'next-pane' ? 1 : leaves.length - 1)) % leaves.length].id) }

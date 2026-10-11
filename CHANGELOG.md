@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Tidy layout (workspace menu **⋮ → Tidy layout**, or a key you assign to the
+  action): sizes every row and column of panes equally, even when the split
+  tree is lopsided, so `[A | [B | C]]` gives A, B and C a third each. Drawered
+  and floating panes are left out; only sizes change.
 - Resizing a pane quickly no longer scrambles Claude Code and Codex output.
   xterm now knows it runs on ConPTY (with the Windows build number, like
   VS Code), and the pty hears only the final size once a resize settles,

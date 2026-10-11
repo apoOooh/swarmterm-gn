@@ -260,6 +260,68 @@ export function resizeSplit(
   }
 }
 
+/**
+ * How many pane columns (`axis` horizontal) or rows (vertical) `node` spans
+ * along `axis`, skipping `hidden` leaves; 0 when nothing in it is visible.
+ *
+ * Splits running along the axis add their sides up. A split across the axis
+ * counts as ONE unit — its panes are stacked, so they share a single column —
+ * unless one of its sides is hidden: the split then collapses at render time
+ * (lib/pane-drawer.ts) and the surviving side stands in for it, so its own
+ * units are what count.
+ */
+function axisUnits(node: LayoutNode, axis: Direction, hidden: ReadonlySet<string>): number {
+  if (node.type === 'leaf') return hidden.has(node.id) ? 0 : 1
+  const first = axisUnits(node.children[0], axis, hidden)
+  const second = axisUnits(node.children[1], axis, hidden)
+  if (first === 0 || second === 0) return first + second
+  return node.direction === axis ? first + second : 1
+}
+
+/** Stored percentages closer than this are already "the same" (no no-op writes). */
+const TIDY_EPSILON = 0.01
+
+/**
+ * Even out the layout by geometry: every pane in a row (or column) ends up the
+ * same size, even when the split tree is lopsided — `[A | [B | C]]` becomes
+ * 33.3 % / 66.7 % outside and 50 / 50 inside, so A, B and C get a third each,
+ * not the 50 / 25 / 25 a blanket 50 % per split would give.
+ *
+ * Each split is sized by the units its sides span along its own axis
+ * (see `axisUnits`). `hiddenLeafIds` (drawered or floating panes) take no space
+ * on screen, so they do not count; a split with a hidden side is not rendered
+ * as a split at all, so its sizes are left alone — restoring the pane then
+ * lands back in the proportions it was parked with.
+ *
+ * Only `sizes` change: ids, directions, leaves and their order are untouched,
+ * which keeps every terminal alive and the mounted split groups in place.
+ * Returns the input (and every untouched subtree) by reference, so callers can
+ * tell a no-op with `===`; never mutates its input.
+ *
+ * Separator gutters are not in the maths: nested panes can differ from their
+ * outer neighbour by a few pixels per nesting level.
+ */
+export function tidyLayout(tree: LayoutNode, hiddenLeafIds: readonly string[] = []): LayoutNode {
+  const hidden = new Set(hiddenLeafIds)
+  const walk = (node: LayoutNode): LayoutNode => {
+    if (node.type === 'leaf') return node
+    const left = walk(node.children[0])
+    const right = walk(node.children[1])
+    const a = axisUnits(node.children[0], node.direction, hidden)
+    const b = axisUnits(node.children[1], node.direction, hidden)
+    let sizes = node.sizes
+    if (a > 0 && b > 0) {
+      const share = (a / (a + b)) * 100
+      if (Math.abs(share - sizes[0]) > TIDY_EPSILON || Math.abs(100 - share - sizes[1]) > TIDY_EPSILON) {
+        sizes = [share, 100 - share]
+      }
+    }
+    if (sizes === node.sizes && left === node.children[0] && right === node.children[1]) return node
+    return { ...node, sizes, children: [left, right] }
+  }
+  return walk(tree)
+}
+
 /** A terminal grid: `rows` stacked rows, each holding `cols` columns. */
 export interface GridShape {
   rows: number

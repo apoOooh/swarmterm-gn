@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { Archive, ArrowDownToLine, Check, Columns2, GripHorizontal, MoreVertical, Pencil, Plus, Settings, X } from 'lucide-react'
+import { Archive, ArrowDownToLine, Check, Columns2, GripHorizontal, LayoutGrid, MoreVertical, Pencil, Plus, Settings, X } from 'lucide-react'
 import {
   DndContext,
   DragOverlay,
@@ -70,6 +70,7 @@ export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: Navba
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
   const renameWorkspace = useAppStore((s) => s.renameWorkspace)
   const closeWorkspace = useAppStore((s) => s.closeWorkspace)
+  const tidyLayout = useAppStore((s) => s.tidyLayout)
   const moveWorkspace = useAppStore((s) => s.moveWorkspace)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
@@ -147,6 +148,7 @@ export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: Navba
                         setRenamingId(null)
                       }}
                       onCancelRename={() => setRenamingId(null)}
+                      onTidy={() => tidyLayout(ws.id)}
                       onClose={() => closeWorkspace(ws.id)}
                     />
                   ))}
@@ -245,6 +247,7 @@ interface WorkspaceItemProps {
   onStartRename: () => void
   onCommitRename: (name: string) => void
   onCancelRename: () => void
+  onTidy: () => void
   onClose: () => void
 }
 
@@ -256,6 +259,7 @@ function WorkspaceItem({
   onStartRename,
   onCommitRename,
   onCancelRename,
+  onTidy,
   onClose
 }: WorkspaceItemProps): ReactElement {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -326,6 +330,10 @@ function WorkspaceItem({
               Rename
             </DropdownMenuItem>
             <WorkspaceDefaultAgentMenu workspace={workspace} />
+            <DropdownMenuItem onSelect={onTidy} disabled={paneCount < 2}>
+              <LayoutGrid className="h-3.5 w-3.5" />
+              Tidy layout
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={onClose}
