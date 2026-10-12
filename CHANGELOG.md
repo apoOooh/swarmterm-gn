@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-12
+
 - Handoff fixes: closing the new pane before its agent reports in now ends
   the handoff instead of waiting forever; failures before Send (spawn error,
   exit, closed pane) reach the notification bell; a ready pane whose agent
