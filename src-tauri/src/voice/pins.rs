@@ -99,12 +99,14 @@ impl PinStore {
         self.pins.remove(pin)
     }
 
-    /// Everything the closed connection held.
+    /// Everything the closed connection held. No reason: nobody is left to
+    /// tell.
     pub fn remove_conn(&mut self, conn: u64) -> Vec<Pin> {
-        self.take_where(|p| p.conn == Some(conn), CancelReason::Expired)
-            .into_iter()
-            .map(|(p, _)| p)
-            .collect()
+        self.take(|p| p.conn == Some(conn))
+    }
+
+    pub fn is_indicator(&self, pin: &str) -> bool {
+        self.pins.get(pin).is_some_and(|p| p.conn.is_some())
     }
 
     /// The pane died or respawned; its indicator pins point at a shell that
@@ -131,11 +133,7 @@ impl PinStore {
         self.pins.values().any(|p| p.conn == Some(conn))
     }
 
-    fn take_where(
-        &mut self,
-        pred: impl Fn(&Pin) -> bool,
-        reason: CancelReason,
-    ) -> Vec<(Pin, CancelReason)> {
+    fn take(&mut self, pred: impl Fn(&Pin) -> bool) -> Vec<Pin> {
         let ids: Vec<String> = self
             .pins
             .values()
@@ -144,8 +142,15 @@ impl PinStore {
             .collect();
         ids.into_iter()
             .filter_map(|id| self.pins.remove(&id))
-            .map(|p| (p, reason))
             .collect()
+    }
+
+    fn take_where(
+        &mut self,
+        pred: impl Fn(&Pin) -> bool,
+        reason: CancelReason,
+    ) -> Vec<(Pin, CancelReason)> {
+        self.take(pred).into_iter().map(|p| (p, reason)).collect()
     }
 }
 
@@ -204,6 +209,7 @@ mod tests {
             ids(&removed),
             vec![(first.as_str(), CancelReason::Superseded)]
         );
+        assert!(!s.is_indicator(&legacy));
         assert!(s.redeem(&legacy, now).is_ok());
         assert!(s.redeem(&other_pane, now).is_ok());
     }
@@ -225,6 +231,7 @@ mod tests {
         let (a, _) = s.issue("t1".into(), "g1".into(), Some(7), now);
         s.issue("t2".into(), "g1".into(), Some(8), now);
         assert!(s.conn_has_pin(7));
+        assert!(s.is_indicator(&a));
         assert_eq!(
             s.remove_conn(7)
                 .into_iter()

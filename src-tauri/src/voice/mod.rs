@@ -328,21 +328,35 @@ async fn begin(app: &AppHandle, hub: &VoiceHub, request_id: String, conn: &Conn)
     };
     let holder = conn.indicator().then_some(conn.id);
     let now = Instant::now();
-    let (pin, removed) =
-        hub.pins
-            .lock()
-            .unwrap()
-            .issue(terminal_id.clone(), spawn_id.clone(), holder, now);
+    let (pin, removed) = {
+        let mut pins = hub.pins.lock().unwrap();
+        // Re-check under the pins lock: a pane that died since the focus
+        // answer already ran drop_terminal and would never clear this pin.
+        // Any later death runs drop_terminal after we release the lock.
+        if spawn_id_of(app, &terminal_id).as_deref() != Some(spawn_id.as_str()) {
+            return Response::err(rid, "no-focus");
+        }
+        let (pin, removed) = pins.issue(terminal_id.clone(), spawn_id.clone(), holder, now);
+        if holder.is_some() {
+            // `on` under the lock too: a begin that supersedes this pin can
+            // only emit its `off` after this, so no late `on` revives a
+            // pill for a pin that is already gone.
+            emit_indicator(
+                app,
+                &Pin {
+                    id: pin.clone(),
+                    terminal_id,
+                    spawn_id,
+                    created: now,
+                    conn: holder,
+                },
+                true,
+            );
+        }
+        (pin, removed)
+    };
     finish(app, removed);
     if holder.is_some() {
-        let issued = Pin {
-            id: pin.clone(),
-            terminal_id,
-            spawn_id,
-            created: now,
-            conn: holder,
-        };
-        emit_indicator(app, &issued, true);
         // Expiry is otherwise lazy (swept on the next issue/redeem); an
         // indicator pin needs it on time or its pill outlives the dictation.
         let app = app.clone();
@@ -445,7 +459,16 @@ pub fn voice_insert_result(
 /// The pill's Stop button. Ends the dictation; the client discards it.
 #[tauri::command]
 pub fn voice_indicator_stop(app: AppHandle, pin: String) {
-    let removed = app.state::<VoiceHub>().pins.lock().unwrap().remove(&pin);
+    let hub = app.state::<VoiceHub>();
+    let removed = {
+        let mut pins = hub.pins.lock().unwrap();
+        // Only indicator pins have a pill; a legacy pin is not ours to stop.
+        if pins.is_indicator(&pin) {
+            pins.remove(&pin)
+        } else {
+            None
+        }
+    };
     if let Some(pin) = removed {
         finish(&app, vec![(pin, CancelReason::User)]);
     }
