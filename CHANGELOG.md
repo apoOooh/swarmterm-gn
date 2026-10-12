@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Accounts: the last known usage survives a restart and shows its age;
+  Codex usage refreshes after each turn and every minute while Settings >
+  Accounts is open.
+
 ## [1.10.1] - 2026-10-12
 
 - Release checks: the accounts browser test follows the add-account wizard.

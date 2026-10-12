@@ -2,7 +2,7 @@ import { MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { budgetLeft, planLabel, statusLamp, type LampColor } from '@/lib/account-status'
-import type { AccountUsage, UsageWindow } from '@/lib/account-usage'
+import { usageAge, type AccountUsage, type UsageWindow } from '@/lib/account-usage'
 import type { AccountStatus } from '@/tauri/accounts'
 
 const LAMP: Record<LampColor, string> = {
@@ -36,11 +36,13 @@ export function AccountCard({ agentName, name, status, usage, configDir, onLogin
   const lamp = statusLamp(status)
   const plan = planLabel(status?.plan)
   const connected = status?.state === 'connected'
+  // Usage is a sample, not a live feed: say when it is old instead of implying it is current.
+  const age = connected && usage ? usageAge(usage.at, Date.now()) : undefined
   return <div className="flex items-center gap-3 rounded border border-border px-3 py-2" title={configDir}>
     <span role="img" aria-label={lamp.label} title={lamp.label} className={`h-2.5 w-2.5 shrink-0 rounded-full ${LAMP[lamp.color]}`} />
     <div className="min-w-0 flex-1">
       <div className="truncate text-sm"><span className="text-muted-foreground">{agentName} · </span><span className="font-medium">{name}</span></div>
-      <div className="truncate text-xs text-muted-foreground">{status?.email ?? lamp.label}</div>
+      <div className="truncate text-xs text-muted-foreground">{status?.email ?? lamp.label}{age && ` · usage ${age}`}</div>
     </div>
     {plan && <span className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">{plan}</span>}
     {connected

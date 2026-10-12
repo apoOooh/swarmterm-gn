@@ -13,6 +13,7 @@ import { AccountCard } from './AccountCard'
 import { AddAccountWizard } from './AddAccountWizard'
 
 const AGENTS = ['claude-code', 'codex'] as const
+const USAGE_POLL_MS = 60_000
 
 export function AccountsPanel({ onLogin }: { onLogin: () => void }): React.ReactElement {
   const { accounts, error, statuses, refresh, refreshStatus, watchLogin, save, remove } = useAgentAccountsStore()
@@ -28,6 +29,15 @@ export function AccountsPanel({ onLogin }: { onLogin: () => void }): React.React
   useEffect(() => {
     for (const agent of AGENTS) void refreshStatus(agent)
     for (const a of accounts) void refreshStatus(a.agentId, a.id)
+  }, [accounts, refreshStatus])
+  // Codex usage lives in its session logs, so a cheap re-read keeps the open
+  // panel current; Claude samples arrive by event and need no polling.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      void refreshStatus('codex')
+      for (const a of accounts) if (a.agentId === 'codex') void refreshStatus(a.agentId, a.id)
+    }, USAGE_POLL_MS)
+    return () => clearInterval(timer)
   }, [accounts, refreshStatus])
 
   const login = async (agent: AgentAccount['agentId'], accountId?: string): Promise<void> => {
@@ -79,6 +89,6 @@ export function AccountsPanel({ onLogin }: { onLogin: () => void }): React.React
       {card(agent)}
       {accounts.filter(a => a.agentId === agent).map(a => card(agent, a))}
     </div>)}
-    <p className="text-xs text-muted-foreground">Credentials stay in each CLI's own folder; Swarmterm stores names and folder references only. Removing a profile leaves its folder on disk. Usage: Claude Code via its status line while a pane runs, Codex from its session logs.</p>
+    <p className="text-xs text-muted-foreground">Credentials stay in each CLI's own folder; Swarmterm stores names and folder references only. Removing a profile leaves its folder on disk. Usage: Claude Code via its status line while a pane runs, Codex from its session logs; the last numbers are kept across restarts.</p>
   </section>
 }
