@@ -271,6 +271,27 @@ describe('moveWorkspace', () => {
   })
 })
 
+// --- handoffPane ----------------------------------------------------------
+
+describe('handoffPane', () => {
+  it('adds a new pane with the target agent, account and cwd and keeps the old one', () => {
+    const store = storeWithWorkspace({ cwd: 'C:/work', terminalCount: 1, agentIds: ['claude-code'] })
+    const original = collectLeaves(activeWorkspace(store).layout)[0]
+    const terminalId = store.getState().handoffPane(original.id, { agentId: 'codex', accountId: 'acc1', cwd: 'C:/work/sub' })
+    const leaves = collectLeaves(activeWorkspace(store).layout)
+    expect(leaves).toHaveLength(2)
+    expect(leaves[0]).toEqual(original)
+    expect(leaves[1]).toMatchObject({ terminalId, agentId: 'codex', accountId: 'acc1', cwd: 'C:/work/sub' })
+    expect(leaves[1].initialPrompt).toBeUndefined()
+    expect(activeWorkspace(store).focusedLeafId).toBe(leaves[1].id)
+  })
+
+  it('returns undefined for an unknown leaf', () => {
+    const store = storeWithWorkspace()
+    expect(store.getState().handoffPane('nope', { agentId: 'codex', cwd: 'C:/x' })).toBeUndefined()
+  })
+})
+
 // --- splitPane ------------------------------------------------------------
 
 describe('splitPane', () => {
@@ -488,6 +509,89 @@ describe('resizeSplitNode', () => {
     const layout = activeWorkspace(store).layout as SplitNode
     store.getState().resizeSplitNode(layout.id, [30, 70])
     expect((activeWorkspace(store).layout as SplitNode).sizes).toEqual([30, 70])
+  })
+})
+
+// --- tidyLayout -----------------------------------------------------------
+
+describe('tidyLayout', () => {
+  /** [A | [B | C]] built the way a user would: split A, then split the new pane. */
+  function lopsidedRow(): StoreApi<AppStore> {
+    const store = storeWithWorkspace()
+    store.getState().splitPane(activeWorkspace(store).focusedLeafId, 'horizontal')
+    store.getState().splitPane(activeWorkspace(store).focusedLeafId, 'horizontal')
+    return store
+  }
+
+  it('gives every pane of a lopsided row an equal share', () => {
+    const store = lopsidedRow()
+    const before = activeWorkspace(store)
+    expect((before.layout as SplitNode).sizes).toEqual([50, 50])
+    store.getState().tidyLayout(before.id)
+    const outer = activeWorkspace(store).layout as SplitNode
+    expect(outer.sizes[0]).toBeCloseTo(100 / 3, 6)
+    expect((outer.children[1] as SplitNode).sizes).toEqual([50, 50])
+  })
+
+  it('keeps panes, focus and split ids as they were', () => {
+    const store = lopsidedRow()
+    const before = activeWorkspace(store)
+    store.getState().tidyLayout(before.id)
+    const after = activeWorkspace(store)
+    expect(collectLeaves(after.layout)).toEqual(collectLeaves(before.layout))
+    expect(after.layout.id).toBe(before.layout.id)
+    expect(after.focusedLeafId).toBe(before.focusedLeafId)
+  })
+
+  it('tidies the workspace it is given, not the active one', () => {
+    const store = lopsidedRow()
+    const first = activeWorkspace(store)
+    store.getState().createWorkspace(SINGLE_TERMINAL)
+    store.getState().tidyLayout(first.id)
+    const tidied = store.getState().workspaces.find((w) => w.id === first.id)!
+    expect((tidied.layout as SplitNode).sizes[0]).toBeCloseTo(100 / 3, 6)
+  })
+
+  it('does not count drawered or floating panes', () => {
+    const store = lopsidedRow()
+    const ws = activeWorkspace(store)
+    const [a, b, c] = collectLeaves(ws.layout)
+    store.getState().drawerPane(b.id)
+    store.getState().floatPane(c.id)
+    store.getState().tidyLayout(ws.id)
+    // Only A is left in the split view, and the inner split keeps what it had.
+    const outer = activeWorkspace(store).layout as SplitNode
+    expect(outer.children[0]).toEqual(a)
+    expect(outer.sizes).toEqual([50, 50])
+  })
+
+  it('ends a zoom so the result is visible', () => {
+    const store = lopsidedRow()
+    const ws = activeWorkspace(store)
+    store.getState().toggleZoom(ws.focusedLeafId)
+    expect(activeWorkspace(store).zoomedLeafId).toBeDefined()
+    store.getState().tidyLayout(ws.id)
+    expect(activeWorkspace(store).zoomedLeafId).toBeUndefined()
+  })
+
+  it('changes nothing for a lone pane or an already tidy layout', () => {
+    const single = storeWithWorkspace()
+    const before = single.getState().workspaces
+    single.getState().tidyLayout(activeWorkspace(single).id)
+    expect(single.getState().workspaces).toBe(before)
+
+    const store = lopsidedRow()
+    store.getState().tidyLayout(activeWorkspace(store).id)
+    const tidy = store.getState().workspaces
+    store.getState().tidyLayout(activeWorkspace(store).id)
+    expect(store.getState().workspaces).toBe(tidy)
+  })
+
+  it('ignores an unknown workspace', () => {
+    const store = lopsidedRow()
+    const before = store.getState().workspaces
+    store.getState().tidyLayout('nope')
+    expect(store.getState().workspaces).toBe(before)
   })
 })
 

@@ -13,12 +13,21 @@ Swarmterm opens on the **composer**: pick a folder (the working directory for ev
 
 Agent detection re-runs every time the composer opens, so installing a CLI needs no restart. Workspace layouts and known agent conversations can be reopened from **Saved workspaces** on Welcome. Settings persist too; terminal output and unsaved editor buffers do not.
 
+### Choosing a folder
+
+Every **Browse** / **Choose path** button opens Swarmterm's own folder picker instead of the Windows dialog. The left column holds your **Favorites** (star the folder you are viewing to pin it; hover a favorite to unpin it) and **Recent** folders from the composer and your saved workspaces — click one to open it, double-click to select it straight away. The box on top filters the subfolders by name; type an absolute path such as `C:\Code\` to jump there. Arrow keys move the highlight, `Enter` opens the highlighted subfolder, `Ctrl + Enter` selects the folder being shown, `Backspace` in the empty box goes up, `Esc` cancels. **Windows dialog** falls back to the native picker.
+
 ## Panes
 
 - **Split** from the pane header, drag the separator to resize, and drag a header onto another pane to swap the two — shells keep running.
+- **Corner resize:** where two separators meet, a small handle lights up on hover. Drag it to resize width and height in one move; every pane touching that corner follows.
+- **Floating panes:** the picture-in-picture button in a pane header lifts the pane out of the layout into a floating window above the others — the shell keeps running. Drag the grip bar on top to move it anywhere, drag its edges or bottom corners to resize. Drag its header onto another pane to dock it there (left, right, top, bottom or swap), or press the button again to put it back where it was. Floating panes come back docked when a saved workspace is restored.
 - **Drag to split:** while you drag a pane over another one, a small picker appears in its middle. Drop on the **left, right, top or bottom** tile and the two panes share that slot, split that way — the dragged pane takes the highlighted half and its old spot closes up. The **Swap** tile in the centre (or anywhere else on the pane) swaps them as before.
 - **Snap layouts:** while a pane is dragged, a bar of layout previews appears at the top of the workspace (like Windows 11's snap layouts): side by side and stacked, plus grid, main-left and main-top from three panes up. Each preview is split into slots — drop on one and every visible pane is rearranged into that layout, the dragged pane in the slot you chose and the others in their current order. Hovering a slot outlines the result first. Split sizes come out even; drawered panes stay in the drawer.
+- **Tidy layout:** the workspace's **⋮ → Tidy layout** menu entry in the sidebar evens out the split sizes so every pane in a row or column ends up the same size — also after you dragged separators around or split a pane several times. Panes that sit side by side share the width equally, panes that sit above each other share the height, however unevenly the layout was built: three panes split as one on the left and two on the right become a third each, not a half and two quarters. A group of stacked panes counts as one column when it sits beside other panes. Drawered and floating panes do not count, and a zoomed pane is restored first so you see the result. Only sizes change; no pane moves and no shell restarts. The action is also listed as **Tidy layout (equal pane sizes)** in Settings → Keyboard Shortcuts, where you can give it a key (none is set by default) or use it as a step of a custom action. Because of the thin gap between panes, nested panes can differ by a few pixels.
 - **Default AI provider for splits:** by default a split opens a plain terminal. Pick an agent under **Settings → Terminal → Default AI provider** (for example Claude Code or Codex) and both split buttons open that agent instead; the split tooltip names it. A workspace can override the setting: choose **Split opens** in the composer when you create it, or later from the workspace's **⋮ → Split opens…** menu in the sidebar (**Settings default** follows the global choice). **Alt+click** a split button for a plain terminal. If the chosen agent's CLI is not installed, the split falls back to a plain terminal. Split panes start in the workspace folder, also with worktree isolation on — they never create a new worktree.
+- **Handoff brief:** the clipboard button in a pane header opens an editable brief for handing the work to another agent or person. Fill in task, status, open items and tests; Swarmterm adds the agent, account, folder, session id, branch, HEAD and a `git diff` reference with the changed files. These four fields are always labelled as stated by you — Swarmterm never claims them as proven by the terminal. A raw tail of the scrollback can be added on request and is marked incomplete. Edit the preview freely, then **Copy**; nothing is sent anywhere.
+- **Account and agent handoff:** in the Handoff brief dialog, **Hand off…** lets you pick Claude Code or Codex with any account profile (or Default), then **Start pane** opens a new pane in the same folder. The old pane keeps running. **Send brief** unlocks only after the new CLI itself reports its session to Swarmterm (a plain shell, a missing CLI or one that quit never qualifies). If the agent waits on a trust or login prompt, **Go to pane** tucks the dialog into a small chip and focuses the new pane; **Open** brings the handoff back. After a while the dialog reminds you to answer the prompt in the pane — it never sends on its own. Then **Send brief** pastes the brief as its first prompt and submits it. It is sent at most once: it waits while the agent is working, asks a question, or you are typing in that pane, and it is cancelled — never retried — if the pane stops or restarts first. The result (sent or not sent) appears in the notification bell. Account usage is shown only when a CLI reports it in structured form; otherwise it reads "Usage unknown" with the time checked. A usage-limit message in the old pane's output is shown only as an unverified hint.
 - Closing a pane closes the gap; closing the last pane closes the workspace.
 - **Drawer:** the archive button just left of ✕ (or `⌘/Ctrl + Shift + D`) parks a pane for later. It leaves the screen like a close and the other panes fill the gap, but the shell, agent session, scrollback and any preview keep running. Parked panes are listed under **Drawer** at the bottom of the sidebar's terminal list (dimmed, state dots still live) and the workspace row shows how many are parked; one click on a row puts the pane back in its original spot. Jumping to a pane that needs attention restores it too. Drawers are not kept across restarts.
 - The left navbar lists workspaces (add, rename, reorder) and the current workspace's terminals — click one to jump to it. `⌘/Ctrl + B` hides the sidebar.
@@ -149,6 +158,12 @@ A system notification (banner) only appears while the Swarmterm window is **unfo
 
 Turn channels on or off in **Settings → Notifications**: **Sound** and **System notifications** apply everywhere, and a **per-agent** toggle below silences one CLI without touching the others — every agent with a state dot gets a row, and all default to on. A plain Terminal pane has no agent state, but once its shell has **shell integration** set up (see below) it chimes the same way when a command that ran for more than 10 seconds finishes while you were elsewhere — the banner reads "Command finished (42s)" or "Command failed (exit 1 · 42s)" — and the **Terminal** row in the per-agent list turns that off.
 
+### Notification center
+
+The **bell** in the title bar keeps a list of what happened while you looked elsewhere, across every workspace: a pane that needs your input, an agent that finished, a long command that finished, a pane whose process exited (with its exit code), and a War Room message held for a pane. The red counter shows unread entries. Click an entry to jump to its pane — Swarmterm switches workspace or brings the pane back from the drawer — and the entry is marked read. Looking at a pane marks its entries read as well; a held War Room message resolves itself once it is delivered. Repeated events of the same pane collapse into one entry. **Mark all read** and **Clear** sit at the top of the list.
+
+The list records independently of the sound and banner settings above, so muting chimes keeps the history. It lasts for the app session and is not saved on quit. Entries of a closed pane stay visible but can no longer be opened.
+
 ## Launch modes
 
 Claude Code and Codex panes run in a **launch mode** that sets how much the agent may do without asking. The current mode is shown next to the agent icon, and the agent menu in the pane header switches it: the pane restarts the CLI with the new flags and continues the conversation (the pane's own session id or the folder's latest session). **Resume previous chat…** in the same menu restarts the pane into the CLI's own session picker (current mode kept), so an older conversation can be taken over.
@@ -157,7 +172,7 @@ Claude Code and Codex panes run in a **launch mode** that sets how much the agen
 
 ### Claude Code
 
-A Claude Code pane starts in **Default** (`--permission-mode default`, Claude asks before edits and commands). The menu also offers **Accept edits** (`--permission-mode acceptEdits`), **Plan** (`--permission-mode plan`) and **Bypass permissions** (`--dangerously-skip-permissions`). Earlier versions always started Claude with bypass; choose **Bypass permissions** as the default launch mode to keep that behaviour.
+A Claude Code pane starts in **Default** (`--permission-mode default`, Claude asks before edits and commands). The menu also offers **Accept edits** (`--permission-mode acceptEdits`), **Plan** (`--permission-mode plan`), **Auto** (`--permission-mode auto`, a classifier approves safe actions and blocks risky ones) and **Bypass permissions** (`--dangerously-skip-permissions`). Earlier versions always started Claude with bypass; choose **Bypass permissions** as the default launch mode to keep that behaviour.
 
 ### Codex
 
@@ -222,6 +237,8 @@ Agents talk in two modes:
 You are a member too — the **Moderator**. The composer at the bottom of the Discussion tab sends to one agent or the whole room, in either mode; replies land in the transcript instead of someone's terminal.
 
 Deliveries never interrupt you: if the target pane has a half-typed — or pasted but not yet sent — command, the message is **held** — a pill in the pane, `⏸N` on the room tab — retries by itself once the pane is free, and "Deliver now" releases it immediately. The same hold applies while the agent is still working or is waiting on a permission/question prompt (so a delivery can never answer a prompt for you); those holds release on their own once the agent is idle and have no "Deliver now". Held messages are never dropped.
+
+No setup is needed: Claude Code, Codex, OpenCode and Qwen Code panes connect to Swarmterm when the agent starts, so a dragged-in agent is ready immediately. Each member chip — and a dot in the pane header — shows **connected**, **waiting** (the agent is still starting) or an error with the reason when the pane has not reached Swarmterm after 15 seconds, for example a plain shell, an agent Swarmterm cannot configure, or a switched-off profile in **Settings → MCP**. An agent can re-read messages it already consumed with `war_room.read_inbox` and `includeRead`.
 
 Drag a member chip out (or press its `✕`) and the agent instantly loses access. Closing a pane removes it automatically — and so does restarting one (switching its agent, shell or folder); just drag it back in.
 
@@ -350,6 +367,10 @@ Every pane is automatically connected to the app over MCP for exactly as long as
 
 War Room abilities only work for panes you dragged into a room, worktree abilities only in workspaces with isolation enabled — and removing a pane from a room revokes its access instantly.
 
+## Swarmterm MCP
+
+The top of **Settings → MCP** has one switch per agent and account for Swarmterm's own server (War Room, browser and worktree tools). On is the default. Off removes only Swarmterm's entry from that profile's configuration and keeps it from being written again; restart running panes afterwards. A server of your own that happens to be called `swarmterm` is never changed. **Details** shows the configuration file and the server address.
+
 ## MCP catalogue
 
 Open **Settings > MCP** and choose a Default account or a named Claude Code or Codex profile. The catalogue offers Playwright, GitHub, Context7, Filesystem, Memory, Sequential Thinking and Fetch. Each entry links to its official documentation and lists its requirements.
@@ -427,6 +448,8 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **Find widget with regex on shows "Invalid regex" while you type** — a pattern that does not parse yet (for example `foo(`) reads **Invalid regex** in the counter and clears the previous highlights until the pattern is valid again. Toggle regex off to search it as literal text.
 - **Any program in any pane can overwrite the clipboard via OSC 52** — like VS Code, there is no per-pane gate. Reads are refused and empty writes never clear it; copies larger than 1 MiB are ignored.
 - **Shell integration is opt-in** — a hand-typed command in a plain Terminal pane is only noticed if that shell emits OSC 133 marks (§Shell integration). Nothing is injected, `cmd.exe` cannot do it, and an interrupted command that redraws the prompt without a `D` mark is simply forgotten.
+- **Claude Code's cursor can lag after a resize** — Claude draws its own cursor block and only redraws it on the next keystroke, so right after dragging a window or pane edge the old block may stay visible. Output and prompt are correct; press any key to refresh.
+
 ## Astera themes
 
 Settings → Appearance includes Vega, Orion, Umbra, Aurora, Antares, Quasar and

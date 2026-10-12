@@ -299,3 +299,44 @@ describe('startNotificationWatch — commands (OSC 133)', () => {
     expect(h.playChime).not.toHaveBeenCalled()
   })
 })
+
+describe('startNotificationWatch → notification center feed', () => {
+  let h: Harness
+  beforeEach(() => { h = harness() })
+
+  it('records a still-current fact even when every chime/banner pref is off', () => {
+    const record = vi.fn()
+    h.prefs.sound = false
+    h.prefs.system = false
+    h.clock.now = 5000
+    startNotificationWatch({ ...h.deps, record })
+    h.emit({ t1: s('blocked') }, { t1: s('working') })
+    h.fireTimers()
+    expect(h.playChime).not.toHaveBeenCalled()
+    expect(record).toHaveBeenCalledWith({
+      kind: 'attention', terminalId: 't1', title: 'Claude Code needs your input', detail: 'my pane', at: 5000
+    })
+  })
+
+  it('does not record a resolved fact or a pane the user is watching', () => {
+    const record = vi.fn()
+    startNotificationWatch({ ...h.deps, record })
+    h.emit({ t1: s('blocked') }, { t1: s('working') })
+    h.states.current = { t1: s('working') }
+    h.fireTimers()
+    h.emit({ t2: s('idle', false) }, { t2: s('working') })
+    h.focus.watchedId = 't2'
+    h.fireTimers()
+    expect(record).not.toHaveBeenCalled()
+  })
+
+  it('records a long finished command with its command copy', () => {
+    const record = vi.fn()
+    startNotificationWatch({ ...h.deps, record })
+    const last = fin(60_000, 1)
+    h.emitCommands({ sh1: cmd('prompt', last) }, { sh1: cmd('running') })
+    h.fireTimers()
+    expect(record).toHaveBeenCalledTimes(1)
+    expect(record.mock.calls[0][0]).toMatchObject({ kind: 'command', terminalId: 'sh1' })
+  })
+})

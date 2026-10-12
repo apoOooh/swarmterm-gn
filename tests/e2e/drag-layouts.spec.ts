@@ -3,8 +3,10 @@ test.beforeEach(async ({ page }) => { await page.goto('/tests/fixtures/app.html'
 
 // Fixture: two plain panes side by side. dnd-kit needs a real pointer gesture
 // (activation distance), so drags are driven step by step with the mouse.
+// Grab the title span: it is the header's bare, draggable space. The header
+// centre can land on a `data-no-dnd` chip (folder/shell) as buttons are added.
 async function startDrag(page: Page, from: Locator): Promise<void> {
-  const h = (await from.locator('.pane-header').boundingBox())!
+  const h = (await from.locator('.pane-header > span.flex-1').boundingBox())!
   await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2)
   await page.mouse.down()
   await page.mouse.move(h.x + h.width / 2 + 20, h.y + h.height / 2 + 20, { steps: 5 })

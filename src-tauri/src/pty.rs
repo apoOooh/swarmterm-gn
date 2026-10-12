@@ -148,6 +148,8 @@ impl CreateTerminalResult {
 /// every descendant, not just the shell.
 pub struct ManagedTerminal {
     pub spawn_id: String,
+    /// Shell process id; root of the tree `terminal_agent_alive` searches.
+    pub pid: Option<u32>,
     pub agent_id: Option<String>,
     /// Configured spawn cwd; OSC 7 shell navigation must not change the explorer's root.
     pub cwd: std::path::PathBuf,
@@ -444,6 +446,18 @@ pub fn spawn_terminal(
     cmd.env("SWARMTERM_PTY_GENERATION", &spawn_id);
     if let Some(url) = state.mcp_url.get() {
         cmd.env("SWARMTERM_MCP_URL", url.as_ref());
+        // OpenCode gets the server per process via OPENCODE_CONFIG_CONTENT
+        // (merged over its own config files), so the user's opencode.json is
+        // never written. A value the user already exported wins.
+        if options.agent_id.as_deref() == Some("opencode")
+            && crate::mcp::toggle::is_enabled("opencode", None)
+            && std::env::var_os("OPENCODE_CONFIG_CONTENT").is_none()
+        {
+            cmd.env(
+                "OPENCODE_CONFIG_CONTENT",
+                crate::mcp::config::opencode_config_content(url.as_ref(), &id),
+            );
+        }
     }
     let cwd = options.cwd.clone().unwrap_or_else(|| {
         app.path()
@@ -493,6 +507,19 @@ pub fn spawn_terminal(
             options.agent_id.as_deref(),
             options.agent_id.as_deref() == Some("codex") && crate::hook::codex::supported(),
         );
+        // A switched-off profile gets no per-process pin either.
+        let mcp_on = options.agent_id.as_deref().is_none_or(|agent| {
+            crate::mcp::toggle::is_enabled(agent, options.account_id.as_deref())
+        });
+        let ic = crate::hook::codex::with_mcp_url(
+            &ic,
+            options.agent_id.as_deref(),
+            state
+                .mcp_url
+                .get()
+                .map(|url| url.as_ref())
+                .filter(|_| mcp_on),
+        );
         let line = if resolved.is_some() {
             format!("{ic}\r")
         } else {
@@ -502,10 +529,12 @@ pub fn spawn_terminal(
         line
     });
 
+    let waiter_spawn_id = spawn_id.clone();
     state.terminals.lock().unwrap().insert(
         id.clone(),
         ManagedTerminal {
             spawn_id,
+            pid,
             agent_id: options.agent_id,
             writer,
             master: pair.master,
@@ -527,9 +556,40 @@ pub fn spawn_terminal(
         }
     }
 
+    // A shell that exits on its own (typed `exit`, crash) never closes the
+    // ConPTY output pipe while the master lives, so the reader alone would
+    // park on read() forever and the pane would never report Exit. The waiter
+    // owns the child: once it dies, it drops THIS generation's map entry
+    // (spawn_id guards a same-id respawn — though that waits for our Exit
+    // anyway) to force the reader's EOF, then hands read_loop the exit code.
+    // On the kill_terminal path the entry is already gone and this is a no-op.
+    let (exit_tx, exit_rx) = std::sync::mpsc::channel::<i32>();
+    let waiter_app = app.clone();
+    let waiter_id = id.clone();
+    std::thread::spawn(move || {
+        let mut child = child;
+        let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
+        if let Some(state) = waiter_app.try_state::<AppState>() {
+            // Bound before the drop so the master is released outside the lock.
+            let removed = {
+                let mut map = state.terminals.lock().unwrap();
+                if map
+                    .get(&waiter_id)
+                    .is_some_and(|t| t.spawn_id == waiter_spawn_id)
+                {
+                    map.remove(&waiter_id)
+                } else {
+                    None
+                }
+            };
+            drop(removed);
+        }
+        let _ = exit_tx.send(exit_code);
+    });
+
     let app = app.clone();
     std::thread::spawn(move || {
-        read_loop(app, id, reader, child, on_data);
+        read_loop(app, id, reader, exit_rx, on_data);
     });
 
     CreateTerminalResult {
@@ -545,7 +605,7 @@ fn read_loop(
     app: AppHandle,
     id: String,
     mut reader: Box<dyn Read + Send>,
-    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+    exit_rx: std::sync::mpsc::Receiver<i32>,
     on_data: Channel<PtyOut>,
 ) {
     let mut pending: Vec<u8> = Vec::new();
@@ -583,7 +643,9 @@ fn read_loop(
     if !pending.is_empty() {
         let _ = on_data.send(PtyOut::Data(String::from_utf8_lossy(&pending).into_owned()));
     }
-    let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
+    // The waiter thread owns the child; EOF means it is dead or about to be
+    // (kill_terminal dropped the master after killing it).
+    let exit_code = exit_rx.recv().unwrap_or(-1);
 
     // Remove from the registry BEFORE notifying the renderer: a retry triggered by
     // the exit event must find the id free, since create rejects a duplicate live id.

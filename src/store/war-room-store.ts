@@ -12,13 +12,18 @@ export interface WarRoomMember {
   name: string
   agentId: string | null
   cwd: string
-  /** False until the pane's agent completes the MCP handshake (first
-   *  war_room call) — a dragged-in bare shell stays pending forever. */
+  /** False until an MCP client from the pane reached Swarmterm (normally
+   *  already at agent startup) — a dragged-in bare shell stays pending. */
   connected: boolean
+  /** ms epoch of the join; drives the waiting → error grace period. */
+  joinedAt: number
 }
 
 const toMember = (m: WarRoomMemberInfo): WarRoomMember => ({
-  terminalId: m.terminalId, name: m.name, agentId: m.agentId, cwd: m.cwd, connected: m.connected
+  terminalId: m.terminalId, name: m.name, agentId: m.agentId, cwd: m.cwd, connected: m.connected,
+  // Hydration has no join time; restart the grace period instead of
+  // flashing an error for members that joined before a dev reload.
+  joinedAt: Date.now()
 })
 
 interface WarRoomStore {
@@ -86,7 +91,8 @@ export const useWarRoomStore = create<WarRoomStore>((set, get) => ({
       const transcriptByRoom = { ...s.transcriptByRoom, [e.roomId]: roomTranscript }
       if (e.kind === 'join') {
         const member: WarRoomMember = {
-          terminalId: e.terminalId, name: e.name, agentId: e.agentId, cwd: e.cwd, connected: e.connected
+          terminalId: e.terminalId, name: e.name, agentId: e.agentId, cwd: e.cwd, connected: e.connected,
+          joinedAt: e.ts
         }
         // Belt-and-braces: the server emits the old room's Leave before this
         // Join, but event reordering across threads must never leave one

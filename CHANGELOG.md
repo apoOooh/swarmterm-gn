@@ -2,6 +2,71 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-12
+
+- Handoff fixes: closing the new pane before its agent reports in now ends
+  the handoff instead of waiting forever; failures before Send (spawn error,
+  exit, closed pane) reach the notification bell; a ready pane whose agent
+  is never recognised on screen explains why Send stays locked. The folder
+  picker opened from Settings keeps its focus trap, and Esc closes the
+  picker rather than Settings.
+- Account and agent handoff: from the Handoff brief, pick a Claude Code or
+  Codex account profile and start a new pane in the same folder; the brief
+  is sent as its first prompt only after the pane runs, its process is
+  unchanged and you confirm. One attempt, typing/agent hold respected, no
+  retry, old pane untouched, outcome listed in the notification bell. Usage
+  shows "unknown" with a timestamp unless a CLI reports structured data.
+- Handoff brief: a pane header button opens an editable brief with task,
+  status, open items, tests, agent/account/folder/session and branch, HEAD
+  and a diff reference. User-written fields are labelled as unverified, an
+  optional terminal excerpt is marked incomplete, and the brief is only
+  copied, never sent.
+- Choosing a folder now opens an in-app picker instead of the Windows
+  dialog: favorites you pin, recent and saved-workspace folders, type-to-filter
+  and path jumping, keyboard navigation, and a "Windows dialog" fallback.
+- Tidy layout (workspace menu **⋮ → Tidy layout**, or a key you assign to the
+  action): sizes every row and column of panes equally, even when the split
+  tree is lopsided, so `[A | [B | C]]` gives A, B and C a third each. Drawered
+  and floating panes are left out; only sizes change.
+- Resizing a pane quickly no longer scrambles Claude Code and Codex output.
+  xterm now knows it runs on ConPTY (with the Windows build number, like
+  VS Code), and the pty hears only the final size once a resize settles,
+  so the agent redraws once instead of for every intermediate step.
+- Float a pane above the layout, move and resize it freely, and dock it
+  onto any pane by dragging its header.
+- Resize panes from the corner: drag the handle where a horizontal and a
+  vertical separator meet to change width and height in one move.
+- Notification center: a bell in the title bar lists panes that need input,
+  finished agents and long commands, exited processes and held War Room
+  messages across all workspaces. Clicking an entry reveals and focuses its
+  pane (other workspace or drawer) and marks it read.
+- A shell that exits on its own (typed `exit`, crash) now ends the pane on
+  Windows. Previously ConPTY kept the output pipe open, so the pane never
+  showed "Process exited".
+- Pin each Codex pane to its own app's MCP server, so a development build
+  running next to the installed app no longer redirects Codex away from the
+  War Room. Codex session hooks start without a nested PowerShell, stale
+  duplicate hook entries are removed, and Codex asks once to trust the
+  updated hook.
+- War Room: reading the inbox no longer loses messages. Read messages stay in
+  a short history that `war_room.read_inbox` returns with `includeRead`, so a
+  probe reported as delivered is still visible after the agent read it on the
+  nudge.
+- War Room: agents connect without setup. A pane counts as connected as soon
+  as its agent's MCP client reaches Swarmterm, not after its first War Room
+  call. Member chips and the pane header show connected, waiting or an error
+  with the reason.
+- Settings → MCP: an on/off switch per agent and account for Swarmterm's own
+  MCP entry. Off removes only Swarmterm's entry and leaves other servers
+  untouched; details are collapsed.
+- OpenCode panes join the War Room automatically. The server is passed to
+  each pane through `OPENCODE_CONFIG_CONTENT`, and `opencode.json` is never
+  written.
+
+## [1.5.2] - 2026-10-11
+
+- Add an Auto launch mode for Claude Code (`--permission-mode auto`).
+
 ## [1.5.1] - 2026-10-11
 
 - Release 1.5.0 again; its release checks failed on two browser tests still

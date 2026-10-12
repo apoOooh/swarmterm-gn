@@ -184,6 +184,19 @@ describe('TerminalSession', () => {
     expect(session.getStatus()).toEqual({ kind: 'connecting' })
   })
 
+  it('exposes a generation that changes on retry and dispose', () => {
+    const deps = makeDeps()
+    const session = new TerminalSession('t1', { write: vi.fn() }, deps)
+    session.start(OPTS)
+    const first = session.getGeneration()
+    deps.emit({ type: 'exit', payload: { exitCode: 1 } })
+    session.retry(OPTS)
+    expect(session.getGeneration()).not.toBe(first)
+    const second = session.getGeneration()
+    session.dispose()
+    expect(session.getGeneration()).not.toBe(second)
+  })
+
   it('ignores pty messages from a superseded generation after retry', () => {
     const deps = makeDeps()
     const write = vi.fn()

@@ -19,6 +19,9 @@ import { collectLeaves } from '@/lib/layout-tree'
 import type { TerminalTextPref } from '@/lib/terminal-text'
 import { decideClipboardAction, isMacPlatform } from '@/lib/terminal-clipboard'
 import { isWindowsPlatform } from '@/lib/platform'
+import { windowsPtyOption } from '@/lib/windows-pty'
+import { createResizeDebouncer, type ResizeDebouncer } from '@/lib/resize-debounce'
+import { getWindowsBuildNumber } from '@/tauri/shell'
 import { matchConfiguredShortcut } from '@/store/shortcut-store'
 import { readClipboard, saveClipboardImage, writeClipboard } from '@/tauri/clipboard'
 import { imagePasteText, supportsImagePaste } from '@/lib/clipboard-image'
@@ -31,7 +34,7 @@ import {
 import { parseFileUrl } from '@/lib/file-url'
 import { parseOsc52 } from '@/lib/osc52'
 import { parseShellMark } from '@/lib/shell-marks'
-import { isPlainShellPane } from '@/lib/templates'
+import { isPlainShellPane, templateById } from '@/lib/templates'
 import { sanitizePromptText } from '@/lib/prompt-sanitize'
 import { detectPathCandidates, listingDirAbove, listingEntry, parsePathSuffix } from '@/lib/path-link-parse'
 import { classifyOscLink, openPathLocation } from '@/lib/terminal-link-actions'
@@ -50,6 +53,7 @@ import { displayPath } from '@/lib/files/paths'
 import { devLog } from '@/lib/dev-log'
 import { useShellMarkStore } from '@/store/shell-mark-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
+import { useNotificationCenterStore } from '@/store/notification-center-store'
 import {
   breaksSegment,
   diffToEdit,
@@ -141,6 +145,8 @@ interface Entry {
   opened: boolean
   pendingFocus?: boolean
   observer?: ResizeObserver
+  /** Pty-side size: observer ticks are coalesced, attach/spawn flush at once. */
+  ptyResize: ResizeDebouncer
   /**
    * The running detection loop for this pane's agent, if any — absent for
    * plain `terminal` panes (`manifestForAgent` returns undefined for those)
@@ -175,6 +181,31 @@ interface Entry {
 
 /** Live terminals keyed by terminalId, owned outside React's render tree. */
 const entries = new Map<string, Entry>()
+
+// Fetched once; terminals created before it resolves start with the
+// build-less ConPTY option and get upgraded in place.
+let windowsBuild: number | null = null
+if (isWindowsPlatform()) {
+  void getWindowsBuildNumber()
+    .then((build) => {
+      windowsBuild = build
+      for (const entry of entries.values()) entry.term.options.windowsPty = windowsPtyOption(true, build)
+    })
+    .catch(() => {})
+}
+
+function recordExit(id: string, exitCode: number): void {
+  if (document.hasFocus() && selectFocusedTerminalId(useAppStore.getState()) === id) return
+  const agentId = getTerminalAgentId(id)
+  const who = agentId === undefined || isPlainShellPane(agentId) ? 'Shell' : templateById(agentId).name
+  useNotificationCenterStore.getState().add({
+    kind: 'exit',
+    terminalId: id,
+    title: `${who} exited (code ${exitCode})`,
+    detail: useTerminalTitleStore.getState().titles[id] ?? '',
+    at: Date.now()
+  })
+}
 const terminalInitializers = createFrameTaskQueue(
   callback => requestAnimationFrame(callback),
   handle => cancelAnimationFrame(handle)
@@ -206,7 +237,7 @@ const NO_STATUS: TerminalStatus = { kind: 'connecting' }
  * (~16 per page), or the GPU context is later lost, we dispose the addon and
  * xterm falls back to the DOM renderer — slower, but always functional.
  */
-function loadWebglRenderer(id: string, entry: Entry): void {
+function loadWebglRenderer(entry: Entry): void {
   try {
     const addon = new WebglAddon()
     addon.onContextLoss(() => {
@@ -216,7 +247,7 @@ function loadWebglRenderer(id: string, entry: Entry): void {
       // drop the GPU context mid-layout) may have collapsed cols/rows against
       // garbage dimensions. Re-measure once the swap has settled so the pane —
       // and the pty — match the renderer that's actually drawing now.
-      setTimeout(() => refitEntry(id, entry), 0)
+      setTimeout(() => refitEntry(entry), 0)
     })
     entry.term.loadAddon(addon)
   } catch {
@@ -237,7 +268,7 @@ function safeFit(entry: Entry): boolean {
 }
 
 /** Re-fit one terminal and push the new size to its pty only when it changed. */
-function refitEntry(id: string, entry: Entry): void {
+function refitEntry(entry: Entry): void {
   // Never fit against a hidden/occluded layout: the dims measured there are
   // garbage (FitAddon's 2×1 floor) and would be pushed to the pty, making a
   // running TUI redraw at 2 columns. The focus/visibility refit in App.tsx
@@ -245,7 +276,7 @@ function refitEntry(id: string, entry: Entry): void {
   if (document.visibilityState === 'hidden') return
   const { cols, rows } = entry.term
   if (safeFit(entry) && (entry.term.cols !== cols || entry.term.rows !== rows)) {
-    resizeTerminal(id, entry.term.cols, entry.term.rows)
+    entry.ptyResize.schedule(entry.term.cols, entry.term.rows)
   }
 }
 
@@ -260,8 +291,8 @@ function refitEntry(id: string, entry: Entry): void {
  * hidden hosts are skipped by the zero-size guard in safeFit.
  */
 export function refitAttachedTerminals(): void {
-  for (const [id, entry] of entries) {
-    if (entry.opened && entry.observer !== undefined) refitEntry(id, entry)
+  for (const entry of entries.values()) {
+    if (entry.opened && entry.observer !== undefined) refitEntry(entry)
   }
 }
 
@@ -375,6 +406,7 @@ function getOrCreate(id: string): Entry {
     fontSize: text.fontSize,
     lineHeight: text.lineHeight,
     scrollback: 5000,
+    windowsPty: windowsPtyOption(isWindowsPlatform(), windowsBuild),
     theme: { ...VSCODE_DARK_THEME, ...terminalTheme(useAppearanceStore.getState().style) }
   })
   const fit = new FitAddon()
@@ -963,9 +995,15 @@ function getOrCreate(id: string): Entry {
   )
   // Mirror pty death into the detector: the session is the source of truth for
   // exit/error, and the detector has no pty visibility of its own.
+  let prevKind: TerminalStatus['kind'] = session.getStatus().kind
   session.subscribe(() => {
-    const kind = session.getStatus().kind
+    const status = session.getStatus()
+    const kind = status.kind
     const entry = entries.get(id)
+    // Notification center: a pane dying while the user looks elsewhere is a
+    // fact worth listing. Transition only — status repaints must not re-add.
+    if (status.kind === 'exited' && prevKind !== 'exited') recordExit(id, status.exitCode)
+    prevKind = kind
     // Stamped on the transition only, so later status repaints don't keep
     // re-opening the focus-report window.
     if (entry) {
@@ -976,7 +1014,7 @@ function getOrCreate(id: string): Entry {
         // inserted its PTY, so an earlier resize may have had no target.
         // Reapply the current geometry once this generation is ready.
         safeFit(entry)
-        resizeTerminal(id, entry.term.cols, entry.term.rows)
+        entry.ptyResize.flush(entry.term.cols, entry.term.rows)
       }
     }
     if (kind === 'exited' || kind === 'error') {
@@ -993,6 +1031,11 @@ function getOrCreate(id: string): Entry {
   })
 
   const entry: Entry = {
+    ptyResize: createResizeDebouncer({
+      send: (cols, rows) => resizeTerminal(id, cols, rows),
+      setTimer: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimer: (h) => window.clearTimeout(h as number)
+    }),
     term,
     fit,
     search,
@@ -1034,9 +1077,9 @@ export function attachTerminal(id: string, container: HTMLElement, config: Attac
     terminalInitializers.enqueue(id, () => {
       if (entries.get(id) !== entry || !entry.host.isConnected || entry.host.parentElement !== container) return
       entry.term.open(entry.mount)
-      loadWebglRenderer(id, entry)
+      loadWebglRenderer(entry)
       entry.opened = true
-      finishTerminalAttach(id, entry, container)
+      finishTerminalAttach(entry, container)
       const app = useAppStore.getState()
       if (entry.pendingFocus && !app.welcomeFocused && selectFocusedTerminalId(app) === id
         && !document.querySelector(OVERLAY_SELECTOR)
@@ -1047,20 +1090,20 @@ export function attachTerminal(id: string, container: HTMLElement, config: Attac
     })
     return
   }
-  finishTerminalAttach(id, entry, container)
+  finishTerminalAttach(entry, container)
 }
 
-function finishTerminalAttach(id: string, entry: Entry, container: HTMLElement): void {
+function finishTerminalAttach(entry: Entry, container: HTMLElement): void {
   // The pty must end up at whatever size the pane (re)attached at. The fit
   // just above already moved xterm, so the observer's initial delivery goes
   // through refitEntry with NO cols/rows delta and would skip the push —
   // and session.start() is a no-op for an already-running pty (remount via
   // split collapse). Push unconditionally here instead.
-  if (safeFit(entry)) resizeTerminal(id, entry.term.cols, entry.term.rows)
+  if (safeFit(entry)) entry.ptyResize.flush(entry.term.cols, entry.term.rows)
 
   entry.observer?.disconnect()
   entry.observer = new ResizeObserver(() => {
-    refitEntry(id, entry)
+    refitEntry(entry)
   })
   entry.observer.observe(container)
 
@@ -1074,6 +1117,7 @@ export function detachTerminal(id: string): void {
   if (!entry) return
   entry.observer?.disconnect()
   entry.observer = undefined
+  entry.ptyResize.cancel()
   entry.host.remove()
 }
 
@@ -1085,6 +1129,7 @@ export function disposeTerminal(id: string): void {
   const entry = entries.get(id)
   if (!entry) return
   entry.observer?.disconnect()
+  entry.ptyResize.cancel()
   entry.session.dispose()
   entry.term.dispose()
   entry.host.remove()
@@ -1316,6 +1361,15 @@ export function awaitTerminalRelocated(id: string, timeoutMs = 4000): Promise<vo
   })
 }
 
+/**
+ * Pty generation of a live terminal (undefined when unknown). Callers that
+ * type into a pane after an await capture it first and re-check before the
+ * write, so a respawn in between never receives text meant for its predecessor.
+ */
+export function getTerminalGeneration(id: string): number | undefined {
+  return entries.get(id)?.session.getGeneration()
+}
+
 export function getTerminalStatus(id: string): TerminalStatus {
   return entries.get(id)?.session.getStatus() ?? NO_STATUS
 }
@@ -1470,12 +1524,12 @@ export function onTerminalSearchResults(
  * renderer inherits it into the rows).
  */
 export function applyTerminalText(pref: TerminalTextPref): void {
-  for (const [id, entry] of entries) {
+  for (const entry of entries.values()) {
     entry.term.options.fontFamily = pref.fontFamily
     entry.term.options.fontSize = pref.fontSize
     entry.term.options.lineHeight = pref.lineHeight
     entry.host.style.fontFeatureSettings = ligatureFeatureSettings(pref.ligatures)
-    refitEntry(id, entry)
+    refitEntry(entry)
   }
 }
 

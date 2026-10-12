@@ -1,9 +1,11 @@
 mod accounts;
+mod agent_process;
 mod agents;
 mod analytics;
 mod commands;
 mod devlog;
 mod files;
+mod folder_list;
 mod git;
 mod json_style;
 mod links;
@@ -83,6 +85,11 @@ pub fn run() {
             // Register the MCP server at Claude's user scope (~/.claude.json)
             // instead of dropping a .mcp.json into every project. One-shot,
             // idempotent, log-only.
+            // The Settings → MCP opt-outs must be known before the first
+            // writer runs, or a switched-off profile is re-enrolled at boot.
+            if let Ok(dir) = app.path().app_data_dir() {
+                crate::mcp::toggle::load(dir.join("swarmterm-mcp-disabled.json"));
+            }
             crate::mcp::config::register_user_scope(app.handle());
             // Register `swarmterm --hook` under Claude Code's hook events in
             // ~/.claude/settings.json so Claude Code panes report exact
@@ -134,18 +141,23 @@ pub fn run() {
             commands::war_room_delete,
             commands::war_room_moderator_send,
             commands::report_agent_state,
+            commands::terminal_agent_alive,
             commands::list_available_shells,
+            commands::windows_build_number,
             commands::list_available_agents,
             commands::list_agent_accounts,
             commands::save_agent_account,
             commands::delete_agent_account,
             commands::configure_account_mcp,
+            commands::swarmterm_mcp_profiles,
+            commands::set_swarmterm_mcp,
             commands::inspect_account_mcp,
             commands::list_agent_sessions,
             commands::inspect_saved_workspace,
             commands::set_claude_statusline,
             commands::resolve_path_link,
             commands::resolve_dir_link,
+            commands::list_folders,
             commands::find_available_editor,
             commands::open_in_editor,
             commands::reveal_in_file_manager,

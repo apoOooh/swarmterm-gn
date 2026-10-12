@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2, Archive } from 'lucide-react'
+import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2, Archive, PictureInPicture2, ClipboardList } from 'lucide-react'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 import { AgentIcon } from '@/components/AgentIcon'
 import { Button } from '@/components/ui/button'
@@ -19,6 +19,7 @@ import { contextBand, contextUsageTitle, formatContextUsage, type ContextBand } 
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { accountLabel } from '@/lib/agent-accounts'
 import { cn } from '@/lib/utils'
+import type { ConnectionStatus } from '@/lib/war-room-connection'
 
 interface PaneHeaderProps {
   /** Resolved agent id (leaf override already applied). */
@@ -49,10 +50,15 @@ interface PaneHeaderProps {
   /** Name of the agent a split opens (resolved default), for the tooltip. */
   splitAgentName: string
   onClose: () => void
+  /** Open the handoff brief preview for this pane (SWA-21). */
+  onHandoff: () => void
   /** Park the pane in the workspace drawer (hidden, kept running). */
   onDrawer: () => void
   isZoomed: boolean
   onToggleZoom: () => void
+  /** Whether the pane floats above the split view (lib/floating-panes.ts). */
+  isFloating: boolean
+  onToggleFloat: () => void
   /** Whether broadcast mode is armed for this workspace. */
   broadcastActive: boolean
   /** Whether this pane is in the broadcast group. */
@@ -67,6 +73,8 @@ interface PaneHeaderProps {
   worktreeBranch?: string
   /** Context-window % from Claude Code's status line (S15); absent ⇒ no chip. */
   ctxPct?: number
+  /** War Room connection of this pane; absent ⇒ not in a room, no chip. */
+  warRoom?: ConnectionStatus | null
 }
 
 // Band → colour. Amber is VS Code Dark Modern `editorWarning.foreground`, red is
@@ -277,6 +285,20 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
         </DropdownMenu>
       </div>
 
+      {props.warRoom && (
+        <span
+          data-warroom-status={props.warRoom.kind}
+          title={`War Room: ${props.warRoom.label}. ${props.warRoom.reason}`}
+          aria-label={`War Room: ${props.warRoom.label}`}
+          className={cn(
+            'h-1.5 w-1.5 shrink-0 rounded-full',
+            props.warRoom.kind === 'connected' && 'bg-emerald-500',
+            props.warRoom.kind === 'waiting' && 'bg-amber-400',
+            props.warRoom.kind === 'error' && 'bg-destructive'
+          )}
+        />
+      )}
+
       {/* Worktree — lowest priority: full name → truncated → icon-only → hidden. */}
       {worktreeBranch && level.worktree !== 'hidden' && (
         <span
@@ -326,6 +348,9 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
             <Radio className="h-3.5 w-3.5" />
           </Button>
         )}
+        <Button variant="ghost" size="icon-sm" title="Handoff brief — preview and copy, nothing is sent" aria-label="Handoff brief" onClick={props.onHandoff}>
+          <ClipboardList className="h-3.5 w-3.5" />
+        </Button>
         <Button variant="ghost" size="icon-sm" title={splitTitle('Split right', props.splitAgentName)} aria-label="Split right" onClick={(e) => props.onSplitRight(e.altKey)}>
           <Columns2 className="h-3.5 w-3.5" />
         </Button>
@@ -334,6 +359,9 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
         </Button>
         <Button variant="ghost" size="icon-sm" title={props.isZoomed ? 'Restore pane (Ctrl+Shift+Enter)' : 'Maximize pane (Ctrl+Shift+Enter)'} aria-label={props.isZoomed ? 'Restore pane' : 'Maximize pane'} aria-pressed={props.isZoomed} onClick={props.onToggleZoom}>
           {props.isZoomed ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+        </Button>
+        <Button variant="ghost" size="icon-sm" title={props.isFloating ? 'Dock pane back into the layout' : 'Float pane — drag freely, drag the header onto a pane to dock'} aria-label={props.isFloating ? 'Dock pane' : 'Float pane'} aria-pressed={props.isFloating} onClick={props.onToggleFloat}>
+          <PictureInPicture2 className="h-3.5 w-3.5" />
         </Button>
         <Button variant="ghost" size="icon-sm" title="Move to drawer — keeps running (Ctrl+Shift+D)" aria-label="Move to drawer" onClick={props.onDrawer}>
           <Archive className="h-3.5 w-3.5" />

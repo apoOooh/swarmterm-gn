@@ -1,15 +1,20 @@
-import type { ReactElement } from 'react'
-import { Group, Panel, Separator } from 'react-resizable-panels'
+import { useEffect, useRef, type ReactElement } from 'react'
+import { Group, Panel, Separator, type GroupImperativeHandle } from 'react-resizable-panels'
 import type { LayoutNode, LeafNode } from '@/lib/layout-tree'
 import { useAppStore, type Workspace as WorkspaceModel } from '@/store/app-store'
 import { PaneWorkbench } from '@/components/Files/PaneWorkbench'
 import { BroadcastBanner } from '@/components/Workspace/BroadcastBanner'
 import { SnapBar } from '@/components/Workspace/SnapBar'
+import { CornerHandles } from '@/components/Workspace/CornerHandles'
+import { FloatingPane } from '@/components/Workspace/FloatingPane'
+import { hiddenLeafIds } from '@/lib/floating-panes'
+import { findLeaf } from '@/lib/layout-tree'
 import { AgentIcon } from '@/components/AgentIcon'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
 import { zoomedLeaf } from '@/lib/pane-zoom'
 import { visibleLayout } from '@/lib/pane-drawer'
+import { splitsToRealign } from '@/lib/split-sync'
 import { Archive } from 'lucide-react'
 
 interface WorkspaceProps {
@@ -19,10 +24,40 @@ interface WorkspaceProps {
 /** Render one workspace: its binary split-tree of resizable terminal panes. */
 export function Workspace({ workspace }: WorkspaceProps): ReactElement {
   const resizeSplitNode = useAppStore((s) => s.resizeSplitNode)
+  // Live Group handles so CornerHandles can move two splits in one drag.
+  const groups = useRef(new Map<string, GroupImperativeHandle>())
 
-  function renderNode(node: LayoutNode): ReactElement {
-    if (node.type === 'leaf') {
-      return (
+  // Groups are uncontrolled: `sizes` only seeds a Group when it mounts. Tidy
+  // rewrites the sizes of splits that stay mounted, so push the stored sizes
+  // into any live Group that disagrees. Drags and corner drags commit what the
+  // Group already shows, so they never trigger a write here. getLayout() is
+  // empty until a Group is measured; those Groups are skipped (they seed from
+  // the store on mount anyway). A hidden workspace's Groups keep their last
+  // measured size, so a Tidy there lands too. The handle throws for a Group
+  // that is already gone; a missed realign is only cosmetic, so fail open
+  // rather than take the tree down from an effect.
+  useEffect(() => {
+    const live = (id: string): [number, number] | undefined => {
+      try {
+        const layout = groups.current.get(id)?.getLayout()
+        const a = layout?.[`${id}:a`]
+        const b = layout?.[`${id}:b`]
+        return typeof a === 'number' && typeof b === 'number' ? [a, b] : undefined
+      } catch {
+        return undefined
+      }
+    }
+    for (const { id, sizes } of splitsToRealign(workspace.layout, live)) {
+      try {
+        groups.current.get(id)?.setLayout({ [`${id}:a`]: sizes[0], [`${id}:b`]: sizes[1] })
+      } catch {
+        /* Group unmounted since the read above */
+      }
+    }
+  }, [workspace.layout])
+
+  function renderLeaf(node: LeafNode, isFloating = false): ReactElement {
+    return (
         <PaneWorkbench
           key={node.id}
           leaf={node}
@@ -34,9 +69,13 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
           }
           worktreeMode={workspace.worktreeMode}
           isZoomed={workspace.zoomedLeafId === node.id}
+          isFloating={isFloating}
         />
-      )
-    }
+    )
+  }
+
+  function renderNode(node: LayoutNode): ReactElement {
+    if (node.type === 'leaf') return renderLeaf(node)
 
     const leftId = `${node.id}:a`
     const rightId = `${node.id}:b`
@@ -44,6 +83,10 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
       <Group
         key={node.id}
         orientation={node.direction}
+        groupRef={(handle) => {
+          if (handle) groups.current.set(node.id, handle)
+          else groups.current.delete(node.id)
+        }}
         className="h-full w-full"
         defaultLayout={{ [leftId]: node.sizes[0], [rightId]: node.sizes[1] }}
         onLayoutChanged={(layout) => {
@@ -76,15 +119,32 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
   // Drawered panes are pruned first, then zoom picks from what is left. Both
   // only unmount the hidden panes: their xterm + pty live on in
   // terminal-registry and reattach on restore/unzoom.
-  const visible = visibleLayout(workspace.layout, workspace.drawerLeafIds ?? [])
+  // Floating panes are pruned like drawered ones and drawn on top instead.
+  const floating = workspace.floating ?? []
+  const visible = visibleLayout(workspace.layout, hiddenLeafIds(workspace.drawerLeafIds ?? [], floating))
   const drawerCount = workspace.drawerLeafIds?.length ?? 0
+  const zoomed = visible ? zoomedLeaf(visible, workspace.zoomedLeafId) : null
   return (
     <div data-focus-return className="flex h-full w-full flex-col bg-canvas">
       <BroadcastBanner workspace={workspace} />
       <div className="relative min-h-0 flex-1 p-2">
         {visible
-          ? renderNode(zoomedLeaf(visible, workspace.zoomedLeafId) ?? visible)
-          : <EmptyDrawerState count={drawerCount} />}
+          ? renderNode(zoomed ?? visible)
+          : drawerCount > 0 && <EmptyDrawerState count={drawerCount} />}
+        {visible && !zoomed && <CornerHandles layout={visible} groups={groups} inset={8} />}
+        {!zoomed && (
+          <div className="pointer-events-none absolute inset-2 z-30 [&>*]:pointer-events-auto">
+            {floating.map((rect) => {
+              const leaf = findLeaf(workspace.layout, rect.leafId)
+              if (!leaf) return null
+              return (
+                <FloatingPane key={rect.leafId} rect={rect} label={templateById(leaf.agentId ?? DEFAULT_TEMPLATE_ID).name}>
+                  {renderLeaf(leaf, true)}
+                </FloatingPane>
+              )
+            })}
+          </div>
+        )}
         <SnapBar layout={workspace.layout} drawerLeafIds={workspace.drawerLeafIds ?? []} />
       </div>
     </div>

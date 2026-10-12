@@ -29,6 +29,33 @@ Do not mark them passed from the in-memory fixture alone.
       parked and restores at the end), and drop a pane on a War Room tab while
       the bar is showing (still joins the room).
 
+## Tidy layout
+
+- [ ] Split a pane right, then split the new pane right again, so three panes
+      sit in a row with the first at half width. Sidebar **⋮ → Tidy layout** →
+      all three become equal thirds right away (the separators move, no
+      shell restarts).
+- [ ] In a 2×2 grid drag the separators to odd positions, then Tidy layout →
+      rows and columns are even again. Entry is greyed out in a one-pane
+      workspace.
+- [ ] Tidy a workspace you are not looking at, then switch to it → already
+      even. With a pane in the drawer or floating, Tidy sizes only the panes
+      on screen; after restoring the pane, Tidy layout again evens out all.
+- [ ] Zoom a pane, then Tidy layout → the zoom ends and the even layout shows.
+
+## Corner resize and floating panes
+
+- [ ] In a 2×2 grid, hover where the separators meet → a handle lights up;
+      dragging it resizes width and height together.
+- [ ] Float pane (header button) → the pane floats above the layout, its
+      shell keeps running; the grip bar moves it, edges and bottom corners
+      resize it.
+- [ ] Drag the floating pane's header onto another pane's dock tile → it
+      docks on that side. Float again, press the button → it returns to its
+      original slot.
+- [ ] Maximize another pane while one floats → the float hides; restore
+      brings it back.
+
 ## Pane drawer
 
 - [ ] In a 3-pane workspace run `ping -t localhost` in one pane, click its
@@ -443,6 +470,10 @@ machine that never built Swarmterm. Details in
 - [ ] Settings → Notifications: Sound off → banner still works; System off → chime still works; per-agent off → that agent is fully silent.
 - [ ] macOS: first banner triggers the system permission prompt; denying it keeps chimes working.
 - [ ] Plain Terminal pane never notifies.
+- [ ] Bell: an agent in another workspace blocks → bell counter rises; the entry names workspace and pane; clicking it switches workspace, focuses the pane and clears the counter.
+- [ ] Bell: type `exit 3` in a background shell pane → pane shows "Process exited", bell lists "Shell exited (code 3)".
+- [ ] Bell: a drawered pane's entry restores the pane from the drawer; a closed pane's entry is shown disabled.
+- [ ] Bell: Sound and System off → entries are still recorded.
 
 
 ## Account profiles (SWA-9)
@@ -454,6 +485,21 @@ machine that never built Swarmterm. Details in
 - Save a workspace with an exact profile-bound session, quit, restart and restore. Verify both its account and conversation identity survive.
 - Remove a profile, then restore its saved workspace. Verify a warning appears and its pane starts a fresh conversation using Default. Configuration files and already running panes must remain intact.
 - Change a pane's account. Verify the agent restarts and no old conversation is resumed under the new profile.
+
+## Account and agent handoff (SWA-22)
+
+- Open a Claude pane's Handoff brief, click **Hand off…**, pick a Codex
+  profile and **Start pane**. A new Codex pane opens in the same folder; the
+  old pane is unchanged. **Send brief** stays disabled until it runs.
+- Press **Send brief** while typing in the new pane: the dialog shows the
+  typing hold; after you stop and clear the line, the brief arrives once and
+  is submitted. The bell lists "Handoff brief delivered". Double-clicking
+  Send never pastes twice.
+- Start a handoff with an account whose CLI fails to start (or close the new
+  pane before sending): the dialog shows "Not sent", the bell lists the
+  failure, and nothing is retried.
+- Usage reads "Usage unknown" with a time; a limit message in the old pane
+  shows only as an unverified hint.
 
 ## MCP catalogue (SWA-11)
 

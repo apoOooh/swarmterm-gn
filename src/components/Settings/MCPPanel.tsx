@@ -3,8 +3,9 @@ import { Button } from '@/components/ui/button'
 import { MCP_CATALOG, MCP_CATALOG_VERSION } from '@/lib/mcp-catalog'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { configureAccountMcp, inspectAccountMcp, type CatalogStatus } from '@/tauri/mcp-catalog'
-import { pickDirectory } from '@/tauri/dialog'
+import { pickFolder } from '@/store/folder-picker-store'
 import { openUrl } from '@/tauri/opener'
+import { SwarmtermMcpSwitches } from './SwarmtermMcpSwitches'
 
 export function MCPPanel(): React.ReactElement {
   const { accounts, error: accountError, refresh } = useAgentAccountsStore()
@@ -32,7 +33,7 @@ export function MCPPanel(): React.ReactElement {
     } catch (error) { setError(String(error)) }
     finally { setBusy(false) }
   }
-  return <section className="space-y-5">
+  return <div className="space-y-8"><SwarmtermMcpSwitches /><section className="space-y-5">
     <h2 className="text-lg font-semibold">MCP catalogue</h2>
     <p className="text-sm text-muted-foreground">Add reviewed server definitions to an account's CLI configuration. Existing servers remain intact. Packages may download when the CLI starts them; authentication and credentials stay with the CLI.</p>
     <label className="block text-sm">Account<select aria-label="MCP account" value={selection} disabled={busy} onChange={event => setSelection(event.target.value)} className="mt-1 block w-full rounded border border-input bg-background p-2">
@@ -48,12 +49,12 @@ export function MCPPanel(): React.ReactElement {
         <p className="text-sm text-muted-foreground">{entry.description}</p><p className="text-xs text-muted-foreground">{entry.requirement}</p>
         {entry.directories && <div className="space-y-2">
           <label className="block text-xs">Allowed directories (one per line)<textarea aria-label="Filesystem allowed directories" value={directoryText} disabled={busy} onChange={event => setDirectoryText(event.target.value)} className="mt-1 block min-h-16 w-full rounded border border-input bg-background p-2" /></label>
-          <Button variant="ghost" disabled={busy} onClick={() => void pickDirectory().then(path => { if (path) setDirectoryText(current => current.split('\n').includes(path) ? current : `${current}${current && !current.endsWith('\n') ? '\n' : ''}${path}`) }).catch(error => setError(String(error)))}>Choose directory</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => void pickFolder().then(path => { if (path) setDirectoryText(current => current.split('\n').includes(path) ? current : `${current}${current && !current.endsWith('\n') ? '\n' : ''}${path}`) }).catch(error => setError(String(error)))}>Choose directory</Button>
         </div>}
         {current === 'conflict' && <p className="text-xs text-muted-foreground">This server name already has a different definition. Manage it in the agent CLI; Swarmterm will preserve it.</p>}
         <button type="button" onClick={() => void openUrl(entry.documentationUrl).catch(error => setError(String(error)))} className="text-xs text-primary underline">Official documentation</button>
       </article>
     })}</div>
     <p className="text-xs text-muted-foreground">Catalogue version {MCP_CATALOG_VERSION}. Configured means the definition exists, not that the server is connected. Use the agent CLI to authenticate, check connectivity or remove servers.</p>
-  </section>
+  </section></div>
 }

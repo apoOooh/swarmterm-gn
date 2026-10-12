@@ -99,21 +99,29 @@ const DROP: FireVerdict = { sound: false, system: false }
  * unfocused AT THIS INSTANT — inside the app the chime alone is the signal.
  */
 export function resolveFire(pending: PendingNotification, ctx: FireContext): FireVerdict {
+  if (!isStillCurrent(pending, ctx)) return DROP
+  if (ctx.paneWatched) return DROP
+  if (!agentNotificationsEnabled(ctx.prefs, pending.agentId)) return DROP
+  return { sound: ctx.prefs.sound, system: ctx.prefs.system && !ctx.windowFocused }
+}
+
+/**
+ * The prefs-free half of resolveFire: does the fact that armed `pending`
+ * still hold? The notification center records on this alone (plus the
+ * watched check) — muting chimes must not empty the history.
+ */
+export function isStillCurrent(pending: PendingNotification, ctx: Pick<FireContext, 'current' | 'command'>): boolean {
   if (pending.kind === 'command') {
     // A plain pane has no agent-state entry, so `current` says nothing here.
     // The record that armed us must still be the pane's `last`: a newer
     // (even short) command or a respawn clear means the user has moved on.
     const last = ctx.command?.last
-    if (last === undefined || last.finishedAt !== pending.finishedAt) return DROP
-  } else {
-    const { current } = ctx
-    if (current === undefined) return DROP
-    if (pending.kind === 'attention' && current.state !== 'blocked') return DROP
-    if (pending.kind === 'completion' && !(current.state === 'idle' && !current.seen)) return DROP
+    return last !== undefined && last.finishedAt === pending.finishedAt
   }
-  if (ctx.paneWatched) return DROP
-  if (!agentNotificationsEnabled(ctx.prefs, pending.agentId)) return DROP
-  return { sound: ctx.prefs.sound, system: ctx.prefs.system && !ctx.windowFocused }
+  const { current } = ctx
+  if (current === undefined) return false
+  if (pending.kind === 'attention') return current.state === 'blocked'
+  return current.state === 'idle' && !current.seen
 }
 
 export function notificationCopy(

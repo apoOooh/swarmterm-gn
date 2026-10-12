@@ -1,5 +1,6 @@
 import { toggledZoom } from '@/lib/pane-zoom'
 import { drawerAfterRemoval, nextVisibleLeafId } from '@/lib/pane-drawer'
+import { clampFloatRect, floatingAfterRemoval, floatPane, hiddenLeafIds, isFloating, unfloatPane, type FloatRect } from '@/lib/floating-panes'
 import { create, type StateCreator } from 'zustand'
 import {
   paneLayoutFor,
@@ -10,6 +11,7 @@ import {
   splitLeaf,
   reorderLeaves,
   moveLeafBeside,
+  tidyLayout,
   updateLeaf,
   type Direction,
   type DockSide,
@@ -49,6 +51,10 @@ export interface Workspace {
    *  `layout`, so their pty/xterm keep running (see lib/pane-drawer.ts).
    *  Absent ⇒ empty. Order = drawer order (oldest first). */
   drawerLeafIds?: string[]
+  /** Leaves shown as floating windows above the split view; like the drawer
+   *  they stay in `layout` (see lib/floating-panes.ts). Absent ⇒ none.
+   *  Order = stacking order (last on top). Not persisted. */
+  floating?: FloatRect[]
   /** Agent a split pane starts with in this workspace (template id).
    *  Absent ⇒ inherit the global default from Settings (agent-pref-store). */
   defaultAgentId?: string
@@ -161,12 +167,23 @@ export interface AppActions {
   /** `agentId` is the resolved split agent (lib/agent-pref resolveSplitAgent);
    *  absent or 'terminal' ⇒ a plain shell. */
   splitPane: (leafId: string, direction: Direction, agentId?: string) => void
+  /** Account/agent handoff (SWA-22): split `leafId` into a new pane running
+   *  `agentId` with `accountId` in `cwd`. The source pane is left untouched.
+   *  No initialPrompt: the brief is delivered later, after confirmation.
+   *  Returns the new terminalId, or undefined when the leaf is not found. */
+  handoffPane: (leafId: string, target: { agentId: string; accountId?: string; cwd: string }) => string | undefined
   /** Set (or clear with undefined) a workspace's default split agent. */
   setWorkspaceDefaultAgent: (workspaceId: string, agentId: string | undefined) => void
   closePane: (leafId: string) => void
   toggleZoom: (leafId: string) => void
   /** Park a pane in its workspace's drawer: hidden like a close, but kept alive. */
   drawerPane: (leafId: string) => void
+  /** Detach a pane from the split view into a floating window. */
+  floatPane: (leafId: string) => void
+  /** Return a floating pane to its original slot in the split view. */
+  dockFloatingPane: (leafId: string) => void
+  /** Move/resize a floating pane; also raises it to the top. */
+  setFloatRect: (rect: FloatRect) => void
   /** Bring a drawered pane back into its original slot and focus it. */
   restorePane: (leafId: string) => void
   runFileInPane: (leafId: string, cwd: string, command: string) => void
@@ -176,6 +193,8 @@ export interface AppActions {
   /** Snap layout: rebuild the active workspace as `presetId` with `leafId` in `slot`. */
   applySnapLayout: (leafId: string, presetId: string, slot: number) => void
   resizeSplitNode: (splitId: string, sizes: [number, number]) => void
+  /** Even out a workspace's panes by geometry (see `tidyLayout` in lib/layout-tree). */
+  tidyLayout: (workspaceId: string) => void
   setPaneAgent: (leafId: string, agentId: string) => void
   setPaneAccount: (leafId: string, accountId?: string) => void
   setPaneCwd: (leafId: string, cwd: string | undefined) => void
@@ -440,6 +459,24 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       })
     ),
 
+  handoffPane: (leafId, target) => {
+    let terminalId: string | undefined
+    set((s) =>
+      mapActive(s, (w) => {
+        if (!findLeaf(w.layout, leafId) || isDrawered(w, leafId)) return w
+        const newLeaf: LeafNode = { ...makeLeaf(), agentId: target.agentId, accountId: target.accountId, cwd: target.cwd }
+        terminalId = newLeaf.terminalId
+        return {
+          ...w,
+          layout: splitLeaf(w.layout, leafId, 'horizontal', newLeaf, uid()),
+          focusedLeafId: newLeaf.id,
+          zoomedLeafId: undefined
+        }
+      })
+    )
+    return terminalId
+  },
+
   setWorkspaceDefaultAgent: (workspaceId, agentId) =>
     set((s) => ({
       workspaces: s.workspaces.map((w) => {
@@ -462,7 +499,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   toggleZoom: (leafId) =>
     set((s) => {
       const ws = s.workspaces.find((w) => findLeaf(w.layout, leafId))
-      if (!ws || isDrawered(ws, leafId)) return {}
+      if (!ws || isDrawered(ws, leafId) || isFloating(ws.floating, leafId)) return {}
       return { workspaces: s.workspaces.map((w) => w.id === ws.id ? { ...w, zoomedLeafId: toggledZoom(w.zoomedLeafId, leafId), focusedLeafId: leafId } : w) }
     }),
 
@@ -481,12 +518,36 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         ...w,
         drawerLeafIds,
         focusedLeafId,
+        floating: w.floating && unfloatPane(w.floating, leafId),
         // A zoom on the parked pane lapses; a zoom on another pane survives.
         zoomedLeafId: w.zoomedLeafId === leafId ? undefined : w.zoomedLeafId,
         // Keystrokes must never fan out into a pane nobody can see.
         broadcastLeafIds: w.broadcastLeafIds.filter((id) => id !== leafId)
       }) }
     }),
+
+  floatPane: (leafId) =>
+    set((s) => {
+      const ws = s.workspaces.find((w) => findLeaf(w.layout, leafId))
+      if (!ws || isDrawered(ws, leafId)) return {}
+      return { workspaces: s.workspaces.map((w) => w.id !== ws.id ? w : {
+        ...w,
+        floating: floatPane(w.floating ?? [], leafId),
+        focusedLeafId: leafId,
+        // A zoom would hide the split view the float was just lifted from.
+        zoomedLeafId: undefined
+      }) }
+    }),
+
+  dockFloatingPane: (leafId) =>
+    set((s) => ({ workspaces: s.workspaces.map((w) => isFloating(w.floating, leafId)
+      ? { ...w, floating: unfloatPane(w.floating!, leafId), focusedLeafId: leafId }
+      : w) })),
+
+  setFloatRect: (rect) =>
+    set((s) => ({ workspaces: s.workspaces.map((w) => isFloating(w.floating, rect.leafId)
+      ? { ...w, floating: [...unfloatPane(w.floating!, rect.leafId), clampFloatRect(rect)] }
+      : w) })),
 
   restorePane: (leafId) =>
     set((s) => {
@@ -515,7 +576,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         // Prefer a pane still on screen; fall back to a drawered one only when
         // every survivor is parked (the workspace then shows its empty state).
         const fallback = leaves.find((l) => !drawerLeafIds.includes(l.id)) ?? leaves[0]
-        return { ...w, layout, drawerLeafIds, focusedLeafId: ids.has(w.focusedLeafId) ? w.focusedLeafId : fallback.id,
+        const floating = w.floating && floatingAfterRemoval(w.floating, layout)
+        return { ...w, layout, drawerLeafIds, floating, focusedLeafId: ids.has(w.focusedLeafId) ? w.focusedLeafId : fallback.id,
           broadcastLeafIds: w.broadcastLeafIds.filter((id) => ids.has(id)) }
       }) }))
     })
@@ -530,7 +592,10 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       mapActive(s, (w) => {
         if (fromLeafId === toLeafId) return w
         if (!findLeaf(w.layout, fromLeafId) || !findLeaf(w.layout, toLeafId)) return w
-        return { ...w, layout: reorderLeaves(w.layout, fromLeafId, toLeafId) }
+        // Dropping a floating pane onto a docked one docks it in that slot.
+        if (isFloating(w.floating, toLeafId)) return w
+        return { ...w, layout: reorderLeaves(w.layout, fromLeafId, toLeafId),
+          floating: w.floating && unfloatPane(w.floating, fromLeafId) }
       })
     ),
 
@@ -543,9 +608,12 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
     set((s) =>
       mapActive(s, (w) => {
         if (isDrawered(w, fromLeafId) || isDrawered(w, toLeafId)) return w
+        // Targets are docked panes only: a floating target has no visible slot.
+        if (isFloating(w.floating, toLeafId)) return w
         const layout = moveLeafBeside(w.layout, fromLeafId, toLeafId, side, uid())
         if (layout === w.layout) return w
-        return { ...w, layout, focusedLeafId: fromLeafId, zoomedLeafId: undefined }
+        return { ...w, layout, focusedLeafId: fromLeafId, zoomedLeafId: undefined,
+          floating: w.floating && unfloatPane(w.floating, fromLeafId) }
       })
     ),
 
@@ -554,12 +622,26 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       mapActive(s, (w) => {
         const layout = applyPreset(w.layout, w.drawerLeafIds ?? [], presetId, leafId, slot, uid)
         if (layout === null) return w
-        return { ...w, layout, focusedLeafId: leafId, zoomedLeafId: undefined }
+        // The preset arranges every non-drawered pane, floating ones included.
+        return { ...w, layout, focusedLeafId: leafId, zoomedLeafId: undefined, floating: undefined }
       })
     ),
 
   resizeSplitNode: (splitId, sizes) =>
     set((s) => mapActive(s, (w) => ({ ...w, layout: resizeSplit(w.layout, splitId, sizes) }))),
+
+  // Takes the workspace id rather than acting on the active one, so the sidebar
+  // menu can tidy any workspace without switching to it. Drawered and floating
+  // panes take no room in the split view, so they stay out of the maths. A zoom
+  // ends: the user asked to see an even layout, and a zoomed pane would hide it.
+  tidyLayout: (workspaceId) =>
+    set((s) => {
+      const ws = s.workspaces.find((w) => w.id === workspaceId)
+      if (!ws) return {}
+      const layout = tidyLayout(ws.layout, hiddenLeafIds(ws.drawerLeafIds ?? [], ws.floating ?? []))
+      if (layout === ws.layout && ws.zoomedLeafId === undefined) return {}
+      return { workspaces: s.workspaces.map((w) => (w.id === ws.id ? { ...w, layout, zoomedLeafId: undefined } : w)) }
+    }),
 
   // An agent switch respawns the pty; replaying a brief written for another
   // agent would be wrong, so a pending prompt is dropped along with it. A

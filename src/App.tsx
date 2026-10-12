@@ -45,10 +45,12 @@ import {
   focusTerminal,
   getTerminalAgentId,
   getTerminalCwd,
+  getTerminalGeneration,
   isAnyTerminalFocused,
   noteAgentHook,
   refitAttachedTerminals
 } from '@/lib/terminal-registry'
+import { useHandoffStore } from '@/store/handoff-store'
 import {
   describeFocusedElement,
   shouldReturnFocus,
@@ -73,6 +75,8 @@ import { confirmQuit, onQuitRequested } from '@/tauri/app'
 import { RightPanel } from '@/components/RightPanel/RightPanel'
 import { Navbar } from '@/components/Navbar/Navbar'
 import { SettingsView } from '@/components/Settings/SettingsView'
+import { FolderPicker } from '@/components/FolderPicker/FolderPicker'
+import { HandoffDialog } from '@/components/TerminalPane/HandoffDialog'
 import { TitleBar } from '@/components/TitleBar/TitleBar'
 import { Workspace, PaneDragGhost } from '@/components/Workspace/Workspace'
 import { Welcome } from '@/components/Welcome/Welcome'
@@ -89,6 +93,8 @@ import { useShellAvailabilityStore } from '@/store/shell-availability-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useNotificationPrefStore } from '@/store/notification-pref-store'
 import { startNotificationWatch } from '@/lib/notification-watch'
+import { useNotificationCenterStore } from '@/store/notification-center-store'
+import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { startAgentStateMirror } from '@/lib/agent-state-mirror'
 import { startGitRefreshWatch } from '@/lib/git-refresh'
 import { reportAgentState, onAgentHook, onAgentContext } from '@/tauri/agent-state'
@@ -146,7 +152,12 @@ export default function App(): ReactElement {
   const macroRunning = useRef(false)
   useEffect(() => wireSavedWorkspaces(), [])
   useEffect(() => {
-    const listener = onAgentSession(e => useAppStore.getState().recordPaneSession(e.terminalId, e.agentId, e.sessionId))
+    const listener = onAgentSession(e => {
+      useAppStore.getState().recordPaneSession(e.terminalId, e.agentId, e.sessionId)
+      // The handoff's readiness proof: the target CLI itself reported in for
+      // this pane (Rust matched spawn + agent); tagged with the live generation.
+      useHandoffStore.getState().dispatch({ type: 'session', terminalId: e.terminalId, agentId: e.agentId, generation: getTerminalGeneration(e.terminalId) })
+    })
     return () => { void listener.then(off => off()) }
   }, [])
   useEffect(() => {
@@ -274,8 +285,9 @@ export default function App(): ReactElement {
       displayName: member.name
     })
       .then(() => {
-        // A move resets the handshake (new room, new pending state); the intro
-        // tells the agent to call list_peers, which reconnects it immediately.
+        // A move resets the handshake (new room, new pending state); the
+        // backend reconnects it on join when the pane's MCP client was
+        // already seen, and the intro introduces the new peers.
         //
         // Ordering note — the first place in this file where event-vs-response
         // ordering is load-bearing, hence written down: the backend emits this
@@ -441,12 +453,13 @@ export default function App(): ReactElement {
         e.preventDefault(); const index = state.workspaces.indexOf(workspace)
         state.setActiveWorkspace(state.workspaces[(index + (action === 'next-workspace' ? 1 : state.workspaces.length - 1)) % state.workspaces.length].id); return
       }
-      if (['split-horizontal','split-vertical','close-pane','close-workspace','next-pane','previous-pane','select-all-broadcast','clear-broadcast'].includes(action)) {
+      if (['split-horizontal','split-vertical','close-pane','close-workspace','tidy-layout','next-pane','previous-pane','select-all-broadcast','clear-broadcast'].includes(action)) {
         if (!workspace || state.welcomeFocused || !requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
         e.preventDefault()
         if (action === 'split-horizontal' || action === 'split-vertical') state.splitPane(workspace.focusedLeafId, action === 'split-horizontal' ? 'horizontal' : 'vertical')
         else if (action === 'close-pane') state.closePane(workspace.focusedLeafId)
         else if (action === 'close-workspace') state.closeWorkspace(workspace.id)
+        else if (action === 'tidy-layout') state.tidyLayout(workspace.id)
         else if (action === 'select-all-broadcast') state.selectAllBroadcast()
         else if (action === 'clear-broadcast') state.clearBroadcast()
         else { const leaves = collectLeaves(workspace.layout), index = leaves.findIndex(l => l.id === workspace.focusedLeafId); state.setFocusedLeaf(leaves[(index + (action === 'next-pane' ? 1 : leaves.length - 1)) % leaves.length].id) }
@@ -836,10 +849,52 @@ export default function App(): ReactElement {
       getPaneTitle: (id) => useTerminalTitleStore.getState().titles[id] ?? '',
       playChime,
       sendSystemNotification: (opts) => void sendSystemNotification(opts),
+      record: (entry) => useNotificationCenterStore.getState().add(entry),
       now: Date.now,
       setTimer: (fn, ms) => window.setTimeout(fn, ms),
       clearTimer: (h) => window.clearTimeout(h as number)
     })
+  }, [])
+
+  // Notification center, the two feeds that are not agent/command transitions:
+  // a War Room delivery being held (released ⇒ the entry resolves itself), and
+  // the user looking at a pane (focused pane + focused window ⇒ its entries
+  // are read). Outside the render path like the watch above.
+  useEffect(() => {
+    const center = (): ReturnType<typeof useNotificationCenterStore.getState> =>
+      useNotificationCenterStore.getState()
+    const unsubHeld = useWarRoomStore.subscribe((cur, prev) => {
+      if (cur.held === prev.held) return
+      for (const [id, reason] of Object.entries(cur.held)) {
+        if (prev.held[id] !== undefined) continue
+        // The pane in front of the user already shows its in-pane hold pill.
+        if (document.hasFocus() && selectFocusedTerminalId(useAppStore.getState()) === id) continue
+        center().add({
+          kind: 'hold',
+          terminalId: id,
+          title: `War Room message held (${HOLD_REASON_COPY[reason]})`,
+          detail: useTerminalTitleStore.getState().titles[id] ?? '',
+          at: Date.now()
+        })
+      }
+      for (const id of Object.keys(prev.held)) {
+        if (!(id in cur.held)) center().markTerminalRead(id, ['hold'])
+      }
+    })
+    const markWatched = (): void => {
+      if (!document.hasFocus()) return
+      const id = selectFocusedTerminalId(useAppStore.getState())
+      if (id !== undefined) center().markTerminalRead(id, ['attention', 'completion', 'command', 'exit'])
+    }
+    const unsubFocus = useAppStore.subscribe((cur, prev) => {
+      if (selectFocusedTerminalId(cur) !== selectFocusedTerminalId(prev)) markWatched()
+    })
+    window.addEventListener('focus', markWatched)
+    return () => {
+      unsubHeld()
+      unsubFocus()
+      window.removeEventListener('focus', markWatched)
+    }
   }, [])
 
   // Git panel self-refresh: an agent pane leaving `working` (or exiting) inside
@@ -1038,6 +1093,8 @@ export default function App(): ReactElement {
             initialCategory={settingsTab}
           />
         )}
+        <FolderPicker />
+        <HandoffDialog />
       </div>
     </div>
   )

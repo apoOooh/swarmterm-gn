@@ -1,3 +1,4 @@
+import { useMemberConnection } from '@/components/WarRoom/useMemberConnection'
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, RotateCw } from 'lucide-react'
 import { useDraggable, useDroppable } from '@dnd-kit/core'
@@ -16,6 +17,9 @@ import { Button } from '@/components/ui/button'
 import { HeldDeliveryPill } from '@/components/TerminalPane/HeldDeliveryPill'
 import { SearchOverlay } from '@/components/TerminalPane/SearchOverlay'
 import { PaneHeader } from './PaneHeader'
+import { HandoffBriefDialog } from './HandoffBriefDialog'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { accountLabel } from '@/lib/agent-accounts'
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -29,15 +33,17 @@ import { agentCommand, DEFAULT_TEMPLATE_ID, templateById, withLaunchMode } from 
 import { buildAgentSpawnCommand, shellFlavor } from '@/lib/agent-spawn-command'
 import { buildContinueCommand, buildResumeCommand } from '@/lib/resume-command'
 import { isWindowsPlatform } from '@/lib/platform'
-import { pickDirectory } from '@/tauri/dialog'
+import { pickFolder } from '@/store/folder-picker-store'
 import { cn } from '@/lib/utils'
 import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
 import { insertExplorerPaths } from '@/components/FileDropListener'
 import { devLog } from '@/lib/dev-log'
+import { handoffCwd } from '@/lib/handoff-brief'
 import {
   attachTerminal,
   detachTerminal,
   focusTerminal,
+  getTerminalCwd,
   getTerminalStatus,
   getHoveredPathLink,
   openPathLink,
@@ -60,6 +66,8 @@ interface TerminalPaneProps {
   worktreeMode: boolean
   /** Whether this pane is zoomed to fill its workspace. */
   isZoomed?: boolean
+  /** Whether this pane floats above the split view. */
+  isFloating?: boolean
 }
 
 /**
@@ -76,7 +84,8 @@ export function TerminalPane({
   broadcastActive,
   isBroadcastMember,
   worktreeMode,
-  isZoomed = false
+  isZoomed = false,
+  isFloating = false
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -114,6 +123,7 @@ export function TerminalPane({
   // Per-terminal selector: only this pane wakes when ITS number changes, and the
   // store returns the same state on a no-change sample, so streaming stays quiet.
   const ctxPct = useContextUsageStore((s) => s.byId[terminalId])
+  const warRoomStatus = useMemberConnection(terminalId)
   // Narrow boolean selector: only THIS pane re-renders when the find overlay
   // opens/closes for it, not every pane on every keystroke in some other one
   // (the overlay owns its own query/toggle state, not the store).
@@ -261,10 +271,14 @@ export function TerminalPane({
 
   async function handleChoosePath(): Promise<void> {
     // Start in the workspace folder, not the OS default (home).
-    const dir = await pickDirectory(cwd)
+    const dir = await pickFolder(cwd)
     if (dir) setPaneCwd(leafId, dir)
   }
 
+  const [handoffOpen, setHandoffOpen] = useState(false)
+  // Live shell cwd captured when the brief opens (see handoffCwd).
+  const [briefCwd, setBriefCwd] = useState(resolvedCwd)
+  const accounts = useAgentAccountsStore((st) => st.accounts)
   const [dialog, setDialog] = useState<{ targets: DialogTarget[]; clears: ClearTarget[] } | null>(null)
   // Lazily computed when the context menu opens (see the ContextMenu wrapper
   // below) rather than on every render of every pane.
@@ -396,9 +410,19 @@ export function TerminalPane({
         onSplitDown={(plain) => splitPane(leafId, 'vertical', splitAgentFor(plain))}
         splitAgentName={templateById(splitAgentFor(false)).name}
         onClose={() => closePane(leafId)}
+        onHandoff={() => {
+          setBriefCwd(handoffCwd(getTerminalCwd(terminalId), resolvedCwd))
+          setHandoffOpen(true)
+        }}
         onDrawer={() => useAppStore.getState().drawerPane(leafId)}
         isZoomed={isZoomed}
         onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
+        isFloating={isFloating}
+        onToggleFloat={() => {
+          const st = useAppStore.getState()
+          if (isFloating) st.dockFloatingPane(leafId)
+          else st.floatPane(leafId)
+        }}
         broadcastActive={broadcastActive}
         isBroadcastMember={isBroadcastMember}
         onToggleBroadcast={() => toggleBroadcastMember(leafId)}
@@ -408,6 +432,18 @@ export function TerminalPane({
         worktreeBranch={leaf.worktreeBranch}
         agentTitle={agentTitle}
         ctxPct={ctxPct}
+        warRoom={warRoomStatus}
+      />
+
+      <HandoffBriefDialog
+        open={handoffOpen}
+        onClose={() => setHandoffOpen(false)}
+        terminalId={terminalId}
+        leafId={leaf.id}
+        agentName={templateById(resolvedAgentId).name}
+        accountLabel={leaf.accountId === undefined ? undefined : accountLabel(leaf.accountId, accounts)}
+        cwd={briefCwd}
+        sessionId={leaf.sessionId}
       />
 
       <ClearWorktreeDialog

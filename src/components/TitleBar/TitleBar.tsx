@@ -19,6 +19,7 @@ import { minimize, toggleMaximize, closeWindow, onMaximizedChanged } from '@/tau
 import { isMacPlatform } from '@/lib/platform'
 import { needsTrafficLightInset } from '@/lib/titlebar-chrome'
 import { HeaderRecentSearch } from './HeaderRecentSearch'
+import { NotificationBell } from './NotificationBell'
 
 // On macOS the OS draws native traffic lights over this header (titleBarStyle
 // Overlay — see tauri.macos.conf.json): hide the custom window buttons and
@@ -113,6 +114,7 @@ export function TitleBar({ fullscreen }: TitleBarProps): ReactElement {
       </div>
 
       <div className="flex h-full items-center">
+        <NotificationBell />
         {!onHome && (
           <button
             type="button"
