@@ -11,7 +11,8 @@ interface AccountsState {
   accounts: AgentAccount[]
   error: string | null
   refresh: () => Promise<void>
-  save: (account: SaveAgentAccount) => Promise<void>
+  /** Resolves with the stored profile (from the write, not the reread). */
+  save: (account: SaveAgentAccount) => Promise<AgentAccount>
   remove: (id: string) => Promise<void>
   /** Keyed by `accountUsageKey`; absent = not checked yet. */
   statuses: Record<string, AccountStatus>
@@ -55,6 +56,8 @@ export const useAgentAccountsStore = create<AccountsState>((set, get) => {
       clearTimeout(watches.get(key))
       const deadline = Date.now() + LOGIN_WATCH_MS
       const tick = (): void => {
+        // A profile removed mid-login has nothing left to watch.
+        if (accountId && !get().accounts.some(a => a.id === accountId)) { watches.delete(key); return }
         void get().refreshStatus(agentId, accountId).then(status => {
           if (status?.state === 'connected' || Date.now() > deadline) { watches.delete(key); return }
           watches.set(key, setTimeout(tick, LOGIN_POLL_MS))
@@ -79,7 +82,7 @@ export const useAgentAccountsStore = create<AccountsState>((set, get) => {
       inFlight = request
       return request
     },
-    save: async account => { await saveAgentAccount(account); await refreshAfterMutation() },
+    save: async account => { const saved = await saveAgentAccount(account); await refreshAfterMutation(); return saved },
     remove: async id => { await deleteAgentAccount(id); await refreshAfterMutation() }
   }
 })
