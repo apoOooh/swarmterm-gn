@@ -1,3 +1,4 @@
+mod account_status;
 mod accounts;
 mod agent_process;
 mod agents;
@@ -159,6 +160,7 @@ pub fn run() {
             commands::list_agent_accounts,
             commands::save_agent_account,
             commands::delete_agent_account,
+            commands::get_account_status,
             commands::configure_account_mcp,
             commands::swarmterm_mcp_profiles,
             commands::set_swarmterm_mcp,
