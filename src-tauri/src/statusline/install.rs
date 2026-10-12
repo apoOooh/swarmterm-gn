@@ -53,19 +53,8 @@ pub fn merge_settings(
     existing: Option<&str>,
     command: Option<&str>,
 ) -> Result<SettingsWrite, String> {
-    let mut root: Value = match existing.map(str::trim).filter(|s| !s.is_empty()) {
-        None => json!({}),
-        Some(s) => serde_json::from_str(s).map_err(|e| format!("parse: {e}"))?,
-    };
-    if !root.is_object() {
-        return Err("root is not a JSON object".into());
-    }
-
-    let current = root
-        .get("statusLine")
-        .and_then(|s| s.get("command"))
-        .and_then(|c| c.as_str())
-        .map(str::to_owned);
+    let mut root = parse_root(existing)?;
+    let current = status_command(&root).map(str::to_owned);
 
     if let Some(cmd) = current.as_deref() {
         if !is_ours(cmd) {
@@ -105,6 +94,88 @@ pub fn merge_settings(
         .map(SettingsWrite::Write)
 }
 
+fn parse_root(existing: Option<&str>) -> Result<Value, String> {
+    let root: Value = match existing.map(str::trim).filter(|s| !s.is_empty()) {
+        None => json!({}),
+        Some(s) => serde_json::from_str(s).map_err(|e| format!("parse: {e}"))?,
+    };
+    if !root.is_object() {
+        return Err("root is not a JSON object".into());
+    }
+    Ok(root)
+}
+
+fn status_command(root: &Value) -> Option<&str> {
+    root.get("statusLine")
+        .and_then(|s| s.get("command"))
+        .and_then(|c| c.as_str())
+}
+
+/// Carry the user's own status line from the default profile into a named
+/// account profile. Such a profile runs Claude Code with its own
+/// `CLAUDE_CONFIG_DIR`, so without this the user's line silently turns into
+/// ours (or nothing) there. The whole `statusLine` object is copied, keeping
+/// `refreshInterval`/`padding`. Precedence matches the default profile: a
+/// foreign line beats ours, and a foreign line already in the profile is the
+/// user's choice for that account, so it is never replaced.
+pub fn adopt_default_status_line(
+    profile: Option<&str>,
+    default: Option<&str>,
+) -> Result<SettingsWrite, String> {
+    let default = parse_root(default)?;
+    let Some(line) = default
+        .get("statusLine")
+        .filter(|_| status_command(&default).is_some_and(|c| !is_ours(c)))
+    else {
+        return Ok(SettingsWrite::Unchanged);
+    };
+    let mut root = parse_root(profile)?;
+    if status_command(&root).is_some_and(|c| !is_ours(c)) {
+        return Ok(SettingsWrite::Foreign);
+    }
+    // `insert` on an existing key keeps its slot under `preserve_order`.
+    root.as_object_mut()
+        .unwrap()
+        .insert("statusLine".to_string(), line.clone());
+    crate::json_style::JsonStyle::detect(profile)
+        .render(&root)
+        .map(SettingsWrite::Write)
+}
+
+/// File variant of `adopt_default_status_line`. A missing default file means
+/// there is nothing to adopt; returns whether the profile file was written.
+pub fn adopt_default_status_line_file(profile: &Path, default: &Path) -> Result<bool, String> {
+    let Some(default) = read_optional(default)? else {
+        return Ok(false);
+    };
+    let existing = read_optional(profile)?;
+    match adopt_default_status_line(existing.as_deref(), Some(&default))? {
+        SettingsWrite::Write(s) => write_atomic(profile, s).map(|_| true),
+        SettingsWrite::Unchanged | SettingsWrite::Foreign => Ok(false),
+    }
+}
+
+fn read_optional(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read: {e}")),
+    }
+}
+
+fn write_atomic(path: &Path, contents: String) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, contents).map_err(|e| format!("write tmp: {e}"))?;
+    fs::rename(&tmp, path).map_err(|e| {
+        // Best-effort tmp cleanup on rename failure so we don't leave litter.
+        let _ = fs::remove_file(&tmp);
+        format!("rename: {e}")
+    })
+}
+
 /// Resolve Claude Code's user-scope settings file. Honors `CLAUDE_CONFIG_DIR`
 /// (which relocates the whole `~/.claude` directory); a blank value is treated
 /// as unset so we never resolve to `/settings.json`. Note this is a DIFFERENT
@@ -119,11 +190,7 @@ pub fn resolve_settings_path(home: &Path, claude_config_dir: Option<&str>) -> Pa
 /// Read → merge → write tmp → rename. The rename is atomic, so a crash
 /// mid-write can never leave the user with a truncated settings file.
 pub fn write_settings_to_file(path: &Path, command: Option<&str>) -> Result<(), String> {
-    let existing = match fs::read_to_string(path) {
-        Ok(s) => Some(s),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(format!("read: {e}")),
-    };
+    let existing = read_optional(path)?;
     let merged = match merge_settings(existing.as_deref(), command)? {
         SettingsWrite::Unchanged => return Ok(()),
         SettingsWrite::Foreign => {
@@ -131,16 +198,7 @@ pub fn write_settings_to_file(path: &Path, command: Option<&str>) -> Result<(), 
         }
         SettingsWrite::Write(s) => s,
     };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, merged).map_err(|e| format!("write tmp: {e}"))?;
-    fs::rename(&tmp, path).map_err(|e| {
-        // Best-effort tmp cleanup on rename failure so we don't leave litter.
-        let _ = fs::remove_file(&tmp);
-        format!("rename: {e}")
-    })
+    write_atomic(path, merged)
 }
 
 /// Install or remove the status line entry for the running app.
@@ -425,6 +483,90 @@ mod tests {
         let v = parse(&fs::read_to_string(&path).unwrap());
         assert!(v.get("statusLine").is_none());
         assert_eq!(v["theme"], "dark");
+    }
+
+    const USER_LINE: &str = r#"{"theme":"dark","statusLine":{"type":"command","command":"node \"C:/u/.claude/statusline.mjs\"","refreshInterval":5}}"#;
+
+    #[test]
+    fn adopt_copies_the_users_line_over_ours_with_all_its_keys() {
+        let profile = format!(
+            r#"{{"hooks":{{}},"statusLine":{{"type":"command","command":{}}},"model":"opus"}}"#,
+            serde_json::to_string(OURS).unwrap()
+        );
+        let SettingsWrite::Write(out) =
+            adopt_default_status_line(Some(&profile), Some(USER_LINE)).unwrap()
+        else {
+            panic!("expected a write");
+        };
+        let v = parse(&out);
+        assert_eq!(v["statusLine"], parse(USER_LINE)["statusLine"]);
+        assert!(
+            v.get("theme").is_none(),
+            "only statusLine is adopted: {out}"
+        );
+        assert!(
+            pos(&out, "hooks") < pos(&out, "statusLine")
+                && pos(&out, "statusLine") < pos(&out, "model"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn adopt_fills_a_profile_without_a_status_line() {
+        let SettingsWrite::Write(out) = adopt_default_status_line(None, Some(USER_LINE)).unwrap()
+        else {
+            panic!("expected a write");
+        };
+        assert_eq!(parse(&out)["statusLine"]["refreshInterval"], 5);
+    }
+
+    #[test]
+    fn adopt_never_replaces_a_line_the_profile_owns() {
+        let own = r#"{"statusLine":{"type":"command","command":"~/work-line.sh"}}"#;
+        assert!(matches!(
+            adopt_default_status_line(Some(own), Some(USER_LINE)).unwrap(),
+            SettingsWrite::Foreign
+        ));
+        assert!(matches!(
+            adopt_default_status_line(Some(USER_LINE), Some(USER_LINE)).unwrap(),
+            SettingsWrite::Foreign
+        ));
+    }
+
+    #[test]
+    fn adopt_ignores_a_default_with_ours_or_no_line() {
+        let ours = format!(
+            r#"{{"statusLine":{{"type":"command","command":{}}}}}"#,
+            serde_json::to_string(OURS).unwrap()
+        );
+        for default in [
+            None,
+            Some("{}"),
+            Some(r#"{"theme":"dark"}"#),
+            Some(ours.as_str()),
+        ] {
+            assert!(matches!(
+                adopt_default_status_line(None, default).unwrap(),
+                SettingsWrite::Unchanged
+            ));
+        }
+    }
+
+    #[test]
+    fn adopt_file_writes_once_and_tolerates_a_missing_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile").join("settings.json");
+        let default = dir.path().join("settings.json");
+        assert!(!adopt_default_status_line_file(&profile, &default).unwrap());
+        assert!(!profile.exists());
+        fs::write(&default, USER_LINE).unwrap();
+        write_settings_to_file(&profile, Some(OURS)).unwrap();
+        assert!(adopt_default_status_line_file(&profile, &default).unwrap());
+        assert!(!adopt_default_status_line_file(&profile, &default).unwrap());
+        // Our own writer now sees the user's line and stands down.
+        assert!(write_settings_to_file(&profile, Some(OURS)).is_err());
+        let v = parse(&fs::read_to_string(&profile).unwrap());
+        assert_eq!(v["statusLine"], parse(USER_LINE)["statusLine"]);
     }
 
     #[test]
