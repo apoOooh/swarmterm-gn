@@ -2,10 +2,14 @@
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-12
+
 - Voice dictation shows a "Listening…" pill with a Stop button in the pane
   the dictation will land in, while you speak (needs buzzkey with protocol
   negotiation). Stop discards the dictation. Changing auto-Enter in
   Settings → Voice no longer cancels a dictation in progress.
+- Accounts: an add-account wizard creates a Claude Code or Codex profile and
+  opens its login in one step; account cards show the login status.
 
 ## [1.9.0] - 2026-10-12
 
