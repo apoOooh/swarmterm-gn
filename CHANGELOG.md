@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-12
+
 - Prompt library: save prompts locally and send one to a running Claude Code
   or Codex pane (held while you type or the agent works, sent once) or
   start it in a new pane next to the focused one, optionally in a fresh git
