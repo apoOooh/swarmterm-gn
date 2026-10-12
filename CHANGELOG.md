@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Accounts: Claude Code panes on a named profile now show your own status
+  line and load your user-level MCP servers from the Default account,
+  instead of only Swarmterm's status line and server.
+
 ## [1.10.1] - 2026-10-12
 
 - Release checks: the accounts browser test follows the add-account wizard.

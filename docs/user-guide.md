@@ -480,6 +480,8 @@ Open **Settings > Accounts** to see every login at a glance, grouped by agent. E
 
 Choose **Add account**, pick Claude Code or Codex, confirm the suggested name (a dedicated configuration folder is optional under **Advanced**; blank creates an isolated one), then **Continue & log in**. A terminal opens with the CLI's own login; once it finishes the card turns green. The **⋯** menu on a card offers log in again, rename, show folder and remove. The **Default** account uses the CLI's existing configuration.
 
+A named Claude Code profile has its own configuration folder, so Swarmterm carries two things over from the Default account each time a pane starts with that profile: your own status line (if Default uses one that is not Swarmterm's) and your user-level MCP servers. Both are only added, never overwritten: a status line you set for the profile itself stays, and so does a server the profile already defines under the same name. A server you remove only from the profile returns on the next pane start; remove it from Default as well.
+
 Choose **Log in** to open a regular terminal pane running the CLI's own login command with that profile's configuration. Complete the normal login flow there. Swarmterm never asks for passwords or stores access tokens; credentials remain in the CLI's configuration files. CLI login flows may request that you visit a URL outside Swarmterm.
 
 In the workspace composer, each supported agent has an account selector. Pick a fixed profile for every new pane of that agent, or choose **Round robin** to rotate through its Default account and named profiles independently of the other agents. Resumed conversations keep the account that owns them. The sessions dialog can filter conversations by account.

@@ -224,7 +224,7 @@ fn codex_sessions_root() -> Option<std::path::PathBuf> {
 }
 
 /// HOME on unix, USERPROFILE on Windows — same convention as `agents.rs`.
-fn home_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     let var = "USERPROFILE";
     #[cfg(not(windows))]
