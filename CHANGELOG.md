@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-10-12
+
+- Release checks: the accounts browser test follows the add-account wizard.
+  1.10.0 was tagged but never published.
+
 ## [1.10.0] - 2026-10-12
 
 - Voice dictation shows a "Listening…" pill with a Stop button in the pane
