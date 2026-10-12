@@ -1,58 +1,84 @@
 import { useEffect, useState } from 'react'
+import { Plus } from 'lucide-react'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { useAccountUsageStore } from '@/store/account-usage-store'
 import { useAppStore } from '@/store/app-store'
 import { getHomeDir } from '@/tauri/dialog'
-import { pickFolder } from '@/store/folder-picker-store'
+import { revealInFileManager } from '@/tauri/links'
 import { Button } from '@/components/ui/button'
+import { accountUsageKey } from '@/lib/account-usage'
 import { templateById } from '@/lib/templates'
 import type { AgentAccount } from '@/tauri/accounts'
+import { AccountCard } from './AccountCard'
+import { AddAccountWizard } from './AddAccountWizard'
+
+const AGENTS = ['claude-code', 'codex'] as const
 
 export function AccountsPanel({ onLogin }: { onLogin: () => void }): React.ReactElement {
-  const { accounts, error, refresh, save, remove } = useAgentAccountsStore()
-  const [editing, setEditing] = useState<string | undefined>()
-  const [agentId, setAgentId] = useState<AgentAccount['agentId']>('claude-code')
-  const [name, setName] = useState('')
-  const [configDir, setConfigDir] = useState('')
+  const { accounts, error, statuses, refresh, refreshStatus, watchLogin, save, remove } = useAgentAccountsStore()
+  const usage = useAccountUsageStore(s => s.byAccount)
+  const [adding, setAdding] = useState(false)
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | undefined>()
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
+
   useEffect(() => { void refresh() }, [refresh])
-  const reset = (): void => { setEditing(undefined); setName(''); setConfigDir(''); setFailure(null) }
+  // Re-check every profile whenever the panel opens or the list changes —
+  // logins finished in a pane land here without a manual refresh.
+  useEffect(() => {
+    for (const agent of AGENTS) void refreshStatus(agent)
+    for (const a of accounts) void refreshStatus(a.agentId, a.id)
+  }, [accounts, refreshStatus])
+
   const login = async (agent: AgentAccount['agentId'], accountId?: string): Promise<void> => {
     try {
       const cwd = await getHomeDir()
       useAppStore.getState().createWorkspace({ cwd, terminalCount: 1, agentIds: [agent], accountIds: [accountId], startupCommands: [agent === 'codex' ? 'codex login' : 'claude auth login'] })
+      watchLogin(agent, accountId)
       onLogin()
     } catch (error) { setFailure(String(error)) }
   }
-  return <section className="space-y-5">
-    <h2 className="text-lg font-semibold">Accounts</h2>
-    <p className="text-sm text-muted-foreground">Keep separate Claude Code and Codex logins in isolated CLI configuration folders. Credentials stay in the CLI's own configuration. Swarmterm stores profile names and folder references.</p>
-    {(error || failure) && <p role="alert" className="text-sm text-destructive">{failure ?? error}</p>}
-    <div className="space-y-2">
-      {(['claude-code', 'codex'] as const).map(agent => <div key={agent} className="flex items-center justify-between rounded border border-border p-3">
-        <span className="text-sm">{templateById(agent).name} · Default</span>
-        <Button variant="outline" onClick={() => void login(agent)}>Log in</Button>
-      </div>)}
-      {accounts.map(account => <div key={account.id} className="rounded border border-border p-3">
-        <div className="flex items-center gap-2">
-          <span className="flex-1 text-sm font-medium">{templateById(account.agentId).name} · {account.name}</span>
-          <Button variant="outline" onClick={() => void login(account.agentId, account.id)}>Log in</Button>
-          <Button variant="ghost" onClick={() => { setEditing(account.id); setAgentId(account.agentId); setName(account.name); setConfigDir(account.configDir); setFailure(null) }}>Edit</Button>
-          <Button variant="ghost" disabled={busy} onClick={() => { setBusy(true); void remove(account.id).then(() => { if (editing === account.id) reset() }).catch(error => setFailure(String(error))).finally(() => setBusy(false)) }}>Remove</Button>
-        </div>
-        <p className="mt-1 break-all text-xs text-muted-foreground">{account.configDir}</p>
-      </div>)}
+  const run = (task: () => Promise<unknown>): void => {
+    setBusy(true); setFailure(null)
+    void task().catch(error => setFailure(String(error))).finally(() => setBusy(false))
+  }
+  const card = (agentId: AgentAccount['agentId'], account?: AgentAccount): React.ReactElement => {
+    const key = accountUsageKey(agentId, account?.id)
+    return <AccountCard key={key} agentName={templateById(agentId).name} name={account?.name ?? 'Default'}
+      status={statuses[key]} usage={usage[key]} configDir={account?.configDir}
+      onLogin={() => void login(agentId, account?.id)}
+      onRename={account && (() => setRenaming({ id: account.id, name: account.name }))}
+      onShowFolder={account && (() => void revealInFileManager(account.configDir).catch(e => setFailure(String(e))))}
+      onRemove={account && (() => run(() => remove(account.id)))} />
+  }
+
+  return <section className="space-y-4">
+    <div className="flex items-center justify-between">
+      <h2 className="text-lg font-semibold">Accounts</h2>
+      {!adding && <Button size="sm" onClick={() => { setAdding(true); setFailure(null) }}><Plus className="h-4 w-4" />Add account</Button>}
     </div>
-    <form className="space-y-3 border-t border-border pt-4" onSubmit={event => {
-      event.preventDefault(); setBusy(true); setFailure(null)
-      void save({ id: editing, agentId, name: name.trim(), configDir: configDir.trim() || undefined }).then(reset).catch(error => setFailure(String(error))).finally(() => setBusy(false))
+    {(error || failure) && <p role="alert" className="text-sm text-destructive">{failure ?? error}</p>}
+    {adding && <AddAccountWizard existing={accounts} busy={busy} onCancel={() => setAdding(false)} onCreate={input => run(async () => {
+      const ids = new Set(accounts.map(a => a.id))
+      await save(input)
+      const created = useAgentAccountsStore.getState().accounts.find(a => !ids.has(a.id))
+      setAdding(false)
+      await login(input.agentId, created?.id)
+    })} />}
+    {renaming && <form className="flex gap-2" onSubmit={e => {
+      e.preventDefault()
+      const account = accounts.find(a => a.id === renaming.id)
+      if (account) run(async () => { await save({ id: account.id, agentId: account.agentId, name: renaming.name.trim(), configDir: account.configDir }); setRenaming(undefined) })
     }}>
-      <h3 className="text-sm font-medium">{editing ? 'Edit account profile' : 'Add account profile'}</h3>
-      <label className="block text-sm">Agent<select aria-label="Account agent" value={agentId} disabled={!!editing} onChange={event => setAgentId(event.target.value as AgentAccount['agentId'])} className="mt-1 block w-full rounded border border-input bg-background p-2"><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></label>
-      <label className="block text-sm">Name<input aria-label="Account name" value={name} maxLength={80} onChange={event => setName(event.target.value)} className="mt-1 block w-full rounded border border-input bg-background p-2" required /></label>
-      <label className="block text-sm">Configuration folder (optional)<div className="mt-1 flex gap-2"><input aria-label="Account configuration folder" value={configDir} onChange={event => setConfigDir(event.target.value)} placeholder="Create an isolated folder automatically" className="min-w-0 flex-1 rounded border border-input bg-background p-2" /><Button type="button" variant="outline" onClick={() => void pickFolder().then(path => { if (path) setConfigDir(path) })}>Browse</Button></div></label>
-      <p className="text-xs text-muted-foreground">Removing a profile leaves its configuration and credentials on disk. Existing panes keep running. Saved panes whose profile was removed start fresh with the default account.</p>
-      <div className="flex gap-2"><Button disabled={busy || !name.trim()} type="submit">{editing ? 'Save profile' : 'Add profile'}</Button>{editing && <Button type="button" variant="ghost" onClick={reset}>Cancel</Button>}</div>
-    </form>
+      <input aria-label="Account name" autoFocus value={renaming.name} maxLength={80} onChange={e => setRenaming({ ...renaming, name: e.target.value })} className="min-w-0 flex-1 rounded border border-input bg-background p-2 text-sm" />
+      <Button type="submit" size="sm" disabled={busy || !renaming.name.trim()}>Save</Button>
+      <Button type="button" size="sm" variant="ghost" onClick={() => setRenaming(undefined)}>Cancel</Button>
+    </form>}
+    {AGENTS.map(agent => <div key={agent} className="space-y-1.5">
+      <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{templateById(agent).name}</h3>
+      {card(agent)}
+      {accounts.filter(a => a.agentId === agent).map(a => card(agent, a))}
+    </div>)}
+    <p className="text-xs text-muted-foreground">Credentials stay in each CLI's own folder; Swarmterm stores names and folder references only. Removing a profile leaves its folder on disk. Usage: Claude Code via its status line while a pane runs, Codex from its session logs.</p>
   </section>
 }

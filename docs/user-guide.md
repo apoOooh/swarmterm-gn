@@ -474,7 +474,9 @@ font preferences remain separate.
 
 ## Account profiles
 
-Open **Settings > Accounts** to add separate Claude Code or Codex profiles. Give each profile a name and optionally select a dedicated CLI configuration folder. Leaving the folder blank creates an isolated folder automatically. The **Default** account uses the CLI's existing configuration.
+Open **Settings > Accounts** to see every login at a glance, grouped by agent. Each card shows a status light (green connected, yellow login expired, red not logged in, grey not checked yet), the subscription plan, and the 5-hour and 7-day budget **still available** with a small bar; hover for reset time and how old the number is. Claude Code reports its budget through the Swarmterm status line while one of its panes runs; Codex's is read from its own session logs. Swarmterm reads only plan and login state from the CLI's files — tokens never leave them.
+
+Choose **Add account**, pick Claude Code or Codex, confirm the suggested name (a dedicated configuration folder is optional under **Advanced**; blank creates an isolated one), then **Continue & log in**. A terminal opens with the CLI's own login; once it finishes the card turns green. The **⋯** menu on a card offers log in again, rename, show folder and remove. The **Default** account uses the CLI's existing configuration.
 
 Choose **Log in** to open a regular terminal pane running the CLI's own login command with that profile's configuration. Complete the normal login flow there. Swarmterm never asks for passwords or stores access tokens; credentials remain in the CLI's configuration files. CLI login flows may request that you visit a URL outside Swarmterm.
 

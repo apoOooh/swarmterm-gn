@@ -748,6 +748,55 @@ pub async fn delete_agent_account(
         .map_err(|_| "Account profile deletion interrupted")?
 }
 
+/// Login state, plan and rate limits for one profile (`accountId` absent =
+/// the agent's default login). Metadata only — see `account_status.rs`.
+#[tauri::command]
+pub async fn get_account_status(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    agent_id: String,
+    account_id: Option<String>,
+) -> Result<crate::account_status::AccountStatus, String> {
+    files_main_only(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = account_config_dir(&app, &agent_id, account_id.as_deref())?;
+        Ok(crate::account_status::read_status(&agent_id, &dir))
+    })
+    .await
+    .map_err(|_| "Account status check interrupted")?
+}
+
+/// The CLI's config folder for a profile, with the same env/home fallback the
+/// CLIs themselves use for the default login.
+fn account_config_dir(
+    app: &AppHandle,
+    agent_id: &str,
+    account_id: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    if !matches!(agent_id, "claude-code" | "codex") {
+        return Err("Account status supports Claude and Codex profiles".into());
+    }
+    if let Some(id) = account_id {
+        let account = crate::accounts::list(app)?
+            .into_iter()
+            .find(|a| a.id == id && a.agent_id == agent_id)
+            .ok_or("Account profile no longer exists")?;
+        return Ok(account.config_dir.into());
+    }
+    let (var, fallback) = if agent_id == "codex" {
+        ("CODEX_HOME", ".codex")
+    } else {
+        ("CLAUDE_CONFIG_DIR", ".claude")
+    };
+    if let Some(dir) = std::env::var(var).ok().filter(|v| !v.trim().is_empty()) {
+        return Ok(dir.into());
+    }
+    app.path()
+        .home_dir()
+        .map(|home| home.join(fallback))
+        .map_err(|_| "Cannot resolve default account directory".into())
+}
+
 fn account_mcp_path(
     app: &AppHandle,
     agent_id: &str,
