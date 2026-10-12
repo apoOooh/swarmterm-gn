@@ -7,7 +7,7 @@
 import type { HoldReason } from '@/lib/war-room-nudge'
 
 /** `handoff` acknowledges a SWA-22 brief delivery (sent or failed) on the new pane. */
-export type CenterKind = 'attention' | 'completion' | 'command' | 'exit' | 'hold' | 'handoff' | 'prompt'
+export type CenterKind = 'attention' | 'completion' | 'command' | 'exit' | 'hold' | 'handoff' | 'prompt' | 'routine'
 
 export interface NewCenterEntry {
   kind: CenterKind
