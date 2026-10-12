@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-12
+
+- Routines: run Claude Code or Codex with a saved brief on a schedule
+  (time of day with weekdays, or every N minutes) while the app is open.
+  Each run opens a new pane in the active workspace, optionally in a fresh
+  git worktree; never overlaps itself, and missed runs are caught up once
+  or skipped, never in a burst. Outcomes land in the notification bell.
+
 ## [1.7.0] - 2026-10-12
 
 - Prompt library: save prompts locally and send one to a running Claude Code
