@@ -5,7 +5,7 @@ import { insertRejection, prepareDictationBody, shouldSubmitDictation } from '@/
  * One dictated insert, end to end on the renderer side (SWA-12). Rust has
  * already redeemed the pin and checked the pane; this writes the draft
  * through the generation-checked command and reports the outcome, which Rust
- * relays to Buzzkey as the ACK.
+ * relays to buzzkey as the ACK.
  *
  * Dependencies are injected so the whole sequence is unit-testable without
  * xterm or IPC (`voice-delivery.test.ts`); `App.tsx` wires the real ones.

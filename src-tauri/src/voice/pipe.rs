@@ -1,4 +1,4 @@
-//! Buzzkey adapter: a Windows named pipe plus a discovery file.
+//! buzzkey adapter: a Windows named pipe plus a discovery file.
 //!
 //! Why a pipe and not a route on the MCP server: a loopback HTTP port is
 //! reachable from any browser tab (CSRF, DNS rebinding) and the MCP server
@@ -7,7 +7,7 @@
 //! creation fail if another process already squats the name.
 //!
 //! Discovery: `%LOCALAPPDATA%\<app-id>\voice-endpoint.json` holds the pipe
-//! name, a fresh 256-bit token and our pid (Buzzkey matches it against the
+//! name, a fresh 256-bit token and our pid (buzzkey matches it against the
 //! foreground window, so dev and installed app never cross). Written
 //! atomically, removed when the endpoint stops.
 

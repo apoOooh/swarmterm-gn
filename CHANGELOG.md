@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-- Voice dictation: a local dictation app (Buzzkey) can type into the pane
+## [1.9.0] - 2026-10-12
+
+- Voice dictation: a local dictation app (buzzkey) can type into the pane
   that had the keyboard when you started speaking, even if focus moves
   while it transcribes. Text arrives as a draft, never redirected, never
   into a pane waiting on a permission prompt; plain shells get one line.

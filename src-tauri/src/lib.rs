@@ -102,7 +102,7 @@ pub fn run() {
             crate::hook::install::register(app.handle());
             crate::hook::codex::register(app.handle());
             // Voice dictation endpoint (SWA-12): named pipe + discovery file
-            // for Buzzkey; follows Settings → Voice. Failure is logged only.
+            // for buzzkey; follows Settings → Voice. Failure is logged only.
             crate::voice::init(app.handle());
             // Boot the MCP server. Any failure is logged and swallowed: browser
             // preview via MCP just won't work for this run, but Swarmterm as a
