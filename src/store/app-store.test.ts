@@ -292,6 +292,33 @@ describe('handoffPane', () => {
   })
 })
 
+// --- promptPane -----------------------------------------------------------
+
+describe('promptPane', () => {
+  it('splits the focused pane into an agent pane that starts with the prompt', () => {
+    const store = storeWithWorkspace({ cwd: 'C:/work', terminalCount: 1, agentIds: ['claude-code'] })
+    const original = collectLeaves(activeWorkspace(store).layout)[0]
+    const terminalId = store.getState().promptPane({ agentId: 'codex', accountId: 'acc1', prompt: 'Run the tests' })
+    const leaves = collectLeaves(activeWorkspace(store).layout)
+    expect(leaves).toHaveLength(2)
+    expect(leaves[0]).toEqual(original)
+    expect(leaves[1]).toMatchObject({ terminalId, agentId: 'codex', accountId: 'acc1', initialPrompt: 'Run the tests' })
+    expect(leaves[1].cwd).toBeUndefined()
+    expect(activeWorkspace(store).focusedLeafId).toBe(leaves[1].id)
+  })
+
+  it('binds the new pane to a provisioned worktree', () => {
+    const store = storeWithWorkspace({ cwd: 'C:/work', terminalCount: 1, agentIds: ['terminal'] })
+    const id = store.getState().promptPane({ agentId: 'claude-code', prompt: 'x', worktree: { path: 'C:/work.worktrees/a', branch: 'swarm/a' } })
+    expect(collectLeaves(activeWorkspace(store).layout).find((l) => l.terminalId === id)).toMatchObject({ cwd: 'C:/work.worktrees/a', worktreeBranch: 'swarm/a' })
+  })
+
+  it('returns undefined without a workspace', () => {
+    const store = freshStore()
+    expect(store.getState().promptPane({ agentId: 'codex', prompt: 'x' })).toBeUndefined()
+  })
+})
+
 // --- splitPane ------------------------------------------------------------
 
 describe('splitPane', () => {

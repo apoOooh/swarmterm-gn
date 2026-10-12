@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Prompt library: save prompts locally and send one to a running Claude Code
+  or Codex pane (held while you type or the agent works, sent once) or
+  start it in a new pane next to the focused one, optionally in a fresh git
+  worktree. Title bar button or the "Open prompt library" action.
+
 - Conversation view: a pane running Claude Code or Codex gets a header
   button that shows its session as a read-only conversation, read from the
   CLI's own session file (newest part for long sessions, tool steps

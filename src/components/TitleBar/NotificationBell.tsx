@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react'
-import { AlertCircle, ArrowRightLeft, Bell, CheckCircle2, Hourglass, Power, TerminalSquare } from 'lucide-react'
+import { AlertCircle, ArrowRightLeft, Bell, CheckCircle2, Hourglass, MessageSquareText, Power, TerminalSquare } from 'lucide-react'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { collectLeaves } from '@/lib/layout-tree'
 import { unreadCount, type CenterEntry, type CenterKind } from '@/lib/notification-center'
@@ -16,7 +16,8 @@ const KIND_ICON: Record<CenterKind, { icon: typeof Bell; className: string }> = 
   command: { icon: TerminalSquare, className: 'text-muted-foreground' },
   exit: { icon: Power, className: 'text-muted-foreground' },
   hold: { icon: Hourglass, className: 'text-[#E5C07B]' },
-  handoff: { icon: ArrowRightLeft, className: 'text-[#3794FF]' }
+  handoff: { icon: ArrowRightLeft, className: 'text-[#3794FF]' },
+  prompt: { icon: MessageSquareText, className: 'text-[#3794FF]' }
 }
 
 interface Target {

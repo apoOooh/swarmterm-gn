@@ -23,6 +23,8 @@ import { useAgentStateStore } from '@/store/agent-state-store'
 import { useShellMarkStore } from '@/store/shell-mark-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
 import { useAccountUsageStore } from '@/store/account-usage-store'
+import { usePromptLibraryStore } from '@/store/prompt-library-store'
+import { PromptLibraryDialog } from '@/components/Prompts/PromptLibraryDialog'
 import { matchConfiguredShortcut, useShortcutStore } from '@/store/shortcut-store'
 import { ACTION_EVENT } from '@/lib/app-actions'
 import { runWorkspaceMacro } from '@/lib/run-workspace-macro'
@@ -436,6 +438,7 @@ export default function App(): ReactElement {
         return
       }
       if (action === 'open-settings') { e.preventDefault(); setSettingsOpen(true); return }
+      if (action === 'open-prompts') { e.preventDefault(); usePromptLibraryStore.getState().setOpen(true); return }
       if (action === 'new-workspace') { e.preventDefault(); useAppStore.getState().openWelcome(); return }
       const state = useAppStore.getState()
       const workspace = state.workspaces.find(w => w.id === state.activeWorkspaceId)
@@ -813,6 +816,8 @@ export default function App(): ReactElement {
     return () => void unlisten.then((fn) => fn())
   }, [])
 
+  useEffect(() => usePromptLibraryStore.getState().hydrate(), [])
+
   // Account rate limits (`swarmterm --statusline` → GET /status?rl5 → `agent:usage`)
   // belong to the pane's account profile, so the pane is resolved to its
   // accountId once, here. Only Claude Code reports them.
@@ -1110,6 +1115,7 @@ export default function App(): ReactElement {
         )}
         <FolderPicker />
         <HandoffDialog />
+        <PromptLibraryDialog />
       </div>
     </div>
   )
