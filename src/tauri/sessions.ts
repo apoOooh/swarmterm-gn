@@ -14,3 +14,10 @@ export const onAgentSession = (handler: (e: AgentSessionEvent) => void): Promise
   listen<AgentSessionEvent>('agent:session', event => handler(event.payload))
 export const inspectSavedWorkspace = (cwd: string, panes: Pick<SavedLeaf, 'cwd' | 'agentId' | 'sessionId' | 'accountId'>[]): Promise<SavedWorkspaceInspection> =>
   invoke('inspect_saved_workspace', { cwd, panes: panes.map(({ cwd, agentId, sessionId, accountId }) => ({ cwd, agentId, sessionId, accountId })) })
+
+export interface ThreadMessage { role: 'user' | 'assistant' | 'tool'; text: string; at?: string }
+export interface AgentThread { found: boolean; truncated: boolean; messages: ThreadMessage[] }
+/** Read-only conversation of one session (SWA-25), lockstep with
+ *  `src-tauri/src/sessions/thread.rs::Thread`. Fail-open: `found: false`. */
+export const readAgentThread = (agentId: string, sessionId: string, accountId?: string): Promise<AgentThread> =>
+  invoke('read_agent_thread', { agentId, sessionId, accountId })

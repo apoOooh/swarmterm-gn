@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2, Archive, PictureInPicture2, ClipboardList } from 'lucide-react'
+import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2, Archive, PictureInPicture2, ClipboardList, MessagesSquare } from 'lucide-react'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 import { AgentIcon } from '@/components/AgentIcon'
 import { Button } from '@/components/ui/button'
@@ -52,6 +52,8 @@ interface PaneHeaderProps {
   onClose: () => void
   /** Open the handoff brief preview for this pane (SWA-21). */
   onHandoff: () => void
+  /** Open the read-only conversation view (SWA-25); absent ⇒ no button. */
+  onThread?: () => void
   /** Park the pane in the workspace drawer (hidden, kept running). */
   onDrawer: () => void
   isZoomed: boolean
@@ -346,6 +348,11 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
             className={cn(props.isBroadcastMember && 'text-broadcast')}
           >
             <Radio className="h-3.5 w-3.5" />
+          </Button>
+        )}
+        {props.onThread && (
+          <Button variant="ghost" size="icon-sm" title="Conversation — read-only view of this session" aria-label="Conversation thread" onClick={props.onThread}>
+            <MessagesSquare className="h-3.5 w-3.5" />
           </Button>
         )}
         <Button variant="ghost" size="icon-sm" title="Handoff brief — preview and copy, nothing is sent" aria-label="Handoff brief" onClick={props.onHandoff}>

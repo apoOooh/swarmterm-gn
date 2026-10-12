@@ -18,6 +18,8 @@ import { HeldDeliveryPill } from '@/components/TerminalPane/HeldDeliveryPill'
 import { SearchOverlay } from '@/components/TerminalPane/SearchOverlay'
 import { PaneHeader } from './PaneHeader'
 import { HandoffBriefDialog } from './HandoffBriefDialog'
+import { ThreadDialog } from './ThreadDialog'
+import { canShowThread } from '@/lib/thread-view'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { accountLabel } from '@/lib/agent-accounts'
 import {
@@ -276,6 +278,7 @@ export function TerminalPane({
   }
 
   const [handoffOpen, setHandoffOpen] = useState(false)
+  const [threadOpen, setThreadOpen] = useState(false)
   // Live shell cwd captured when the brief opens (see handoffCwd).
   const [briefCwd, setBriefCwd] = useState(resolvedCwd)
   const accounts = useAgentAccountsStore((st) => st.accounts)
@@ -414,6 +417,7 @@ export function TerminalPane({
           setBriefCwd(handoffCwd(getTerminalCwd(terminalId), resolvedCwd))
           setHandoffOpen(true)
         }}
+        onThread={canShowThread(resolvedAgentId, leaf.sessionId) ? () => setThreadOpen(true) : undefined}
         onDrawer={() => useAppStore.getState().drawerPane(leafId)}
         isZoomed={isZoomed}
         onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
@@ -443,6 +447,16 @@ export function TerminalPane({
         agentName={templateById(resolvedAgentId).name}
         accountLabel={leaf.accountId === undefined ? undefined : accountLabel(leaf.accountId, accounts)}
         cwd={briefCwd}
+        sessionId={leaf.sessionId}
+      />
+
+      <ThreadDialog
+        open={threadOpen}
+        onClose={() => setThreadOpen(false)}
+        terminalId={terminalId}
+        agentId={resolvedAgentId}
+        agentName={templateById(resolvedAgentId).name}
+        accountId={leaf.accountId}
         sessionId={leaf.sessionId}
       />
 

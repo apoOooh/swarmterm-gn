@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Conversation view: a pane running Claude Code or Codex gets a header
+  button that shows its session as a read-only conversation, read from the
+  CLI's own session file (newest part for long sessions, tool steps
+  optional). Nothing in it can type into the pane or approve anything.
+
 - Handoff shows the target account's usage: Claude Code's 5-hour and
   7-day rate limits travel with the Swarmterm status line and are kept per
   account profile, with the time they were taken. Codex stays "unknown".
