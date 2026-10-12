@@ -23,7 +23,7 @@ if (import.meta.env.DEV) {
   void Promise.all([import('./lib/dev-log'), import('./tauri/devlog')]).then(([{ installDevLog }, { writeDevLog }]) => installDevLog(writeDevLog))
   // Read-only probe for the external testlab (Playwright over CDP): state the
   // DOM cannot show, e.g. terminal text drawn by the WebGL renderer.
-  void Promise.all([import('./lib/terminal-registry'), import('./store/app-store'), import('./store/document-store')]).then(([reg, app, docs]) => {
+  void Promise.all([import('./lib/terminal-registry'), import('./store/app-store'), import('./store/document-store'), import('./store/routine-store')]).then(([reg, app, docs, routines]) => {
     Object.assign(window, { __swarmtermDev: {
       terminalText: (id: string, lines?: number) => reg.readTerminalText(id, lines),
       terminalGeometry: (id: string) => reg.terminalGeometry(id),
@@ -32,6 +32,9 @@ if (import.meta.env.DEV) {
       activeWorkspaceId: () => app.useAppStore.getState().activeWorkspaceId,
       // The one write: lets a scenario remove the workspace it created.
       closeWorkspace: (id: string) => app.useAppStore.getState().closeWorkspace(id),
+      // Makes a routine due without waiting for its schedule (SWA-24 scenario).
+      backdateRoutine: (id: string, ms: number) => routines.useRoutineStore.getState().patch(id, { lastScheduledAt: Date.now() - ms }),
+      routines: () => routines.useRoutineStore.getState().routines,
       documents: () => Object.values(docs.useDocumentStore.getState().documents).map((d) => ({ path: d.path, mode: d.mode, dirty: d.dirty }))
     } })
   })

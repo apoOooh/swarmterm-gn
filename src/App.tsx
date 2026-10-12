@@ -25,6 +25,9 @@ import { useContextUsageStore } from '@/store/context-usage-store'
 import { useAccountUsageStore } from '@/store/account-usage-store'
 import { usePromptLibraryStore } from '@/store/prompt-library-store'
 import { PromptLibraryDialog } from '@/components/Prompts/PromptLibraryDialog'
+import { RoutinesDialog } from '@/components/Routines/RoutinesDialog'
+import { useRoutineScheduler } from '@/components/Routines/routine-runtime'
+import { useRoutineStore } from '@/store/routine-store'
 import { matchConfiguredShortcut, useShortcutStore } from '@/store/shortcut-store'
 import { ACTION_EVENT } from '@/lib/app-actions'
 import { runWorkspaceMacro } from '@/lib/run-workspace-macro'
@@ -439,6 +442,7 @@ export default function App(): ReactElement {
       }
       if (action === 'open-settings') { e.preventDefault(); setSettingsOpen(true); return }
       if (action === 'open-prompts') { e.preventDefault(); usePromptLibraryStore.getState().setOpen(true); return }
+      if (action === 'open-routines') { e.preventDefault(); useRoutineStore.getState().setOpen(true); return }
       if (action === 'new-workspace') { e.preventDefault(); useAppStore.getState().openWelcome(); return }
       const state = useAppStore.getState()
       const workspace = state.workspaces.find(w => w.id === state.activeWorkspaceId)
@@ -817,6 +821,7 @@ export default function App(): ReactElement {
   }, [])
 
   useEffect(() => usePromptLibraryStore.getState().hydrate(), [])
+  useRoutineScheduler()
 
   // Account rate limits (`swarmterm --statusline` → GET /status?rl5 → `agent:usage`)
   // belong to the pane's account profile, so the pane is resolved to its
@@ -1116,6 +1121,7 @@ export default function App(): ReactElement {
         <FolderPicker />
         <HandoffDialog />
         <PromptLibraryDialog />
+        <RoutinesDialog />
       </div>
     </div>
   )

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 import {
   Copy,
+  CalendarClock,
   MessageSquareText,
   Minus,
   PanelLeftClose,
@@ -22,6 +23,7 @@ import { needsTrafficLightInset } from '@/lib/titlebar-chrome'
 import { HeaderRecentSearch } from './HeaderRecentSearch'
 import { NotificationBell } from './NotificationBell'
 import { usePromptLibraryStore } from '@/store/prompt-library-store'
+import { useRoutineStore } from '@/store/routine-store'
 
 // On macOS the OS draws native traffic lights over this header (titleBarStyle
 // Overlay — see tauri.macos.conf.json): hide the custom window buttons and
@@ -125,6 +127,16 @@ export function TitleBar({ fullscreen }: TitleBarProps): ReactElement {
           className="relative mr-1 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <MessageSquareText className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          data-tauri-drag-region="false"
+          aria-label="Routines"
+          title="Routines — run an agent on a schedule"
+          onClick={() => useRoutineStore.getState().setOpen(true)}
+          className="relative mr-1 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <CalendarClock className="h-4 w-4" />
         </button>
         <NotificationBell />
         {!onHome && (
