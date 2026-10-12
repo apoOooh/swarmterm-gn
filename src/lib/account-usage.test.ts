@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { accountUsageKey, applyUsageSample, describeUsage } from './account-usage'
+import { USAGE_STORAGE_KEY, accountUsageKey, applyUsageSample, describeUsage, dropExpiredWindows, readStoredUsage, storeUsage, usageAge } from './account-usage'
 
 describe('accountUsageKey', () => {
   it('separates agents and treats undefined as the default profile', () => {
@@ -44,5 +44,53 @@ describe('describeUsage', () => {
 
   it('mentions the 5h reset when known', () => {
     expect(describeUsage({ fiveHour: { pct: 10, resetsAt: 1_760_000_000 }, at: 7 }, 1000).text).toMatch(/^Usage 5h 10%, resets /)
+  })
+})
+
+describe('dropExpiredWindows', () => {
+  it('drops windows whose reset already passed and keeps the rest', () => {
+    const s = { fiveHour: { pct: 80, resetsAt: 100 }, sevenDay: { pct: 30, resetsAt: 900 }, at: 1 }
+    expect(dropExpiredWindows(s, 500_000)).toEqual({ fiveHour: undefined, sevenDay: { pct: 30, resetsAt: 900 }, at: 1 })
+  })
+
+  it('keeps windows without a reset and drops a sample with nothing left', () => {
+    expect(dropExpiredWindows({ sevenDay: { pct: 5 }, at: 1 }, 9e12)?.sevenDay?.pct).toBe(5)
+    expect(dropExpiredWindows({ fiveHour: { pct: 5, resetsAt: 1 }, at: 1 }, 5000)).toBeUndefined()
+  })
+})
+
+describe('stored usage', () => {
+  const memory = (): Storage => {
+    const m = new Map<string, string>()
+    return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v), removeItem: (k) => void m.delete(k), clear: () => m.clear(), key: () => null, length: 0 }
+  }
+
+  it('round-trips samples and drops expired windows on read', () => {
+    const storage = memory()
+    storeUsage(storage, {
+      'claude-code:': { fiveHour: { pct: 40, resetsAt: 2000 }, sevenDay: { pct: 9, resetsAt: 9000 }, at: 1 },
+      'codex:': { fiveHour: { pct: 1, resetsAt: 10 }, at: 1 }
+    })
+    expect(readStoredUsage(storage, 5_000_000)).toEqual({
+      'claude-code:': { fiveHour: undefined, sevenDay: { pct: 9, resetsAt: 9000 }, at: 1 }
+    })
+  })
+
+  it('survives garbage', () => {
+    const storage = memory()
+    storage.setItem(USAGE_STORAGE_KEY, '{nope')
+    expect(readStoredUsage(storage, 0)).toEqual({})
+    storage.setItem(USAGE_STORAGE_KEY, JSON.stringify({ a: { fiveHour: { pct: 'x' }, at: 1 }, b: 3 }))
+    expect(readStoredUsage(storage, 0)).toEqual({})
+  })
+})
+
+describe('usageAge', () => {
+  it('is silent while fresh and coarse afterwards', () => {
+    const min = 60_000
+    expect(usageAge(0, 4 * min)).toBeUndefined()
+    expect(usageAge(0, 12 * min)).toBe('12 min ago')
+    expect(usageAge(0, 125 * min)).toBe('2 h ago')
+    expect(usageAge(0, 50 * 60 * min)).toBe('2 d ago')
   })
 })

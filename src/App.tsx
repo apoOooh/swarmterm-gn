@@ -841,6 +841,20 @@ export default function App(): ReactElement {
     return () => void unlisten.then((fn) => fn())
   }, [])
 
+  // Codex writes `rate_limits` into its session log after each turn, so a
+  // working → idle edge is the moment a re-read sees new numbers.
+  useEffect(() => {
+    return useAgentStateStore.subscribe((cur, prev) => {
+      for (const [terminalId, pane] of Object.entries(cur.byId)) {
+        if (pane.state !== 'idle' || prev.byId[terminalId]?.state !== 'working') continue
+        const state = useAppStore.getState()
+        const ws = selectWorkspaceByTerminalId(state, terminalId)
+        const leaf = ws && collectLeaves(ws.layout).find((l) => l.terminalId === terminalId)
+        if (leaf?.agentId === 'codex') void useAgentAccountsStore.getState().refreshStatus('codex', leaf.accountId)
+      }
+    })
+  }, [])
+
   // Manual-check verdicts land as native OS dialogs, not DOM — nothing to
   // position over the terminal. Subscribed outside the render path so the
   // per-chunk download progress never re-renders App. Dismiss BEFORE the

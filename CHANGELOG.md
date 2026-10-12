@@ -5,6 +5,9 @@
 - Accounts: Claude Code panes on a named profile now show your own status
   line and load your user-level MCP servers from the Default account,
   instead of only Swarmterm's status line and server.
+- Accounts: the last known usage survives a restart and shows its age;
+  Codex usage refreshes after each turn and every minute while Settings >
+  Accounts is open.
 
 ## [1.10.1] - 2026-10-12
 
