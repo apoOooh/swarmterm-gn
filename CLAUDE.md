@@ -268,6 +268,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   client's clipboard fallback. Answers and pushes share a per-connection
   writer task — never write to the pipe from the reader. `apply()` only
   restarts the endpoint on an on/off switch.
+  Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
+  the pins lock): never call `voice::drop_terminal` while holding
+  `terminals`.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that
