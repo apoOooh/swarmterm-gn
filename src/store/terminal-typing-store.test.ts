@@ -91,3 +91,19 @@ describe('clearTyping', () => {
     expect(after.lastKeyAt).toBe(before.lastKeyAt)
   })
 })
+
+describe('markDraft', () => {
+  it('marks a dictated draft as the user typing and returns its stamp', () => {
+    const stamp = useTerminalTypingStore.getState().markDraft('t1', 5)
+    const s = useTerminalTypingStore.getState()
+    expect(stamp).toBe(5)
+    expect(s.dirty['t1']).toBe(true)
+    expect(s.lastKeyAt['t1']).toBe(5)
+  })
+
+  it('a later submit clears the stamp so a delayed Enter can see it', () => {
+    useTerminalTypingStore.getState().markDraft('t1', 5)
+    useTerminalTypingStore.getState().noteInput('t1', '\r')
+    expect(useTerminalTypingStore.getState().lastKeyAt['t1']).toBeUndefined()
+  })
+})

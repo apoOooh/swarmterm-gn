@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react'
-import { Bell, FileText, Keyboard, Palette, Terminal, Users, Plug, X } from 'lucide-react'
+import { Bell, FileText, Keyboard, Mic, Palette, Terminal, Users, Plug, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { AppearancePanel } from './AppearancePanel'
@@ -9,8 +9,9 @@ import { KeyboardShortcutsPanel } from './KeyboardShortcutsPanel'
 import { FilesPanel } from './FilesPanel'
 import { AccountsPanel } from './AccountsPanel'
 import { MCPPanel } from './MCPPanel'
+import { VoicePanel } from './VoicePanel'
 
-export type CategoryId = 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts' | 'accounts' | 'mcp'
+export type CategoryId = 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts' | 'accounts' | 'mcp' | 'voice'
 
 interface Category {
   id: CategoryId
@@ -25,6 +26,7 @@ const CATEGORIES: Category[] = [
   { id: 'terminal', label: 'Terminal', Icon: Terminal },
   { id: 'files', label: 'Files', Icon: FileText },
   { id: 'notifications', label: 'Notifications', Icon: Bell },
+  { id: 'voice', label: 'Voice', Icon: Mic },
   { id: 'shortcuts', label: 'Keyboard Shortcuts', Icon: Keyboard },
 ]
 
@@ -112,6 +114,7 @@ export function SettingsView({ onClose, initialCategory }: SettingsViewProps): R
               {activeCategory === 'notifications' && <NotificationsPanel />}
               {activeCategory === 'shortcuts' && <KeyboardShortcutsPanel />}
               {activeCategory === 'mcp' && <MCPPanel />}
+              {activeCategory === 'voice' && <VoicePanel />}
             </div>
           </div>
         </div>

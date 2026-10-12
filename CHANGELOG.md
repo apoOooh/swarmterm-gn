@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Voice dictation: a local dictation app (Buzzkey) can type into the pane
+  that had the keyboard when you started speaking, even if focus moves
+  while it transcribes. Text arrives as a draft, never redirected, never
+  into a pane waiting on a permission prompt; plain shells get one line.
+  Named pipe for your Windows user only, with a per-launch key. Settings →
+  Voice switches it off or allows auto-Enter.
+
 ## [1.8.0] - 2026-10-12
 
 - Routines: run Claude Code or Codex with a saved brief on a schedule

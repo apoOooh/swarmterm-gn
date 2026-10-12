@@ -20,6 +20,7 @@ pub mod statusline;
 // Public so `main.rs` can reach `--hook` without booting Tauri.
 pub mod hook;
 mod tray;
+mod voice;
 mod warroom;
 mod window_fit;
 
@@ -32,6 +33,7 @@ use tauri::WindowEvent;
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(voice::VoiceHub::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.unminimize();
@@ -99,6 +101,9 @@ pub fn run() {
             // `claude`: hooks are snapshotted at session start.
             crate::hook::install::register(app.handle());
             crate::hook::codex::register(app.handle());
+            // Voice dictation endpoint (SWA-12): named pipe + discovery file
+            // for Buzzkey; follows Settings → Voice. Failure is logged only.
+            crate::voice::init(app.handle());
             // Boot the MCP server. Any failure is logged and swallowed: browser
             // preview via MCP just won't work for this run, but Swarmterm as a
             // whole still functions.
@@ -131,6 +136,11 @@ pub fn run() {
             commands::files_unwatch,
             commands::create_terminal,
             commands::write_terminal,
+            commands::write_terminal_checked,
+            voice::voice_focus_response,
+            voice::voice_insert_result,
+            voice::voice_get_settings,
+            voice::voice_set_settings,
             commands::resize_terminal,
             commands::kill_terminal,
             commands::war_room_join,

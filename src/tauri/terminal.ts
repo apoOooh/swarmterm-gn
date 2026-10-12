@@ -50,3 +50,11 @@ export const killTerminal = (id: string): Promise<void> => invoke('kill_terminal
  */
 export const isTerminalAgentAlive = (id: string): Promise<boolean> =>
   invoke<boolean>('terminal_agent_alive', { id })
+
+/**
+ * Write that Rust only performs while the pane still runs the PTY generation
+ * the caller pinned (voice dictation). Rejects with `target-gone` after a
+ * respawn or exit; resolving is the delivery ACK.
+ */
+export const writeTerminalChecked = (id: string, expectedSpawnId: string, data: string): Promise<void> =>
+  invoke('write_terminal_checked', { id, expectedSpawnId, data })
