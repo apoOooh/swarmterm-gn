@@ -4,7 +4,6 @@ import {
   reduceHandoff,
   handoffTargets,
   sessionHookGaps,
-  describeUsage,
   limitHint,
   submitBlocker,
   focusTrapTarget,
@@ -117,13 +116,6 @@ describe('handoffTargets', () => {
 })
 
 describe('usage', () => {
-  it('is unknown with a timestamp without structured data', () => {
-    expect(describeUsage(undefined, 1000)).toEqual({ known: false, text: 'Usage unknown', checkedAt: 1000 })
-  })
-  it('uses structured percentages only', () => {
-    expect(describeUsage({ usedPercent: 82.4, source: 'cli', at: 7 }, 1000)).toEqual({ known: true, text: 'Usage 82% (cli)', checkedAt: 7 })
-    expect(describeUsage({ usedPercent: Number.NaN, source: 'cli', at: 7 }, 1000).known).toBe(false)
-  })
   it('limit text is only a hint', () => {
     expect(limitHint('Claude usage limit reached. Resets 5pm')).toMatch(/hint/i)
     expect(limitHint('all good')).toBeUndefined()

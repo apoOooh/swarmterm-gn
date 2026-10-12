@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-12
+
+- Prompt library: save prompts locally and send one to a running Claude Code
+  or Codex pane (held while you type or the agent works, sent once) or
+  start it in a new pane next to the focused one, optionally in a fresh git
+  worktree. Title bar button or the "Open prompt library" action.
+
+- Conversation view: a pane running Claude Code or Codex gets a header
+  button that shows its session as a read-only conversation, read from the
+  CLI's own session file (newest part for long sessions, tool steps
+  optional). Nothing in it can type into the pane or approve anything.
+
+- Handoff shows the target account's usage: Claude Code's 5-hour and
+  7-day rate limits travel with the Swarmterm status line and are kept per
+  account profile, with the time they were taken. Codex stays "unknown".
+
 ## [1.6.0] - 2026-10-12
 
 - Handoff fixes: closing the new pane before its agent reports in now ends

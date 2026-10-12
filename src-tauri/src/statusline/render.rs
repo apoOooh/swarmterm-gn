@@ -33,6 +33,7 @@ pub struct CtxInfo {
 #[derive(Debug, Default, Deserialize)]
 pub struct StatusInput {
     pub context_window: Option<ContextWindow>,
+    pub rate_limits: Option<crate::mcp::rate_limits::RawRateLimits>,
 }
 
 #[derive(Debug, Default, Deserialize)]

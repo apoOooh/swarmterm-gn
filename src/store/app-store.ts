@@ -172,6 +172,11 @@ export interface AppActions {
    *  No initialPrompt: the brief is delivered later, after confirmation.
    *  Returns the new terminalId, or undefined when the leaf is not found. */
   handoffPane: (leafId: string, target: { agentId: string; accountId?: string; cwd: string }) => string | undefined
+  /** Prompt dispatch (SWA-23): split the active workspace's focused pane
+   *  into a new `agentId` pane that starts with `prompt` as its start
+   *  argument (the worker path), optionally inside a fresh worktree.
+   *  Returns the new terminalId, or undefined without an active workspace. */
+  promptPane: (target: { agentId: string; accountId?: string; prompt: string; worktree?: { path: string; branch: string } }) => string | undefined
   /** Set (or clear with undefined) a workspace's default split agent. */
   setWorkspaceDefaultAgent: (workspaceId: string, agentId: string | undefined) => void
   closePane: (leafId: string) => void
@@ -469,6 +474,34 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         return {
           ...w,
           layout: splitLeaf(w.layout, leafId, 'horizontal', newLeaf, uid()),
+          focusedLeafId: newLeaf.id,
+          zoomedLeafId: undefined
+        }
+      })
+    )
+    return terminalId
+  },
+
+  promptPane: (target) => {
+    let terminalId: string | undefined
+    set((s) =>
+      mapActive(s, (w) => {
+        const anchor =
+          findLeaf(w.layout, w.focusedLeafId) && !isDrawered(w, w.focusedLeafId)
+            ? w.focusedLeafId
+            : collectLeaves(w.layout).find((l) => !isDrawered(w, l.id))?.id
+        if (!anchor) return w
+        const newLeaf: LeafNode = {
+          ...makeLeaf(),
+          agentId: target.agentId,
+          accountId: target.accountId,
+          initialPrompt: target.prompt,
+          ...(target.worktree ? { cwd: target.worktree.path, worktreeBranch: target.worktree.branch } : {})
+        }
+        terminalId = newLeaf.terminalId
+        return {
+          ...w,
+          layout: splitLeaf(w.layout, anchor, 'horizontal', newLeaf, uid()),
           focusedLeafId: newLeaf.id,
           zoomedLeafId: undefined
         }

@@ -185,6 +185,7 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     state.mcp_clients.lock().unwrap().forget(&id);
     // The context chip too: a respawned Claude must not inherit the old %.
     state.context_usage.lock().unwrap().forget(&id);
+    state.rate_limit_usage.lock().unwrap().forget(&id);
     // Same for the agent-state mirror + screen tail: a respawn must start
     // from `unknown`, and a `wait_peer` sleeper on this id must wake now to
     // see the peer gone rather than run out its timeout.
@@ -266,6 +267,24 @@ pub async fn list_agent_sessions(
 ) -> Vec<crate::sessions::SessionEntry> {
     crate::sessions::list_all(
         folder,
+        crate::accounts::list(&app).unwrap_or_default(),
+        account_id,
+    )
+    .await
+}
+
+/// Read-only conversation of one agent session (SWA-25). Fail-open: a missing
+/// or unreadable file is `found: false`, never an error.
+#[tauri::command]
+pub async fn read_agent_thread(
+    app: AppHandle,
+    agent_id: String,
+    session_id: String,
+    account_id: Option<String>,
+) -> crate::sessions::thread::Thread {
+    crate::sessions::read_thread(
+        agent_id,
+        session_id,
         crate::accounts::list(&app).unwrap_or_default(),
         account_id,
     )

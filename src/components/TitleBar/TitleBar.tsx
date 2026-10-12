@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 import {
   Copy,
+  MessageSquareText,
   Minus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -20,6 +21,7 @@ import { isMacPlatform } from '@/lib/platform'
 import { needsTrafficLightInset } from '@/lib/titlebar-chrome'
 import { HeaderRecentSearch } from './HeaderRecentSearch'
 import { NotificationBell } from './NotificationBell'
+import { usePromptLibraryStore } from '@/store/prompt-library-store'
 
 // On macOS the OS draws native traffic lights over this header (titleBarStyle
 // Overlay — see tauri.macos.conf.json): hide the custom window buttons and
@@ -114,6 +116,16 @@ export function TitleBar({ fullscreen }: TitleBarProps): ReactElement {
       </div>
 
       <div className="flex h-full items-center">
+        <button
+          type="button"
+          data-tauri-drag-region="false"
+          aria-label="Prompt library"
+          title="Prompt library — saved prompts, send to a pane"
+          onClick={() => usePromptLibraryStore.getState().setOpen(true)}
+          className="relative mr-1 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <MessageSquareText className="h-4 w-4" />
+        </button>
         <NotificationBell />
         {!onHome && (
           <button

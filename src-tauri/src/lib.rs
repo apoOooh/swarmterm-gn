@@ -153,6 +153,7 @@ pub fn run() {
             commands::set_swarmterm_mcp,
             commands::inspect_account_mcp,
             commands::list_agent_sessions,
+            commands::read_agent_thread,
             commands::inspect_saved_workspace,
             commands::set_claude_statusline,
             commands::resolve_path_link,

@@ -66,6 +66,37 @@ fn rollout_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// The rollout whose `session_meta` names exactly `id` (any cwd) — the thread
+/// view's lookup. Same bounded first-line read as `session_exists`.
+pub fn find_rollout(root: &Path, id: &str) -> Option<PathBuf> {
+    if !super::is_uuid(id) {
+        return None;
+    }
+    let suffix = format!("-{id}.jsonl");
+    rollout_files(root).into_iter().find(|p| {
+        use std::io::{BufRead, BufReader, Read};
+        if !p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|n| n.ends_with(&suffix))
+        {
+            return false;
+        }
+        let Ok(file) = std::fs::File::open(p) else {
+            return false;
+        };
+        let mut line = String::new();
+        if BufReader::new(file.take(1024 * 1024))
+            .read_line(&mut line)
+            .is_err()
+        {
+            return false;
+        }
+        serde_json::from_str::<Value>(&line)
+            .is_ok_and(|meta| meta["type"] == "session_meta" && meta["payload"]["id"] == id)
+    })
+}
+
 /// Verify exactly the saved conversation from metadata only, never by newest
 /// rollout, title, or prompt. No fallback to another conversation in this cwd.
 pub fn session_exists(root: &Path, folder: &str, id: &str) -> bool {

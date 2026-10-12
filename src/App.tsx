@@ -22,6 +22,9 @@ import { useStatuslineStore } from '@/store/statusline-store'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import { useShellMarkStore } from '@/store/shell-mark-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
+import { useAccountUsageStore } from '@/store/account-usage-store'
+import { usePromptLibraryStore } from '@/store/prompt-library-store'
+import { PromptLibraryDialog } from '@/components/Prompts/PromptLibraryDialog'
 import { matchConfiguredShortcut, useShortcutStore } from '@/store/shortcut-store'
 import { ACTION_EVENT } from '@/lib/app-actions'
 import { runWorkspaceMacro } from '@/lib/run-workspace-macro'
@@ -97,7 +100,7 @@ import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { startAgentStateMirror } from '@/lib/agent-state-mirror'
 import { startGitRefreshWatch } from '@/lib/git-refresh'
-import { reportAgentState, onAgentHook, onAgentContext } from '@/tauri/agent-state'
+import { reportAgentState, onAgentHook, onAgentContext, onAgentUsage } from '@/tauri/agent-state'
 import { playChime } from '@/lib/notification-sound'
 import { sendSystemNotification } from '@/tauri/notification'
 import { useTerminalSearchStore } from '@/store/terminal-search-store'
@@ -435,6 +438,7 @@ export default function App(): ReactElement {
         return
       }
       if (action === 'open-settings') { e.preventDefault(); setSettingsOpen(true); return }
+      if (action === 'open-prompts') { e.preventDefault(); usePromptLibraryStore.getState().setOpen(true); return }
       if (action === 'new-workspace') { e.preventDefault(); useAppStore.getState().openWelcome(); return }
       const state = useAppStore.getState()
       const workspace = state.workspaces.find(w => w.id === state.activeWorkspaceId)
@@ -812,6 +816,22 @@ export default function App(): ReactElement {
     return () => void unlisten.then((fn) => fn())
   }, [])
 
+  useEffect(() => usePromptLibraryStore.getState().hydrate(), [])
+
+  // Account rate limits (`swarmterm --statusline` → GET /status?rl5 → `agent:usage`)
+  // belong to the pane's account profile, so the pane is resolved to its
+  // accountId once, here. Only Claude Code reports them.
+  useEffect(() => {
+    const unlisten = onAgentUsage((e) => {
+      const state = useAppStore.getState()
+      const ws = selectWorkspaceByTerminalId(state, e.terminalId)
+      const leaf = ws && collectLeaves(ws.layout).find((l) => l.terminalId === e.terminalId)
+      if (!leaf) return
+      useAccountUsageStore.getState().apply('claude-code', leaf.accountId, { fiveHour: e.fiveHour, sevenDay: e.sevenDay, at: e.atMs })
+    })
+    return () => void unlisten.then((fn) => fn())
+  }, [])
+
   // Manual-check verdicts land as native OS dialogs, not DOM — nothing to
   // position over the terminal. Subscribed outside the render path so the
   // per-chunk download progress never re-renders App. Dismiss BEFORE the
@@ -1095,6 +1115,7 @@ export default function App(): ReactElement {
         )}
         <FolderPicker />
         <HandoffDialog />
+        <PromptLibraryDialog />
       </div>
     </div>
   )
