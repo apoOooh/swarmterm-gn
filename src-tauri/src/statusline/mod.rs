@@ -45,6 +45,13 @@ pub fn ctx_of(stdin: &str) -> Option<render::CtxInfo> {
     input.context_window.as_ref().and_then(render::ctx_info)
 }
 
+/// The account's rate-limit windows in a raw stdin payload; empty when Claude
+/// Code sent none (API-key login, no turn yet) or the payload is unparseable.
+pub fn limits_of(stdin: &str) -> crate::mcp::rate_limits::RateLimits {
+    let input: render::StatusInput = serde_json::from_str(stdin).unwrap_or_default();
+    crate::mcp::rate_limits::from_raw(input.rate_limits.as_ref())
+}
+
 /// Render the line for a raw stdin payload. Unparseable input yields the
 /// no-context line rather than an error.
 pub fn line_for(stdin: &str, mcp: McpState, color: bool) -> String {
@@ -66,11 +73,12 @@ pub fn run_cli() {
     // prints `ctx —` — exactly what `line_for` did before the probe carried it.
     let ctx = ctx_of(&stdin);
     let pct = ctx.map(|c| c.pct);
+    let limits = limits_of(&stdin);
 
     let url = std::env::var("SWARMTERM_MCP_URL").ok();
     let token = std::env::var("SWARMTERM_SESSION").ok();
     let mcp = mcp_state(url.as_deref(), token.as_deref(), |u, t| {
-        probe::probe(u, t, pct, PROBE_TIMEOUT)
+        probe::probe(u, t, pct, &limits, PROBE_TIMEOUT)
     });
 
     println!("{}", render::render(mcp, ctx, true));

@@ -45,5 +45,20 @@ export interface AgentContextEvent {
   atMs: number
 }
 
+/**
+ * One account rate-limit sample from a Claude Code pane (`GET /status?rl5=…`),
+ * lockstep with `src-tauri/src/mcp/rate_limits.rs::AgentUsageEvent`. Rust only
+ * emits on change and never emits an empty sample.
+ */
+export interface AgentUsageEvent {
+  terminalId: string
+  fiveHour: { pct: number; resetsAt: number | null } | null
+  sevenDay: { pct: number; resetsAt: number | null } | null
+  atMs: number
+}
+
+export const onAgentUsage = (handler: (e: AgentUsageEvent) => void): Promise<UnlistenFn> =>
+  listen<AgentUsageEvent>('agent:usage', (event) => handler(event.payload))
+
 export const onAgentContext = (handler: (e: AgentContextEvent) => void): Promise<UnlistenFn> =>
   listen<AgentContextEvent>('agent:context', (event) => handler(event.payload))

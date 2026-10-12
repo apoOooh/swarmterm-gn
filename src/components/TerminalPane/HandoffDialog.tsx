@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { describeUsage, handoffTargets, sessionHookGaps, limitHint, readyHint, startingHint, type HandoffPhase } from '@/lib/handoff-flow'
+import { handoffTargets, sessionHookGaps, limitHint, readyHint, startingHint, type HandoffPhase } from '@/lib/handoff-flow'
 import { deliverHandoffBrief } from '@/lib/handoff-delivery'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { getTerminalGeneration, getTerminalStatus, readTerminalText } from '@/lib/terminal-registry'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
+import { useAccountUsageStore } from '@/store/account-usage-store'
+import { accountUsageKey, describeUsage } from '@/lib/account-usage'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import { listAvailableAgents } from '@/tauri/agents'
 import { useModalFocus } from '@/components/ui/use-modal-focus'
@@ -27,6 +29,7 @@ const STATUS_POLL_MS = 250
 export function HandoffDialog(): React.ReactElement | null {
   const { source, target, state, minimized, setTarget, dispatch, close, minimize, restore } = useHandoffStore()
   const accounts = useAgentAccountsStore((s) => s.accounts)
+  const usageByAccount = useAccountUsageStore((s) => s.byAccount)
   const [openedAt, setOpenedAt] = useState(0)
   const [hint, setHint] = useState<string | undefined>()
   const started = useRef(false)
@@ -122,9 +125,10 @@ export function HandoffDialog(): React.ReactElement | null {
   if (!source) return null
   const targets = available ? handoffTargets(accounts, available, hookless) : []
   const selected = target && targets.some((t) => t.agentId === target.agentId && t.accountId === target.accountId) ? target : targets[0]
-  // No CLI exposes per-account usage as structured data yet, so this stays
+  // The selected TARGET's usage is what the switch decision needs. Only
+  // Claude Code reports structured rate limits; everything else stays
   // "unknown" with the time it was checked — never a number scraped from text.
-  const usage = describeUsage(undefined, openedAt)
+  const usage = describeUsage(selected ? usageByAccount[accountUsageKey(selected.agentId, selected.accountId)] : undefined, openedAt)
 
   const startPane = (): void => {
     if (!selected) return

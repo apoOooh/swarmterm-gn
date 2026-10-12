@@ -159,26 +159,6 @@ export function sessionHookGaps(entries: readonly { id: string; available: boole
   return new Set(entries.filter((e) => e.available && e.id === 'codex' && e.sessionHooks !== true).map((e) => e.id))
 }
 
-/** A usage reading taken from structured CLI output (JSON/status payload) — never scraped text. */
-export interface UsageSample {
-  usedPercent: number
-  source: string
-  at: number
-}
-
-export interface UsageView {
-  known: boolean
-  text: string
-  checkedAt: number
-}
-
-export function describeUsage(sample: UsageSample | undefined, now: number): UsageView {
-  if (!sample || !Number.isFinite(sample.usedPercent) || sample.usedPercent < 0 || sample.usedPercent > 100) {
-    return { known: false, text: 'Usage unknown', checkedAt: now }
-  }
-  return { known: true, text: `Usage ${Math.round(sample.usedPercent)}% (${sample.source})`, checkedAt: sample.at }
-}
-
 const LIMIT_PATTERN = /(usage limit|rate limit|limit reached|out of (?:credits|usage)|try again (?:at|in))/i
 
 /**
