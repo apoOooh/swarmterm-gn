@@ -70,11 +70,22 @@ pub fn status_addr(mcp_url: &str) -> Option<(String, String)> {
 /// Code's JSON, so they are a bug upstream, not a reading. `{:.1}` because the
 /// status line itself shows one decimal and the server rounds to an integer
 /// anyway; anything finer is noise on the wire.
-pub fn build_status_request(authority: &str, token: &str, ctx: Option<f64>) -> String {
-    let query = ctx
+pub fn build_status_request(
+    authority: &str,
+    token: &str,
+    ctx: Option<f64>,
+    limits: &crate::mcp::rate_limits::RateLimits,
+) -> String {
+    // Rate limits ride the same request for the same reason (see
+    // `mcp::rate_limits`); the first parameter opens the query string.
+    let mut query = ctx
         .filter(|p| p.is_finite())
-        .map(|p| format!("?ctx={p:.1}"))
+        .map(|p| format!("&ctx={p:.1}"))
         .unwrap_or_default();
+    query.push_str(&crate::mcp::rate_limits::to_query(limits));
+    if !query.is_empty() {
+        query.replace_range(0..1, "?");
+    }
     // Host carries the port: the server is on an ephemeral one, and a bare host
     // is a malformed Host header for anything but :80.
     format!(
@@ -90,14 +101,20 @@ pub fn build_status_request(authority: &str, token: &str, ctx: Option<f64>) -> S
 /// this pane's MCP link. `ctx` is the pane's context usage in percent, if the
 /// stdin payload carried one — see [`build_status_request`] for why it rides
 /// this request.
-pub fn probe(mcp_url: &str, token: &str, ctx: Option<f64>, timeout: Duration) -> Option<bool> {
+pub fn probe(
+    mcp_url: &str,
+    token: &str,
+    ctx: Option<f64>,
+    limits: &crate::mcp::rate_limits::RateLimits,
+    timeout: Duration,
+) -> Option<bool> {
     let (_host, authority) = status_addr(mcp_url)?;
     let addr = authority.to_socket_addrs().ok()?.next()?;
     let mut stream = TcpStream::connect_timeout(&addr, timeout).ok()?;
     stream.set_read_timeout(Some(timeout)).ok()?;
     stream.set_write_timeout(Some(timeout)).ok()?;
 
-    let req = build_status_request(&authority, token, ctx);
+    let req = build_status_request(&authority, token, ctx, limits);
     stream.write_all(req.as_bytes()).ok()?;
     stream.flush().ok()?;
 
@@ -210,7 +227,7 @@ mod tests {
         // `None` is "no data yet" (no API turn / unparseable stdin). It must
         // reach the server as the bare path — never as `ctx=0`, which is a
         // real reading.
-        let req = build_status_request("127.0.0.1:52431", "tok", None);
+        let req = build_status_request("127.0.0.1:52431", "tok", None, &Default::default());
         assert!(
             req.starts_with("GET /status HTTP/1.1\r\n"),
             "req was {req:?}"
@@ -223,13 +240,30 @@ mod tests {
 
     #[test]
     fn request_with_ctx_carries_one_decimal() {
-        let req = build_status_request("127.0.0.1:52431", "tok", Some(42.14));
+        let req = build_status_request("127.0.0.1:52431", "tok", Some(42.14), &Default::default());
+        let limits = crate::mcp::rate_limits::RateLimits {
+            five_hour: Some(crate::mcp::rate_limits::Window {
+                pct: 42,
+                resets_at: Some(9),
+            }),
+            seven_day: None,
+        };
+        let with = build_status_request("127.0.0.1:52431", "tok", Some(1.0), &limits);
+        assert!(
+            with.starts_with("GET /status?ctx=1.0&rl5=42&rl5r=9 HTTP/1.1\r\n"),
+            "req was {with:?}"
+        );
+        let only = build_status_request("127.0.0.1:52431", "tok", None, &limits);
+        assert!(
+            only.starts_with("GET /status?rl5=42&rl5r=9 HTTP/1.1\r\n"),
+            "req was {only:?}"
+        );
         assert!(
             req.starts_with("GET /status?ctx=42.1 HTTP/1.1\r\n"),
             "req was {req:?}"
         );
         // 0 % is data (a fresh session), distinct from `None`.
-        let req = build_status_request("127.0.0.1:52431", "tok", Some(0.0));
+        let req = build_status_request("127.0.0.1:52431", "tok", Some(0.0), &Default::default());
         assert!(
             req.starts_with("GET /status?ctx=0.0 HTTP/1.1\r\n"),
             "req was {req:?}"
@@ -239,7 +273,8 @@ mod tests {
     #[test]
     fn non_finite_ctx_is_dropped() {
         for bad in [f64::NAN, f64::INFINITY] {
-            let req = build_status_request("127.0.0.1:52431", "tok", Some(bad));
+            let req =
+                build_status_request("127.0.0.1:52431", "tok", Some(bad), &Default::default());
             assert!(
                 req.starts_with("GET /status HTTP/1.1\r\n"),
                 "req for {bad} was {req:?}"
@@ -285,7 +320,13 @@ mod tests {
               Content-Length: 26\r\nConnection: close\r\n\r\n{\"mcp\":{\"connected\":true}}",
         );
         assert_eq!(
-            probe(&url, "abc-123", Some(42.1), Duration::from_millis(500)),
+            probe(
+                &url,
+                "abc-123",
+                Some(42.1),
+                &Default::default(),
+                Duration::from_millis(500)
+            ),
             Some(true)
         );
         let req = server.join().unwrap();
@@ -304,7 +345,13 @@ mod tests {
               {\"mcp\":{\"connected\":false}}",
         );
         assert_eq!(
-            probe(&url, "abc-123", None, Duration::from_millis(500)),
+            probe(
+                &url,
+                "abc-123",
+                None,
+                &Default::default(),
+                Duration::from_millis(500)
+            ),
             Some(false)
         );
         let req = server.join().unwrap();
@@ -321,7 +368,16 @@ mod tests {
         let (url, server) = serve_once(
             b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         );
-        assert_eq!(probe(&url, "ghost", None, Duration::from_millis(500)), None);
+        assert_eq!(
+            probe(
+                &url,
+                "ghost",
+                None,
+                &Default::default(),
+                Duration::from_millis(500)
+            ),
+            None
+        );
         server.join().unwrap();
     }
 
@@ -334,6 +390,7 @@ mod tests {
                 "http://127.0.0.1:1/mcp",
                 "tok",
                 None,
+                &Default::default(),
                 Duration::from_millis(300)
             ),
             None

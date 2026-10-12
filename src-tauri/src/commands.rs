@@ -185,6 +185,7 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     state.mcp_clients.lock().unwrap().forget(&id);
     // The context chip too: a respawned Claude must not inherit the old %.
     state.context_usage.lock().unwrap().forget(&id);
+    state.rate_limit_usage.lock().unwrap().forget(&id);
     // Same for the agent-state mirror + screen tail: a respawn must start
     // from `unknown`, and a `wait_peer` sleeper on this id must wake now to
     // see the peer gone rather than run out its timeout.

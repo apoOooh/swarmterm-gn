@@ -64,6 +64,7 @@ use axum::Json;
 
 use crate::mcp::auth::{self, AuthError, TerminalId};
 use crate::mcp::context_usage::{self, AgentContextEvent};
+use crate::mcp::rate_limits::{self, AgentUsageEvent};
 use crate::pty::AppState;
 
 #[derive(Clone)]
@@ -294,6 +295,28 @@ fn publish_context(app: &AppHandle, terminal_id: &str, pct: Option<f64>) {
     }
 }
 
+/// Record one rate-limit sample for a pane and emit `agent:usage` on change.
+/// Same lock discipline as `publish_context`.
+fn publish_usage(app: &AppHandle, terminal_id: &str, limits: rate_limits::RateLimits) {
+    let change = app
+        .state::<AppState>()
+        .rate_limit_usage
+        .lock()
+        .unwrap()
+        .record(terminal_id, limits);
+    if let Some(limits) = change {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "agent:usage",
+            &AgentUsageEvent {
+                terminal_id: terminal_id.to_owned(),
+                limits,
+                at_ms: crate::warroom::now_ms(),
+            },
+        );
+    }
+}
+
 /// `GET /status` — the status line's only backend call. Loopback-only (the
 /// listener binds `127.0.0.1:0`); it reveals nothing beyond one boolean about
 /// the caller's own pane, and records the caller's own context % when the
@@ -311,6 +334,11 @@ async fn status_handler(
         &app,
         &terminal_id,
         context_usage::parse_ctx_query(query.as_deref()),
+    );
+    publish_usage(
+        &app,
+        &terminal_id,
+        rate_limits::parse_query(query.as_deref()),
     );
     let token = auth::bearer(bearer_header(&headers));
     let connected = app

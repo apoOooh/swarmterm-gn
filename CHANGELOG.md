@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Handoff shows the target account's usage: Claude Code's 5-hour and
+  7-day rate limits travel with the Swarmterm status line and are kept per
+  account profile, with the time they were taken. Codex stays "unknown".
+
 ## [1.6.0] - 2026-10-12
 
 - Handoff fixes: closing the new pane before its agent reports in now ends

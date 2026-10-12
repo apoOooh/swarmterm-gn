@@ -7,6 +7,7 @@ pub mod clients;
 pub mod config;
 pub mod context_usage;
 pub mod peer_state;
+pub mod rate_limits;
 pub mod server;
 pub mod toggle;
 pub mod tools;
