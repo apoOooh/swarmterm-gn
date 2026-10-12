@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react'
-import { AlertCircle, ArrowRightLeft, Bell, CalendarClock, CheckCircle2, Hourglass, MessageSquareText, Power, TerminalSquare } from 'lucide-react'
+import { AlertCircle, ArrowRightLeft, Bell, CalendarClock, CheckCircle2, Hourglass, Mic, MessageSquareText, Power, TerminalSquare } from 'lucide-react'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { collectLeaves } from '@/lib/layout-tree'
 import { unreadCount, type CenterEntry, type CenterKind } from '@/lib/notification-center'
@@ -18,7 +18,8 @@ const KIND_ICON: Record<CenterKind, { icon: typeof Bell; className: string }> = 
   hold: { icon: Hourglass, className: 'text-[#E5C07B]' },
   handoff: { icon: ArrowRightLeft, className: 'text-[#3794FF]' },
   prompt: { icon: MessageSquareText, className: 'text-[#3794FF]' },
-  routine: { icon: CalendarClock, className: 'text-[#3794FF]' }
+  routine: { icon: CalendarClock, className: 'text-[#3794FF]' },
+  dictation: { icon: Mic, className: 'text-[#E5C07B]' }
 }
 
 interface Target {

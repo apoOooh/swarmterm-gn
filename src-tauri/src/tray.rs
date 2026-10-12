@@ -36,6 +36,8 @@ pub fn show_main(app: &tauri::AppHandle) {
 pub fn quit(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     state.quitting.store(true, Ordering::SeqCst);
+    // Remove the voice discovery file so buzzkey never dials a dead pipe.
+    crate::voice::shutdown(app);
     // Use `if let Ok` rather than `unwrap` so the process still exits even if the
     // terminals lock was somehow poisoned.
     if let Ok(mut map) = state.terminals.lock() {

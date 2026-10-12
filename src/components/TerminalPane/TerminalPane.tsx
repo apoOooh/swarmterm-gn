@@ -15,6 +15,7 @@ import { useTerminalSearchStore } from '@/store/terminal-search-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
 import { Button } from '@/components/ui/button'
 import { HeldDeliveryPill } from '@/components/TerminalPane/HeldDeliveryPill'
+import { VoiceIndicatorPill } from '@/components/TerminalPane/VoiceIndicatorPill'
 import { SearchOverlay } from '@/components/TerminalPane/SearchOverlay'
 import { PaneHeader } from './PaneHeader'
 import { HandoffBriefDialog } from './HandoffBriefDialog'
@@ -471,6 +472,7 @@ export function TerminalPane({
         <div ref={containerRef} className="absolute inset-0" />
 
         <HeldDeliveryPill terminalId={terminalId} />
+        <VoiceIndicatorPill terminalId={terminalId} />
         <DockPicker leafId={leafId} />
         {searchOpen && <SearchOverlay terminalId={terminalId} />}
 

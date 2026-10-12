@@ -1,12 +1,23 @@
 import { create } from 'zustand'
-import { listAgentAccounts, saveAgentAccount, deleteAgentAccount, type AgentAccount, type SaveAgentAccount } from '@/tauri/accounts'
+import { listAgentAccounts, saveAgentAccount, deleteAgentAccount, getAccountStatus, type AccountStatus, type AgentAccount, type SaveAgentAccount } from '@/tauri/accounts'
+import { accountUsageKey } from '@/lib/account-usage'
+import { useAccountUsageStore } from '@/store/account-usage-store'
+
+/** Login watch after the wizard opens a login pane: poll until connected. */
+const LOGIN_POLL_MS = 3000
+const LOGIN_WATCH_MS = 5 * 60_000
 
 interface AccountsState {
   accounts: AgentAccount[]
   error: string | null
   refresh: () => Promise<void>
-  save: (account: SaveAgentAccount) => Promise<void>
+  /** Resolves with the stored profile (from the write, not the reread). */
+  save: (account: SaveAgentAccount) => Promise<AgentAccount>
   remove: (id: string) => Promise<void>
+  /** Keyed by `accountUsageKey`; absent = not checked yet. */
+  statuses: Record<string, AccountStatus>
+  refreshStatus: (agentId: AgentAccount['agentId'], accountId?: string) => Promise<AccountStatus | undefined>
+  watchLogin: (agentId: AgentAccount['agentId'], accountId?: string) => void
 }
 function sameAccounts(previous: AgentAccount[], next: AgentAccount[]): boolean {
   return previous.length === next.length && previous.every((account, index) => {
@@ -24,8 +35,36 @@ export const useAgentAccountsStore = create<AccountsState>((set, get) => {
     if (inFlight) await inFlight
     await get().refresh()
   }
+  const watches = new Map<string, ReturnType<typeof setTimeout>>()
   return {
-    accounts: [], error: null,
+    accounts: [], error: null, statuses: {},
+    refreshStatus: async (agentId, accountId) => {
+      try {
+        const status = await getAccountStatus(agentId, accountId)
+        set(s => ({ statuses: { ...s.statuses, [accountUsageKey(agentId, accountId)]: status } }))
+        // Codex usage comes from its rollout files; it joins the same store
+        // the Claude status line feeds, where the newer sample wins.
+        if (status.usage) useAccountUsageStore.getState().apply(agentId, accountId, status.usage)
+        return status
+      } catch {
+        // Fail-open: a removed profile or unreadable folder just stays grey.
+        return undefined
+      }
+    },
+    watchLogin: (agentId, accountId) => {
+      const key = accountUsageKey(agentId, accountId)
+      clearTimeout(watches.get(key))
+      const deadline = Date.now() + LOGIN_WATCH_MS
+      const tick = (): void => {
+        // A profile removed mid-login has nothing left to watch.
+        if (accountId && !get().accounts.some(a => a.id === accountId)) { watches.delete(key); return }
+        void get().refreshStatus(agentId, accountId).then(status => {
+          if (status?.state === 'connected' || Date.now() > deadline) { watches.delete(key); return }
+          watches.set(key, setTimeout(tick, LOGIN_POLL_MS))
+        })
+      }
+      watches.set(key, setTimeout(tick, LOGIN_POLL_MS))
+    },
     refresh: () => {
       if (inFlight) return inFlight
       const request = listAgentAccounts().then(accounts => {
@@ -43,7 +82,7 @@ export const useAgentAccountsStore = create<AccountsState>((set, get) => {
       inFlight = request
       return request
     },
-    save: async account => { await saveAgentAccount(account); await refreshAfterMutation() },
+    save: async account => { const saved = await saveAgentAccount(account); await refreshAfterMutation(); return saved },
     remove: async id => { await deleteAgentAccount(id); await refreshAfterMutation() }
   }
 })

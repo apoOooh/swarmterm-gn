@@ -22,6 +22,10 @@ export interface TerminalTypingStore {
    *  and by `noteInput` itself on a submit, all of which want the same thing:
    *  drop this terminal's entries. */
   clearTyping: (terminalId: string) => void
+  /** Voice dictation wrote a draft into this pane: it now holds the user's
+   *  unsubmitted line, exactly as if typed. Returns the `lastKeyAt` stamp so
+   *  the delayed Enter can tell whether the user touched the line since. */
+  markDraft: (terminalId: string, nowMs: number) => number
 }
 
 export const useTerminalTypingStore = create<TerminalTypingStore>((set, get) => ({
@@ -48,6 +52,14 @@ export const useTerminalTypingStore = create<TerminalTypingStore>((set, get) => 
       if (kind === 'nav') return { lastKeyAt }
       return { lastKeyAt, dirty: { ...s.dirty, [terminalId]: true } }
     })
+  },
+
+  markDraft: (terminalId, nowMs) => {
+    set((s) => ({
+      lastKeyAt: { ...s.lastKeyAt, [terminalId]: nowMs },
+      dirty: { ...s.dirty, [terminalId]: true }
+    }))
+    return nowMs
   },
 
   clearTyping: (terminalId) =>

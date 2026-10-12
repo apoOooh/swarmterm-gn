@@ -261,6 +261,18 @@ Toggle it in **Settings → Terminal**. Swarmterm merge-writes the entry into `~
 
 The pane header mirrors the percentage as a small `ctx 63%` chip (same amber / red bands) once the first reply lands, so you can compare panes without reading each status line. It needs the status line enabled — that is where the number comes from — and disappears on `/clear`, when `claude` exits, and on very narrow panes.
 
+## Voice dictation
+
+A local dictation app (buzzkey) can type what you say straight into Swarmterm. Start dictating while a pane has the keyboard; the text lands in **that** pane even if you click another one while it transcribes.
+
+- Dictation arrives as a **draft**: it sits in the prompt and is never sent on its own. In a plain shell, line breaks and tabs become spaces, so nothing runs or completes.
+- A pane that waits for a permission answer gets nothing — dictation must never answer a prompt for you. If the pane was closed or restarted, the text is not redirected anywhere else. Either way the notification bell says why, and buzzkey keeps the text on the clipboard.
+- With Settings, Welcome, the file editor, a search field or any dialog holding the keyboard, Swarmterm refuses rather than guesses.
+
+While you speak, the target pane shows a **Listening…** pill. Its **Stop** button (also reachable with Tab) throws the dictation away; buzzkey's own hotkey works as before. The pill disappears when the text arrives, when you cancel, when the pane closes or restarts, and after two minutes at the latest. Older buzzkey versions dictate without the pill.
+
+**Settings → Voice** turns the endpoint on or off and can allow auto-Enter (off by default; never in plain shells, and only if you did not touch the prompt in the meantime). Only apps running as your Windows user can connect: Swarmterm opens a named pipe restricted to your account and writes its name and a fresh per-launch key to `%LOCALAPPDATA%\<app id>\voice-endpoint.json`.
+
 ## Terminal essentials
 
 - **Real PTYs with 24-bit truecolor** — agent CLIs, emoji and box drawing render exactly as in your normal terminal, and IMEs (Vietnamese Telex, CJK) work without dropped characters.
@@ -464,7 +476,9 @@ font preferences remain separate.
 
 ## Account profiles
 
-Open **Settings > Accounts** to add separate Claude Code or Codex profiles. Give each profile a name and optionally select a dedicated CLI configuration folder. Leaving the folder blank creates an isolated folder automatically. The **Default** account uses the CLI's existing configuration.
+Open **Settings > Accounts** to see every login at a glance, grouped by agent. Each card shows a status light (green connected, yellow login expired, red not logged in, grey not checked yet), the subscription plan, and the 5-hour and 7-day budget **still available** with a small bar; hover for reset time and how old the number is. Claude Code reports its budget through the Swarmterm status line while one of its panes runs; Codex's is read from its own session logs. Swarmterm reads only plan and login state from the CLI's files — tokens never leave them.
+
+Choose **Add account**, pick Claude Code or Codex, confirm the suggested name (a dedicated configuration folder is optional under **Advanced**; blank creates an isolated one), then **Continue & log in**. A terminal opens with the CLI's own login; once it finishes the card turns green. The **⋯** menu on a card offers log in again, rename, show folder and remove. The **Default** account uses the CLI's existing configuration.
 
 Choose **Log in** to open a regular terminal pane running the CLI's own login command with that profile's configuration. Complete the normal login flow there. Swarmterm never asks for passwords or stores access tokens; credentials remain in the CLI's configuration files. CLI login flows may request that you visit a URL outside Swarmterm.
 

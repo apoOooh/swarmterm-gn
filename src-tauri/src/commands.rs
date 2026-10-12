@@ -114,6 +114,27 @@ pub fn write_terminal(state: State<'_, AppState>, id: String, data: String) {
     }
 }
 
+/// Write that only lands in the PTY generation the caller pinned. Voice
+/// dictation resolves its target long before the bytes arrive; a same-id
+/// respawn (agent/cwd switch) in between must reject, not type into the new
+/// shell. The check runs under the `terminals` lock, so no respawn can slip
+/// between check and write, and the `Result` is the delivery ACK.
+#[tauri::command]
+pub fn write_terminal_checked(
+    state: State<'_, AppState>,
+    id: String,
+    expected_spawn_id: String,
+    data: String,
+) -> Result<(), String> {
+    let mut terminals = state.terminals.lock().map_err(|e| e.to_string())?;
+    let t = terminals.get_mut(&id).ok_or("target-gone")?;
+    crate::voice::check_generation(&t.spawn_id, &expected_spawn_id)?;
+    t.writer
+        .write_all(data.as_bytes())
+        .and_then(|_| t.writer.flush())
+        .map_err(|e| format!("write-failed: {e}"))
+}
+
 #[tauri::command]
 pub fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) {
     if let Some(t) = state.terminals.lock().unwrap().get(&id) {
@@ -159,6 +180,9 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     if let Some((room_id, event)) = left {
         let _ = app.emit("warroom:event", &crate::warroom::scoped(&room_id, event));
     }
+    // A pinned dictation must not type into (or show its pill on) a dead or
+    // respawned shell. Idempotent with read_loop, like the War Room leave.
+    crate::voice::drop_terminal(&app, &id);
     // A dead pane's preview must not linger as an orphaned native webview
     // painting over nothing. Idempotent with the renderer's GC sweep and with
     // read_loop below — whoever runs second finds the label gone.
@@ -725,6 +749,55 @@ pub async fn delete_agent_account(
     tauri::async_runtime::spawn_blocking(move || crate::accounts::delete(&app, &id))
         .await
         .map_err(|_| "Account profile deletion interrupted")?
+}
+
+/// Login state, plan and rate limits for one profile (`accountId` absent =
+/// the agent's default login). Metadata only — see `account_status.rs`.
+#[tauri::command]
+pub async fn get_account_status(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    agent_id: String,
+    account_id: Option<String>,
+) -> Result<crate::account_status::AccountStatus, String> {
+    files_main_only(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = account_config_dir(&app, &agent_id, account_id.as_deref())?;
+        Ok(crate::account_status::read_status(&agent_id, &dir))
+    })
+    .await
+    .map_err(|_| "Account status check interrupted")?
+}
+
+/// The CLI's config folder for a profile, with the same env/home fallback the
+/// CLIs themselves use for the default login.
+fn account_config_dir(
+    app: &AppHandle,
+    agent_id: &str,
+    account_id: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    if !matches!(agent_id, "claude-code" | "codex") {
+        return Err("Account status supports Claude and Codex profiles".into());
+    }
+    if let Some(id) = account_id {
+        let account = crate::accounts::list(app)?
+            .into_iter()
+            .find(|a| a.id == id && a.agent_id == agent_id)
+            .ok_or("Account profile no longer exists")?;
+        return Ok(account.config_dir.into());
+    }
+    let (var, fallback) = if agent_id == "codex" {
+        ("CODEX_HOME", ".codex")
+    } else {
+        ("CLAUDE_CONFIG_DIR", ".claude")
+    };
+    if let Some(dir) = std::env::var(var).ok().filter(|v| !v.trim().is_empty()) {
+        return Ok(dir.into());
+    }
+    app.path()
+        .home_dir()
+        .map(|home| home.join(fallback))
+        .map_err(|_| "Cannot resolve default account directory".into())
 }
 
 fn account_mcp_path(

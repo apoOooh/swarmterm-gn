@@ -1,6 +1,6 @@
 [package]
 name = "swarmterm"
-version = "1.8.0"
+version = "1.10.0"
 description = "One window for a whole swarm of AI coding agents — split terminals, per-agent git worktrees, live web previews, and a War Room where agents collaborate"
 authors = ["Duong Duc Nguyen"]
 license = "GPL-3.0-only"
@@ -63,6 +63,7 @@ windows-sys = { version = "0.59", features = [
   "Wdk_System_Threading",
   "Win32_Foundation",
   "Win32_Security",
+  "Win32_Security_Authorization",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_JobObjects",
   "Win32_System_Registry",

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-12
+
+- Voice dictation shows a "Listening…" pill with a Stop button in the pane
+  the dictation will land in, while you speak (needs buzzkey with protocol
+  negotiation). Stop discards the dictation. Changing auto-Enter in
+  Settings → Voice no longer cancels a dictation in progress.
+- Accounts: an add-account wizard creates a Claude Code or Codex profile and
+  opens its login in one step; account cards show the login status.
+
+## [1.9.0] - 2026-10-12
+
+- Voice dictation: a local dictation app (buzzkey) can type into the pane
+  that had the keyboard when you started speaking, even if focus moves
+  while it transcribes. Text arrives as a draft, never redirected, never
+  into a pane waiting on a permission prompt; plain shells get one line.
+  Named pipe for your Windows user only, with a per-launch key. Settings →
+  Voice switches it off or allows auto-Enter.
+
 ## [1.8.0] - 2026-10-12
 
 - Routines: run Claude Code or Codex with a saved brief on a schedule
