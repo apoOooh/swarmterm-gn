@@ -8,7 +8,7 @@ import {
   limitHint,
   submitBlocker,
   focusTrapTarget,
-  startingHint,
+  startingHint, readyHint, READY_HINT_MS,
   STARTING_HINT_MS,
   type HandoffState
 } from './handoff-flow'
@@ -25,6 +25,11 @@ describe('handoff state machine', () => {
     expect(s.phase).toBe('starting')
     s = reduceHandoff(s, { type: 'status', kind: 'running', generation: 0, agent: 'idle' })
     expect(s).toMatchObject({ phase: 'ready', terminalId: 't2', generation: 0 })
+  })
+
+  it('fails when the new pane is closed before its session hook arrives (review 6)', () => {
+    const s = reduceHandoff(start(), { type: 'status', kind: 'gone', generation: undefined })
+    expect(s).toMatchObject({ phase: 'failed', error: expect.stringMatching(/closed/) })
   })
 
   it('fails when the new pane errors or exits before confirmation', () => {
@@ -222,5 +227,15 @@ describe('startingHint (review round 2)', () => {
     expect(startingHint('starting', 1000, 1000 + STARTING_HINT_MS)).toMatch(/answer its prompt/)
     expect(startingHint('ready', 1000, 1000 + STARTING_HINT_MS * 2)).toBeUndefined()
     expect(startingHint('starting', undefined, 99_999_999)).toBeUndefined()
+  })
+})
+
+describe('readyHint (review 6: detector never recognises the agent)', () => {
+  it('explains a locked Send only after the time limit and only while the agent is unseen', () => {
+    expect(readyHint('ready', false, 1000, 1000 + READY_HINT_MS - 1)).toBeUndefined()
+    expect(readyHint('ready', false, 1000, 1000 + READY_HINT_MS)).toMatch(/not recognised/)
+    expect(readyHint('ready', true, 1000, 1000 + READY_HINT_MS * 2)).toBeUndefined()
+    expect(readyHint('starting', false, 1000, 1000 + READY_HINT_MS * 2)).toBeUndefined()
+    expect(readyHint('ready', false, undefined, 99_999_999)).toBeUndefined()
   })
 })

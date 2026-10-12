@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Handoff fixes: closing the new pane before its agent reports in now ends
+  the handoff instead of waiting forever; failures before Send (spawn error,
+  exit, closed pane) reach the notification bell; a ready pane whose agent
+  is never recognised on screen explains why Send stays locked. The folder
+  picker opened from Settings keeps its focus trap, and Esc closes the
+  picker rather than Settings.
 - Account and agent handoff: from the Handoff brief, pick a Claude Code or
   Codex account profile and start a new pane in the same folder; the brief
   is sent as its first prompt only after the pane runs, its process is

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ownsKeyboard, pushModal, removeModal } from './modal-stack'
+import { foreignModalAbove, ownsKeyboard, pushModal, removeModal } from './modal-stack'
 
 describe('modal stack', () => {
   it('only the most recently opened modal owns the keyboard', () => {
@@ -23,5 +23,13 @@ describe('modal stack', () => {
 
   it('an unregistered modal never owns the keyboard', () => {
     expect(ownsKeyboard([], 1, false)).toBe(false)
+  })
+
+  it('a foreign modal that was already open below ours does not take the keyboard (review 6)', () => {
+    const settings = {}
+    const later = {}
+    expect(foreignModalAbove([settings], new Set([settings]))).toBe(false)
+    expect(foreignModalAbove([settings, later], new Set([settings]))).toBe(true)
+    expect(foreignModalAbove([], new Set([settings]))).toBe(false)
   })
 })

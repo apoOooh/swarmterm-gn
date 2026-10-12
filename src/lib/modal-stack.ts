@@ -6,8 +6,9 @@
  *
  * Modals using useModalFocus register here in open order. Modals that do not
  * (Settings, Welcome dialogs, FileDialog) are seen only as foreign
- * `aria-modal` nodes; one that is open while ours is, was opened over it
- * (ours would have kept focus otherwise), so it counts as on top.
+ * `aria-modal` nodes. Only one that appeared AFTER ours opened is on top:
+ * the folder picker opened from Settings → Accounts sits over a Settings
+ * modal that was already there, and must keep its trap and Esc.
  */
 export type ModalStack = readonly number[]
 
@@ -17,4 +18,9 @@ export const removeModal = (stack: ModalStack, id: number): ModalStack => stack.
 
 export function ownsKeyboard(stack: ModalStack, id: number, foreignModalOpen: boolean): boolean {
   return !foreignModalOpen && stack.length > 0 && stack[stack.length - 1] === id
+}
+
+/** A foreign modal open now that was not yet open when ours opened. */
+export function foreignModalAbove<T>(openNow: readonly T[], openAtOurOpen: ReadonlySet<T>): boolean {
+  return openNow.some((n) => !openAtOurOpen.has(n))
 }
