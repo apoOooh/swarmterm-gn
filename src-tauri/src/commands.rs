@@ -273,6 +273,24 @@ pub async fn list_agent_sessions(
     .await
 }
 
+/// Read-only conversation of one agent session (SWA-25). Fail-open: a missing
+/// or unreadable file is `found: false`, never an error.
+#[tauri::command]
+pub async fn read_agent_thread(
+    app: AppHandle,
+    agent_id: String,
+    session_id: String,
+    account_id: Option<String>,
+) -> crate::sessions::thread::Thread {
+    crate::sessions::read_thread(
+        agent_id,
+        session_id,
+        crate::accounts::list(&app).unwrap_or_default(),
+        account_id,
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn inspect_saved_workspace(
     app: AppHandle,

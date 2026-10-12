@@ -8,6 +8,7 @@ pub mod claude;
 pub mod codex;
 pub mod opencode;
 pub mod qwen;
+pub mod thread;
 
 use serde::Serialize;
 use std::io::Read;
@@ -281,6 +282,44 @@ pub async fn list_all(
         entries.extend(opencode::scan(&folder).await);
     }
     entries
+}
+
+/// One session's conversation for the read-only thread view. The store root
+/// follows the pane's account profile (`account_id`), the default profile
+/// otherwise; an unknown profile id finds nothing rather than falling back.
+pub async fn read_thread(
+    agent_id: String,
+    session_id: String,
+    accounts: Vec<crate::accounts::AgentAccount>,
+    account_id: Option<String>,
+) -> thread::Thread {
+    tauri::async_runtime::spawn_blocking(move || {
+        let base = match &account_id {
+            Some(id) => match accounts
+                .iter()
+                .find(|a| &a.id == id && a.agent_id == agent_id)
+            {
+                Some(a) => Some(std::path::PathBuf::from(&a.config_dir)),
+                None => return thread::Thread::default(),
+            },
+            None => None,
+        };
+        match agent_id.as_str() {
+            "claude-code" => base
+                .map(|b| b.join("projects"))
+                .or_else(claude_projects_root)
+                .map(|root| thread::read_claude(&root, &session_id))
+                .unwrap_or_default(),
+            "codex" => base
+                .map(|b| b.join("sessions"))
+                .or_else(codex_sessions_root)
+                .map(|root| thread::read_codex(&root, &session_id))
+                .unwrap_or_default(),
+            _ => thread::Thread::default(),
+        }
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[cfg(test)]
