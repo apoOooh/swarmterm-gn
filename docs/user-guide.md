@@ -269,6 +269,8 @@ A local dictation app (buzzkey) can type what you say straight into Swarmterm. S
 - A pane that waits for a permission answer gets nothing — dictation must never answer a prompt for you. If the pane was closed or restarted, the text is not redirected anywhere else. Either way the notification bell says why, and buzzkey keeps the text on the clipboard.
 - With Settings, Welcome, the file editor, a search field or any dialog holding the keyboard, Swarmterm refuses rather than guesses.
 
+While you speak, the target pane shows a **Listening…** pill. Its **Stop** button (also reachable with Tab) throws the dictation away; buzzkey's own hotkey works as before. The pill disappears when the text arrives, when you cancel, when the pane closes or restarts, and after two minutes at the latest. Older buzzkey versions dictate without the pill.
+
 **Settings → Voice** turns the endpoint on or off and can allow auto-Enter (off by default; never in plain shells, and only if you did not touch the prompt in the meantime). Only apps running as your Windows user can connect: Swarmterm opens a named pipe restricted to your account and writes its name and a fresh per-launch key to `%LOCALAPPDATA%\<app id>\voice-endpoint.json`.
 
 ## Terminal essentials

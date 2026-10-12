@@ -180,6 +180,9 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     if let Some((room_id, event)) = left {
         let _ = app.emit("warroom:event", &crate::warroom::scoped(&room_id, event));
     }
+    // A pinned dictation must not type into (or show its pill on) a dead or
+    // respawned shell. Idempotent with read_loop, like the War Room leave.
+    crate::voice::drop_terminal(&app, &id);
     // A dead pane's preview must not linger as an orphaned native webview
     // painting over nothing. Idempotent with the renderer's GC sweep and with
     // read_loop below — whoever runs second finds the label gone.

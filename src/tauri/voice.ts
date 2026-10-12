@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { IndicatorEvent } from '@/lib/voice-indicator'
 
 /**
  * Voice dictation bridge (SWA-12). Rust owns the buzzkey pipe and the pins;
@@ -38,6 +39,14 @@ export const onVoiceFocusRequest = (cb: (requestId: string) => void): Promise<Un
 
 export const onVoiceInsert = (cb: (e: VoiceInsertEvent) => void): Promise<UnlistenFn> =>
   listen<VoiceInsertEvent>('voice:insert', (e) => cb(e.payload))
+
+/** "Listening" pill on/off for a pinned pane (SWA-40). */
+export const onVoiceIndicator = (cb: (e: IndicatorEvent) => void): Promise<UnlistenFn> =>
+  listen<IndicatorEvent>('voice:indicator', (e) => cb(e.payload))
+
+/** The pill's Stop: drops the pin and tells the dictation app to discard. */
+export const voiceIndicatorStop = (pin: string): Promise<void> =>
+  invoke('voice_indicator_stop', { pin })
 
 export const voiceFocusResponse = (requestId: string, reply: FocusReply): Promise<void> =>
   invoke('voice_focus_response', { requestId, reply })

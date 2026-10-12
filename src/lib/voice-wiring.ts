@@ -1,4 +1,4 @@
-import { onVoiceFocusRequest, onVoiceInsert, voiceFocusResponse, voiceInsertResult } from '@/tauri/voice'
+import { onVoiceFocusRequest, onVoiceIndicator, onVoiceInsert, voiceFocusResponse, voiceInsertResult } from '@/tauri/voice'
 import { writeTerminalChecked } from '@/tauri/terminal'
 import { dictationTarget } from '@/lib/voice-focus'
 import { deliverDictation } from '@/lib/voice-delivery'
@@ -16,6 +16,7 @@ import { useAgentStateStore } from '@/store/agent-state-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useNotificationCenterStore } from '@/store/notification-center-store'
+import { useVoiceIndicatorStore } from '@/store/voice-indicator-store'
 
 /** Notification copy for a dictation that did not land. */
 const REASON_COPY: Record<string, string> = {
@@ -78,8 +79,11 @@ export function wireVoice(isSettingsOpen: () => boolean): () => void {
     })
   })
 
+  const indicator = onVoiceIndicator((e) => useVoiceIndicatorStore.getState().apply(e))
+
   return () => {
     void focus.then((off) => off())
+    void indicator.then((off) => off())
     void insert.then((off) => off())
   }
 }

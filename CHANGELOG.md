@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Voice dictation shows a "Listening…" pill with a Stop button in the pane
+  the dictation will land in, while you speak (needs buzzkey with protocol
+  negotiation). Stop discards the dictation. Changing auto-Enter in
+  Settings → Voice no longer cancels a dictation in progress.
+
 ## [1.9.0] - 2026-10-12
 
 - Voice dictation: a local dictation app (buzzkey) can type into the pane

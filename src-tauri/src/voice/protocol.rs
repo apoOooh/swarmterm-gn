@@ -3,14 +3,32 @@
 //! glue stays thin.
 //!
 //! Every request carries `v` and the per-launch `token` from the discovery
-//! file. Three ops exist and nothing else: `begin` pins the pane that owns
-//! the keyboard, `insert` writes a draft into a pinned pane, `cancel` drops
-//! a pin. No op runs a command — the pipe can type text, never execute it.
+//! file. Four ops exist and nothing else: `hello` negotiates capabilities,
+//! `begin` pins the pane that owns the keyboard, `insert` writes a draft into
+//! a pinned pane, `cancel` drops a pin. No op runs a command — the pipe can
+//! type text, never execute it.
+//!
+//! Versioning (SWA-40): the envelope stays `v: 1` so 1.9.0 and older clients
+//! keep talking. `proto` lives only inside `hello`; a client that never says
+//! hello is proto 1. An unknown op answers `unknown-op` and keeps the
+//! connection, so a newer client can probe (1.9.0 answers `bad-request`,
+//! which clients must read the same way).
+//!
+//! On a negotiated connection the server may also push lines. A push carries
+//! an `event` key, an answer never does; the client keeps at most one request
+//! in flight, so every other line answers that request.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const VERSION: u64 = 1;
+/// Protocol generation announced in `hello`. Proto 1 = no hello.
+pub const PROTO: u64 = 2;
+/// The client holds one connection per dictation; the pinned pane shows a
+/// "listening" pill and the server may push `cancelled` on that connection.
+pub const CAP_INDICATOR: &str = "indicator";
+/// What this build offers. Active is the intersection with the client's list.
+pub const CAPABILITIES: &[&str] = &[CAP_INDICATOR];
 /// Longest accepted request line, enforced while reading (not after).
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
 /// Longest dictated text; anything longer is not dictation. Kept small on
@@ -18,9 +36,20 @@ pub const MAX_LINE_BYTES: usize = 64 * 1024;
 /// lock, and an agent that is not reading stdin can stall a large block.
 pub const MAX_TEXT_CHARS: usize = 8 * 1024;
 const MAX_ID_LEN: usize = 64;
+const MAX_LABEL_CHARS: usize = 64;
+const MAX_CAPS: usize = 16;
+const MAX_CAP_LEN: usize = 32;
+const KNOWN_OPS: &[&str] = &["hello", "begin", "insert", "cancel"];
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Request {
+    Hello {
+        request_id: String,
+        proto: u64,
+        app: String,
+        version: String,
+        capabilities: Vec<String>,
+    },
     Begin {
         request_id: String,
     },
@@ -31,6 +60,7 @@ pub enum Request {
         submit: bool,
     },
     Cancel {
+        request_id: Option<String>,
         pin: String,
     },
 }
@@ -39,9 +69,16 @@ pub enum Request {
 #[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
 enum Op {
     #[serde(rename_all = "camelCase")]
-    Begin {
+    Hello {
         request_id: String,
+        proto: u64,
+        app: String,
+        version: String,
+        #[serde(default)]
+        capabilities: Vec<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    Begin { request_id: String },
     #[serde(rename_all = "camelCase")]
     Insert {
         request_id: String,
@@ -50,7 +87,12 @@ enum Op {
         #[serde(default)]
         submit: bool,
     },
+    // `requestId` is optional on purpose: a 1.9.0 server refuses the extra
+    // field, so clients only add it after a successful hello.
+    #[serde(rename_all = "camelCase")]
     Cancel {
+        #[serde(default)]
+        request_id: Option<String>,
         pin: String,
     },
 }
@@ -72,6 +114,14 @@ pub struct Response {
     pub agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submit_scheduled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proto: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
 }
 
 impl Response {
@@ -92,11 +142,80 @@ impl Response {
             ..Default::default()
         }
     }
+    pub fn hello(request_id: String, capabilities: Vec<String>) -> Self {
+        Self {
+            proto: Some(PROTO),
+            app: Some("swarmterm".into()),
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            capabilities: Some(capabilities),
+            ..Self::ok(Some(request_id))
+        }
+    }
     pub fn to_line(&self) -> String {
         let mut s = serde_json::to_string(self).unwrap_or_else(|_| "{}".into());
         s.push('\n');
         s
     }
+}
+
+/// Why the server dropped an indicator pin, as pushed to the client. Only
+/// `user` means "discard the recording"; every other reason (and a plain
+/// EOF) leaves the client its clipboard fallback, so no dictation is lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelReason {
+    User,
+    Superseded,
+    TargetGone,
+    Expired,
+    Disabled,
+}
+
+impl CancelReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Superseded => "superseded",
+            Self::TargetGone => "target-gone",
+            Self::Expired => "expired",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+/// Server push on a negotiated connection.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Event {
+    pub v: u64,
+    pub event: &'static str,
+    pub pin: String,
+    pub reason: &'static str,
+}
+
+impl Event {
+    pub fn cancelled(pin: String, reason: CancelReason) -> Self {
+        Self {
+            v: VERSION,
+            event: "cancelled",
+            pin,
+            reason: reason.as_str(),
+        }
+    }
+    pub fn to_line(&self) -> String {
+        let mut s = serde_json::to_string(self).unwrap_or_else(|_| "{}".into());
+        s.push('\n');
+        s
+    }
+}
+
+/// The capabilities both sides announced, in our order. Unknown ones from
+/// the client are ignored, never an error — that keeps adding a capability
+/// later a one-sided change.
+pub fn negotiate(client: &[String]) -> Vec<String> {
+    CAPABILITIES
+        .iter()
+        .filter(|c| client.iter().any(|x| x == *c))
+        .map(|c| (*c).to_owned())
+        .collect()
 }
 
 /// Compare without an early exit, so response timing does not leak how many
@@ -116,6 +235,17 @@ fn valid_id(id: &str) -> bool {
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn valid_cap(c: &str) -> bool {
+    !c.is_empty()
+        && c.len() <= MAX_CAP_LEN
+        && c.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+fn valid_label(s: &str) -> bool {
+    !s.trim().is_empty() && s.chars().count() <= MAX_LABEL_CHARS && !s.chars().any(char::is_control)
 }
 
 /// Parse and authenticate one line. Errors are the `reason` sent back.
@@ -138,8 +268,26 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
     {
         return Err("unauthorized");
     }
+    match obj.get("op").and_then(Value::as_str) {
+        Some(op) if KNOWN_OPS.contains(&op) => {}
+        Some(_) => return Err("unknown-op"),
+        None => return Err("bad-request"),
+    }
     let op: Op = serde_json::from_value(Value::Object(obj)).map_err(|_| "bad-request")?;
     let req = match op {
+        Op::Hello {
+            request_id,
+            proto,
+            app,
+            version,
+            capabilities,
+        } => Request::Hello {
+            request_id,
+            proto,
+            app,
+            version,
+            capabilities,
+        },
         Op::Begin { request_id } => Request::Begin { request_id },
         Op::Insert {
             request_id,
@@ -152,9 +300,28 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
             text,
             submit,
         },
-        Op::Cancel { pin } => Request::Cancel { pin },
+        Op::Cancel { request_id, pin } => Request::Cancel { request_id, pin },
     };
     match &req {
+        Request::Hello {
+            request_id,
+            proto,
+            app,
+            version,
+            capabilities,
+        } => {
+            if !valid_id(request_id)
+                || *proto == 0
+                || !valid_label(app)
+                || !valid_label(version)
+                || capabilities.len() > MAX_CAPS
+                || !capabilities.iter().all(|c| valid_cap(c))
+            {
+                Err("bad-request")
+            } else {
+                Ok(req)
+            }
+        }
         Request::Begin { request_id } if !valid_id(request_id) => Err("bad-request"),
         Request::Insert {
             request_id,
@@ -172,7 +339,11 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
                 Ok(req)
             }
         }
-        Request::Cancel { pin } if !valid_id(pin) => Err("bad-request"),
+        Request::Cancel { request_id, pin }
+            if !valid_id(pin) || request_id.as_deref().is_some_and(|r| !valid_id(r)) =>
+        {
+            Err("bad-request")
+        }
         _ => Ok(req),
     }
 }
@@ -184,7 +355,7 @@ mod tests {
     const TOKEN: &str = "secret-token";
 
     #[test]
-    fn parses_the_three_ops() {
+    fn parses_the_request_ops() {
         assert_eq!(
             parse(
                 r#"{"v":1,"token":"secret-token","op":"begin","requestId":"r1"}"#,
@@ -211,8 +382,57 @@ mod tests {
                 r#"{"v":1,"token":"secret-token","op":"cancel","pin":"p1"}"#,
                 TOKEN
             ),
-            Ok(Request::Cancel { pin: "p1".into() })
+            Ok(Request::Cancel {
+                request_id: None,
+                pin: "p1".into()
+            })
         );
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"cancel","requestId":"r3","pin":"p1"}"#,
+                TOKEN
+            ),
+            Ok(Request::Cancel {
+                request_id: Some("r3".into()),
+                pin: "p1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_hello_and_negotiates_the_intersection() {
+        let line = r#"{"v":1,"token":"secret-token","op":"hello","requestId":"h1","proto":2,"app":"buzzkey","version":"1.9.1+bk.3","capabilities":["indicator","quit","future-thing"]}"#;
+        let Ok(Request::Hello {
+            proto,
+            app,
+            capabilities,
+            ..
+        }) = parse(line, TOKEN)
+        else {
+            panic!("hello did not parse");
+        };
+        assert_eq!((proto, app.as_str()), (2, "buzzkey"));
+        assert_eq!(negotiate(&capabilities), vec!["indicator".to_owned()]);
+        assert!(negotiate(&[]).is_empty());
+    }
+
+    #[test]
+    fn rejects_malformed_hello() {
+        let long_app = format!(
+            r#"{{"v":1,"token":"secret-token","op":"hello","requestId":"h","proto":2,"app":"{}","version":"1"}}"#,
+            "a".repeat(MAX_LABEL_CHARS + 1)
+        );
+        assert_eq!(parse(&long_app, TOKEN), Err("bad-request"));
+        let bad_cap = r#"{"v":1,"token":"secret-token","op":"hello","requestId":"h","proto":2,"app":"b","version":"1","capabilities":["Indicator"]}"#;
+        assert_eq!(parse(bad_cap, TOKEN), Err("bad-request"));
+        let caps: Vec<String> = (0..=MAX_CAPS).map(|i| format!("\"c{i}\"")).collect();
+        let many = format!(
+            r#"{{"v":1,"token":"secret-token","op":"hello","requestId":"h","proto":2,"app":"b","version":"1","capabilities":[{}]}}"#,
+            caps.join(",")
+        );
+        assert_eq!(parse(&many, TOKEN), Err("bad-request"));
+        let proto0 = r#"{"v":1,"token":"secret-token","op":"hello","requestId":"h","proto":0,"app":"b","version":"1"}"#;
+        assert_eq!(parse(proto0, TOKEN), Err("bad-request"));
     }
 
     #[test]
@@ -223,6 +443,8 @@ mod tests {
             parse(r#"{"v":1,"op":"begin","requestId":"r1"}"#, TOKEN),
             Err("unauthorized")
         );
+        let unknown_no_token = r#"{"v":1,"op":"run"}"#;
+        assert_eq!(parse(unknown_no_token, TOKEN), Err("unauthorized"));
         assert!(!token_matches("secret-token-longer", TOKEN));
         assert!(!token_matches("", TOKEN));
     }
@@ -230,9 +452,14 @@ mod tests {
     #[test]
     fn rejects_unknown_ops_fields_and_versions() {
         let run = r#"{"v":1,"token":"secret-token","op":"run","cmd":"calc"}"#;
-        assert_eq!(parse(run, TOKEN), Err("bad-request"));
+        assert_eq!(parse(run, TOKEN), Err("unknown-op"));
+        let no_op = r#"{"v":1,"token":"secret-token","requestId":"r1"}"#;
+        assert_eq!(parse(no_op, TOKEN), Err("bad-request"));
         let extra = r#"{"v":1,"token":"secret-token","op":"begin","requestId":"r1","shell":true}"#;
         assert_eq!(parse(extra, TOKEN), Err("bad-request"));
+        let bad_cancel =
+            r#"{"v":1,"token":"secret-token","op":"cancel","requestId":"a b","pin":"p"}"#;
+        assert_eq!(parse(bad_cancel, TOKEN), Err("bad-request"));
         let v2 = r#"{"v":2,"token":"secret-token","op":"begin","requestId":"r1"}"#;
         assert_eq!(parse(v2, TOKEN), Err("unsupported-version"));
         assert_eq!(parse("not json", TOKEN), Err("bad-request"));
@@ -253,11 +480,19 @@ mod tests {
     }
 
     #[test]
-    fn response_lines_are_compact_json() {
+    fn response_and_event_lines_are_compact_json() {
         let line = Response::err(Some("r1".into()), "no-focus").to_line();
         assert_eq!(
             line,
             "{\"v\":1,\"requestId\":\"r1\",\"ok\":false,\"reason\":\"no-focus\"}\n"
         );
+        assert_eq!(
+            Event::cancelled("p1".into(), CancelReason::User).to_line(),
+            "{\"v\":1,\"event\":\"cancelled\",\"pin\":\"p1\",\"reason\":\"user\"}\n"
+        );
+        let hello = Response::hello("h1".into(), vec!["indicator".into()]);
+        assert_eq!(hello.proto, Some(PROTO));
+        assert!(hello.to_line().contains("\"capabilities\":[\"indicator\"]"));
+        assert!(!hello.to_line().contains("event"));
     }
 }

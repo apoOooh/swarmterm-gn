@@ -139,6 +139,7 @@ pub fn run() {
             commands::write_terminal_checked,
             voice::voice_focus_response,
             voice::voice_insert_result,
+            voice::voice_indicator_stop,
             voice::voice_get_settings,
             voice::voice_set_settings,
             commands::resize_terminal,
