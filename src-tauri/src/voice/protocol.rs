@@ -13,8 +13,10 @@ use serde_json::Value;
 pub const VERSION: u64 = 1;
 /// Longest accepted request line, enforced while reading (not after).
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
-/// Longest dictated text; anything longer is not dictation.
-pub const MAX_TEXT_CHARS: usize = 32 * 1024;
+/// Longest dictated text; anything longer is not dictation. Kept small on
+/// purpose: `write_terminal_checked` writes under the global `terminals`
+/// lock, and an agent that is not reading stdin can stall a large block.
+pub const MAX_TEXT_CHARS: usize = 8 * 1024;
 const MAX_ID_LEN: usize = 64;
 
 #[derive(Debug, PartialEq, Eq)]

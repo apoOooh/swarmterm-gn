@@ -68,15 +68,17 @@ export async function deliverDictation(req: DictationRequest, deps: DictationDep
   if (late) return { ok: false, reason: late }
 
   const bracketed = info.bracketed
+  // Mark the draft BEFORE the write's IPC round trip, or a War Room tick in
+  // between sees a clean pane and pastes onto it. Order matters: IME baseline
+  // first, then dirty. A failed write leaves a dirty flag without text, which
+  // only holds room deliveries until the next Enter — harmless.
+  deps.resetInput(req.terminalId)
+  const stamp = deps.markDraft(req.terminalId, deps.now())
   try {
     await deps.write(req.terminalId, req.expectedSpawnId, prepareDictationBody(req.text, bracketed))
   } catch (e) {
     return { ok: false, reason: reasonOf(e) }
   }
-  // Order matters: invalidate the IME baseline first, then mark the line as
-  // the user's own draft so War Room deliveries hold off.
-  deps.resetInput(req.terminalId)
-  const stamp = deps.markDraft(req.terminalId, deps.now())
 
   const wantSubmit = req.submit && bracketed
   if (wantSubmit) void submitLater(req, deps, stamp)

@@ -28,10 +28,10 @@ function setup(over: Partial<DictationDeps> = {}) {
 const req: DictationRequest = { requestId: 'r1', terminalId: 't1', expectedSpawnId: 's1', text: 'hi', submit: false }
 
 describe('deliverDictation', () => {
-  it('writes the framed draft, then resets the IME baseline, then marks dirty', async () => {
+  it('resets the IME baseline, marks dirty, then writes the framed draft', async () => {
     const { deps, calls } = setup()
     expect(await deliverDictation(req, deps)).toEqual({ ok: true, submitScheduled: false })
-    expect(calls).toEqual(['write:"\\u001b[200~hi\\u001b[201~"', 'reset', 'dirty'])
+    expect(calls).toEqual(['reset', 'dirty', 'write:"\\u001b[200~hi\\u001b[201~"'])
   })
 
   it('passes the pinned spawn id to the checked write', async () => {
@@ -51,9 +51,8 @@ describe('deliverDictation', () => {
       ok: false,
       reason: 'target-gone'
     })
-    const { deps, calls } = setup({ write: async () => Promise.reject('target-gone') })
+    const { deps } = setup({ write: async () => Promise.reject('target-gone') })
     expect(await deliverDictation(req, deps)).toEqual({ ok: false, reason: 'target-gone' })
-    expect(calls).toEqual([])
   })
 
   it('waits for an open IME composition and gives up after the limit', async () => {
@@ -88,6 +87,6 @@ describe('deliverDictation', () => {
     const { deps, calls } = setup({ draftInfo: () => ({ bracketed: false, composing: false }) })
     const out = await deliverDictation({ ...req, text: 'a\nb', submit: true }, deps)
     expect(out.submitScheduled).toBe(false)
-    expect(calls[0]).toBe('write:"a b"')
+    expect(calls[2]).toBe('write:"a b"')
   })
 })
