@@ -24,7 +24,8 @@ import type { HoldReason } from '@/lib/war-room-nudge'
 import type { AgentEngineState } from '@/lib/agent-state/types'
 import { templateById } from '@/lib/templates'
 
-export type PtyKind = 'connecting' | 'running' | 'exited' | 'error'
+/** `gone` = the new pane was closed (no registry entry, no layout leaf). */
+export type PtyKind = 'connecting' | 'running' | 'exited' | 'error' | 'gone'
 
 export interface LivePty {
   kind: PtyKind
@@ -91,6 +92,7 @@ export function reduceHandoff(s: HandoffState, e: HandoffEvent): HandoffState {
       if (s.phase === 'choosing') return s
       if (e.kind === 'error') return fail(s, e.message ?? 'The new pane failed to start.')
       if (e.kind === 'exited') return fail(s, 'The new pane exited before the brief was delivered.')
+      if (e.kind === 'gone') return fail(s, 'The new pane was closed before the brief was delivered.')
       // Ready only on a positive, agent-specific signal: the CLI's own session
       // hook for THIS pty generation. A shell whose CLI is missing or crashed
       // is `running` too, and the detector reports `idle` for screens it
@@ -231,4 +233,17 @@ export const STARTING_HINT_MS = 15_000
 export function startingHint(phase: HandoffPhase, startedAt: number | undefined, now: number): string | undefined {
   if (phase !== 'starting' || startedAt === undefined || now - startedAt < STARTING_HINT_MS) return undefined
   return 'Agent not ready yet — answer its prompt (trust, login) in the new pane. The handoff waits here.'
+}
+
+/** How long a ready pane may stay unrecognised by the detector before the dialog explains the locked Send. */
+export const READY_HINT_MS = 15_000
+
+/**
+ * The session hook proved the CLI started, but Send waits for the detector to
+ * recognise the agent. A screen it never recognises would otherwise leave a
+ * silently disabled button.
+ */
+export function readyHint(phase: HandoffPhase, agentSeen: boolean | undefined, readyAt: number | undefined, now: number): string | undefined {
+  if (phase !== 'ready' || agentSeen || readyAt === undefined || now - readyAt < READY_HINT_MS) return undefined
+  return 'The agent reported its session but is not recognised on screen yet, so Send stays locked. Check the new pane, or copy the brief from the Handoff brief dialog.'
 }

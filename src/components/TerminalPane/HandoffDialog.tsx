@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { describeUsage, handoffTargets, sessionHookGaps, limitHint, startingHint, type HandoffPhase } from '@/lib/handoff-flow'
+import { describeUsage, handoffTargets, sessionHookGaps, limitHint, readyHint, startingHint, type HandoffPhase } from '@/lib/handoff-flow'
 import { deliverHandoffBrief } from '@/lib/handoff-delivery'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { getTerminalGeneration, getTerminalStatus, readTerminalText } from '@/lib/terminal-registry'
@@ -8,7 +8,7 @@ import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import { listAvailableAgents } from '@/tauri/agents'
 import { useModalFocus } from '@/components/ui/use-modal-focus'
-import { useAppStore } from '@/store/app-store'
+import { selectWorkspaceByTerminalId, useAppStore } from '@/store/app-store'
 import { useHandoffStore } from '@/store/handoff-store'
 import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
@@ -66,9 +66,12 @@ export function HandoffDialog(): React.ReactElement | null {
     if (!terminalId || !waiting) return
     const poll = (): void => {
       const status = getTerminalStatus(terminalId)
+      // The leaf leaves the layout when the pane is closed (drawered panes stay),
+      // and its registry status would read `connecting` forever.
+      const gone = selectWorkspaceByTerminalId(useAppStore.getState(), terminalId) === undefined
       dispatch({
         type: 'status',
-        kind: status.kind,
+        kind: gone ? 'gone' : status.kind,
         generation: getTerminalGeneration(terminalId),
         agent: useAgentStateStore.getState().byId[terminalId]?.state,
         message: status.kind === 'error' ? status.message : undefined
@@ -78,12 +81,31 @@ export function HandoffDialog(): React.ReactElement | null {
     const h = window.setInterval(poll, STATUS_POLL_MS)
     return () => window.clearInterval(h)
   }, [terminalId, waiting, dispatch])
+  // When the pane became ready, for the "Send locked" hint.
+  const [readyAt, setReadyAt] = useState<number | undefined>()
   useEffect(() => {
-    if (phase !== 'starting') return
+    setReadyAt(phase === 'ready' ? Date.now() : undefined)
+  }, [phase])
+  useEffect(() => {
+    if (phase !== 'starting' && phase !== 'ready') return
     setNow(Date.now())
     const h = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(h)
   }, [phase])
+
+  // Failures before Send (spawn error, exit, closed pane) come from status
+  // polling, not from delivery callbacks; they need the same acknowledgement.
+  const error = state.error
+  useEffect(() => {
+    if (phase !== 'failed' || started.current || !terminalId) return
+    useNotificationCenterStore.getState().add({
+      kind: 'handoff',
+      terminalId,
+      title: `Handoff brief not sent: ${error ?? 'unknown error'}`,
+      detail: useTerminalTitleStore.getState().titles[terminalId] ?? '',
+      at: Date.now()
+    })
+  }, [phase, terminalId, error])
 
   const dismiss = (): void => {
     // A confirmed (possibly held) delivery keeps running after close — it is
@@ -176,7 +198,7 @@ export function HandoffDialog(): React.ReactElement | null {
   }
   const finished = phase === 'delivered' || phase === 'pasted' || phase === 'failed' || phase === 'delivering'
   const key = (t: { agentId: string; accountId?: string }): string => `${t.agentId}:${t.accountId ?? ''}`
-  const notReady = startingHint(phase, startedAt, now)
+  const notReady = startingHint(phase, startedAt, now) ?? readyHint(phase, state.agentSeen, readyAt, now)
 
   if (minimized) {
     // Non-modal chip: no role="dialog", so overlay-watch and terminal-focus

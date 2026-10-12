@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { focusTrapTarget } from '@/lib/handoff-flow'
 import { focusTerminal } from '@/lib/terminal-registry'
-import { ownsKeyboard, pushModal, removeModal, type ModalStack } from '@/lib/modal-stack'
+import { foreignModalAbove, ownsKeyboard, pushModal, removeModal, type ModalStack } from '@/lib/modal-stack'
 
 let stack: ModalStack = []
 let nextId = 1
@@ -29,10 +29,14 @@ export function useModalFocus(open: boolean, onClose: () => void, returnTo: stri
     if (!open) return
     const modalId = nextId++
     stack = pushModal(stack, modalId)
-    const foreignOpen = (): boolean =>
-      Array.from(document.querySelectorAll('[aria-modal="true"]')).some(
+    const foreign = (): Element[] =>
+      Array.from(document.querySelectorAll('[aria-modal="true"]')).filter(
         (n) => root.current !== null && !root.current.contains(n) && !n.contains(root.current) && !n.hasAttribute('data-modal-stack')
       )
+    // Foreign modals already open below us (Settings under its folder picker)
+    // must not count as on top. Captured after mount, before any newer modal.
+    const below = new Set(foreign())
+    const foreignOpen = (): boolean => foreignModalAbove(foreign(), below)
     const top = (): boolean => ownsKeyboard(stack, modalId, foreignOpen())
     const nodes = (): HTMLElement[] =>
       Array.from(root.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []).filter((n) => !n.hasAttribute('disabled'))
