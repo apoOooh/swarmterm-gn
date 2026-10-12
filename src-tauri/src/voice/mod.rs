@@ -1,4 +1,4 @@
-//! Voice dictation endpoint (SWA-12): an external dictation app (Buzzkey)
+//! Voice dictation endpoint (SWA-12): an external dictation app (buzzkey)
 //! sends finished text; Swarmterm types it as a draft into the pane that
 //! owned the keyboard when recording began.
 //!
@@ -8,7 +8,7 @@
 //!   who owns the keyboard and pins `{terminalId, spawn_id}`; `insert`
 //!   redeems the pin, hands the text to the renderer (`voice:insert`) and
 //!   waits for the ACK of the generation-checked write.
-//! - `pipe` (Windows only): named pipe + discovery file, the Buzzkey adapter.
+//! - `pipe` (Windows only): named pipe + discovery file, the buzzkey adapter.
 //!
 //! The renderer owns focus and xterm state (bracketed paste, IME, typing
 //! signal), Rust owns the PTY generation. Both checks are needed: the

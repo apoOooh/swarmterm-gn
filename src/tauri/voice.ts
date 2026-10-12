@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 /**
- * Voice dictation bridge (SWA-12). Rust owns the Buzzkey pipe and the pins;
+ * Voice dictation bridge (SWA-12). Rust owns the buzzkey pipe and the pins;
  * it asks the renderer who owns the keyboard (`voice:focus-request`) and
  * hands it pinned text to write (`voice:insert`). Both answers go back by
  * requestId. Serde camelCase in lockstep with `src-tauri/src/voice/mod.rs`.

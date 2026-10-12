@@ -4,7 +4,7 @@ import { ToggleRow } from './NotificationsPanel'
 
 /**
  * Settings → Voice (SWA-12). The endpoint lets a local dictation app
- * (Buzzkey) type into the pane that owned the keyboard when recording
+ * (buzzkey) type into the pane that owned the keyboard when recording
  * began. Settings live in Rust (`voice/settings.rs`), which also enforces
  * them: switching off closes the pipe and revokes open dictations.
  */
@@ -26,7 +26,7 @@ export function VoicePanel(): ReactElement {
       <section>
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">Voice</h1>
         <p className="mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground">
-          A local dictation app such as Buzzkey can send what you say straight into the pane that had
+          A local dictation app such as buzzkey can send what you say straight into the pane that had
           the keyboard when you started speaking — even if you click elsewhere while it transcribes.
           Text arrives as a draft; it is never sent as a command on its own.
         </p>
