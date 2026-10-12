@@ -1,6 +1,6 @@
 import type { AppShortcutAction } from './keybindings'
 
-export type BuiltinActionId = AppShortcutAction | 'new-workspace' | 'open-settings' | 'split-horizontal' | 'split-vertical' | 'close-pane' | 'close-workspace' | 'next-workspace' | 'previous-workspace' | 'next-pane' | 'previous-pane' | 'tidy-layout' | 'select-all-broadcast' | 'clear-broadcast' | 'save-file' | 'cycle-markdown'
+export type BuiltinActionId = AppShortcutAction | 'new-workspace' | 'open-settings' | 'split-horizontal' | 'split-vertical' | 'close-pane' | 'close-workspace' | 'next-workspace' | 'previous-workspace' | 'next-pane' | 'previous-pane' | 'tidy-layout' | 'select-all-broadcast' | 'clear-broadcast' | 'save-file' | 'cycle-markdown' | 'open-prompts'
 export interface AppAction { id: BuiltinActionId; label: string; group: string; defaultBinding?: string; macro?: boolean }
 /** The window handler and terminal gate resolve the same registry and overrides. */
 export const APP_ACTIONS: AppAction[] = [
@@ -8,6 +8,7 @@ export const APP_ACTIONS: AppAction[] = [
   { id: 'focus-explorer', label: 'Focus file explorer', group: 'Window', defaultBinding: 'Mod+Shift+E', macro: true },
   { id: 'new-workspace', label: 'Open workspace composer', group: 'Workspaces' },
   { id: 'open-settings', label: 'Open settings', group: 'Window', defaultBinding: 'Mod+,' },
+  { id: 'open-prompts', label: 'Open prompt library', group: 'Window' },
   { id: 'next-workspace', label: 'Next workspace', group: 'Workspaces', macro: true },
   { id: 'previous-workspace', label: 'Previous workspace', group: 'Workspaces', macro: true },
   { id: 'close-workspace', label: 'Close active workspace', group: 'Workspaces' },
