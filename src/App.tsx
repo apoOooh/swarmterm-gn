@@ -122,6 +122,7 @@ import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
 import { onAgentSession } from '@/tauri/sessions'
 import { wireSavedWorkspaces, flushSavedWorkspaces } from '@/store/saved-workspaces-store'
+import { wireVoice } from '@/lib/voice-wiring'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
 
@@ -578,6 +579,9 @@ export default function App(): ReactElement {
   // not capture a stale value.
   const settingsOpenRef = useRef(settingsOpen)
   settingsOpenRef.current = settingsOpen
+
+  // Voice dictation (SWA-12): answers Rust's focus/insert requests.
+  useEffect(() => wireVoice(() => settingsOpenRef.current), [])
 
   /** Focus the active workspace's focused terminal, unless something is typing. */
   const returnFocusToTerminal = useCallback(() => {

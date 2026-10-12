@@ -114,6 +114,27 @@ pub fn write_terminal(state: State<'_, AppState>, id: String, data: String) {
     }
 }
 
+/// Write that only lands in the PTY generation the caller pinned. Voice
+/// dictation resolves its target long before the bytes arrive; a same-id
+/// respawn (agent/cwd switch) in between must reject, not type into the new
+/// shell. The check runs under the `terminals` lock, so no respawn can slip
+/// between check and write, and the `Result` is the delivery ACK.
+#[tauri::command]
+pub fn write_terminal_checked(
+    state: State<'_, AppState>,
+    id: String,
+    expected_spawn_id: String,
+    data: String,
+) -> Result<(), String> {
+    let mut terminals = state.terminals.lock().map_err(|e| e.to_string())?;
+    let t = terminals.get_mut(&id).ok_or("target-gone")?;
+    crate::voice::check_generation(&t.spawn_id, &expected_spawn_id)?;
+    t.writer
+        .write_all(data.as_bytes())
+        .and_then(|_| t.writer.flush())
+        .map_err(|e| format!("write-failed: {e}"))
+}
+
 #[tauri::command]
 pub fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) {
     if let Some(t) = state.terminals.lock().unwrap().get(&id) {

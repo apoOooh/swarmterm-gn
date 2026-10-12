@@ -261,6 +261,16 @@ Toggle it in **Settings → Terminal**. Swarmterm merge-writes the entry into `~
 
 The pane header mirrors the percentage as a small `ctx 63%` chip (same amber / red bands) once the first reply lands, so you can compare panes without reading each status line. It needs the status line enabled — that is where the number comes from — and disappears on `/clear`, when `claude` exits, and on very narrow panes.
 
+## Voice dictation
+
+A local dictation app (Buzzkey) can type what you say straight into Swarmterm. Start dictating while a pane has the keyboard; the text lands in **that** pane even if you click another one while it transcribes.
+
+- Dictation arrives as a **draft**: it sits in the prompt and is never sent on its own. In a plain shell, line breaks and tabs become spaces, so nothing runs or completes.
+- A pane that waits for a permission answer gets nothing — dictation must never answer a prompt for you. If the pane was closed or restarted, the text is not redirected anywhere else. Either way the notification bell says why, and Buzzkey keeps the text on the clipboard.
+- With Settings, Welcome, the file editor, a search field or any dialog holding the keyboard, Swarmterm refuses rather than guesses.
+
+**Settings → Voice** turns the endpoint on or off and can allow auto-Enter (off by default; never in plain shells, and only if you did not touch the prompt in the meantime). Only apps running as your Windows user can connect: Swarmterm opens a named pipe restricted to your account and writes its name and a fresh per-launch key to `%LOCALAPPDATA%\<app id>\voice-endpoint.json`.
+
 ## Terminal essentials
 
 - **Real PTYs with 24-bit truecolor** — agent CLIs, emoji and box drawing render exactly as in your normal terminal, and IMEs (Vietnamese Telex, CJK) work without dropped characters.

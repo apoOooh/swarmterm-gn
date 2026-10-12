@@ -245,6 +245,20 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   (error ⇒ empty, never blocks Create); session ids are regex-validated in
   `lib/resume-command.ts` before they reach a shell line; resume panes spawn
   at the session's recorded cwd and are exempt from worktree provisioning.
+- **Voice pipe (SWA-12).** `src-tauri/src/voice/`: a named pipe (current-user
+  DACL, `first_pipe_instance`) plus `voice-endpoint.json` in the local app
+  data dir (pipe, per-launch token, pid) — not a route on the MCP server,
+  which browsers can reach. Three ops only (`begin`/`insert`/`cancel`),
+  never a command. `begin` asks the renderer who owns the keyboard
+  (`lib/voice-focus.ts`, 300 ms) and pins `{terminalId, spawn_id}`
+  single-use; `insert` hands the text to the renderer, which writes ONLY via
+  `write_terminal_checked` (spawn_id checked under the `terminals` lock) and
+  reports the ACK back. Draft rules live in `lib/voice-insert.ts` /
+  `voice-delivery.ts`: sanitise before framing, plain shells flatten
+  CR/LF/TAB, blocked panes refused, reset the IME segment THEN mark dirty,
+  Enter is a separate delayed write re-checked against the typing stamp.
+  The source logic is pipe-independent so an in-process speech source can
+  call it directly.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that

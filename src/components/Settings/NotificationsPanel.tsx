@@ -15,7 +15,7 @@ interface ToggleRowProps {
   icon?: ReactElement
 }
 
-function ToggleRow({ label, description, checked, onChange, icon }: ToggleRowProps): ReactElement {
+export function ToggleRow({ label, description, checked, onChange, icon }: ToggleRowProps): ReactElement {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
       <div className="flex min-w-0 items-center gap-2">

@@ -174,6 +174,10 @@ interface Entry {
    * callers has any way to know that.
    */
   resetInputSegment: () => void
+  /** True while an IME composition is open in this pane's textarea. Voice
+   *  dictation waits for it to end: text written to the pty mid-composition
+   *  would be overwritten by the composition's own commit. */
+  isComposing: () => boolean
   /** When the current pty reached `running` — anchors the start window in
    *  which agent panes drop focus reports (`lib/focus-report.ts`). */
   ptyStartedAt?: number
@@ -1045,7 +1049,8 @@ function getOrCreate(id: string): Entry {
     config: {},
     cwd: '',
     opened: false,
-    resetInputSegment: resetSegment
+    resetInputSegment: resetSegment,
+    isComposing: () => compositionOpen
   }
   entries.set(id, entry)
   return entry
@@ -1255,6 +1260,26 @@ export function submitTerminalPrompt(id: string): void {
   const entry = entries.get(id)
   if (!entry) return
   void writeTerminal(id, '\r')
+}
+
+/**
+ * What the voice draft path (`lib/voice-delivery.ts`) needs to know about a
+ * pane before writing: whether the foreground app framed pastes, and whether
+ * an IME composition is open. Undefined for an unknown terminal.
+ */
+export function getTerminalDraftInfo(id: string): { bracketed: boolean; composing: boolean } | undefined {
+  const entry = entries.get(id)
+  if (!entry) return undefined
+  return { bracketed: entry.term.modes.bracketedPasteMode, composing: entry.isComposing() }
+}
+
+/**
+ * Invalidate the IME baseline after text reached the pty from outside the
+ * textarea (same reason as `pasteIntoTerminal`). Must run BEFORE the typing
+ * store marks the pane dirty, never after.
+ */
+export function resetTerminalInputSegment(id: string): void {
+  entries.get(id)?.resetInputSegment()
 }
 
 /** Re-spawn the pty after exit/error, clearing the screen first. */
