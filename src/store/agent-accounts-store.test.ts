@@ -1,9 +1,9 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { deleteAgentAccount, listAgentAccounts, saveAgentAccount, type AgentAccount } from '@/tauri/accounts'
+import { deleteAgentAccount, getAccountStatus, listAgentAccounts, saveAgentAccount, type AgentAccount } from '@/tauri/accounts'
 import { useAgentAccountsStore } from './agent-accounts-store'
 
 vi.mock('@/tauri/accounts', () => ({
-  listAgentAccounts: vi.fn(), saveAgentAccount: vi.fn(), deleteAgentAccount: vi.fn()
+  listAgentAccounts: vi.fn(), saveAgentAccount: vi.fn(), deleteAgentAccount: vi.fn(), getAccountStatus: vi.fn()
 }))
 
 const account: AgentAccount = { id: 'profile-1', agentId: 'codex', name: 'Work', configDir: '/profiles/work' }
@@ -88,4 +88,26 @@ it.each(['save', 'remove'] as const)('rereads after %s when an earlier refresh r
   await Promise.all([earlierRefresh, write])
   expect(listAgentAccounts).toHaveBeenCalledTimes(2)
   expect(useAgentAccountsStore.getState().accounts).toEqual(updated)
+})
+
+it('save returns the stored profile even when the reread fails', async () => {
+  // The wizard logs into the returned profile; it must never fall back to
+  // the default login because a list refresh went wrong.
+  vi.mocked(saveAgentAccount).mockResolvedValue(account)
+  vi.mocked(listAgentAccounts).mockRejectedValue(new Error('io'))
+  await expect(useAgentAccountsStore.getState().save({ agentId: 'codex', name: 'Work' })).resolves.toEqual(account)
+})
+
+it('stops watching a login once its profile is gone', async () => {
+  vi.useFakeTimers()
+  try {
+    useAgentAccountsStore.setState({ accounts: [account] })
+    vi.mocked(getAccountStatus).mockResolvedValue({ state: 'loggedOut' })
+    useAgentAccountsStore.getState().watchLogin('codex', account.id)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(getAccountStatus).toHaveBeenCalledTimes(1)
+    useAgentAccountsStore.setState({ accounts: [] })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(getAccountStatus).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
 })

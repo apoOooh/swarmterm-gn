@@ -59,11 +59,11 @@ export function AccountsPanel({ onLogin }: { onLogin: () => void }): React.React
     </div>
     {(error || failure) && <p role="alert" className="text-sm text-destructive">{failure ?? error}</p>}
     {adding && <AddAccountWizard existing={accounts} busy={busy} onCancel={() => setAdding(false)} onCreate={input => run(async () => {
-      const ids = new Set(accounts.map(a => a.id))
-      await save(input)
-      const created = useAgentAccountsStore.getState().accounts.find(a => !ids.has(a.id))
+      // Log into the profile the write returned. Diffing the reread list
+      // could come up empty and silently log into the default account.
+      const created = await save(input)
       setAdding(false)
-      await login(input.agentId, created?.id)
+      await login(input.agentId, created.id)
     })} />}
     {renaming && <form className="flex gap-2" onSubmit={e => {
       e.preventDefault()
