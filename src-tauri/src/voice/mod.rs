@@ -10,6 +10,11 @@
 //!   waits for the ACK of the generation-checked write.
 //! - `pipe` (Windows only): named pipe + discovery file, the buzzkey adapter.
 //!
+//! Indicator (SWA-40): on a connection that negotiated `indicator`, `begin`
+//! issues a pin bound to that connection and turns the pane's "listening"
+//! pill on. Every end of such a pin funnels through `finish`, which turns the
+//! pill off and pushes the reason to the client if it is still connected.
+//!
 //! The renderer owns focus and xterm state (bracketed paste, IME, typing
 //! signal), Rust owns the PTY generation. Both checks are needed: the
 //! renderer decides WHAT to write, `write_terminal_checked` refuses to write
@@ -22,16 +27,17 @@ pub mod protocol;
 mod settings;
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::pty::AppState;
-use pins::PinStore;
-use protocol::{Request, Response};
+use pins::{Pin, PinStore, PIN_TTL};
+use protocol::{CancelReason, Event, Request, Response, CAP_INDICATOR};
 pub use settings::VoiceSettings;
 
 /// Renderer round trip for "who owns the keyboard". A late answer belongs to
@@ -84,6 +90,46 @@ struct InsertEvent {
     submit: bool,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct IndicatorEvent {
+    terminal_id: String,
+    pin: String,
+    active: bool,
+}
+
+/// What a connection's writer task sends. `Close` ends the connection after
+/// everything queued before it went out (used after an `expired` push).
+pub enum Outgoing {
+    Line(String),
+    Close,
+}
+
+/// Per-connection state, owned by whoever reads the requests. The default is
+/// a proto-1 connection without capabilities (also what an in-process
+/// source would use).
+#[derive(Default)]
+pub struct Conn {
+    pub id: u64,
+    requests: u64,
+    capabilities: Vec<String>,
+}
+
+impl Conn {
+    fn indicator(&self) -> bool {
+        self.capabilities.iter().any(|c| c == CAP_INDICATOR)
+    }
+}
+
+/// The client that last said hello. Kept for the companion UI (SWA-42).
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct PeerInfo {
+    pub app: String,
+    pub version: String,
+    pub proto: u64,
+}
+
 #[derive(Default)]
 pub struct VoiceHub {
     pins: Mutex<PinStore>,
@@ -91,6 +137,9 @@ pub struct VoiceHub {
     insert_waiters: Mutex<HashMap<String, oneshot::Sender<InsertReply>>>,
     seen: Mutex<VecDeque<(String, Response)>>,
     settings: Mutex<VoiceSettings>,
+    conns: Mutex<HashMap<u64, mpsc::UnboundedSender<Outgoing>>>,
+    next_conn: AtomicU64,
+    peer: Mutex<Option<PeerInfo>>,
     #[cfg(windows)]
     server: Mutex<Option<pipe::Running>>,
 }
@@ -98,6 +147,22 @@ pub struct VoiceHub {
 impl VoiceHub {
     pub fn settings(&self) -> VoiceSettings {
         self.settings.lock().unwrap().clone()
+    }
+
+    #[allow(dead_code)]
+    pub fn peer(&self) -> Option<PeerInfo> {
+        self.peer.lock().unwrap().clone()
+    }
+
+    /// A new pipe connection; pushes for it go through `tx`.
+    pub fn register_conn(&self, tx: mpsc::UnboundedSender<Outgoing>) -> u64 {
+        let id = self.next_conn.fetch_add(1, Ordering::Relaxed) + 1;
+        self.conns.lock().unwrap().insert(id, tx);
+        id
+    }
+
+    pub fn conn_has_pin(&self, conn: u64) -> bool {
+        self.pins.lock().unwrap().conn_has_pin(conn)
     }
 
     fn remembered(&self, request_id: &str) -> Option<Response> {
@@ -122,14 +187,94 @@ fn spawn_id_of(app: &AppHandle, terminal_id: &str) -> Option<String> {
     terminals.get(terminal_id).map(|t| t.spawn_id.clone())
 }
 
+fn emit_indicator(app: &AppHandle, pin: &Pin, active: bool) {
+    let _ = app.emit(
+        "voice:indicator",
+        IndicatorEvent {
+            terminal_id: pin.terminal_id.clone(),
+            pin: pin.id.clone(),
+            active,
+        },
+    );
+}
+
+/// The one place an indicator pin ends on the server's initiative: pill off,
+/// reason pushed to its connection if that is still open. `Expired` also
+/// closes the connection — the client sees why instead of a bare EOF.
+fn finish(app: &AppHandle, removed: Vec<(Pin, CancelReason)>) {
+    let hub = app.state::<VoiceHub>();
+    for (pin, reason) in removed {
+        let Some(conn) = pin.conn else { continue };
+        emit_indicator(app, &pin, false);
+        if let Some(tx) = hub.conns.lock().unwrap().get(&conn) {
+            let _ = tx.send(Outgoing::Line(
+                Event::cancelled(pin.id.clone(), reason).to_line(),
+            ));
+            if reason == CancelReason::Expired {
+                let _ = tx.send(Outgoing::Close);
+            }
+        }
+    }
+}
+
+/// Pill off without a push: the client itself ended the pin (insert,
+/// cancel) or is gone.
+fn quiet_off(app: &AppHandle, pin: &Pin) {
+    if pin.conn.is_some() {
+        emit_indicator(app, pin, false);
+    }
+}
+
+/// The connection closed: forget it, then drop its pins. In that order, so
+/// nothing is pushed into a dead pipe.
+pub fn close_conn(app: &AppHandle, conn: u64) {
+    let hub = app.state::<VoiceHub>();
+    hub.conns.lock().unwrap().remove(&conn);
+    let pins = hub.pins.lock().unwrap().remove_conn(conn);
+    for pin in &pins {
+        quiet_off(app, pin);
+    }
+}
+
+/// Terminal died or respawned (`kill_terminal` and `read_loop`, like the
+/// War Room auto-leave). Idempotent.
+pub fn drop_terminal(app: &AppHandle, terminal_id: &str) {
+    let Some(hub) = app.try_state::<VoiceHub>() else {
+        return;
+    };
+    let removed = hub.pins.lock().unwrap().remove_terminal(terminal_id);
+    finish(app, removed);
+}
+
 /// Source-independent entry point: one parsed request in, one response out.
-pub async fn handle(app: &AppHandle, req: Request) -> Response {
+pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response {
     let hub = app.state::<VoiceHub>();
     if !hub.settings().enabled {
         return Response::err(None, "disabled");
     }
+    conn.requests += 1;
     match req {
-        Request::Begin { request_id } => begin(app, &hub, request_id).await,
+        Request::Hello {
+            request_id,
+            proto,
+            app: peer_app,
+            version,
+            capabilities,
+        } => {
+            // Only as the opener: capabilities change what a pin is, so they
+            // cannot switch under a dictation that is already running.
+            if conn.requests > 1 {
+                return Response::err(Some(request_id), "bad-request");
+            }
+            conn.capabilities = protocol::negotiate(&capabilities);
+            *hub.peer.lock().unwrap() = Some(PeerInfo {
+                app: peer_app,
+                version,
+                proto,
+            });
+            Response::hello(request_id, conn.capabilities.clone())
+        }
+        Request::Begin { request_id } => begin(app, &hub, request_id, conn).await,
         Request::Insert {
             request_id,
             pin,
@@ -143,14 +288,17 @@ pub async fn handle(app: &AppHandle, req: Request) -> Response {
             hub.remember(&request_id, &resp);
             resp
         }
-        Request::Cancel { pin } => {
-            hub.pins.lock().unwrap().cancel(&pin);
-            Response::ok(None)
+        Request::Cancel { request_id, pin } => {
+            let removed = hub.pins.lock().unwrap().remove(&pin);
+            if let Some(pin) = removed {
+                quiet_off(app, &pin);
+            }
+            Response::ok(request_id)
         }
     }
 }
 
-async fn begin(app: &AppHandle, hub: &VoiceHub, request_id: String) -> Response {
+async fn begin(app: &AppHandle, hub: &VoiceHub, request_id: String, conn: &Conn) -> Response {
     let rid = Some(request_id.clone());
     let (tx, rx) = oneshot::channel();
     let ask = uuid::Uuid::new_v4().simple().to_string();
@@ -178,11 +326,47 @@ async fn begin(app: &AppHandle, hub: &VoiceHub, request_id: String) -> Response 
     let Some(spawn_id) = spawn_id_of(app, &terminal_id) else {
         return Response::err(rid, "no-focus");
     };
-    let pin = hub
-        .pins
-        .lock()
-        .unwrap()
-        .issue(terminal_id, spawn_id, Instant::now());
+    let holder = conn.indicator().then_some(conn.id);
+    let now = Instant::now();
+    let (pin, removed) = {
+        let mut pins = hub.pins.lock().unwrap();
+        // Re-check under the pins lock: a pane that died since the focus
+        // answer already ran drop_terminal and would never clear this pin.
+        // Any later death runs drop_terminal after we release the lock.
+        if spawn_id_of(app, &terminal_id).as_deref() != Some(spawn_id.as_str()) {
+            return Response::err(rid, "no-focus");
+        }
+        let (pin, removed) = pins.issue(terminal_id.clone(), spawn_id.clone(), holder, now);
+        if holder.is_some() {
+            // `on` under the lock too: a begin that supersedes this pin can
+            // only emit its `off` after this, so no late `on` revives a
+            // pill for a pin that is already gone.
+            emit_indicator(
+                app,
+                &Pin {
+                    id: pin.clone(),
+                    terminal_id,
+                    spawn_id,
+                    created: now,
+                    conn: holder,
+                },
+                true,
+            );
+        }
+        (pin, removed)
+    };
+    finish(app, removed);
+    if holder.is_some() {
+        // Expiry is otherwise lazy (swept on the next issue/redeem); an
+        // indicator pin needs it on time or its pill outlives the dictation.
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(PIN_TTL + Duration::from_millis(50)).await;
+            let hub = app.state::<VoiceHub>();
+            let removed = hub.pins.lock().unwrap().remove_expired(Instant::now());
+            finish(&app, removed);
+        });
+    }
     Response {
         pin: Some(pin),
         name: reply.name,
@@ -200,9 +384,19 @@ async fn insert(
     submit: bool,
 ) -> Response {
     let rid = Some(request_id.to_owned());
-    let Some(pin) = hub.pins.lock().unwrap().redeem(pin, Instant::now()) else {
-        return Response::err(rid, "pin-invalid");
+    let redeemed = hub.pins.lock().unwrap().redeem(pin, Instant::now());
+    let pin = match redeemed {
+        Ok(pin) => pin,
+        Err(stale) => {
+            if let Some(stale) = stale {
+                quiet_off(app, &stale);
+            }
+            return Response::err(rid, "pin-invalid");
+        }
     };
+    // Off before the write: recording is over, the pill must not sit on top
+    // of the text it is about to receive.
+    quiet_off(app, &pin);
     if spawn_id_of(app, &pin.terminal_id).as_deref() != Some(pin.spawn_id.as_str()) {
         return Response::err(rid, "target-gone");
     }
@@ -262,6 +456,24 @@ pub fn voice_insert_result(
     }
 }
 
+/// The pill's Stop button. Ends the dictation; the client discards it.
+#[tauri::command]
+pub fn voice_indicator_stop(app: AppHandle, pin: String) {
+    let hub = app.state::<VoiceHub>();
+    let removed = {
+        let mut pins = hub.pins.lock().unwrap();
+        // Only indicator pins have a pill; a legacy pin is not ours to stop.
+        if pins.is_indicator(&pin) {
+            pins.remove(&pin)
+        } else {
+            None
+        }
+    };
+    if let Some(pin) = removed {
+        finish(&app, vec![(pin, CancelReason::User)]);
+    }
+}
+
 #[tauri::command]
 pub fn voice_get_settings(hub: tauri::State<'_, VoiceHub>) -> VoiceSettings {
     hub.settings()
@@ -275,8 +487,13 @@ pub fn voice_set_settings(
     let hub = app.state::<VoiceHub>();
     let path = settings_path(&app)?;
     settings::save(&path, &settings)?;
-    *hub.settings.lock().unwrap() = settings.clone();
-    apply(&app);
+    let was_enabled =
+        std::mem::replace(&mut *hub.settings.lock().unwrap(), settings.clone()).enabled;
+    // Only an on/off switch restarts the endpoint. Auto-Enter is read per
+    // insert, so changing it must not kill a dictation that is running.
+    if was_enabled != settings.enabled {
+        apply(&app);
+    }
     Ok(settings)
 }
 
@@ -301,7 +518,10 @@ pub fn init(app: &AppHandle) {
 /// again issues a fresh token.
 pub fn apply(app: &AppHandle) {
     let hub = app.state::<VoiceHub>();
-    hub.pins.lock().unwrap().revoke_all();
+    // Push `disabled` before the server stops: each writer drains its queue
+    // after its reader is gone, so clients still learn why.
+    let removed = hub.pins.lock().unwrap().revoke_all();
+    finish(app, removed);
     #[cfg(windows)]
     {
         let mut server = hub.server.lock().unwrap();

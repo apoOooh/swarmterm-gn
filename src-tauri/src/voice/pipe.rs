@@ -10,19 +10,29 @@
 //! name, a fresh 256-bit token and our pid (buzzkey matches it against the
 //! foreground window, so dev and installed app never cross). Written
 //! atomically, removed when the endpoint stops.
+//!
+//! Each connection has a reader (this task, one request at a time) and a
+//! writer task fed by a channel. Answers and server pushes (SWA-40) both go
+//! through that channel, so a push during an 8-second `insert` is neither
+//! blocked nor interleaved mid-line.
 
 use std::ffi::c_void;
 use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
+use super::pins::PIN_TTL;
 use super::protocol::{self, Response, MAX_LINE_BYTES};
+use super::{Conn, Outgoing, VoiceHub};
 
 /// A connection that sends nothing for this long is closed.
 const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// While a connection holds a dictation it may stay silent for the whole
+/// recording; the pin's own expiry (pushed as `expired`) ends it first.
+const HOLD_TIMEOUT: std::time::Duration = PIN_TTL.saturating_add(std::time::Duration::from_secs(5));
 
 pub struct Running {
     stop: watch::Sender<bool>,
@@ -129,8 +139,41 @@ async fn accept_loop(
 async fn serve(
     app: AppHandle,
     token: String,
-    mut conn: NamedPipeServer,
+    conn: NamedPipeServer,
     mut stop: watch::Receiver<bool>,
+) {
+    let (mut rd, wr) = tokio::io::split(conn);
+    let (tx, rx) = mpsc::unbounded_channel();
+    let (closed_tx, mut closed) = watch::channel(false);
+    let id = app.state::<VoiceHub>().register_conn(tx.clone());
+    tauri::async_runtime::spawn(write_loop(wr, rx, closed_tx));
+    let mut state = Conn {
+        id,
+        ..Default::default()
+    };
+    read_loop(
+        &app,
+        &token,
+        &mut rd,
+        &tx,
+        &mut state,
+        &mut stop,
+        &mut closed,
+    )
+    .await;
+    // Unregister before the pins go, so nothing is pushed into a dead pipe.
+    // Dropping `tx` afterwards lets the writer drain what is queued and end.
+    super::close_conn(&app, id);
+}
+
+async fn read_loop(
+    app: &AppHandle,
+    token: &str,
+    rd: &mut ReadHalf<NamedPipeServer>,
+    tx: &mpsc::UnboundedSender<Outgoing>,
+    state: &mut Conn,
+    stop: &mut watch::Receiver<bool>,
+    closed: &mut watch::Receiver<bool>,
 ) {
     let mut buf: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -140,32 +183,57 @@ async fn serve(
             let line: Vec<u8> = buf.drain(..=pos).collect();
             let text = String::from_utf8_lossy(&line[..line.len() - 1]);
             let text = text.trim_end_matches('\r');
-            let resp = match protocol::parse(text, &token) {
-                Ok(req) => super::handle(&app, req).await,
+            let resp = match protocol::parse(text, token) {
+                Ok(req) => super::handle(app, req, state).await,
                 Err(reason) => Response::err(None, reason),
             };
             let unauthorized = resp.reason.as_deref() == Some("unauthorized");
-            if conn.write_all(resp.to_line().as_bytes()).await.is_err() || unauthorized {
+            if tx.send(Outgoing::Line(resp.to_line())).is_err() || unauthorized {
                 return;
             }
         }
         // The limit is enforced while reading: an endless line never grows
         // the buffer past MAX_LINE_BYTES.
         if buf.len() > MAX_LINE_BYTES {
-            let _ = conn
-                .write_all(Response::err(None, "too-large").to_line().as_bytes())
-                .await;
+            let _ = tx.send(Outgoing::Line(Response::err(None, "too-large").to_line()));
             return;
         }
+        let idle = if app.state::<VoiceHub>().conn_has_pin(state.id) {
+            HOLD_TIMEOUT
+        } else {
+            IDLE_TIMEOUT
+        };
         let n = tokio::select! {
             _ = stop.changed() => return,
-            r = tokio::time::timeout(IDLE_TIMEOUT, conn.read(&mut chunk)) => match r {
+            _ = closed.changed() => return,
+            r = tokio::time::timeout(idle, rd.read(&mut chunk)) => match r {
                 Ok(Ok(n)) if n > 0 => n,
                 _ => return,
             },
         };
         buf.extend_from_slice(&chunk[..n]);
     }
+}
+
+/// Writes whole lines in queue order. Ends on `Close`, on a write error, or
+/// once every sender is gone and the queue is drained; `closed` then tells
+/// the reader.
+async fn write_loop(
+    mut wr: WriteHalf<NamedPipeServer>,
+    mut rx: mpsc::UnboundedReceiver<Outgoing>,
+    closed: watch::Sender<bool>,
+) {
+    while let Some(out) = rx.recv().await {
+        match out {
+            Outgoing::Line(line) => {
+                if wr.write_all(line.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+            Outgoing::Close => break,
+        }
+    }
+    let _ = closed.send(true);
 }
 
 mod security {

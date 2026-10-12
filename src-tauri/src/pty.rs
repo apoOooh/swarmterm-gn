@@ -671,6 +671,7 @@ fn read_loop(
             use tauri::Emitter;
             let _ = app.emit("warroom:event", &crate::warroom::scoped(&room_id, event));
         }
+        crate::voice::drop_terminal(&app, &id);
         // Same preview cleanup as kill_terminal: read_loop is the path a shell
         // takes when it exits on its own (typed `exit`, crashed), where no one
         // called kill_terminal. preview:closed tells the renderer too — the

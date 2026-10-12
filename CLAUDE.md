@@ -258,7 +258,19 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   CR/LF/TAB, blocked panes refused, reset the IME segment THEN mark dirty,
   Enter is a separate delayed write re-checked against the typing stamp.
   The source logic is pipe-independent so an in-process speech source can
-  call it directly.
+  call it directly. SWA-40: envelope stays `v:1`; `hello` (first request
+  only) negotiates `proto`/capabilities per connection, unknown ops answer
+  `unknown-op` (1.9.0: `bad-request`, clients treat both as proto 1).
+  `indicator` = the client holds ONE connection per dictation; the pin is
+  bound to it and drives the pane pill (`voice:indicator`, keyed by pin).
+  Every server-side pin end goes through `finish` (pill off + `cancelled`
+  push with reason); only `user` means discard, anything else keeps the
+  client's clipboard fallback. Answers and pushes share a per-connection
+  writer task — never write to the pipe from the reader. `apply()` only
+  restarts the endpoint on an on/off switch.
+  Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
+  the pins lock): never call `voice::drop_terminal` while holding
+  `terminals`.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that
