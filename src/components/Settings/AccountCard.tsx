@@ -2,7 +2,7 @@ import { MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { budgetLeft, planLabel, statusLamp, type LampColor } from '@/lib/account-status'
-import { usageAge, type AccountUsage, type UsageWindow } from '@/lib/account-usage'
+import { dropExpiredWindows, usageAge, type AccountUsage, type UsageWindow } from '@/lib/account-usage'
 import type { AccountStatus } from '@/tauri/accounts'
 
 const LAMP: Record<LampColor, string> = {
@@ -14,7 +14,7 @@ function Budget({ label, window, checkedAt }: { label: string; window: UsageWind
   const reset = window?.resetsAt ? `Resets ${new Date(window.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''
   const age = checkedAt ? `As of ${new Date(checkedAt).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}` : ''
   const tone = left === undefined ? 'bg-muted' : left < 15 ? 'bg-red-500' : left < 40 ? 'bg-amber-400' : 'bg-emerald-500'
-  return <div className="w-20" title={left === undefined ? 'No usage reported yet' : [reset, age].filter(Boolean).join(' · ')}>
+  return <div className="w-20" title={left === undefined ? 'No usage reported yet' : [`${left}% left`, reset, age].filter(Boolean).join(' · ')}>
     <div className="flex justify-between text-[11px] text-muted-foreground"><span>{label}</span><span className="tabular-nums text-foreground">{left === undefined ? '—' : `${left}%`}</span></div>
     <div className="mt-1 h-1 rounded bg-muted"><div className={`h-1 rounded ${tone}`} style={{ width: `${left ?? 0}%` }} /></div>
   </div>
@@ -37,7 +37,11 @@ export function AccountCard({ agentName, name, status, usage, configDir, onLogin
   const plan = planLabel(status?.plan)
   const connected = status?.state === 'connected'
   // Usage is a sample, not a live feed: say when it is old instead of implying it is current.
-  const age = connected && usage ? usageAge(usage.at, Date.now()) : undefined
+  const now = Date.now()
+  const age = connected && usage ? usageAge(usage.at, now) : undefined
+  // Codex samples come from session logs and can be a day old: a window whose
+  // reset has passed would show a long-gone number, so drop it at render too.
+  const live = usage && dropExpiredWindows(usage, now)
   return <div className="flex items-center gap-3 rounded border border-border px-3 py-2" title={configDir}>
     <span role="img" aria-label={lamp.label} title={lamp.label} className={`h-2.5 w-2.5 shrink-0 rounded-full ${LAMP[lamp.color]}`} />
     <div className="min-w-0 flex-1">
@@ -46,7 +50,7 @@ export function AccountCard({ agentName, name, status, usage, configDir, onLogin
     </div>
     {plan && <span className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">{plan}</span>}
     {connected
-      ? <><Budget label="5h" window={usage?.fiveHour} checkedAt={usage?.at} /><Budget label="7d" window={usage?.sevenDay} checkedAt={usage?.at} /></>
+      ? <><Budget label="5h" window={live?.fiveHour} checkedAt={live?.at} /><Budget label="7d" window={live?.sevenDay} checkedAt={live?.at} /></>
       : status && <Button size="sm" variant="outline" onClick={onLogin}>Log in</Button>}
     <DropdownMenu>
       <DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" aria-label={`${name} actions`}><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
