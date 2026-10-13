@@ -31,10 +31,10 @@ export function statusLamp(status: { state: LoginState } | undefined): { color: 
   }
 }
 
-/** Percent of the window still available; `undefined` when unknown. */
-export function budgetLeft(window: Pick<UsageWindow, 'pct'> | null | undefined): number | undefined {
+/** Percent of the window used — the status line's reading; `undefined` when unknown. */
+export function budgetUsed(window: Pick<UsageWindow, 'pct'> | null | undefined): number | undefined {
   if (!window || !Number.isFinite(window.pct)) return undefined
-  return Math.max(0, Math.min(100, Math.round(100 - window.pct)))
+  return Math.max(0, Math.min(100, Math.round(window.pct)))
 }
 
 /** Default name in the wizard: "<Agent> N", past the highest existing N. */

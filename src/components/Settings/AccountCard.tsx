@@ -1,7 +1,7 @@
 import { MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { budgetLeft, planLabel, statusLamp, type LampColor } from '@/lib/account-status'
+import { budgetUsed, planLabel, statusLamp, type LampColor } from '@/lib/account-status'
 import { dropExpiredWindows, usageAge, type AccountUsage, type UsageWindow } from '@/lib/account-usage'
 import type { AccountStatus } from '@/tauri/accounts'
 
@@ -10,13 +10,13 @@ const LAMP: Record<LampColor, string> = {
 }
 
 function Budget({ label, window, checkedAt }: { label: string; window: UsageWindow | null | undefined; checkedAt?: number }): React.ReactElement {
-  const left = budgetLeft(window)
+  const used = budgetUsed(window)
   const reset = window?.resetsAt ? `Resets ${new Date(window.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''
   const age = checkedAt ? `As of ${new Date(checkedAt).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}` : ''
-  const tone = left === undefined ? 'bg-muted' : left < 15 ? 'bg-red-500' : left < 40 ? 'bg-amber-400' : 'bg-emerald-500'
-  return <div className="w-20" title={left === undefined ? 'No usage reported yet' : [`${left}% left`, reset, age].filter(Boolean).join(' · ')}>
-    <div className="flex justify-between text-[11px] text-muted-foreground"><span>{label}</span><span className="tabular-nums text-foreground">{left === undefined ? '—' : `${left}%`}</span></div>
-    <div className="mt-1 h-1 rounded bg-muted"><div className={`h-1 rounded ${tone}`} style={{ width: `${left ?? 0}%` }} /></div>
+  const tone = used === undefined ? 'bg-muted' : used > 85 ? 'bg-red-500' : used > 60 ? 'bg-amber-400' : 'bg-emerald-500'
+  return <div className="w-20" title={used === undefined ? 'No usage reported yet' : [`${used}% used`, reset, age].filter(Boolean).join(' · ')}>
+    <div className="flex justify-between text-[11px] text-muted-foreground"><span>{label}</span><span className="tabular-nums text-foreground">{used === undefined ? '—' : `${used}%`}</span></div>
+    <div className="mt-1 h-1 rounded bg-muted"><div className={`h-1 rounded ${tone}`} style={{ width: `${used ?? 0}%` }} /></div>
   </div>
 }
 
