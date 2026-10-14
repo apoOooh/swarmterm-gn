@@ -24,6 +24,7 @@
 //! rest of the payload (prompt text, `last_assistant_message`, tool input,
 //! cwd) must not leave the pane, so it is never even read into a struct.
 
+pub mod adopt;
 pub mod codex;
 pub mod install;
 pub mod post;

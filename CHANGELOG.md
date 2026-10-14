@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Accounts: Claude Code panes on a named profile now also get your hooks
+  and `permissions.deny`/`ask` rules from the Default account, so guards
+  such as a data-masking hook apply there too. `permissions.allow` is never
+  copied.
 - Accounts: Claude Code panes on a named profile now show your own status
   line and load your user-level MCP servers from the Default account,
   instead of only Swarmterm's status line and server.

@@ -76,7 +76,7 @@ fn our_group(command: &str) -> Value {
 /// A group is ours iff it is an object whose `hooks` is a non-empty array and
 /// EVERY entry's command is ours. Anything mixed belongs to the user — they
 /// hand-copied our command into their own group and may edit it as they like.
-fn group_is_ours(group: &Value, is_ours: fn(&str) -> bool) -> bool {
+pub(crate) fn group_is_ours(group: &Value, is_ours: fn(&str) -> bool) -> bool {
     let Some(entries) = group.get("hooks").and_then(Value::as_array) else {
         return false;
     };
