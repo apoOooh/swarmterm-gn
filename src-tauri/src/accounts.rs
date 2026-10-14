@@ -287,7 +287,7 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
 }
 
 /// A named profile's own `CLAUDE_CONFIG_DIR` hides the default profile's
-/// status line and user-scope MCP servers, so sessions under it look and
+/// status line, user-scope MCP servers, hooks and permission guards, so sessions under it look and
 /// behave unlike the user's normal Claude Code. Runs on every enrollment
 /// (each pane start), which also repairs profiles created before this
 /// existed. Convenience only: failures are logged and never block a pane.
@@ -323,6 +323,9 @@ fn adopt_default_claude_config_from(dir: &Path, default_json: &Path, default_set
         default_settings,
     ) {
         eprintln!("accounts: cannot adopt default status line into profile: {e}");
+    }
+    if let Err(e) = crate::hook::adopt::adopt_file(dir, default_settings) {
+        eprintln!("accounts: cannot adopt default hooks and permission guards into profile: {e}");
     }
 }
 
@@ -420,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_adopts_default_status_line_and_servers_but_never_its_own_dir() {
+    fn profile_adopts_default_status_line_servers_and_guards_but_never_its_own_dir() {
         let home = tempfile::tempdir().unwrap();
         let default_json = home.path().join(".claude.json");
         let default_dir = home.path().join(".claude");
@@ -431,7 +434,7 @@ mod tests {
             r#"{"mcpServers":{"board":{"command":"py"}}}"#,
         )
         .unwrap();
-        let line = r#"{"statusLine":{"type":"command","command":"node mine.mjs"}}"#;
+        let line = r#"{"statusLine":{"type":"command","command":"node mine.mjs"},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"node guard.mjs"}]}]},"permissions":{"deny":["Read(**/.env)"]}}"#;
         fs::write(&default_settings, line).unwrap();
 
         let profile = home.path().join("profile");
@@ -441,10 +444,13 @@ mod tests {
         assert!(json.contains("\"board\""), "{json}");
         let settings = fs::read_to_string(profile.join("settings.json")).unwrap();
         assert!(settings.contains("node mine.mjs"), "{settings}");
+        assert!(settings.contains("node guard.mjs"), "{settings}");
+        assert!(settings.contains("Read(**/.env)"), "{settings}");
 
         // A profile pointed at the default directory is the default itself.
         adopt_default_claude_config_from(&default_dir, &default_json, &default_settings);
         assert!(!default_dir.join(".claude.json").exists());
+        assert!(!default_dir.join(crate::hook::adopt::RECORD_FILE).exists());
         assert_eq!(fs::read_to_string(&default_settings).unwrap(), line);
     }
 
