@@ -128,12 +128,7 @@ async fn accept_loop(
             (Ok(()), Ok(next)) => {
                 backoff = BACKOFF_MIN;
                 let conn = std::mem::replace(&mut server, next);
-                tauri::async_runtime::spawn(serve(
-                    app.clone(),
-                    token.clone(),
-                    conn,
-                    stop.clone(),
-                ));
+                tauri::async_runtime::spawn(serve(app.clone(), token.clone(), conn, stop.clone()));
                 continue;
             }
             // The failed instance is discarded; the fresh one takes over.

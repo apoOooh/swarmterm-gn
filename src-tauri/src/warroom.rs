@@ -871,7 +871,8 @@ mod tests {
         assert_eq!(inbox[1].content, "m3"); // oldest three evicted
         assert_eq!(inbox.last().unwrap().content, format!("m{}", INBOX_CAP + 2));
         // Marker is reported once.
-        r.send("t1", Some("t2"), "again", MessageMode::Probe, 11).unwrap();
+        r.send("t1", Some("t2"), "again", MessageMode::Probe, 11)
+            .unwrap();
         let inbox = r.drain_inbox("t2").unwrap();
         assert_eq!(inbox.len(), 1);
         assert_eq!(inbox[0].content, "again");
@@ -881,7 +882,9 @@ mod tests {
     fn oversized_content_is_refused() {
         let mut r = room_with_two();
         let big = "x".repeat(MAX_CONTENT_CHARS + 1);
-        assert!(r.send("t1", Some("t2"), &big, MessageMode::Probe, 10).is_err());
+        assert!(r
+            .send("t1", Some("t2"), &big, MessageMode::Probe, 10)
+            .is_err());
         assert!(r.drain_inbox("t2").unwrap().is_empty());
     }
 
