@@ -6,7 +6,7 @@ use std::{
     io::Read,
     path::Path,
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{Condvar, Mutex},
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
@@ -26,22 +26,38 @@ enum ProbeState {
 
 const RETRY_AFTER: Duration = Duration::from_secs(60);
 
+/// How long a caller waits for a probe another thread is running (the probe
+/// itself gives up after 3 s).
+const PROBE_WAIT: Duration = Duration::from_millis(3_500);
+
 /// Whether the installed Codex supports hook isolation. Warmed off-thread at
 /// startup (`warm`), so pane spawns normally hit the cache. The lock is never
 /// held across the probe: a caller arriving while another probe runs (or
 /// within `RETRY_AFTER` of a timeout) gets `false` instead of blocking.
 pub fn supported() -> bool {
     static STATE: Mutex<ProbeState> = Mutex::new(ProbeState::Unknown);
-    supported_with(&STATE, Instant::now, probe)
+    static DONE: Condvar = Condvar::new();
+    supported_with(&STATE, &DONE, PROBE_WAIT, Instant::now, probe)
 }
 
 fn supported_with(
     state: &Mutex<ProbeState>,
+    done: &Condvar,
+    wait: Duration,
     now: impl Fn() -> Instant,
     probe: impl FnOnce() -> Option<bool>,
 ) -> bool {
     {
         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        if *s == ProbeState::Probing {
+            // A probe is running (normally the startup warm-up): wait for its
+            // answer, bounded, so a pane spawned during startup still gets
+            // hook isolation. The lock is released while waiting.
+            s = done
+                .wait_timeout_while(s, wait, |st| *st == ProbeState::Probing)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
         match *s {
             ProbeState::Known(known) => return known,
             ProbeState::Probing => return false,
@@ -53,16 +69,12 @@ fn supported_with(
     }
     let result = probe();
     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-    match result {
-        Some(known) => {
-            *s = ProbeState::Known(known);
-            known
-        }
-        None => {
-            *s = ProbeState::TimedOut(now());
-            false
-        }
-    }
+    *s = match result {
+        Some(known) => ProbeState::Known(known),
+        None => ProbeState::TimedOut(now()),
+    };
+    done.notify_all();
+    result.unwrap_or(false)
 }
 
 /// Run the first probe on a blocking worker so no IPC/async thread pays it.
@@ -346,11 +358,19 @@ mod tests {
                 r
             }
         };
-        assert!(!supported_with(&state, || t0, probe(None)));
+        assert!(!supported_with(
+            &state,
+            &Condvar::new(),
+            Duration::ZERO,
+            || t0,
+            probe(None)
+        ));
         assert_eq!(*state.lock().unwrap(), ProbeState::TimedOut(t0));
         // Within the retry interval: no new probe.
         assert!(!supported_with(
             &state,
+            &Condvar::new(),
+            Duration::ZERO,
             || t0 + Duration::from_secs(30),
             probe(Some(true))
         ));
@@ -358,12 +378,16 @@ mod tests {
         // After it: probe again, and a definite answer is cached.
         assert!(supported_with(
             &state,
+            &Condvar::new(),
+            Duration::ZERO,
             || t0 + RETRY_AFTER,
             probe(Some(true))
         ));
         assert_eq!(calls.get(), 2);
         assert!(supported_with(
             &state,
+            &Condvar::new(),
+            Duration::ZERO,
             || t0 + RETRY_AFTER * 10,
             probe(Some(false))
         ));
@@ -371,11 +395,38 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_caller_does_not_wait_for_running_probe() {
+    fn caller_waits_for_a_running_probe() {
+        let shared = std::sync::Arc::new((Mutex::new(ProbeState::Probing), Condvar::new()));
+        let prober = shared.clone();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            *prober.0.lock().unwrap() = ProbeState::Known(true);
+            prober.1.notify_all();
+        });
+        let got = supported_with(
+            &shared.0,
+            &shared.1,
+            Duration::from_secs(3),
+            Instant::now,
+            || panic!("must not probe while another probe runs"),
+        );
+        t.join().unwrap();
+        assert!(got);
+    }
+
+    #[test]
+    fn wait_for_a_running_probe_is_bounded() {
         let state = Mutex::new(ProbeState::Probing);
-        assert!(!supported_with(&state, Instant::now, || panic!(
-            "must not probe"
-        )));
+        let start = Instant::now();
+        let got = supported_with(
+            &state,
+            &Condvar::new(),
+            Duration::from_millis(30),
+            Instant::now,
+            || panic!("must not probe"),
+        );
+        assert!(!got);
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
     #[test]
     fn isolates_supported_codex_without_changing_other_commands() {
