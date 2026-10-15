@@ -6,7 +6,7 @@ use std::{
     io::Read,
     path::Path,
     process::{Command, Stdio},
-    sync::OnceLock,
+    sync::Mutex,
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
@@ -14,20 +14,42 @@ use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
 
 const EVENTS: [&str; 2] = ["SessionStart", "UserPromptSubmit"];
 
+/// Whether the installed Codex supports hook isolation. A definite answer is
+/// cached for the process; a probe that timed out (cold disk, AV scan) is not,
+/// so the next caller retries. Warmed off-thread at startup (`warm`), so pane
+/// spawns normally hit the cache. Concurrent first callers wait on the lock.
 pub fn supported() -> bool {
-    static SUPPORTED: OnceLock<bool> = OnceLock::new();
-    *SUPPORTED.get_or_init(probe)
+    static SUPPORTED: Mutex<Option<bool>> = Mutex::new(None);
+    let mut cached = SUPPORTED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = *cached {
+        return known;
+    }
+    match probe() {
+        Some(known) => {
+            *cached = Some(known);
+            known
+        }
+        None => false,
+    }
 }
 
-fn probe() -> bool {
+/// Run the first probe on a blocking worker so no IPC/async thread pays it.
+pub fn warm() {
+    tauri::async_runtime::spawn_blocking(|| {
+        supported();
+    });
+}
+
+/// `None` = undecided (timed out); retried on the next call.
+fn probe() -> Option<bool> {
     let Some(binary) = crate::agents::find_agent_binary("codex") else {
-        return false;
+        return Some(false);
     };
     let Ok(mut output) = tempfile::tempfile() else {
-        return false;
+        return Some(false);
     };
     let Ok(stdout) = output.try_clone() else {
-        return false;
+        return Some(false);
     };
     let mut command = Command::new(binary);
     command
@@ -41,30 +63,30 @@ fn probe() -> bool {
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
     let Ok(mut child) = command.spawn() else {
-        return false;
+        return Some(false);
     };
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return false,
+            Ok(Some(_)) | Err(_) => return Some(false),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return false;
+                return None;
             }
         }
     }
     use std::io::{Seek, SeekFrom};
     if output.seek(SeekFrom::Start(0)).is_err() {
-        return false;
+        return Some(false);
     }
     let mut help = String::new();
     if output.take(64 * 1024).read_to_string(&mut help).is_err() {
-        return false;
+        return Some(false);
     }
-    help.contains("--no-daemon") && help.contains("--dangerously-bypass-hook-trust")
+    Some(help.contains("--no-daemon") && help.contains("--dangerously-bypass-hook-trust"))
 }
 
 pub fn isolated_command(command: &str, agent: Option<&str>, supported: bool) -> String {

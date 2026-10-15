@@ -102,6 +102,9 @@ pub fn run() {
             // `claude`: hooks are snapshotted at session start.
             crate::hook::install::register(app.handle());
             crate::hook::codex::register(app.handle());
+            // `codex --help` probe can take seconds on a cold start; pay it
+            // here, off-thread, instead of on the first Codex pane spawn.
+            crate::hook::codex::warm();
             // Voice dictation endpoint (SWA-12): named pipe + discovery file
             // for buzzkey; follows Settings → Voice. Failure is logged only.
             crate::voice::init(app.handle());
