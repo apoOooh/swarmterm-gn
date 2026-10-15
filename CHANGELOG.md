@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-10-15
+
+- Settings: new **Title bar** page. Reorder the pane-header controls by drag
+  or arrow buttons and set each to Core, Can hide, ⋯ only or Off; Reset to
+  defaults restores the original header. Layouts are remembered.
+- Pane header: on narrow panes the agent, title, folder, maximize and ✕ stay
+  visible and the other controls collapse behind `⋯`; hovering the header (or
+  clicking `⋯`) shows them in a second row.
+- Pane zoom: a maximized pane shows a violet border and a restore button with
+  the number of hidden panes; the sidebar marks the maximized pane and dims
+  the hidden ones.
+- Layout: double-click a separator or corner handle to even out the panes.
+- Closing a pane shuts agents down gracefully before stopping their processes,
+  so Claude Code no longer disables its fullscreen renderer machine-wide.
+- Performance: PTY output is coalesced, sidebar resize and terminal refits are
+  batched per frame, blocking work stays off the main thread, and session
+  titles are cached.
+
 ## [1.11.0] - 2026-10-15
 
 - Settings: switching Swarmterm's Claude status line no longer fails when
