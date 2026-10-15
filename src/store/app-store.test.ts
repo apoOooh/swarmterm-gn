@@ -539,6 +539,19 @@ describe('resizeSplitNode', () => {
   })
 })
 
+// --- equalizeSplitNode ---------------------------------------------------
+
+describe('equalizeSplitNode', () => {
+  it('evens out a resized split', () => {
+    const store = storeWithWorkspace()
+    store.getState().splitPane(activeWorkspace(store).focusedLeafId, 'horizontal')
+    const layout = activeWorkspace(store).layout as SplitNode
+    store.getState().resizeSplitNode(layout.id, [30, 70])
+    store.getState().equalizeSplitNode(layout.id)
+    expect((activeWorkspace(store).layout as SplitNode).sizes).toEqual([50, 50])
+  })
+})
+
 // --- tidyLayout -----------------------------------------------------------
 
 describe('tidyLayout', () => {

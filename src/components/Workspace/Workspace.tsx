@@ -24,6 +24,7 @@ interface WorkspaceProps {
 /** Render one workspace: its binary split-tree of resizable terminal panes. */
 export function Workspace({ workspace }: WorkspaceProps): ReactElement {
   const resizeSplitNode = useAppStore((s) => s.resizeSplitNode)
+  const equalizeSplitNode = useAppStore((s) => s.equalizeSplitNode)
   // Live Group handles so CornerHandles can move two splits in one drag.
   const groups = useRef(new Map<string, GroupImperativeHandle>())
 
@@ -101,6 +102,11 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
           {renderNode(node.children[0])}
         </Panel>
         <Separator
+          title="Double-click to even out"
+          // Our own reset replaces the library one (which only targets a
+          // Panel defaultSize, and we have none).
+          disableDoubleClick
+          onDoubleClick={() => equalizeSplitNode(node.id)}
           className={cn(
             'shrink-0 bg-canvas transition-colors hover:bg-ring data-[separator]:bg-canvas',
             node.direction === 'horizontal' ? 'w-2 cursor-col-resize' : 'h-2 cursor-row-resize'

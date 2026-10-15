@@ -8,6 +8,7 @@ import {
   closeLeaf,
   findLeaf,
   resizeSplit,
+  equalizeSplit,
   splitLeaf,
   reorderLeaves,
   moveLeafBeside,
@@ -198,6 +199,8 @@ export interface AppActions {
   /** Snap layout: rebuild the active workspace as `presetId` with `leafId` in `slot`. */
   applySnapLayout: (leafId: string, presetId: string, slot: number) => void
   resizeSplitNode: (splitId: string, sizes: [number, number]) => void
+  /** Even out one split (double-clicked separator); see `equalizeSplit` in lib/layout-tree. */
+  equalizeSplitNode: (splitId: string) => void
   /** Even out a workspace's panes by geometry (see `tidyLayout` in lib/layout-tree). */
   tidyLayout: (workspaceId: string) => void
   setPaneAgent: (leafId: string, agentId: string) => void
@@ -662,6 +665,16 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
 
   resizeSplitNode: (splitId, sizes) =>
     set((s) => mapActive(s, (w) => ({ ...w, layout: resizeSplit(w.layout, splitId, sizes) }))),
+
+  // Drawered and floating panes take no room on screen, so they stay out of
+  // the count, as in tidyLayout.
+  equalizeSplitNode: (splitId) =>
+    set((s) =>
+      mapActive(s, (w) => {
+        const layout = equalizeSplit(w.layout, splitId, hiddenLeafIds(w.drawerLeafIds ?? [], w.floating ?? []))
+        return layout === w.layout ? w : { ...w, layout }
+      })
+    ),
 
   // Takes the workspace id rather than acting on the active one, so the sidebar
   // menu can tidy any workspace without switching to it. Drawered and floating
