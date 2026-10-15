@@ -15,6 +15,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:dev:isolated": "tauri dev --config src-tauri/tauri.dev-instance.conf.json",
     "logo": "node scripts/gen-logo.mjs",
     "bump": "node scripts/bump-version.mjs",
     "release:mac": "bash scripts/release-macos.sh",
