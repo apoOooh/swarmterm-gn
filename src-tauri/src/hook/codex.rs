@@ -32,8 +32,9 @@ const PROBE_WAIT: Duration = Duration::from_millis(3_500);
 
 /// Whether the installed Codex supports hook isolation. Warmed off-thread at
 /// startup (`warm`), so pane spawns normally hit the cache. The lock is never
-/// held across the probe: a caller arriving while another probe runs (or
-/// within `RETRY_AFTER` of a timeout) gets `false` instead of blocking.
+/// held across the probe: a caller arriving while another probe runs waits up
+/// to `PROBE_WAIT` for its answer (then `false`); within `RETRY_AFTER` of a
+/// timeout it gets `false` without probing again.
 pub fn supported() -> bool {
     static STATE: Mutex<ProbeState> = Mutex::new(ProbeState::Unknown);
     static DONE: Condvar = Condvar::new();
@@ -67,7 +68,8 @@ fn supported_with(
             ProbeState::Unknown | ProbeState::TimedOut(_) => *s = ProbeState::Probing,
         }
     }
-    let result = probe();
+    // A panicking probe must not leave the state stuck at `Probing`.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(probe)).unwrap_or(None);
     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
     *s = match result {
         Some(known) => ProbeState::Known(known),
@@ -428,6 +430,21 @@ mod tests {
         assert!(!got);
         assert!(start.elapsed() < Duration::from_secs(2));
     }
+
+    #[test]
+    fn panicking_probe_does_not_leave_state_probing() {
+        let state = Mutex::new(ProbeState::Unknown);
+        let got = supported_with(
+            &state,
+            &Condvar::new(),
+            Duration::from_millis(30),
+            Instant::now,
+            || panic!("probe blew up"),
+        );
+        assert!(!got);
+        assert!(matches!(*state.lock().unwrap(), ProbeState::TimedOut(_)));
+    }
+
     #[test]
     fn isolates_supported_codex_without_changing_other_commands() {
         assert_eq!(
