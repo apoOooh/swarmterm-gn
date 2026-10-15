@@ -5,7 +5,7 @@ use super::{
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -58,11 +58,35 @@ fn ignored(path: &Path, root: &Path) -> bool {
     })
 }
 
+/// Watched directories, keyed by `watch_key` (case-folded on Windows, where
+/// the file system is case-insensitive) and mapping to the path actually
+/// registered with the watcher, which `unwatch` needs verbatim.
+type Watched = BTreeMap<PathBuf, PathBuf>;
+
+fn watch_key(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Record `path`; true if it was not tracked yet.
+fn track(watched: &mut Watched, path: &Path) -> bool {
+    match watched.entry(watch_key(path)) {
+        std::collections::btree_map::Entry::Occupied(_) => false,
+        std::collections::btree_map::Entry::Vacant(v) => {
+            v.insert(path.to_path_buf());
+            true
+        }
+    }
+}
+
 fn add_tree(
     watcher: &mut RecommendedWatcher,
     path: &Path,
     root: &Path,
-    watched: &mut BTreeSet<PathBuf>,
+    watched: &mut Watched,
 ) -> Result<(), String> {
     if ignored(path, root)
         || fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
@@ -70,7 +94,7 @@ fn add_tree(
     {
         return Ok(());
     }
-    if watched.insert(path.to_path_buf()) {
+    if track(watched, path) {
         watcher
             .watch(path, RecursiveMode::NonRecursive)
             .map_err(|e| e.to_string())?;
@@ -106,13 +130,15 @@ fn lease_existing(
     }
 }
 
-/// Watched directories at or below `path`. Descendants sort directly after their
-/// ancestor in a `BTreeSet<PathBuf>`, so a range scan replaces a full pass.
-fn watched_subtree(watched: &BTreeSet<PathBuf>, path: &Path) -> Vec<PathBuf> {
+/// Watched directories at or below `path`, as (key, registered path). Keys of
+/// descendants sort directly after their ancestor's, so a range scan replaces
+/// a full pass.
+fn watched_subtree(watched: &Watched, path: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let key = watch_key(path);
     watched
-        .range(path.to_path_buf()..)
-        .take_while(|p| p.starts_with(path))
-        .cloned()
+        .range(key.clone()..)
+        .take_while(|(k, _)| k.starts_with(&key))
+        .map(|(k, p)| (k.clone(), p.clone()))
         .collect()
 }
 
@@ -136,7 +162,7 @@ impl FileService {
             let _ = tx.send(e);
         })
         .map_err(|e| e.to_string())?;
-        let mut watched = BTreeSet::new();
+        let mut watched = Watched::new();
         add_tree(&mut watcher, &root, &root, &mut watched)?;
         // Worktree .git files point to metadata elsewhere. Watch only that metadata, never its project tree.
         let git = root.join(".git");
@@ -189,7 +215,7 @@ impl FileService {
             while !thread_stop.load(Ordering::Acquire) {
                 for path in extra_rx.try_iter() {
                     if let Some(parent) = path.parent() {
-                        if watched.insert(parent.to_path_buf()) {
+                        if track(&mut watched, parent) {
                             let _ = watcher.watch(parent, RecursiveMode::NonRecursive);
                         }
                     }
@@ -225,9 +251,9 @@ impl FileService {
                 for path in changed {
                     // Follow newly created folders; heavy generated directories stay pruned.
                     if !path.exists() {
-                        for removed in watched_subtree(&watched, &path) {
+                        for (key, removed) in watched_subtree(&watched, &path) {
                             let _ = watcher.unwatch(&removed);
-                            watched.remove(&removed);
+                            watched.remove(&key);
                         }
                     }
                     if path.is_dir() {
@@ -283,20 +309,44 @@ mod tests {
         fs::create_dir_all(t.path().join("src/nested")).unwrap();
         fs::create_dir_all(t.path().join("node_modules/large")).unwrap();
         let mut watcher = notify::recommended_watcher(|_| {}).unwrap();
-        let mut watched = BTreeSet::new();
+        let mut watched = Watched::new();
         add_tree(&mut watcher, t.path(), t.path(), &mut watched).unwrap();
-        assert!(watched.contains(&t.path().join("src/nested")));
-        assert!(!watched.contains(&t.path().join("node_modules")));
+        assert!(watched.contains_key(&watch_key(&t.path().join("src/nested"))));
+        assert!(!watched.contains_key(&watch_key(&t.path().join("node_modules"))));
     }
     #[test]
     fn watched_subtree_returns_only_descendants() {
-        let watched: BTreeSet<PathBuf> = ["a", "a/b", "a/b/c", "a/b0", "a/c", "b"]
-            .iter()
-            .map(PathBuf::from)
+        let mut watched = Watched::new();
+        for p in ["a", "a/b", "a/b/c", "a/b0", "a/c", "b"] {
+            track(&mut watched, Path::new(p));
+        }
+        let got: Vec<_> = watched_subtree(&watched, Path::new("a/b"))
+            .into_iter()
+            .map(|(_, p)| p)
             .collect();
-        let got = watched_subtree(&watched, Path::new("a/b"));
         assert_eq!(got, vec![PathBuf::from("a/b"), PathBuf::from("a/b/c")]);
         assert!(watched_subtree(&watched, Path::new("z")).is_empty());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn watched_subtree_ignores_case_on_windows() {
+        let mut watched = Watched::new();
+        for p in [r"C:\Repo\Src", r"C:\Repo\Src\Lib", r"C:\Repo\Other"] {
+            track(&mut watched, Path::new(p));
+        }
+        assert!(!track(&mut watched, Path::new(r"c:\repo\SRC")));
+        let got: Vec<_> = watched_subtree(&watched, Path::new(r"c:\REPO\src"))
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect();
+        // Originals come back verbatim for unwatch.
+        assert_eq!(
+            got,
+            vec![
+                PathBuf::from(r"C:\Repo\Src"),
+                PathBuf::from(r"C:\Repo\Src\Lib")
+            ]
+        );
     }
     #[test]
     fn native_watcher_receives_external_creation() {
