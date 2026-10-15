@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-10-16
+
+- Sidebar: while the sidebar is hidden, rest the mouse on the left edge to
+  slide it in over the workspace (Settings → Appearance → Peek sidebar on
+  left edge).
 - Notifications: the bell now reports when the MCP server stops, when voice
   input fails (cleared again once it recovers) and when a pane stopped
   reading input so a paste was dropped. These entries show their details and
