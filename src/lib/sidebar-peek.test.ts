@@ -4,6 +4,7 @@ import {
   SIDEBAR_PEEK_STORAGE_KEY,
   readStoredSidebarPeek,
   storeSidebarPeek,
+  peekCloseDecision,
   type SidebarPeekStorage
 } from './sidebar-peek'
 
@@ -17,6 +18,18 @@ function fakeStorage(initial: Record<string, string> = {}): SidebarPeekStorage &
     }
   }
 }
+
+describe('peekCloseDecision', () => {
+  it('closes once the pointer is away and nothing floats over it', () => {
+    expect(peekCloseDecision({ hovered: false, overlayOpen: false })).toBe('close')
+  })
+  it('defers while the pointer is back over the sidebar', () => {
+    expect(peekCloseDecision({ hovered: true, overlayOpen: false })).toBe('defer')
+  })
+  it('defers while a menu or dialog opened from the sidebar is up', () => {
+    expect(peekCloseDecision({ hovered: false, overlayOpen: true })).toBe('defer')
+  })
+})
 
 describe('sidebar peek setting', () => {
   it('is on by default', () => {

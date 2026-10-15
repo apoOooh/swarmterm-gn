@@ -237,6 +237,13 @@ Do not mark them passed from the in-memory fixture alone.
       updates the preview and every pane.
 - [ ] Settings → Keyboard Shortcuts lists the bindings for the current platform.
 - [ ] `⌘/Ctrl + B` toggles the sidebar; `Esc` closes Settings.
+- [ ] Sidebar hidden: resting the mouse on the left window edge slides it in over
+      the terminals (no terminal resizes); moving away slides it out. Items and
+      menus in it work, and it stays open while one of its menus is up. An open
+      preview column never paints over it. Dragging a workspace out of the rail
+      doesn't close it mid-drag.
+- [ ] Settings → Appearance → *Peek sidebar on left edge* off: the edge does
+      nothing; the choice survives a restart.
 - [ ] Restart the app → appearance and terminal preferences are remembered.
 
 ## Worktrees

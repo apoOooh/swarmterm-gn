@@ -22,7 +22,7 @@ import { collectLeaves } from '@/lib/layout-tree'
 import { useAppStore, type Workspace } from '@/store/app-store'
 import { useNavbarVisibilityStore } from '@/store/navbar-visibility-store'
 import { useSidebarPeekStore } from '@/store/sidebar-peek-store'
-import { PEEK_CLOSE_DELAY_MS, PEEK_OPEN_DELAY_MS } from '@/lib/sidebar-peek'
+import { PEEK_CLOSE_DELAY_MS, PEEK_OPEN_DELAY_MS, peekCloseDecision } from '@/lib/sidebar-peek'
 import { OVERLAY_SELECTOR } from '@/lib/terminal-focus'
 import { AttentionBadge } from '@/components/Navbar/AttentionBadge'
 import { Button } from '@/components/ui/button'
@@ -118,7 +118,11 @@ export function Navbar(props: NavbarProps): ReactElement {
       }
       // Stay out while the pointer is back over the rail, or a menu / dialog
       // opened from it is up (Radix portals those outside the <nav>).
-      if (navRef.current?.matches(':hover') || document.querySelector(OVERLAY_SELECTOR) !== null) {
+      const decision = peekCloseDecision({
+        hovered: navRef.current?.matches(':hover') ?? false,
+        overlayOpen: document.querySelector(OVERLAY_SELECTOR) !== null
+      })
+      if (decision === 'defer') {
         schedulePeek(false)
         return
       }
@@ -134,9 +138,13 @@ export function Navbar(props: NavbarProps): ReactElement {
 
   useEffect(() => () => clearPeekTimer(), [])
 
-  // Slide-out: stay absolute until the width transition has finished.
+  // Slide-out: stay absolute until the width transition has finished. Only on
+  // a real open → closed edge, not on mount.
+  const wasPeek = useRef(peek)
   useEffect(() => {
-    if (peek) return
+    const was = wasPeek.current
+    wasPeek.current = peek
+    if (peek || !was) return
     setPeekClosing(true)
     const t = window.setTimeout(() => setPeekClosing(false), 220)
     return () => window.clearTimeout(t)
@@ -187,7 +195,12 @@ export function Navbar(props: NavbarProps): ReactElement {
       data-focus-return
       style={{ width: shown ? sidebarWidth : 0 }}
       onPointerEnter={peeking ? clearPeekTimer : undefined}
-      onPointerLeave={peeking ? () => schedulePeek(false) : undefined}
+      onPointerLeave={peeking ? (e) => {
+        // A drag (workspace reorder) leaving the rail must not close it under
+        // the drag; decide once the button is released.
+        if (e.buttons === 0) schedulePeek(false)
+        else window.addEventListener('pointerup', () => schedulePeek(false), { once: true })
+      } : undefined}
       // The width transition animates show/hide only. Left on during a drag,
       // every pointermove restarts a 200 ms animation: the edge trails the
       // pointer and the whole workspace area re-lays out every frame.
@@ -197,7 +210,7 @@ export function Navbar(props: NavbarProps): ReactElement {
         !resizing && 'transition-[width] duration-200 ease-in-out motion-reduce:transition-none'
       )}
     >
-      {peeking && <span hidden data-covers-webview />}
+      {overlay && <span hidden data-covers-webview />}
       {!overlay && <div
         role="separator"
         aria-label="Resize sidebar"

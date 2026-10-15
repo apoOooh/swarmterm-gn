@@ -10,6 +10,19 @@ export const PEEK_OPEN_DELAY_MS = 150
 /** Grace period after the pointer leaves the peeking sidebar before it slides out. */
 export const PEEK_CLOSE_DELAY_MS = 300
 
+/** What the state the pointer left behind says about a pending close. */
+export interface PeekCloseState {
+  /** The pointer is back over the sidebar. */
+  hovered: boolean
+  /** A menu / dialog / listbox is open (Radix portals them outside the sidebar). */
+  overlayOpen: boolean
+}
+
+/** When the close delay runs out: slide out, or check again after another delay. */
+export function peekCloseDecision(state: PeekCloseState): 'close' | 'defer' {
+  return state.hovered || state.overlayOpen ? 'defer' : 'close'
+}
+
 /** Minimal storage surface — lets tests pass a fake in place of localStorage. */
 export interface SidebarPeekStorage {
   getItem: (key: string) => string | null
