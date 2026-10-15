@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveHeaderLevel, shortenPath } from './header-layout'
+import { resolveHeaderLevel, resolveHeaderOverflow, shortenPath } from './header-layout'
 
 describe('resolveHeaderLevel', () => {
   it('shows everything at full width', () => {
@@ -55,5 +55,45 @@ describe('shortenPath', () => {
 
   it('returns the input when there is no separator', () => {
     expect(shortenPath('project')).toBe('project')
+  })
+})
+
+describe('resolveHeaderOverflow', () => {
+  const items = [
+    { id: 'agent', width: 40, priority: 0, pinned: true },
+    { id: 'title', width: 60, priority: 0, pinned: true },
+    { id: 'folder', width: 50, priority: 0, pinned: true },
+    { id: 'shell', width: 30, priority: 1 },
+    { id: 'split-right', width: 24, priority: 2 },
+    { id: 'drawer', width: 24, priority: 3 },
+    { id: 'close', width: 24, priority: 0, pinned: true },
+  ]
+
+  it('hides nothing (and needs no ⋯) when everything fits', () => {
+    const r = resolveHeaderOverflow(400, items)
+    expect(r.hidden).toEqual([])
+    expect(r.visible).toEqual(items.map(i => i.id))
+  })
+
+  it('keeps only pinned items in a very narrow pane', () => {
+    const r = resolveHeaderOverflow(100, items)
+    expect(r.visible).toEqual(['agent', 'title', 'folder', 'close'])
+    expect(r.hidden).toEqual(['shell', 'split-right', 'drawer'])
+  })
+
+  it('hides lowest-priority items first, reserving room for ⋯', () => {
+    // pinned 174 + ⋯ 24 = 198; shell (30) fits in 230, split-right would not.
+    const r = resolveHeaderOverflow(230, items)
+    expect(r.hidden).toEqual(['split-right', 'drawer'])
+    expect(r.visible).toEqual(['agent', 'title', 'folder', 'shell', 'close'])
+  })
+
+  it('never lets a smaller low-priority item jump a hidden higher one', () => {
+    const r = resolveHeaderOverflow(180, [
+      { id: 'a', width: 100, priority: 0, pinned: true },
+      { id: 'big', width: 80, priority: 1 },
+      { id: 'small', width: 10, priority: 2 },
+    ])
+    expect(r.hidden).toEqual(['big', 'small'])
   })
 })

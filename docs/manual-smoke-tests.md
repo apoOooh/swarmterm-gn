@@ -57,6 +57,21 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Maximize another pane while one floats → the float hides; restore
       brings it back.
 
+## Pane header overflow
+
+- [ ] Split a Claude pane right three or four times until the panes are narrow:
+      agent icon + mode, title (truncated), folder name, maximize and ✕ stay
+      fully on screen in every header; a `⋯` button appears.
+- [ ] Hover a narrow header: after a short pause a second row drops over the
+      terminal with the hidden controls; moving the mouse into it keeps it open,
+      leaving closes it. Widen the pane: `⋯` and the row disappear.
+- [ ] From the dropped row open the shell menu and pick a shell, then split
+      right: both work, the row stays up while the menu is open.
+- [ ] Click `⋯`: the row stays open after the mouse leaves; `Esc` or a click
+      elsewhere closes it. Typing in the terminal afterwards still works.
+- [ ] Dragging a narrow pane by its header still swaps/docks it; double-clicking
+      bare header space still maximizes.
+
 ## Pane drawer
 
 - [ ] In a 3-pane workspace run `ping -t localhost` in one pane, click its
