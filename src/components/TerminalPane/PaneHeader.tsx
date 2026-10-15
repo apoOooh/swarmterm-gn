@@ -15,6 +15,8 @@ import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { KNOWN_SHELLS, visibleShells, type ShellId } from '@/lib/terminal-pref'
 import { useShellAvailabilityStore } from '@/store/shell-availability-store'
 import { resolveHeaderLevel, resolveHeaderOverflow, shortenPath, type HeaderOverflowItem } from '@/lib/header-layout'
+import { applyHeaderLayout } from '@/lib/header-layout-pref'
+import { useHeaderLayoutStore } from '@/store/header-layout-store'
 import { contextBand, contextUsageTitle, formatContextUsage, type ContextBand } from '@/lib/context-usage'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { accountLabel } from '@/lib/agent-accounts'
@@ -108,9 +110,10 @@ interface HeaderItem extends HeaderOverflowItem {
 }
 
 /**
- * The per-pane header. Critical items (agent + mode, title, folder, zoom,
- * close) are pinned and always render; everything else is collapsible and is
- * dropped in priority order when the row runs out of room — see
+ * The per-pane header. Core items (by default agent + mode, title, folder;
+ * user-configurable in Settings → Title bar) plus zoom and close are pinned and
+ * always render; everything else is collapsible and is dropped from the end of
+ * the user's order when the row runs out of room — see
  * `resolveHeaderOverflow`. Hidden items aren't gone: a ⋯ chip marks them, and
  * hovering the header (or clicking ⋯) drops a wrapping second row over the
  * terminal that shows them. A ResizeObserver on the header row drives it.
@@ -118,6 +121,8 @@ interface HeaderItem extends HeaderOverflowItem {
 export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   const { agentId, shellId, resolvedCwd, hasCwdOverride, worktreeBranch, ctxPct } = props
   const accounts = useAgentAccountsStore(s => s.accounts)
+  const layoutOrder = useHeaderLayoutStore(s => s.order)
+  const layoutCore = useHeaderLayoutStore(s => s.core)
   const agent = templateById(agentId)
   const mode = launchMode(agentId, props.launchModeId)
   const agentLabel = agent.name
@@ -213,8 +218,8 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   }
 
   // ── Items ─────────────────────────────────────────────────────────────────
-  // Row order = array order. Priority (lower survives longer) only matters for
-  // the collapsible ones: shell → worktree → ctx → war room → account → actions.
+  // Built in the default order; `applyHeaderLayout` below re-sorts them and
+  // sets pinned/priority from the user's Settings → Title bar preference.
   const items: HeaderItem[] = []
   const iconButton = (
     id: string,
@@ -532,10 +537,11 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
     </Button>
   ), true)
 
-  const { visible, hidden } = resolveHeaderOverflow(width, items)
-  const byId = new Map(items.map(i => [i.id, i]))
+  const laidOut = applyHeaderLayout(items, { order: layoutOrder, core: layoutCore })
+  const { visible, hidden } = resolveHeaderOverflow(width, laidOut)
+  const byId = new Map(laidOut.map(i => [i.id, i]))
   const visibleSet = new Set(visible)
-  const rowItems = items.filter(i => visibleSet.has(i.id) && i.id !== 'zoom' && i.id !== 'close')
+  const rowItems = laidOut.filter(i => visibleSet.has(i.id) && i.id !== 'zoom' && i.id !== 'close')
   const hasHidden = hidden.length > 0
   const expanded = hasHidden && (hover || pinned || menuOpen)
 

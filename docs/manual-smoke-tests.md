@@ -72,6 +72,10 @@ Do not mark them passed from the in-memory fixture alone.
       `Esc` in the terminal (e.g. vim) leaves the pinned row open.
 - [ ] Dragging a narrow pane by its header still swaps/docks it; double-clicking
       bare header space still maximizes.
+- [ ] Settings → Title bar: mark Split right as Core — it stays in a narrow
+      header; drag Shell to the bottom — it moves to the end of every header and
+      is first to collapse. Restart the app: the layout is kept. Reset to
+      defaults restores the original header.
 
 ## Pane drawer
 
