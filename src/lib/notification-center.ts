@@ -18,6 +18,8 @@ export type CenterKind =
   | 'prompt'
   | 'routine'
   | 'dictation'
+  /** Backend service failure (MCP server, voice pipe); not tied to a pane. */
+  | 'backend'
 
 export interface NewCenterEntry {
   kind: CenterKind

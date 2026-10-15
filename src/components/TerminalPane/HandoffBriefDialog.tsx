@@ -47,6 +47,7 @@ export function HandoffBriefDialog(props: HandoffBriefDialogProps): React.ReactE
   const [withExcerpt, setWithExcerpt] = useState(false)
   const [manual, setManual] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -54,6 +55,7 @@ export function HandoffBriefDialog(props: HandoffBriefDialogProps): React.ReactE
     setManual(null)
     setWithExcerpt(false)
     setCopied(false)
+    setCopyFailed(false)
     setGit(undefined)
     setExcerpt(readTerminalText(terminalId, EXCERPT_CAPTURE_ROWS))
     let alive = true
@@ -85,7 +87,8 @@ export function HandoffBriefDialog(props: HandoffBriefDialogProps): React.ReactE
   const text = manual ?? generated
 
   const copy = (): void => {
-    void writeClipboard(text).then(() => setCopied(true))
+    setCopyFailed(false)
+    void writeClipboard(text).then(() => setCopied(true)).catch(() => setCopyFailed(true))
   }
 
   return (
@@ -139,7 +142,7 @@ export function HandoffBriefDialog(props: HandoffBriefDialogProps): React.ReactE
           >
             Hand off…
           </Button>
-          <Button size="sm" onClick={copy}>{copied ? 'Copied' : 'Copy'}</Button>
+          <Button size="sm" onClick={copy}>{copied ? 'Copied' : copyFailed ? 'Copy failed' : 'Copy'}</Button>
         </div>
       </div>
     </div>

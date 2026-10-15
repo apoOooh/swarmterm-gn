@@ -196,7 +196,8 @@ if (isWindowsPlatform()) {
       windowsBuild = build
       for (const entry of entries.values()) entry.term.options.windowsPty = windowsPtyOption(true, build)
     })
-    .catch(() => {})
+    // Terminals keep the build-less ConPTY option; say so instead of failing silently.
+    .catch((e) => console.warn('terminal-registry: Windows build number unavailable, using build-less ConPTY option:', e))
 }
 
 function recordExit(id: string, exitCode: number): void {

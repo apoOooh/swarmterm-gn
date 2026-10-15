@@ -77,7 +77,7 @@ import { useDocumentStore } from '@/store/document-store'
 import { useExplorerStore } from '@/store/explorer-store'
 import { onFileChange } from '@/tauri/files'
 import { registerCloseGuard } from '@/lib/close-guard'
-import { confirmQuit, onQuitRequested } from '@/tauri/app'
+import { confirmQuit, onMcpServerExited, onQuitRequested, onVoicePipeError, onVoicePipeRecovered } from '@/tauri/app'
 import { RightPanel } from '@/components/RightPanel/RightPanel'
 import { Navbar } from '@/components/Navbar/Navbar'
 import { SettingsView } from '@/components/Settings/SettingsView'
@@ -125,17 +125,31 @@ import { wireSavedWorkspaces, flushSavedWorkspaces } from '@/store/saved-workspa
 import { wireVoice } from '@/lib/voice-wiring'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
+import { cleanupWhenResolved } from '@/lib/listener-cleanup'
+import { staleKeys } from '@/lib/stale-sweep'
+import { VOICE_ALERT_ID, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
 
 // Platform never changes at runtime, so a module-level constant is fine.
 const isMac = isMacPlatform()
 
 /** Terminal ids referenced by any workspace's layout — the ones to keep alive. */
-function liveTerminalIds(workspaces: WorkspaceModel[]): Set<string> {
-  const ids = new Set<string>()
+/** Leaf ids and terminal ids across every layout, from a single tree walk. */
+function liveLayoutIds(workspaces: WorkspaceModel[]): { leaves: Set<string>; terminals: Set<string> } {
+  const leaves = new Set<string>()
+  const terminals = new Set<string>()
   for (const ws of workspaces) {
-    for (const leaf of collectLeaves(ws.layout)) ids.add(leaf.terminalId)
+    for (const leaf of collectLeaves(ws.layout)) {
+      leaves.add(leaf.id)
+      terminals.add(leaf.terminalId)
+    }
   }
-  return ids
+  return { leaves, terminals }
+}
+
+function sameIds(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const id of a) if (!b.has(id)) return false
+  return true
 }
 
 // Dock tiles and snap slots sit on top of panes; let them win the hit test
@@ -706,9 +720,7 @@ export default function App(): ReactElement {
 
   useEffect(() => {
     if (!isMac) return // no auto-hiding titlebar to dodge off macOS
-    let unlisten: (() => void) | undefined
-    onFullscreenChanged(setIsFullscreen).then((un) => (unlisten = un))
-    return () => unlisten?.()
+    return cleanupWhenResolved(onFullscreenChanged(setIsFullscreen), 'fullscreen')
   }, [])
 
   useEffect(() => {
@@ -726,40 +738,77 @@ export default function App(): ReactElement {
   const chromeOffset = systemChromeOffset(isMac, isFullscreen, systemChromeRevealed)
 
   // Kill orphaned PTYs and close previews when terminals leave all layouts.
-  useEffect(
-    () =>
+  useEffect(() => {
+    // Ids already asked to leave the War Room, so a stale member isn't re-sent
+    // warRoomLeave on every layout tick until the room event removes it.
+    const leaving = new Set<string>()
+    let lastLeaves: Set<string> | undefined
+    let live: Set<string> | undefined
+
+    // Cheap sweeps (O(entries) over small terminalId-keyed maps): run on every
+    // layout change AND whenever those stores change, so an entry that arrives
+    // late for an already-closed pane is dropped even if the layout is stable.
+    const sweepPreviews = (): void => {
+      if (live) for (const id of staleKeys(Object.keys(useBrowserStore.getState().previews), live)) closePreview(id)
+    }
+    // Titles are keyed by terminalId outside the layout tree (see
+    // terminal-title-store) — sweep them the same way previews are, or a
+    // closed pane's title lingers in the store for the rest of the session.
+    const sweepTitles = (): void => {
+      if (!live) return
+      const { titles, clearTitle } = useTerminalTitleStore.getState()
+      for (const id of staleKeys(Object.keys(titles), live)) clearTitle(id)
+    }
+    // War Room members whose terminal left every layout: the Rust auto-leave
+    // on pty death normally beats us here — this sweep is the belt-and-braces
+    // for any path that drops a pane without killing it. Iterate every room's
+    // slice, not just the room shown in the panel.
+    const sweepWarRoom = (): void => {
+      if (!live) return
+      for (const ms of Object.values(useWarRoomStore.getState().membersByRoom)) {
+        for (const m of ms) {
+          if (live.has(m.terminalId) || leaving.has(m.terminalId)) continue
+          leaving.add(m.terminalId)
+          // Rejects when the backend already auto-left the member — harmless.
+          warRoomLeave(m.terminalId).catch(() => {})
+        }
+      }
+    }
+
+    const unsubs = [
       useAppStore.subscribe((state, prev) => {
         // Liveness only changes with the workspaces array; skip other ticks.
         if (state.workspaces === prev.workspaces) return
-        const live = liveTerminalIds(state.workspaces)
-        useDocumentStore.getState().collect(new Set(state.workspaces.flatMap((w) => collectLeaves(w.layout).map((l) => l.id))))
-        collectEditorCache(new Set(Object.keys(useDocumentStore.getState().documents)))
-        disposeOrphanTerminals(live)
-        const { previews } = useBrowserStore.getState()
-        for (const terminalId of Object.keys(previews)) {
-          if (!live.has(terminalId)) closePreview(terminalId)
+        const ids = liveLayoutIds(state.workspaces)
+        // Expensive part: skipped when a reorder/resize keeps the same panes.
+        if (!(lastLeaves && live && sameIds(ids.leaves, lastLeaves) && sameIds(ids.terminals, live))) {
+          useDocumentStore.getState().collect(ids.leaves)
+          collectEditorCache(new Set(Object.keys(useDocumentStore.getState().documents)))
+          disposeOrphanTerminals(ids.terminals)
         }
-        // Titles are keyed by terminalId outside the layout tree (see
-        // terminal-title-store) — sweep them the same way previews are, or a
-        // closed pane's title lingers in the store for the rest of the session.
-        const { titles, clearTitle } = useTerminalTitleStore.getState()
-        for (const terminalId of Object.keys(titles)) {
-          if (!live.has(terminalId)) clearTitle(terminalId)
-        }
-        // War Room members whose terminal left every layout: the Rust
-        // auto-leave on pty death normally beats us here — this sweep is the
-        // belt-and-braces for any path that drops a pane without killing it.
-        // warRoomLeave is idempotent, so racing the backend is harmless.
-        // Iterate every room's slice — the sweep doesn't just target whatever
-        // room is currently shown in the panel.
-        for (const ms of Object.values(useWarRoomStore.getState().membersByRoom)) {
-          for (const m of ms) {
-            if (!live.has(m.terminalId)) void warRoomLeave(m.terminalId)
-          }
-        }
+        lastLeaves = ids.leaves
+        live = ids.terminals
+        sweepPreviews()
+        sweepTitles()
+        sweepWarRoom()
       }),
-    []
-  )
+      useBrowserStore.subscribe((s, p) => { if (s.previews !== p.previews) sweepPreviews() }),
+      useTerminalTitleStore.subscribe((s, p) => { if (s.titles !== p.titles) sweepTitles() }),
+      useWarRoomStore.subscribe((s, p) => { if (s.membersByRoom !== p.membersByRoom) sweepWarRoom() })
+    ]
+    return () => { for (const u of unsubs) u() }
+  }, [])
+
+  // Backend service failures surface in the notification center (bell).
+  useEffect(() => {
+    const center = useNotificationCenterStore.getState
+    const cleanups = [
+      cleanupWhenResolved(onMcpServerExited((reason) => center().add(mcpExitedEntry(reason, Date.now()))), 'mcp:server-exited'),
+      cleanupWhenResolved(onVoicePipeError((p) => center().add(voicePipeErrorEntry(p, Date.now()))), 'voice:pipe-error'),
+      cleanupWhenResolved(onVoicePipeRecovered(() => center().markTerminalRead(VOICE_ALERT_ID, ['backend'])), 'voice:pipe-recovered')
+    ]
+    return () => { for (const c of cleanups) c() }
+  }, [])
 
   // Wire MCP preview:open events to the per-terminal preview. Background
   // terminals update silently — the panel is only revealed when the event

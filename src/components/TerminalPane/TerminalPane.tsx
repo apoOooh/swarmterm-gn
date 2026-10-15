@@ -312,14 +312,19 @@ export function TerminalPane({
       }))
   }
 
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+
   async function openClearDialog(): Promise<void> {
     const clears = resolveWorktreeTargets()
     if (clears.length === 0) return
     const targets: DialogTarget[] = await Promise.all(
       clears.map(async (c) => {
         try {
-          const changed = await getChangedFiles(c.path)
-          const unmerged = await branchUnmergedCount(c.repoRoot, c.branch)
+          const [changed, unmerged] = await Promise.all([getChangedFiles(c.path), branchUnmergedCount(c.repoRoot, c.branch)])
           const { uncommittedCount, unmergedCount, dirty } = classifyWorktree(changed, unmerged)
           return { leafId: c.leafId, branch: c.branch, uncommittedCount, unmergedCount, dirty }
         } catch (e) {
@@ -330,7 +335,8 @@ export function TerminalPane({
         }
       })
     )
-    setDialog({ targets, clears })
+    // The pane may have closed while git was inspecting the worktrees.
+    if (mounted.current) setDialog({ targets, clears })
   }
 
   function confirmClear(approvedLeafIds: string[]): void {
