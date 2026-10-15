@@ -457,6 +457,12 @@ pub fn take_valid_utf8(buf: &mut Vec<u8>) -> Option<String> {
     Some(s)
 }
 
+/// Output coalescing (see read_loop): a burst is batched for up to
+/// OUTPUT_COALESCE or OUTPUT_BATCH_BYTES; output after OUTPUT_IDLE of silence
+/// is sent immediately.
+const OUTPUT_COALESCE: std::time::Duration = std::time::Duration::from_millis(4);
+const OUTPUT_IDLE: std::time::Duration = std::time::Duration::from_millis(16);
+const OUTPUT_BATCH_BYTES: usize = 64 * 1024;
 const READ_BUF_BYTES: usize = 64 * 1024;
 
 /// Spawn a pty, register it in state, and start a reader thread that streams
@@ -717,40 +723,71 @@ fn read_loop(
     exit_rx: std::sync::mpsc::Receiver<i32>,
     on_data: Channel<PtyOut>,
 ) {
-    let mut pending: Vec<u8> = Vec::new();
-    let mut chunk = vec![0u8; READ_BUF_BYTES];
-    // Resolved once: `try_state` walks Tauri's type map, and this loop runs
-    // per pty chunk. `None` only during teardown, when there is nobody left
-    // to read the tail anyway.
-    let peer_state = app.try_state::<AppState>();
-    loop {
-        match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
-            Ok(n) => {
-                pending.extend_from_slice(&chunk[..n]);
-                if let Some(text) = take_valid_utf8(&mut pending) {
-                    // Tee the chunk into the Rust-side screen tail BEFORE the
-                    // renderer sees it, so a `read_peer` racing this chunk
-                    // never reads less than xterm shows. Lock scope is the
-                    // one statement — never held across the channel send.
-                    if let Some(state) = &peer_state {
-                        state.peer_states.lock().unwrap().push_output(
-                            &id,
-                            &text,
-                            crate::warroom::now_ms(),
-                        );
-                        state.peer_wake.notify_waiters();
+    // Reader → flusher split. ConPTY reads block, so coalescing needs its own
+    // thread: the reader decodes (UTF-8 boundary handling stays HERE, so the
+    // flusher only ever joins whole strings) and the flusher below batches a
+    // TUI redraw's many small reads into one tail push, one waiter wake and
+    // one IPC message. The first chunk after a quiet spell is sent at once
+    // (keystroke echo latency unchanged); only bursts wait up to
+    // OUTPUT_COALESCE. The channel closing means EOF with every byte —
+    // including the lossy trailing flush — already queued, so `Exit` below
+    // can never overtake output.
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let mut pending: Vec<u8> = Vec::new();
+        let mut chunk = vec![0u8; READ_BUF_BYTES];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+                Ok(n) => {
+                    pending.extend_from_slice(&chunk[..n]);
+                    if let Some(text) = take_valid_utf8(&mut pending) {
+                        if tx.send(text).is_err() {
+                            return;
+                        }
                     }
-                    let _ = on_data.send(PtyOut::Data(text));
                 }
             }
         }
-    }
-    // Flush any trailing bytes (lossily) so nothing is lost.
-    if !pending.is_empty() {
-        let _ = on_data.send(PtyOut::Data(String::from_utf8_lossy(&pending).into_owned()));
+        // Flush any trailing bytes (lossily) so nothing is lost.
+        if !pending.is_empty() {
+            let _ = tx.send(String::from_utf8_lossy(&pending).into_owned());
+        }
+    });
+
+    // Resolved once: `try_state` walks Tauri's type map, and this loop runs
+    // per flush. `None` only during teardown, when there is nobody left to
+    // read the tail anyway.
+    let peer_state = app.try_state::<AppState>();
+    let mut last_flush = std::time::Instant::now() - OUTPUT_IDLE;
+    while let Ok(mut text) = rx.recv() {
+        let deadline = if last_flush.elapsed() >= OUTPUT_IDLE {
+            std::time::Instant::now()
+        } else {
+            std::time::Instant::now() + OUTPUT_COALESCE
+        };
+        while text.len() < OUTPUT_BATCH_BYTES {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(more) => text.push_str(&more),
+                Err(_) => break,
+            }
+        }
+        // Tee into the Rust-side screen tail BEFORE the renderer sees it, so a
+        // `read_peer` racing this batch never reads less than xterm shows.
+        // Lock scope is the one statement — never held across the send.
+        if let Some(state) = &peer_state {
+            state
+                .peer_states
+                .lock()
+                .unwrap()
+                .push_output(&id, &text, crate::warroom::now_ms());
+            state.peer_wake.notify_waiters();
+        }
+        let _ = on_data.send(PtyOut::Data(text));
+        last_flush = std::time::Instant::now();
     }
     // The waiter thread owns the child; EOF means it is dead or about to be
     // (kill_terminal dropped the master after killing it).
