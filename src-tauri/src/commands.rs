@@ -345,13 +345,26 @@ pub async fn set_claude_statusline(app: AppHandle, enabled: bool) -> Result<(), 
             .map_err(|_| "Status line configuration update interrupted")?;
         let enabled =
             crate::accounts::STATUSLINE_ENABLED.load(std::sync::atomic::Ordering::Relaxed);
-        crate::statusline::install::apply(&app, enabled)?;
+        // A custom status line in the default profile is the user's and stays;
+        // it must not stop the profiles below from following the switch.
+        let default = crate::statusline::install::tolerate_foreign(
+            crate::statusline::install::apply(&app, enabled),
+        );
+        // One broken profile must not leave the others on the old setting:
+        // enroll all, then report the first failure.
+        let mut first_err = default.err();
         for account in crate::accounts::list(&app)? {
             if account.agent_id == "claude-code" {
-                crate::accounts::enroll(&account, None)?;
+                if let Err(e) = crate::accounts::enroll(&account, None) {
+                    eprintln!(
+                        "statusline: cannot update account profile {}: {e}",
+                        account.id
+                    );
+                    first_err.get_or_insert(e);
+                }
             }
         }
-        Ok(())
+        first_err.map_or(Ok(()), Err)
     })
     .await
     .map_err(|_| "Status line configuration update interrupted")?

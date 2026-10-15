@@ -187,15 +187,27 @@ pub fn resolve_settings_path(home: &Path, claude_config_dir: Option<&str>) -> Pa
     }
 }
 
+/// Error text when the user owns the `statusLine` entry. Callers that only
+/// want "ours where we may" match it through `tolerate_foreign`.
+pub const FOREIGN_STATUS_LINE: &str =
+    "settings.json already has a custom statusLine — left untouched";
+
+/// A foreign status line is the user's choice, not a failure: refusing to
+/// overwrite it is the intended outcome. Every other error passes through.
+pub fn tolerate_foreign(result: Result<(), String>) -> Result<(), String> {
+    match result {
+        Err(e) if e == FOREIGN_STATUS_LINE => Ok(()),
+        other => other,
+    }
+}
+
 /// Read → merge → write tmp → rename. The rename is atomic, so a crash
 /// mid-write can never leave the user with a truncated settings file.
 pub fn write_settings_to_file(path: &Path, command: Option<&str>) -> Result<(), String> {
     let existing = read_optional(path)?;
     let merged = match merge_settings(existing.as_deref(), command)? {
         SettingsWrite::Unchanged => return Ok(()),
-        SettingsWrite::Foreign => {
-            return Err("settings.json already has a custom statusLine — left untouched".into())
-        }
+        SettingsWrite::Foreign => return Err(FOREIGN_STATUS_LINE.into()),
         SettingsWrite::Write(s) => s,
     };
     write_atomic(path, merged)
@@ -232,6 +244,25 @@ mod tests {
     }
 
     const OURS: &str = "\"/Applications/Swarmterm.app/Contents/MacOS/swarmterm\" --statusline";
+
+    #[test]
+    fn foreign_status_line_is_tolerated_other_errors_are_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"statusLine":{"type":"command","command":"node mine.mjs"}}"#,
+        )
+        .unwrap();
+        let refused = write_settings_to_file(&path, Some(OURS));
+        assert_eq!(refused, Err(FOREIGN_STATUS_LINE.to_owned()));
+        assert_eq!(tolerate_foreign(refused), Ok(()));
+        assert!(fs::read_to_string(&path).unwrap().contains("node mine.mjs"));
+        assert_eq!(
+            tolerate_foreign(Err("read: denied".into())),
+            Err("read: denied".into())
+        );
+    }
 
     #[test]
     fn quotes_the_path_and_appends_the_flag() {
