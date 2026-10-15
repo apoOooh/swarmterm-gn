@@ -125,17 +125,29 @@ import { wireSavedWorkspaces, flushSavedWorkspaces } from '@/store/saved-workspa
 import { wireVoice } from '@/lib/voice-wiring'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
+import { cleanupWhenResolved } from '@/lib/listener-cleanup'
 
 // Platform never changes at runtime, so a module-level constant is fine.
 const isMac = isMacPlatform()
 
 /** Terminal ids referenced by any workspace's layout — the ones to keep alive. */
-function liveTerminalIds(workspaces: WorkspaceModel[]): Set<string> {
-  const ids = new Set<string>()
+/** Leaf ids and terminal ids across every layout, from a single tree walk. */
+function liveLayoutIds(workspaces: WorkspaceModel[]): { leaves: Set<string>; terminals: Set<string> } {
+  const leaves = new Set<string>()
+  const terminals = new Set<string>()
   for (const ws of workspaces) {
-    for (const leaf of collectLeaves(ws.layout)) ids.add(leaf.terminalId)
+    for (const leaf of collectLeaves(ws.layout)) {
+      leaves.add(leaf.id)
+      terminals.add(leaf.terminalId)
+    }
   }
-  return ids
+  return { leaves, terminals }
+}
+
+function sameIds(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const id of a) if (!b.has(id)) return false
+  return true
 }
 
 // Dock tiles and snap slots sit on top of panes; let them win the hit test
@@ -706,9 +718,7 @@ export default function App(): ReactElement {
 
   useEffect(() => {
     if (!isMac) return // no auto-hiding titlebar to dodge off macOS
-    let unlisten: (() => void) | undefined
-    onFullscreenChanged(setIsFullscreen).then((un) => (unlisten = un))
-    return () => unlisten?.()
+    return cleanupWhenResolved(onFullscreenChanged(setIsFullscreen), 'fullscreen')
   }, [])
 
   useEffect(() => {
@@ -726,13 +736,21 @@ export default function App(): ReactElement {
   const chromeOffset = systemChromeOffset(isMac, isFullscreen, systemChromeRevealed)
 
   // Kill orphaned PTYs and close previews when terminals leave all layouts.
-  useEffect(
-    () =>
-      useAppStore.subscribe((state, prev) => {
+  useEffect(() => {
+    // Ids already asked to leave the War Room, so a stale member isn't re-sent
+    // warRoomLeave on every layout tick until the room event removes it.
+    const leaving = new Set<string>()
+    let lastLeaves: Set<string> | undefined
+    let lastTerminals: Set<string> | undefined
+    return useAppStore.subscribe((state, prev) => {
         // Liveness only changes with the workspaces array; skip other ticks.
         if (state.workspaces === prev.workspaces) return
-        const live = liveTerminalIds(state.workspaces)
-        useDocumentStore.getState().collect(new Set(state.workspaces.flatMap((w) => collectLeaves(w.layout).map((l) => l.id))))
+        const { leaves, terminals: live } = liveLayoutIds(state.workspaces)
+        // A reorder/resize keeps the same panes: nothing to sweep.
+        if (lastLeaves && lastTerminals && sameIds(leaves, lastLeaves) && sameIds(live, lastTerminals)) return
+        lastLeaves = leaves
+        lastTerminals = live
+        useDocumentStore.getState().collect(leaves)
         collectEditorCache(new Set(Object.keys(useDocumentStore.getState().documents)))
         disposeOrphanTerminals(live)
         const { previews } = useBrowserStore.getState()
@@ -754,12 +772,14 @@ export default function App(): ReactElement {
         // room is currently shown in the panel.
         for (const ms of Object.values(useWarRoomStore.getState().membersByRoom)) {
           for (const m of ms) {
-            if (!live.has(m.terminalId)) void warRoomLeave(m.terminalId)
+            if (live.has(m.terminalId) || leaving.has(m.terminalId)) continue
+            leaving.add(m.terminalId)
+            // Rejects when the backend already auto-left the member — harmless.
+            warRoomLeave(m.terminalId).catch(() => {})
           }
         }
-      }),
-    []
-  )
+      })
+  }, [])
 
   // Wire MCP preview:open events to the per-terminal preview. Background
   // terminals update silently — the panel is only revealed when the event

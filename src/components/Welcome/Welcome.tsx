@@ -91,7 +91,7 @@ export function Welcome(): ReactElement {
   useEffect(() => {
     void getHomeDir().then((home) => {
       if (useAppStore.getState().welcomeFolder === '') setFolder(home)
-    })
+    }).catch((e) => console.warn('Welcome: home directory unavailable, leaving folder empty:', e))
   }, [setFolder])
 
   // Re-probe installed agent CLIs every time Welcome mounts so a CLI installed
