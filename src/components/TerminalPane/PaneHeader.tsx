@@ -57,6 +57,8 @@ interface PaneHeaderProps {
   /** Park the pane in the workspace drawer (hidden, kept running). */
   onDrawer: () => void
   isZoomed: boolean
+  /** While zoomed: how many other panes are hidden behind this one. */
+  zoomHiddenCount?: number
   onToggleZoom: () => void
   /** Whether the pane floats above the split view (lib/floating-panes.ts). */
   isFloating: boolean
@@ -118,6 +120,7 @@ interface HeaderItem extends HeaderOverflowItem {
 export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   const { agentId, shellId, resolvedCwd, hasCwdOverride, worktreeBranch, ctxPct } = props
   const accounts = useAgentAccountsStore(s => s.accounts)
+  const hiddenCount = props.zoomHiddenCount ?? 0
   const agent = templateById(agentId)
   const mode = launchMode(agentId, props.launchModeId)
   const agentLabel = agent.name
@@ -220,8 +223,9 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
     id: string,
     priority: number,
     node: React.ReactNode,
-    pinnedItem = false
-  ): void => { items.push({ id, priority, pinned: pinnedItem, width: ICON_PX, render: () => node }) }
+    pinnedItem = false,
+    width = ICON_PX
+  ): void => { items.push({ id, priority, pinned: pinnedItem, width, render: () => node }) }
 
   items.push({
     id: 'agent',
@@ -522,10 +526,23 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   ))
   // Zoom + close — pinned at the far right, after the ⋯ chip.
   iconButton('zoom', 0, (
-    <Button key="zoom" variant="ghost" size="icon-sm" title={props.isZoomed ? 'Restore pane (Ctrl+Shift+Enter)' : 'Maximize pane (Ctrl+Shift+Enter)'} aria-label={props.isZoomed ? 'Restore pane' : 'Maximize pane'} aria-pressed={props.isZoomed} onClick={props.onToggleZoom}>
+    <Button
+      key="zoom"
+      variant="ghost"
+      size={props.isZoomed && hiddenCount > 0 ? 'sm' : 'icon-sm'}
+      title={props.isZoomed
+        ? `Restore pane${hiddenCount > 0 ? ` — ${hiddenCount} other pane${hiddenCount === 1 ? '' : 's'} hidden` : ''} (Ctrl+Shift+Enter)`
+        : 'Maximize pane (Ctrl+Shift+Enter)'}
+      aria-label={props.isZoomed ? 'Restore pane' : 'Maximize pane'}
+      aria-pressed={props.isZoomed}
+      onClick={props.onToggleZoom}
+      // Zoomed: the way out is the one coloured control in the header.
+      className={cn(props.isZoomed && 'h-6 gap-1 px-1.5 bg-zoom/15 text-zoom hover:bg-zoom/25 hover:text-zoom')}
+    >
       {props.isZoomed ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+      {props.isZoomed && hiddenCount > 0 && <span className="text-[10px] font-semibold tabular-nums">+{hiddenCount}</span>}
     </Button>
-  ), true)
+  ), true, ICON_PX + (props.isZoomed && hiddenCount > 0 ? String(hiddenCount).length * CHAR_PX + 14 : 0))
   iconButton('close', 0, (
     <Button key="close" variant="ghost" size="icon-sm" title="Close pane" aria-label="Close pane" onClick={props.onClose}>
       <X className="h-3.5 w-3.5" />
@@ -576,6 +593,9 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
       }}
       className={cn(
         'pane-header relative flex h-7 shrink-0 cursor-grab items-center gap-0.5 border-b border-border bg-card px-1.5 active:cursor-grabbing',
+        // Zoomed: violet bottom border, so "the others are behind this one"
+        // is visible without hunting for the restore icon.
+        props.isZoomed && 'border-b-zoom',
         // Lift above the terminal body (and its z-10 overlays) while the
         // second row hangs over it.
         expanded && 'z-30'

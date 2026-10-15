@@ -10,6 +10,7 @@ module.exports = {
         input: 'rgb(var(--color-input) / calc(var(--color-input-alpha, 1) * <alpha-value>))',
         ring: 'rgb(var(--color-ring) / calc(var(--color-ring-alpha, 1) * <alpha-value>))',
         broadcast: 'rgb(var(--color-broadcast) / calc(var(--color-broadcast-alpha, 1) * <alpha-value>))',
+        zoom: 'rgb(var(--color-zoom) / calc(var(--color-zoom-alpha, 1) * <alpha-value>))',
         activity: 'rgb(var(--color-activity) / calc(var(--color-activity-alpha, 1) * <alpha-value>))',
         background: 'rgb(var(--color-background) / calc(var(--color-background-alpha, 1) * <alpha-value>))',
         canvas: 'rgb(var(--color-canvas) / calc(var(--color-canvas-alpha, 1) * <alpha-value>))',
