@@ -102,6 +102,9 @@ pub fn run() {
             // `claude`: hooks are snapshotted at session start.
             crate::hook::install::register(app.handle());
             crate::hook::codex::register(app.handle());
+            // `codex --help` probe can take seconds on a cold start; pay it
+            // here, off-thread, instead of on the first Codex pane spawn.
+            crate::hook::codex::warm();
             // Voice dictation endpoint (SWA-12): named pipe + discovery file
             // for buzzkey; follows Settings → Voice. Failure is logged only.
             crate::voice::init(app.handle());
@@ -196,6 +199,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, _event| {
+            if let tauri::RunEvent::Exit = _event {
+                crate::mcp::shutdown();
+            }
             // macOS: clicking the Dock icon while the window is hidden
             // (close-to-tray) fires Reopen — re-show like the tray's "Show".
             // Other platforms get here via the single-instance plugin instead.

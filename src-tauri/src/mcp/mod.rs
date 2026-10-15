@@ -49,11 +49,45 @@ pub async fn start(app: AppHandle) -> Result<Arc<str>, String> {
     }
 
     let router = server::axum_router(app.clone());
+    let mut stop = shutdown_signal().subscribe();
+    let handle = tokio::spawn(async move {
+        let res = axum::serve(listener, router)
+            .with_graceful_shutdown(async move {
+                let _ = stop.wait_for(|s| *s).await;
+            })
+            .await;
+        // Anything but a requested shutdown leaves every pane's MCP config
+        // pointing at a dead port — tell the renderer instead of only logging.
+        if !*shutdown_signal().borrow() {
+            let reason = match res {
+                Ok(()) => "server stopped".to_string(),
+                Err(e) => e.to_string(),
+            };
+            eprintln!("mcp: server exited: {reason}");
+            use tauri::Emitter;
+            let _ = app.emit("mcp:server-exited", &reason);
+        }
+    });
+    // Kept so a panic inside the server task is reported rather than lost.
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, router).await {
-            eprintln!("mcp: server exited: {e}");
+        if let Err(e) = handle.await {
+            if e.is_panic() {
+                eprintln!("mcp: server task panicked: {e}");
+            }
         }
     });
 
     Ok(url)
+}
+
+fn shutdown_signal() -> &'static tokio::sync::watch::Sender<bool> {
+    static SIGNAL: std::sync::OnceLock<tokio::sync::watch::Sender<bool>> =
+        std::sync::OnceLock::new();
+    SIGNAL.get_or_init(|| tokio::sync::watch::channel(false).0)
+}
+
+/// Ask the MCP server to stop accepting and close open streams cleanly.
+/// Called on app exit; a no-op if the server never started.
+pub fn shutdown() {
+    shutdown_signal().send_replace(true);
 }

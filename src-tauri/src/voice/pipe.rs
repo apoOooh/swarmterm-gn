@@ -19,7 +19,7 @@
 use std::ffi::c_void;
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tokio::sync::{mpsc, watch};
@@ -112,29 +112,60 @@ async fn accept_loop(
     sd: security::CurrentUserOnly,
     mut stop: watch::Receiver<bool>,
 ) {
+    // Per-connection errors (a client that connects and drops at once, a
+    // transient create failure) must not end dictation for the whole session:
+    // log, back off, rebuild the instance and keep accepting until `stop`.
+    let mut backoff = BACKOFF_MIN;
+    let mut failing = false;
     loop {
-        tokio::select! {
+        let connected = tokio::select! {
             _ = stop.changed() => return,
-            res = server.connect() => {
-                if let Err(e) = res {
-                    eprintln!("voice: connect: {e}");
-                    return;
-                }
-            }
-        }
+            res = server.connect() => res.map_err(|e| format!("connect: {e}")),
+        };
         // Open the next instance before serving this one, so a client never
         // finds the name missing between connections.
-        let next = match create(&name, false, &sd) {
-            Ok(next) => next,
-            Err(e) => {
-                eprintln!("voice: {e}");
-                return;
+        let next = create(&name, false, &sd);
+        match (connected, next) {
+            (Ok(()), Ok(next)) => {
+                backoff = BACKOFF_MIN;
+                if std::mem::take(&mut failing) {
+                    let _ = app.emit("voice:pipe-recovered", ());
+                }
+                let conn = std::mem::replace(&mut server, next);
+                tauri::async_runtime::spawn(serve(app.clone(), token.clone(), conn, stop.clone()));
+                continue;
             }
-        };
-        let conn = std::mem::replace(&mut server, next);
-        tauri::async_runtime::spawn(serve(app.clone(), token.clone(), conn, stop.clone()));
+            // The failed instance is discarded; the fresh one takes over.
+            (Err(e), Ok(next)) => {
+                pipe_error(&app, &e);
+                server = next;
+            }
+            // No replacement: keep the current instance and retry later.
+            (_, Err(e)) => pipe_error(&app, &e),
+        }
+        // Every failure passes through exactly one backoff sleep below, so
+        // the renderer sees at most one `voice:pipe-error` per cycle.
+        failing = true;
+        tokio::select! {
+            _ = stop.changed() => return,
+            _ = tokio::time::sleep(backoff) => {}
+        }
+        backoff = (backoff * 2).min(BACKOFF_MAX);
     }
 }
+
+#[derive(Clone, serde::Serialize)]
+struct PipeError<'a> {
+    message: &'a str,
+}
+
+fn pipe_error(app: &AppHandle, message: &str) {
+    eprintln!("voice: {message}");
+    let _ = app.emit("voice:pipe-error", PipeError { message });
+}
+
+const BACKOFF_MIN: std::time::Duration = std::time::Duration::from_millis(100);
+const BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(5);
 
 async fn serve(
     app: AppHandle,

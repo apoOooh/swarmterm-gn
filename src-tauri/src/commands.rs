@@ -110,7 +110,9 @@ pub fn write_terminal(state: State<'_, AppState>, id: String, data: String) {
     // Enqueue only — the blocking pty write runs on the terminal's writer
     // thread (pty::PtyInput), so a full input pipe can't freeze the UI.
     if let Some(t) = state.terminals.lock().unwrap().get(&id) {
-        let _ = t.input.send(data.as_bytes());
+        if let Err(e) = t.input.send(data.as_bytes()) {
+            eprintln!("[pty] write to {id} dropped: {e}");
+        }
     }
 }
 
@@ -564,7 +566,12 @@ pub fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
     std::process::Command::new(&bin)
         .args(&args)
         .spawn()
-        .map(|_| ())
+        .map(|mut child| {
+            // Reap it off-thread: an un-waited child stays a zombie on Unix.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        })
         .map_err(|e| e.to_string())
 }
 

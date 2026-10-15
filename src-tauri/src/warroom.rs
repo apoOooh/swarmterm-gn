@@ -75,10 +75,20 @@ pub struct RoomMember {
     /// sender saw `delivered` (SWA-29). Keeping a short tail lets the reader
     /// re-fetch with `includeRead` instead of the message being gone.
     pub read: VecDeque<RoomMessage>,
+    /// Unread messages evicted because the inbox hit `INBOX_CAP`; reported
+    /// (and reset) by the next `drain_inbox`.
+    pub dropped: usize,
 }
 
 /// How many already-read messages a member keeps for `includeRead`.
 pub const READ_HISTORY: usize = 20;
+
+/// Unread messages kept per member; the oldest are evicted past this. A peer
+/// that never reads (or a bare shell) must not grow memory without bound.
+pub const INBOX_CAP: usize = 200;
+
+/// Longest accepted message body, in chars.
+pub const MAX_CONTENT_CHARS: usize = 64 * 1024;
 
 /// Snapshot for the renderer (war_room_rooms command / boot hydration).
 #[derive(Debug, Clone, Serialize)]
@@ -174,6 +184,7 @@ impl Default for WarRoom {
                 connected: true,
                 inbox: VecDeque::new(),
                 read: VecDeque::new(),
+                dropped: 0,
             },
         );
         Self { members, seq: 0 }
@@ -231,10 +242,10 @@ impl WarRoom {
         display_name: String,
         ts: u64,
     ) -> WarRoomEvent {
-        let (inbox, read, connected) = self
+        let (inbox, read, connected, dropped) = self
             .members
             .remove(&terminal_id)
-            .map(|m| (m.inbox, m.read, m.connected))
+            .map(|m| (m.inbox, m.read, m.connected, m.dropped))
             .unwrap_or_default();
         self.members.insert(
             terminal_id.clone(),
@@ -245,6 +256,7 @@ impl WarRoom {
                 connected,
                 inbox,
                 read,
+                dropped,
             },
         );
         let seq = self.next_seq();
@@ -325,6 +337,11 @@ impl WarRoom {
         }
         if let Some(msg) = control_byte_refusal(content) {
             return Err(msg);
+        }
+        if content.chars().count() > MAX_CONTENT_CHARS {
+            return Err(format!(
+                "content is longer than {MAX_CONTENT_CHARS} characters — send a summary or a file path instead"
+            ));
         }
         let from_name = self
             .members
@@ -408,6 +425,10 @@ impl WarRoom {
                     mode,
                     ts,
                 });
+                while target.inbox.len() > INBOX_CAP {
+                    target.inbox.pop_front();
+                    target.dropped += 1;
+                }
             }
             // Nudges/paste only make sense for panes running an agent CLI —
             // a plain shell keeps the inbox entry but is never typed into.
@@ -426,10 +447,28 @@ impl WarRoom {
     /// Unread messages, now marked read (moved into the capped history).
     pub fn drain_inbox(&mut self, terminal_id: &str) -> Option<Vec<RoomMessage>> {
         let member = self.members.get_mut(terminal_id)?;
-        let unread: Vec<RoomMessage> = member.inbox.drain(..).collect();
+        let mut unread: Vec<RoomMessage> = member.inbox.drain(..).collect();
         member.read.extend(unread.iter().cloned());
         while member.read.len() > READ_HISTORY {
             member.read.pop_front();
+        }
+        let dropped = std::mem::take(&mut member.dropped);
+        if dropped > 0 {
+            // Synthetic marker (seq 0), first so the reader sees the gap
+            // before the surviving messages. Not kept in the read history.
+            unread.insert(
+                0,
+                RoomMessage {
+                    seq: 0,
+                    from_id: "war-room".into(),
+                    from_name: "War Room".into(),
+                    content: format!(
+                        "{dropped} older unread message(s) were dropped: inbox is capped at {INBOX_CAP}"
+                    ),
+                    mode: MessageMode::Probe,
+                    ts: unread.first().map_or(0, |m| m.ts),
+                },
+            );
         }
         Some(unread)
     }
@@ -816,6 +855,37 @@ mod tests {
         assert!(r.leave("t1", 4).is_none());
         assert!(!r.is_member("t1"));
         assert!(r.is_member("t2"));
+    }
+
+    #[test]
+    fn inbox_is_capped_with_a_dropped_marker() {
+        let mut r = room_with_two();
+        for i in 0..(INBOX_CAP + 3) {
+            r.send("t1", Some("t2"), &format!("m{i}"), MessageMode::Probe, 10)
+                .unwrap();
+        }
+        let inbox = r.drain_inbox("t2").unwrap();
+        assert_eq!(inbox.len(), INBOX_CAP + 1);
+        assert_eq!(inbox[0].seq, 0);
+        assert!(inbox[0].content.starts_with("3 older unread"));
+        assert_eq!(inbox[1].content, "m3"); // oldest three evicted
+        assert_eq!(inbox.last().unwrap().content, format!("m{}", INBOX_CAP + 2));
+        // Marker is reported once.
+        r.send("t1", Some("t2"), "again", MessageMode::Probe, 11)
+            .unwrap();
+        let inbox = r.drain_inbox("t2").unwrap();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].content, "again");
+    }
+
+    #[test]
+    fn oversized_content_is_refused() {
+        let mut r = room_with_two();
+        let big = "x".repeat(MAX_CONTENT_CHARS + 1);
+        assert!(r
+            .send("t1", Some("t2"), &big, MessageMode::Probe, 10)
+            .is_err());
+        assert!(r.drain_inbox("t2").unwrap().is_empty());
     }
 
     #[test]

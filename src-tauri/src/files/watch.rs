@@ -5,7 +5,7 @@ use super::{
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -58,11 +58,35 @@ fn ignored(path: &Path, root: &Path) -> bool {
     })
 }
 
+/// Watched directories, keyed by `watch_key` (case-folded on Windows, where
+/// the file system is case-insensitive) and mapping to the path actually
+/// registered with the watcher, which `unwatch` needs verbatim.
+type Watched = BTreeMap<PathBuf, PathBuf>;
+
+fn watch_key(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Record `path`; true if it was not tracked yet.
+fn track(watched: &mut Watched, path: &Path) -> bool {
+    match watched.entry(watch_key(path)) {
+        std::collections::btree_map::Entry::Occupied(_) => false,
+        std::collections::btree_map::Entry::Vacant(v) => {
+            v.insert(path.to_path_buf());
+            true
+        }
+    }
+}
+
 fn add_tree(
     watcher: &mut RecommendedWatcher,
     path: &Path,
     root: &Path,
-    watched: &mut BTreeSet<PathBuf>,
+    watched: &mut Watched,
 ) -> Result<(), String> {
     if ignored(path, root)
         || fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
@@ -70,7 +94,7 @@ fn add_tree(
     {
         return Ok(());
     }
-    if watched.insert(path.to_path_buf()) {
+    if track(watched, path) {
         watcher
             .watch(path, RecursiveMode::NonRecursive)
             .map_err(|e| e.to_string())?;
@@ -86,6 +110,38 @@ fn add_tree(
     Ok(())
 }
 
+/// Adds a lease to an already running watcher. Returns the extra paths back when
+/// the context has no watcher yet, so the caller can build one.
+fn lease_existing(
+    watchers: &std::sync::Mutex<std::collections::HashMap<String, WatchHandle>>,
+    context_id: &str,
+    extra: Vec<PathBuf>,
+) -> Result<Option<Vec<PathBuf>>, String> {
+    let mut watchers = watchers.lock().map_err(|e| e.to_string())?;
+    match watchers.get_mut(context_id) {
+        Some(handle) => {
+            handle.leases += 1;
+            for path in extra {
+                let _ = handle.extra.send(path);
+            }
+            Ok(None)
+        }
+        None => Ok(Some(extra)),
+    }
+}
+
+/// Watched directories at or below `path`, as (key, registered path). Keys of
+/// descendants sort directly after their ancestor's, so a range scan replaces
+/// a full pass.
+fn watched_subtree(watched: &Watched, path: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let key = watch_key(path);
+    watched
+        .range(key.clone()..)
+        .take_while(|(k, _)| k.starts_with(&key))
+        .map(|(k, p)| (k.clone(), p.clone()))
+        .collect()
+}
+
 impl FileService {
     pub fn watch(
         &self,
@@ -96,20 +152,17 @@ impl FileService {
         let root = self.root(context_id)?;
         let extra: Result<Vec<_>, _> = files.iter().map(|p| guarded(&root, p, false)).collect();
         let extra = extra?;
-        let mut watchers = self.watchers.lock().map_err(|e| e.to_string())?;
-        if let Some(handle) = watchers.get_mut(context_id) {
-            handle.leases += 1;
-            for path in extra {
-                let _ = handle.extra.send(path);
-            }
+        // Fast path: an existing watcher just gains a lease. The tree walk below runs
+        // without the lock so a large project never blocks unwatch or other contexts.
+        let Some(extra) = lease_existing(&self.watchers, context_id, extra)? else {
             return Ok(());
-        }
+        };
         let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
         let mut watcher = notify::recommended_watcher(move |e| {
             let _ = tx.send(e);
         })
         .map_err(|e| e.to_string())?;
-        let mut watched = BTreeSet::new();
+        let mut watched = Watched::new();
         add_tree(&mut watcher, &root, &root, &mut watched)?;
         // Worktree .git files point to metadata elsewhere. Watch only that metadata, never its project tree.
         let git = root.join(".git");
@@ -146,6 +199,15 @@ impl FileService {
         for path in extra {
             let _ = extra_tx.send(path);
         }
+        let mut watchers = self.watchers.lock().map_err(|e| e.to_string())?;
+        if let Some(handle) = watchers.get_mut(context_id) {
+            // Another call registered this context while we walked the tree; ours is dropped.
+            handle.leases += 1;
+            for path in extra_rx.try_iter() {
+                let _ = handle.extra.send(path);
+            }
+            return Ok(());
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
         let id = context_id.to_owned();
@@ -153,7 +215,7 @@ impl FileService {
             while !thread_stop.load(Ordering::Acquire) {
                 for path in extra_rx.try_iter() {
                     if let Some(parent) = path.parent() {
-                        if watched.insert(parent.to_path_buf()) {
+                        if track(&mut watched, parent) {
                             let _ = watcher.watch(parent, RecursiveMode::NonRecursive);
                         }
                     }
@@ -172,39 +234,34 @@ impl FileService {
                         Err(_) => break,
                     }
                 }
-                let mut paths = BTreeSet::new();
+                let mut changed = BTreeSet::new();
                 let mut error = None;
                 for event in batch {
                     match event {
                         Ok(e) => {
-                            if matches!(e.kind, EventKind::Access(_)) {
-                                continue;
-                            }
-                            for path in e.paths {
-                                // Follow newly created folders; heavy generated directories stay pruned.
-                                if !path.exists() {
-                                    let removed = watched
-                                        .iter()
-                                        .filter(|p| super::path::within(&path, p))
-                                        .cloned()
-                                        .collect::<Vec<_>>();
-                                    for removed in removed {
-                                        let _ = watcher.unwatch(&removed);
-                                        watched.remove(&removed);
-                                    }
-                                }
-                                if path.is_dir() {
-                                    if let Err(e) =
-                                        add_tree(&mut watcher, &path, &root, &mut watched)
-                                    {
-                                        error = Some(e);
-                                    }
-                                }
-                                paths.insert(display(&path));
+                            if !matches!(e.kind, EventKind::Access(_)) {
+                                changed.extend(e.paths);
                             }
                         }
                         Err(e) => error = Some(e.to_string()),
                     }
+                }
+                let mut paths = BTreeSet::new();
+                // Each distinct path is handled once per batch.
+                for path in changed {
+                    // Follow newly created folders; heavy generated directories stay pruned.
+                    if !path.exists() {
+                        for (key, removed) in watched_subtree(&watched, &path) {
+                            let _ = watcher.unwatch(&removed);
+                            watched.remove(&key);
+                        }
+                    }
+                    if path.is_dir() {
+                        if let Err(e) = add_tree(&mut watcher, &path, &root, &mut watched) {
+                            error = Some(e);
+                        }
+                    }
+                    paths.insert(display(&path));
                 }
                 if !paths.is_empty() || error.is_some() {
                     let _ = app.emit_to(
@@ -252,10 +309,44 @@ mod tests {
         fs::create_dir_all(t.path().join("src/nested")).unwrap();
         fs::create_dir_all(t.path().join("node_modules/large")).unwrap();
         let mut watcher = notify::recommended_watcher(|_| {}).unwrap();
-        let mut watched = BTreeSet::new();
+        let mut watched = Watched::new();
         add_tree(&mut watcher, t.path(), t.path(), &mut watched).unwrap();
-        assert!(watched.contains(&t.path().join("src/nested")));
-        assert!(!watched.contains(&t.path().join("node_modules")));
+        assert!(watched.contains_key(&watch_key(&t.path().join("src/nested"))));
+        assert!(!watched.contains_key(&watch_key(&t.path().join("node_modules"))));
+    }
+    #[test]
+    fn watched_subtree_returns_only_descendants() {
+        let mut watched = Watched::new();
+        for p in ["a", "a/b", "a/b/c", "a/b0", "a/c", "b"] {
+            track(&mut watched, Path::new(p));
+        }
+        let got: Vec<_> = watched_subtree(&watched, Path::new("a/b"))
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect();
+        assert_eq!(got, vec![PathBuf::from("a/b"), PathBuf::from("a/b/c")]);
+        assert!(watched_subtree(&watched, Path::new("z")).is_empty());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn watched_subtree_ignores_case_on_windows() {
+        let mut watched = Watched::new();
+        for p in [r"C:\Repo\Src", r"C:\Repo\Src\Lib", r"C:\Repo\Other"] {
+            track(&mut watched, Path::new(p));
+        }
+        assert!(!track(&mut watched, Path::new(r"c:\repo\SRC")));
+        let got: Vec<_> = watched_subtree(&watched, Path::new(r"c:\REPO\src"))
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect();
+        // Originals come back verbatim for unwatch.
+        assert_eq!(
+            got,
+            vec![
+                PathBuf::from(r"C:\Repo\Src"),
+                PathBuf::from(r"C:\Repo\Src\Lib")
+            ]
+        );
     }
     #[test]
     fn native_watcher_receives_external_creation() {
