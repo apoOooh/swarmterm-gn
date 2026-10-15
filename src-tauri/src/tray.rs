@@ -45,7 +45,9 @@ pub fn quit(app: &tauri::AppHandle) {
     }
     // Set synchronously so a window close racing the quit is not turned into
     // hide-to-tray.
-    app.state::<AppState>().quitting.store(true, Ordering::SeqCst);
+    app.state::<AppState>()
+        .quitting
+        .store(true, Ordering::SeqCst);
     let app = app.clone();
     std::thread::spawn(move || quit_blocking(&app));
 }

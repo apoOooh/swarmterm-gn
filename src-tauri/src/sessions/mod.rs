@@ -163,6 +163,43 @@ pub(crate) fn read_head(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
+/// `read_head` + title extraction, memoized per file on (mtime, size). Every
+/// discovery opened and parsed the head of every session file again; an
+/// unchanged file now costs one metadata call. Entries are a path plus a short
+/// title, so the cache stays small even for long histories.
+pub(crate) fn cached_head_title(
+    path: &Path,
+    extract: fn(&str) -> Option<String>,
+) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    type Key = (std::path::PathBuf, usize);
+    type Entry = (std::time::SystemTime, u64, Option<String>);
+    static CACHE: Mutex<Option<HashMap<Key, Entry>>> = Mutex::new(None);
+    let meta = std::fs::metadata(path).ok()?;
+    let stamp = (meta.modified().ok()?, meta.len());
+    // The extractor is part of the key: one file is only ever read by one
+    // agent's scanner, but keying on it keeps the cache obviously correct.
+    let key = (path.to_path_buf(), extract as usize);
+    if let Some((m, l, title)) = CACHE
+        .lock()
+        .ok()?
+        .get_or_insert_with(HashMap::new)
+        .get(&key)
+    {
+        if (*m, *l) == stamp {
+            return title.clone();
+        }
+    }
+    let title = read_head(path).as_deref().and_then(extract);
+    if let Ok(mut cache) = CACHE.lock() {
+        cache
+            .get_or_insert_with(HashMap::new)
+            .insert(key, (stamp.0, stamp.1, title.clone()));
+    }
+    title
+}
+
 pub(crate) fn mtime_ms(path: &Path) -> u64 {
     std::fs::metadata(path)
         .and_then(|m| m.modified())

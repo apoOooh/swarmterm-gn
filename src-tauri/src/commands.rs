@@ -303,8 +303,12 @@ pub async fn list_agent_sessions(
     folder: String,
     account_id: Option<String>,
 ) -> Vec<crate::sessions::SessionEntry> {
-    crate::sessions::list_all(folder, accounts_blocking(app).await.unwrap_or_default(), account_id)
-        .await
+    crate::sessions::list_all(
+        folder,
+        accounts_blocking(app).await.unwrap_or_default(),
+        account_id,
+    )
+    .await
 }
 
 /// Read-only conversation of one agent session (SWA-25). Fail-open: a missing

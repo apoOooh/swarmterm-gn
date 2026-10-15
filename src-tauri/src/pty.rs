@@ -178,7 +178,11 @@ impl PtyInput {
                 while let Ok(more) = rx.try_recv() {
                     bytes.extend_from_slice(&more);
                 }
-                if writer.write_all(&bytes).and_then(|_| writer.flush()).is_err() {
+                if writer
+                    .write_all(&bytes)
+                    .and_then(|_| writer.flush())
+                    .is_err()
+                {
                     break;
                 }
             }
