@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-10-15
+
 - Settings: switching Swarmterm's Claude status line no longer fails when
   your Default account uses its own status line, and account profiles now
   follow the switch in that case too.
