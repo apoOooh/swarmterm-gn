@@ -765,12 +765,20 @@ export default function App(): ReactElement {
     // slice, not just the room shown in the panel.
     const sweepWarRoom = (): void => {
       if (!live) return
-      for (const ms of Object.values(useWarRoomStore.getState().membersByRoom)) {
+      const rooms = Object.values(useWarRoomStore.getState().membersByRoom)
+      // Forget ids whose member is gone, so the set can't grow forever and a
+      // terminal id that rejoins later is swept again.
+      const present = new Set(rooms.flatMap((ms) => ms.map((m) => m.terminalId)))
+      for (const id of leaving) if (!present.has(id)) leaving.delete(id)
+      for (const ms of rooms) {
         for (const m of ms) {
           if (live.has(m.terminalId) || leaving.has(m.terminalId)) continue
-          leaving.add(m.terminalId)
-          // Rejects when the backend already auto-left the member — harmless.
-          warRoomLeave(m.terminalId).catch(() => {})
+          const id = m.terminalId
+          leaving.add(id)
+          // Rejects when the backend already auto-left the member (the room
+          // event then removes it). Drop the id so a real failure is retried
+          // on the next sweep instead of being suppressed forever.
+          warRoomLeave(id).catch(() => { leaving.delete(id) })
         }
       }
     }
