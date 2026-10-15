@@ -34,3 +34,20 @@ export function inputDroppedEntry(paneLabel: string, at: number): NewCenterEntry
     at
   }
 }
+
+/** Minimum gap between two input-dropped alerts for the same pane. */
+export const INPUT_ALERT_INTERVAL_MS = 5_000
+
+/**
+ * Per-pane throttle: a stuck pane rejects every keystroke, and each rejection
+ * would otherwise re-add the bell entry. Returns whether to notify now.
+ */
+export function createInputDropThrottle(intervalMs = INPUT_ALERT_INTERVAL_MS): (terminalId: string, now: number) => boolean {
+  const last = new Map<string, number>()
+  return (terminalId, now) => {
+    const prev = last.get(terminalId)
+    if (prev !== undefined && now - prev < intervalMs) return false
+    last.set(terminalId, now)
+    return true
+  }
+}

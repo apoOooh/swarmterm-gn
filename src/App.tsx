@@ -128,7 +128,7 @@ import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
 import { cleanupWhenResolved } from '@/lib/listener-cleanup'
 import { staleKeys } from '@/lib/stale-sweep'
-import { VOICE_ALERT_ID, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
+import { VOICE_ALERT_ID, createInputDropThrottle, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
 
 // Platform never changes at runtime, so a module-level constant is fine.
 const isMac = isMacPlatform()
@@ -819,7 +819,9 @@ export default function App(): ReactElement {
     // A pane whose program stopped reading input: its pty queue is full and
     // the write was dropped (Rust write_terminal), so say so instead of
     // losing the paste silently.
+    const allowInputAlert = createInputDropThrottle()
     setInputDroppedHandler((terminalId) => {
+      if (!allowInputAlert(terminalId, Date.now())) return
       const ws = selectWorkspaceByTerminalId(useAppStore.getState(), terminalId)
       const leaf = ws && collectLeaves(ws.layout).find((l) => l.terminalId === terminalId)
       const label = leaf ? `${templateById(leaf.agentId ?? 'terminal').name} (${ws.name})` : 'A pane'
