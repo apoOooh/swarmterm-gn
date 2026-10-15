@@ -212,7 +212,6 @@ impl ManagedTerminal {
             // detach, so the close runs off the caller's (command/quit) thread
             // and can never delay the hard kill past KILL_GRACE.
             let deadline = std::time::Instant::now() + KILL_GRACE;
-            let job = Arc::new(job);
             std::thread::spawn(move || {
                 drop(writer);
                 // ClosePseudoConsole: delivers CTRL_CLOSE_EVENT and closes the
