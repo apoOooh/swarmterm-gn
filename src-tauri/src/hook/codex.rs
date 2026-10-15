@@ -14,22 +14,54 @@ use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
 
 const EVENTS: [&str; 2] = ["SessionStart", "UserPromptSubmit"];
 
-/// Whether the installed Codex supports hook isolation. A definite answer is
-/// cached for the process; a probe that timed out (cold disk, AV scan) is not,
-/// so the next caller retries. Warmed off-thread at startup (`warm`), so pane
-/// spawns normally hit the cache. Concurrent first callers wait on the lock.
+/// Probe cache. A definite answer is kept for the process; a timed-out probe
+/// (cold disk, AV scan) is retried, but no more often than `RETRY_AFTER`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ProbeState {
+    Unknown,
+    Probing,
+    Known(bool),
+    TimedOut(Instant),
+}
+
+const RETRY_AFTER: Duration = Duration::from_secs(60);
+
+/// Whether the installed Codex supports hook isolation. Warmed off-thread at
+/// startup (`warm`), so pane spawns normally hit the cache. The lock is never
+/// held across the probe: a caller arriving while another probe runs (or
+/// within `RETRY_AFTER` of a timeout) gets `false` instead of blocking.
 pub fn supported() -> bool {
-    static SUPPORTED: Mutex<Option<bool>> = Mutex::new(None);
-    let mut cached = SUPPORTED.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(known) = *cached {
-        return known;
+    static STATE: Mutex<ProbeState> = Mutex::new(ProbeState::Unknown);
+    supported_with(&STATE, Instant::now, probe)
+}
+
+fn supported_with(
+    state: &Mutex<ProbeState>,
+    now: impl Fn() -> Instant,
+    probe: impl FnOnce() -> Option<bool>,
+) -> bool {
+    {
+        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        match *s {
+            ProbeState::Known(known) => return known,
+            ProbeState::Probing => return false,
+            ProbeState::TimedOut(at) if now().saturating_duration_since(at) < RETRY_AFTER => {
+                return false
+            }
+            ProbeState::Unknown | ProbeState::TimedOut(_) => *s = ProbeState::Probing,
+        }
     }
-    match probe() {
+    let result = probe();
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    match result {
         Some(known) => {
-            *cached = Some(known);
+            *s = ProbeState::Known(known);
             known
         }
-        None => false,
+        None => {
+            *s = ProbeState::TimedOut(now());
+            false
+        }
     }
 }
 
@@ -40,7 +72,7 @@ pub fn warm() {
     });
 }
 
-/// `None` = undecided (timed out); retried on the next call.
+/// `None` = undecided (timed out); retried after `RETRY_AFTER`.
 fn probe() -> Option<bool> {
     let Some(binary) = crate::agents::find_agent_binary("codex") else {
         return Some(false);
@@ -301,6 +333,50 @@ pub fn register(app: &AppHandle) {
 mod tests {
     use super::*;
     const OURS: &str = "\"C:/Swarmterm/swarmterm.exe\" --codex-session-hook";
+
+    #[test]
+    fn probe_timeout_is_not_cached_but_retry_is_throttled() {
+        let state = Mutex::new(ProbeState::Unknown);
+        let t0 = Instant::now();
+        let calls = std::cell::Cell::new(0);
+        let probe = |r: Option<bool>| {
+            let calls = &calls;
+            move || {
+                calls.set(calls.get() + 1);
+                r
+            }
+        };
+        assert!(!supported_with(&state, || t0, probe(None)));
+        assert_eq!(*state.lock().unwrap(), ProbeState::TimedOut(t0));
+        // Within the retry interval: no new probe.
+        assert!(!supported_with(
+            &state,
+            || t0 + Duration::from_secs(30),
+            probe(Some(true))
+        ));
+        assert_eq!(calls.get(), 1);
+        // After it: probe again, and a definite answer is cached.
+        assert!(supported_with(
+            &state,
+            || t0 + RETRY_AFTER,
+            probe(Some(true))
+        ));
+        assert_eq!(calls.get(), 2);
+        assert!(supported_with(
+            &state,
+            || t0 + RETRY_AFTER * 10,
+            probe(Some(false))
+        ));
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn concurrent_caller_does_not_wait_for_running_probe() {
+        let state = Mutex::new(ProbeState::Probing);
+        assert!(!supported_with(&state, Instant::now, || panic!(
+            "must not probe"
+        )));
+    }
     #[test]
     fn isolates_supported_codex_without_changing_other_commands() {
         assert_eq!(

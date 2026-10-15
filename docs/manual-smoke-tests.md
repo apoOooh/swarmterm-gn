@@ -510,6 +510,7 @@ machine that never built Swarmterm. Details in
 - [ ] Bell: type `exit 3` in a background shell pane → pane shows "Process exited", bell lists "Shell exited (code 3)".
 - [ ] Bell: a drawered pane's entry restores the pane from the drawer; a closed pane's entry is shown disabled.
 - [ ] Bell: Sound and System off → entries are still recorded.
+- [ ] Bell: a backend alert ("MCP server stopped" / "Voice input failed") shows its reason under the title and is not disabled; clicking it only marks it read.
 
 
 ## Account profiles (SWA-9)

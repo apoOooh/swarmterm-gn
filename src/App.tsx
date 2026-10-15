@@ -36,10 +36,11 @@ import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { inspectSavedWorkspace } from '@/tauri/sessions'
 import { jumpToAttention } from '@/lib/attention-jump'
 import { collectLeaves, findLeaf } from '@/lib/layout-tree'
+import { templateById } from '@/lib/templates'
 import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
 import { ClearGuard, clearInputSequence } from '@/lib/clear-input'
 import { shellFlavor } from '@/lib/agent-spawn-command'
-import { writeTerminal } from '@/tauri/terminal'
+import { setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
 
@@ -127,7 +128,7 @@ import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
 import { cleanupWhenResolved } from '@/lib/listener-cleanup'
 import { staleKeys } from '@/lib/stale-sweep'
-import { VOICE_ALERT_ID, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
+import { VOICE_ALERT_ID, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
 
 // Platform never changes at runtime, so a module-level constant is fine.
 const isMac = isMacPlatform()
@@ -765,12 +766,20 @@ export default function App(): ReactElement {
     // slice, not just the room shown in the panel.
     const sweepWarRoom = (): void => {
       if (!live) return
-      for (const ms of Object.values(useWarRoomStore.getState().membersByRoom)) {
+      const rooms = Object.values(useWarRoomStore.getState().membersByRoom)
+      // Forget ids whose member is gone, so the set can't grow forever and a
+      // terminal id that rejoins later is swept again.
+      const present = new Set(rooms.flatMap((ms) => ms.map((m) => m.terminalId)))
+      for (const id of leaving) if (!present.has(id)) leaving.delete(id)
+      for (const ms of rooms) {
         for (const m of ms) {
           if (live.has(m.terminalId) || leaving.has(m.terminalId)) continue
-          leaving.add(m.terminalId)
-          // Rejects when the backend already auto-left the member — harmless.
-          warRoomLeave(m.terminalId).catch(() => {})
+          const id = m.terminalId
+          leaving.add(id)
+          // Rejects when the backend already auto-left the member (the room
+          // event then removes it). Drop the id so a real failure is retried
+          // on the next sweep instead of being suppressed forever.
+          warRoomLeave(id).catch(() => { leaving.delete(id) })
         }
       }
     }
@@ -807,7 +816,19 @@ export default function App(): ReactElement {
       cleanupWhenResolved(onVoicePipeError((p) => center().add(voicePipeErrorEntry(p, Date.now()))), 'voice:pipe-error'),
       cleanupWhenResolved(onVoicePipeRecovered(() => center().markTerminalRead(VOICE_ALERT_ID, ['backend'])), 'voice:pipe-recovered')
     ]
-    return () => { for (const c of cleanups) c() }
+    // A pane whose program stopped reading input: its pty queue is full and
+    // the write was dropped (Rust write_terminal), so say so instead of
+    // losing the paste silently.
+    setInputDroppedHandler((terminalId) => {
+      const ws = selectWorkspaceByTerminalId(useAppStore.getState(), terminalId)
+      const leaf = ws && collectLeaves(ws.layout).find((l) => l.terminalId === terminalId)
+      const label = leaf ? `${templateById(leaf.agentId ?? 'terminal').name} (${ws.name})` : 'A pane'
+      center().add(inputDroppedEntry(label, Date.now()))
+    })
+    return () => {
+      setInputDroppedHandler(undefined)
+      for (const c of cleanups) c()
+    }
   }, [])
 
   // Wire MCP preview:open events to the per-terminal preview. Background

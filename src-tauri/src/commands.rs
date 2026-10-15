@@ -106,13 +106,16 @@ pub async fn create_terminal(
 }
 
 #[tauri::command]
-pub fn write_terminal(state: State<'_, AppState>, id: String, data: String) {
+pub fn write_terminal(state: State<'_, AppState>, id: String, data: String) -> Result<(), String> {
     // Enqueue only — the blocking pty write runs on the terminal's writer
-    // thread (pty::PtyInput), so a full input pipe can't freeze the UI.
-    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
-        if let Err(e) = t.input.send(data.as_bytes()) {
+    // thread (pty::PtyInput), so a full input pipe can't freeze the UI. An
+    // unknown id stays a silent no-op (a pane racing its own close); a full
+    // queue is returned so the renderer can tell the user input was dropped.
+    match state.terminals.lock().unwrap().get(&id) {
+        Some(t) => t.input.send(data.as_bytes()).inspect_err(|e| {
             eprintln!("[pty] write to {id} dropped: {e}");
-        }
+        }),
+        None => Ok(()),
     }
 }
 

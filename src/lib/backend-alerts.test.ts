@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { addEntry, markTerminalRead, unreadCount } from './notification-center'
-import { MCP_ALERT_ID, VOICE_ALERT_ID, mcpExitedEntry, voicePipeErrorEntry } from './backend-alerts'
+import { INPUT_ALERT_ID, MCP_ALERT_ID, VOICE_ALERT_ID, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from './backend-alerts'
+import { isInputQueueFull } from '@/tauri/terminal'
 
 describe('backend alerts', () => {
   it('builds an MCP exit entry with the reason', () => {
@@ -24,5 +25,18 @@ describe('backend alerts', () => {
 
   it('tolerates a missing payload', () => {
     expect(voicePipeErrorEntry(undefined, 1).detail).toBe('')
+  })
+
+  it('input-dropped alerts are backend entries that never replace a pane entry', () => {
+    const e = inputDroppedEntry('Claude', 3)
+    expect(e.kind).toBe('backend')
+    expect(e.terminalId).toBe(INPUT_ALERT_ID)
+    expect(e.detail).toContain('Claude')
+  })
+
+  it('recognises only the queue-full error', () => {
+    expect(isInputQueueFull('input-queue-full')).toBe(true)
+    expect(isInputQueueFull('target-gone')).toBe(false)
+    expect(isInputQueueFull(new Error('x'))).toBe(false)
   })
 })
