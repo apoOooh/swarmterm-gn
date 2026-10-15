@@ -685,7 +685,10 @@ export default function App(): ReactElement {
       if (terminalId) useAgentStateStore.getState().markSeen(terminalId)
     }
     markFocusedSeen()
-    const unsubscribe = useAppStore.subscribe(markFocusedSeen)
+    // Store ticks only matter when they move focus to another terminal.
+    const unsubscribe = useAppStore.subscribe((state, prev) => {
+      if (selectFocusedTerminalId(state) !== selectFocusedTerminalId(prev)) markFocusedSeen()
+    })
     window.addEventListener('focus', markFocusedSeen)
     return () => {
       unsubscribe()
@@ -725,7 +728,9 @@ export default function App(): ReactElement {
   // Kill orphaned PTYs and close previews when terminals leave all layouts.
   useEffect(
     () =>
-      useAppStore.subscribe((state) => {
+      useAppStore.subscribe((state, prev) => {
+        // Liveness only changes with the workspaces array; skip other ticks.
+        if (state.workspaces === prev.workspaces) return
         const live = liveTerminalIds(state.workspaces)
         useDocumentStore.getState().collect(new Set(state.workspaces.flatMap((w) => collectLeaves(w.layout).map((l) => l.id))))
         collectEditorCache(new Set(Object.keys(useDocumentStore.getState().documents)))

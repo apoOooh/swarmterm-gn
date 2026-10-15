@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactElement } from 'react'
+import { memo, useEffect, useRef, type ReactElement } from 'react'
 import { Group, Panel, Separator, type GroupImperativeHandle } from 'react-resizable-panels'
 import type { LayoutNode, LeafNode } from '@/lib/layout-tree'
 import { useAppStore, type Workspace as WorkspaceModel } from '@/store/app-store'
@@ -21,8 +21,10 @@ interface WorkspaceProps {
   workspace: WorkspaceModel
 }
 
-/** Render one workspace: its binary split-tree of resizable terminal panes. */
-export function Workspace({ workspace }: WorkspaceProps): ReactElement {
+/** Render one workspace: its binary split-tree of resizable terminal panes.
+ * Memoized: workspace objects are immutable store values, so App re-rendering
+ * for a change in ONE workspace no longer re-renders every (hidden) other. */
+export const Workspace = memo(function Workspace({ workspace }: WorkspaceProps): ReactElement {
   const resizeSplitNode = useAppStore((s) => s.resizeSplitNode)
   const equalizeSplitNode = useAppStore((s) => s.equalizeSplitNode)
   // Live Group handles so CornerHandles can move two splits in one drag.
@@ -158,7 +160,7 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
       </div>
     </div>
   )
-}
+})
 
 /** Shown when every pane of the workspace sits in the drawer. */
 function EmptyDrawerState({ count }: { count: number }): ReactElement {
