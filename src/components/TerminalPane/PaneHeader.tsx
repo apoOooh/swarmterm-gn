@@ -154,13 +154,20 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   // so the pointer "leaves" — `menuOpen` keeps the panel up meanwhile.
   const [hover, setHover] = useState(false)
   const [pinned, setPinned] = useState(false)
+  // Opened from the keyboard: the panel then owns focus (`data-keyboard-owner`)
+  // instead of App's focus-return pulling it straight back to the terminal.
+  const [viaKeyboard, setViaKeyboard] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const timer = useRef<number | undefined>(undefined)
   const panelRef = useRef<HTMLDivElement | null>(null)
   const clearTimer = (): void => { window.clearTimeout(timer.current) }
   useEffect(() => clearTimer, [])
-  const onPointerEnter = (): void => {
+  const moreRef = useRef<HTMLButtonElement | null>(null)
+  const onPointerEnter = (e: React.PointerEvent): void => {
     clearTimer()
+    // A button held down = another pane is being dragged across this header;
+    // dropping the panel then would cover the drop target.
+    if (e.buttons !== 0) return
     if (!hover) timer.current = window.setTimeout(() => setHover(true), OPEN_DELAY_MS)
   }
   const onPointerLeave = (): void => {
@@ -180,7 +187,16 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
       if (rootRef.current?.contains(t) || (t as Element).closest?.('[role="menu"]')) return
       setPinned(false)
     }
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setPinned(false) }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      const active = document.activeElement
+      // Esc typed into a terminal (vim, an agent TUI) belongs to the pty, not us.
+      if (active?.closest('.xterm')) return
+      // Focus sitting in the panel would drop to <body> once it goes inert —
+      // hand it back to ⋯, where the keyboard path started.
+      if (active && panelRef.current?.contains(active)) moreRef.current?.focus()
+      setPinned(false)
+    }
     document.addEventListener('pointerdown', onDown, true)
     document.addEventListener('keydown', onKey, true)
     return () => {
@@ -523,11 +539,20 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   const hasHidden = hidden.length > 0
   const expanded = hasHidden && (hover || pinned || menuOpen)
 
+  // When the set of hidden items changes, a menu opened from the panel may have
+  // unmounted without reporting its close, and a pin outlives the ⋯ that set
+  // it. Drop both so a later overflow never reopens the panel on its own.
+  const hiddenKey = hidden.join(',')
+  useEffect(() => { setMenuOpen(false) }, [hiddenKey])
+  useEffect(() => { if (!hasHidden) setPinned(false) }, [hasHidden])
+  useEffect(() => { if (!pinned) setViaKeyboard(false) }, [pinned])
+
   // Keyboard path: ⋯ via Enter/Space pins the panel open and moves focus into it.
   const onMoreClick = (e: React.MouseEvent): void => {
     const next = !pinned
     setPinned(next)
     if (!next) setHover(false)
+    setViaKeyboard(next && e.detail === 0)
     if (next && e.detail === 0) {
       requestAnimationFrame(() => panelRef.current?.querySelector<HTMLElement>('button')?.focus())
     }
@@ -564,6 +589,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
             variant="ghost"
             size="icon-sm"
             title={`${hidden.length} more — hover the header or click to show`}
+            ref={moreRef}
             aria-label="Show hidden controls"
             aria-expanded={expanded}
             onClick={onMoreClick}
@@ -581,6 +607,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
           ref={panelRef}
           data-no-dnd
           data-header-overflow
+          data-keyboard-owner={expanded && viaKeyboard ? '' : undefined}
           role="toolbar"
           aria-label="Hidden pane controls"
           aria-hidden={!expanded}

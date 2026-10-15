@@ -96,4 +96,21 @@ describe('resolveHeaderOverflow', () => {
     ])
     expect(r.hidden).toEqual(['big', 'small'])
   })
+
+  it('treats an exact fit as fitting — no ⋯ reserved', () => {
+    const total = items.reduce((n, i) => n + i.width, 0)
+    expect(resolveHeaderOverflow(total, items).hidden).toEqual([])
+    expect(resolveHeaderOverflow(total - 1, items).hidden.length).toBeGreaterThan(0)
+  })
+
+  it('keeps array order among items of equal priority', () => {
+    // 60 pinned + 24 ⋯ leaves 31 — room for exactly one of the 30px twins.
+    const r = resolveHeaderOverflow(115, [
+      { id: 'p', width: 60, priority: 0, pinned: true },
+      { id: 'x', width: 30, priority: 1 },
+      { id: 'y', width: 30, priority: 1 },
+    ])
+    expect(r.visible).toEqual(['p', 'x'])
+    expect(r.hidden).toEqual(['y'])
+  })
 })

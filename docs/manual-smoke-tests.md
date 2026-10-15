@@ -67,8 +67,9 @@ Do not mark them passed from the in-memory fixture alone.
       leaving closes it. Widen the pane: `⋯` and the row disappear.
 - [ ] From the dropped row open the shell menu and pick a shell, then split
       right: both work, the row stays up while the menu is open.
-- [ ] Click `⋯`: the row stays open after the mouse leaves; `Esc` or a click
-      elsewhere closes it. Typing in the terminal afterwards still works.
+- [ ] Click `⋯`: the row stays open after the mouse leaves; clicking `⋯` again
+      or elsewhere closes it. Typing in the terminal afterwards still works, and
+      `Esc` in the terminal (e.g. vim) leaves the pinned row open.
 - [ ] Dragging a narrow pane by its header still swaps/docks it; double-clicking
       bare header space still maximizes.
 
