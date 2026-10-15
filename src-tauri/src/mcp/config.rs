@@ -223,6 +223,75 @@ pub fn write_mcp_config_to_file(path: &Path) -> Result<(), String> {
     write_mcp_servers_json_to_file(path, swarmterm_entry(), false)
 }
 
+/// Add the default profile's user-scope MCP servers to a named account
+/// profile, which has its own `.claude.json` and would otherwise see only
+/// ours. Additive only: a server the profile already has is never
+/// overwritten and nothing is deleted. `swarmterm` is skipped because
+/// `write_mcp_config_to_file` owns it, gated by the profile's MCP switch.
+/// A server removed from the profile alone comes back on the next pane start;
+/// mirroring the default is what a profile is for. `None` = nothing to add.
+pub fn merge_default_user_servers(
+    profile: Option<&str>,
+    default: &str,
+) -> Result<Option<String>, String> {
+    let default: Value = serde_json::from_str(default).map_err(|e| format!("parse: {e}"))?;
+    let Some(source) = default.get("mcpServers").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    let mut root: Value = match profile.map(str::trim).filter(|s| !s.is_empty()) {
+        None => json!({}),
+        Some(s) => serde_json::from_str(s).map_err(|e| format!("parse: {e}"))?,
+    };
+    let Some(obj) = root.as_object_mut() else {
+        return Err("root is not a JSON object".into());
+    };
+    let Some(servers) = obj
+        .entry("mcpServers".to_string())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+    else {
+        return Err("mcpServers is not an object".into());
+    };
+    let mut added = false;
+    for (name, entry) in source {
+        if name != "swarmterm" && !servers.contains_key(name) {
+            servers.insert(name.clone(), entry.clone());
+            added = true;
+        }
+    }
+    if !added {
+        return Ok(None);
+    }
+    crate::json_style::JsonStyle::detect(profile)
+        .render(&root)
+        .map(Some)
+}
+
+/// File variant of `merge_default_user_servers`; returns whether the profile
+/// file was written. A missing default file means there is nothing to add.
+pub fn copy_default_user_servers(profile: &Path, default: &Path) -> Result<bool, String> {
+    let default = match fs::read_to_string(default) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(format!("read: {e}")),
+    };
+    let existing = match fs::read_to_string(profile) {
+        Ok(s) => Some(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("read: {e}")),
+    };
+    let Some(merged) = merge_default_user_servers(existing.as_deref(), &default)? else {
+        return Ok(false);
+    };
+    let tmp = profile.with_extension("json.tmp");
+    fs::write(&tmp, merged).map_err(|e| format!("write tmp: {e}"))?;
+    fs::rename(&tmp, profile).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("rename: {e}")
+    })?;
+    Ok(true)
+}
+
 /// Qwen Code variant (`settings.json` under `$QWEN_HOME` or `~/.qwen`). An
 /// installed-but-never-run qwen has no `~/.qwen` yet, so the parent dir is
 /// created — the caller has already probed that the CLI exists.
@@ -611,6 +680,65 @@ mod tests {
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.contains("\"swarmterm\""));
         assert!(contents.contains("${SWARMTERM_MCP_URL}"));
+    }
+
+    const DEFAULT_USER: &str = r#"{"projects":{"/p":{}},"mcpServers":{
+        "board":{"type":"stdio","command":"py","env":{"USER":"x"}},
+        "shared":{"type":"http","url":"https://default"},
+        "swarmterm":{"type":"http","url":"stale"}}}"#;
+
+    #[test]
+    fn default_servers_are_added_without_touching_the_profiles_own() {
+        let profile = r#"{"oauthAccount":{},"mcpServers":{"shared":{"type":"http","url":"https://profile"}}}"#;
+        let out = merge_default_user_servers(Some(profile), DEFAULT_USER)
+            .unwrap()
+            .expect("board is missing");
+        let v = parse(&out);
+        assert_eq!(
+            v["mcpServers"]["board"],
+            parse(DEFAULT_USER)["mcpServers"]["board"]
+        );
+        assert_eq!(v["mcpServers"]["shared"]["url"], "https://profile");
+        assert!(v["mcpServers"].get("swarmterm").is_none());
+        assert!(
+            v.get("projects").is_none(),
+            "only servers are copied: {out}"
+        );
+        assert!(v.get("oauthAccount").is_some());
+    }
+
+    #[test]
+    fn default_servers_create_a_missing_profile_and_settle() {
+        let out = merge_default_user_servers(None, DEFAULT_USER)
+            .unwrap()
+            .unwrap();
+        assert!(merge_default_user_servers(Some(&out), DEFAULT_USER)
+            .unwrap()
+            .is_none());
+        assert!(merge_default_user_servers(None, r#"{"theme":"dark"}"#)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn default_servers_reject_a_malformed_profile() {
+        assert!(merge_default_user_servers(Some("{ nope"), DEFAULT_USER).is_err());
+        assert!(merge_default_user_servers(Some(r#"{"mcpServers":[]}"#), DEFAULT_USER).is_err());
+    }
+
+    #[test]
+    fn copy_default_servers_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile.claude.json");
+        let default = dir.path().join(".claude.json");
+        assert!(!copy_default_user_servers(&profile, &default).unwrap());
+        std::fs::write(&default, DEFAULT_USER).unwrap();
+        write_mcp_config_to_file(&profile).unwrap();
+        assert!(copy_default_user_servers(&profile, &default).unwrap());
+        assert!(!copy_default_user_servers(&profile, &default).unwrap());
+        let v = parse(&std::fs::read_to_string(&profile).unwrap());
+        assert!(v["mcpServers"]["board"].is_object());
+        assert_eq!(v["mcpServers"]["swarmterm"], swarmterm_entry());
     }
 
     #[test]

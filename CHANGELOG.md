@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-10-15
+
+- Settings: switching Swarmterm's Claude status line no longer fails when
+  your Default account uses its own status line, and account profiles now
+  follow the switch in that case too.
+- Accounts: Claude Code panes on a named profile now also get your hooks
+  and `permissions.deny`/`ask` rules from the Default account, so guards
+  such as a data-masking hook apply there too. `permissions.allow` is never
+  copied.
+- Accounts: Claude Code panes on a named profile now show your own status
+  line and load your user-level MCP servers from the Default account,
+  instead of only Swarmterm's status line and server.
+- Accounts: the last known usage survives a restart and shows its age;
+  Codex usage refreshes after each turn and every minute while Settings >
+  Accounts is open.
+
 ## [1.10.1] - 2026-10-12
 
 - Release checks: the accounts browser test follows the add-account wizard.

@@ -61,3 +61,54 @@ export function describeUsage(sample: AccountUsage | undefined, now: number): Us
   if (seven) parts.push(`7d ${Math.round(seven.pct)}%`)
   return { known: true, text: `Usage ${parts.join(' · ')} (Claude Code status line)`, checkedAt: sample.at }
 }
+
+/**
+ * A window whose reset has passed says nothing about the account any more —
+ * the real number restarted near 0 — so it is dropped rather than shown stale.
+ * `nowMs` is wall-clock ms; `resetsAt` is epoch seconds.
+ */
+export function dropExpiredWindows(sample: AccountUsage, nowMs: number): AccountUsage | undefined {
+  const live = (w: UsageWindow | null | undefined): UsageWindow | undefined => {
+    const v = validWindow(w)
+    return v && (!v.resetsAt || v.resetsAt * 1000 > nowMs) ? v : undefined
+  }
+  const fiveHour = live(sample.fiveHour)
+  const sevenDay = live(sample.sevenDay)
+  return fiveHour || sevenDay ? { fiveHour, sevenDay, at: sample.at } : undefined
+}
+
+export const USAGE_STORAGE_KEY = 'swarmterm.accountUsage'
+
+/**
+ * Last samples survive a restart: Claude only reports usage while one of its
+ * panes renders the status line, so without this every launch starts at `—`.
+ * Only the numbers are stored — no account names or folders.
+ */
+export function readStoredUsage(storage: Storage, nowMs: number): Record<string, AccountUsage> {
+  let raw: unknown
+  try { raw = JSON.parse(storage.getItem(USAGE_STORAGE_KEY) ?? '{}') } catch { return {} }
+  if (!raw || typeof raw !== 'object') return {}
+  const out: Record<string, AccountUsage> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const s = value as AccountUsage | null
+    if (!s || typeof s !== 'object' || !Number.isFinite(s.at)) continue
+    const live = dropExpiredWindows(s, nowMs)
+    if (live) out[key] = live
+  }
+  return out
+}
+
+export function storeUsage(storage: Storage, byAccount: Record<string, AccountUsage>): void {
+  try { storage.setItem(USAGE_STORAGE_KEY, JSON.stringify(byAccount)) } catch { /* quota/private mode: memory only */ }
+}
+
+const FRESH_MS = 5 * 60_000
+
+/** Short age label for a sample, `undefined` while it is still fresh. */
+export function usageAge(atMs: number, nowMs: number): string | undefined {
+  const min = Math.floor((nowMs - atMs) / 60_000)
+  if (nowMs - atMs < FRESH_MS) return undefined
+  if (min < 60) return `${min} min ago`
+  const h = Math.floor(min / 60)
+  return h < 24 ? `${h} h ago` : `${Math.floor(h / 24)} d ago`
+}

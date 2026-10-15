@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { budgetLeft, nextAccountName, planLabel, statusLamp } from './account-status'
+import { budgetUsed, nextAccountName, planLabel, statusLamp } from './account-status'
 
 describe('planLabel', () => {
   it('maps known plan ids and keeps unknown ones readable', () => {
@@ -20,12 +20,14 @@ describe('statusLamp', () => {
   })
 })
 
-describe('budgetLeft', () => {
-  it('reports what is left, not what is used', () => {
-    expect(budgetLeft({ pct: 89 })).toBe(11)
-    expect(budgetLeft({ pct: 0 })).toBe(100)
-    expect(budgetLeft(undefined)).toBeUndefined()
-    expect(budgetLeft({ pct: Number.NaN })).toBeUndefined()
+describe('budgetUsed', () => {
+  // Same reading as the Claude Code status line, so card and pane never disagree.
+  it('reports what is used, clamped and rounded', () => {
+    expect(budgetUsed({ pct: 82.4 })).toBe(82)
+    expect(budgetUsed({ pct: 0 })).toBe(0)
+    expect(budgetUsed({ pct: 140 })).toBe(100)
+    expect(budgetUsed(undefined)).toBeUndefined()
+    expect(budgetUsed({ pct: Number.NaN })).toBeUndefined()
   })
 })
 

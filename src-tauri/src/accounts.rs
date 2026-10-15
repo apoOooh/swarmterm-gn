@@ -250,18 +250,17 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
                 &dir.join("settings.json"),
                 Some(&crate::hook::install::format_command(&exe, cfg!(windows))),
             )?;
+            adopt_default_claude_config(dir);
             let command = STATUSLINE_ENABLED
                 .load(Ordering::Relaxed)
                 .then(|| crate::statusline::install::format_command(&exe, cfg!(windows)));
             // A foreign status line remains owned by the user.
-            if let Err(e) = crate::statusline::install::write_settings_to_file(
-                &dir.join("settings.json"),
-                command.as_deref(),
-            ) {
-                if !e.contains("custom statusLine") {
-                    return Err(e);
-                }
-            }
+            crate::statusline::install::tolerate_foreign(
+                crate::statusline::install::write_settings_to_file(
+                    &dir.join("settings.json"),
+                    command.as_deref(),
+                ),
+            )?;
         }
         "codex" => {
             // Dev builds leave the Codex URL to the installed app even in a
@@ -283,6 +282,49 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
         _ => return Err("Unsupported account agent".into()),
     }
     Ok(())
+}
+
+/// A named profile's own `CLAUDE_CONFIG_DIR` hides the default profile's
+/// status line, user-scope MCP servers, hooks and permission guards, so sessions under it look and
+/// behave unlike the user's normal Claude Code. Runs on every enrollment
+/// (each pane start), which also repairs profiles created before this
+/// existed. Convenience only: failures are logged and never block a pane.
+fn adopt_default_claude_config(dir: &Path) {
+    let Some(home) = crate::sessions::home_dir() else {
+        return;
+    };
+    // Resolved like the default profile's own panes, which inherit this
+    // process's environment.
+    let cfg = std::env::var("CLAUDE_CONFIG_DIR").ok();
+    let settings = crate::statusline::install::resolve_settings_path(&home, cfg.as_deref());
+    adopt_default_claude_config_from(
+        dir,
+        &crate::mcp::config::resolve_global_config_path(&home, cfg.as_deref()),
+        &settings,
+    );
+}
+
+fn adopt_default_claude_config_from(dir: &Path, default_json: &Path, default_settings: &Path) {
+    if default_settings
+        .parent()
+        .is_some_and(|d| same_dir(&d.to_string_lossy(), &dir.to_string_lossy()))
+    {
+        return;
+    }
+    if let Err(e) =
+        crate::mcp::config::copy_default_user_servers(&dir.join(".claude.json"), default_json)
+    {
+        eprintln!("accounts: cannot copy default MCP servers into profile: {e}");
+    }
+    if let Err(e) = crate::statusline::install::adopt_default_status_line_file(
+        &dir.join("settings.json"),
+        default_settings,
+    ) {
+        eprintln!("accounts: cannot adopt default status line into profile: {e}");
+    }
+    if let Err(e) = crate::hook::adopt::adopt_file(dir, default_settings) {
+        eprintln!("accounts: cannot adopt default hooks and permission guards into profile: {e}");
+    }
 }
 
 #[cfg(test)]
@@ -376,6 +418,38 @@ mod tests {
             cmd.get_env("CODEX_HOME"),
             Some(std::ffi::OsStr::new("profile-dir"))
         );
+    }
+
+    #[test]
+    fn profile_adopts_default_status_line_servers_and_guards_but_never_its_own_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let default_json = home.path().join(".claude.json");
+        let default_dir = home.path().join(".claude");
+        let default_settings = default_dir.join("settings.json");
+        fs::create_dir_all(&default_dir).unwrap();
+        fs::write(
+            &default_json,
+            r#"{"mcpServers":{"board":{"command":"py"}}}"#,
+        )
+        .unwrap();
+        let line = r#"{"statusLine":{"type":"command","command":"node mine.mjs"},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"node guard.mjs"}]}]},"permissions":{"deny":["Read(**/.env)"]}}"#;
+        fs::write(&default_settings, line).unwrap();
+
+        let profile = home.path().join("profile");
+        fs::create_dir_all(&profile).unwrap();
+        adopt_default_claude_config_from(&profile, &default_json, &default_settings);
+        let json = fs::read_to_string(profile.join(".claude.json")).unwrap();
+        assert!(json.contains("\"board\""), "{json}");
+        let settings = fs::read_to_string(profile.join("settings.json")).unwrap();
+        assert!(settings.contains("node mine.mjs"), "{settings}");
+        assert!(settings.contains("node guard.mjs"), "{settings}");
+        assert!(settings.contains("Read(**/.env)"), "{settings}");
+
+        // A profile pointed at the default directory is the default itself.
+        adopt_default_claude_config_from(&default_dir, &default_json, &default_settings);
+        assert!(!default_dir.join(".claude.json").exists());
+        assert!(!default_dir.join(crate::hook::adopt::RECORD_FILE).exists());
+        assert_eq!(fs::read_to_string(&default_settings).unwrap(), line);
     }
 
     #[test]
