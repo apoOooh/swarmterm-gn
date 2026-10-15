@@ -20,9 +20,10 @@ mod job {
     use std::ptr;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
+        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+        TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
@@ -79,6 +80,22 @@ mod job {
         pub fn terminate(&self) {
             unsafe {
                 TerminateJobObject(self.0, 1);
+            }
+        }
+
+        /// Number of processes still alive in the job, or `None` if the query
+        /// fails (callers then stop waiting and terminate).
+        pub fn active_processes(&self) -> Option<u32> {
+            unsafe {
+                let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = mem::zeroed();
+                let ok = QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicAccountingInformation,
+                    &mut info as *mut _ as *mut c_void,
+                    mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                    ptr::null_mut(),
+                );
+                (ok != 0).then_some(info.ActiveProcesses)
             }
         }
     }
@@ -163,17 +180,63 @@ pub struct ManagedTerminal {
 }
 
 impl ManagedTerminal {
-    /// Terminate the terminal's whole process tree. On Windows this nukes the job
-    /// (shell + every descendant); the `killer` call is a fallback for when the
-    /// job could not be created and on non-Windows platforms.
-    pub fn kill(&mut self) {
+    /// Close the terminal the way a regular terminal window does, then make
+    /// sure nothing survives. Returns the thread enforcing the deadline, if any.
+    ///
+    /// Why not just `kill()`: `TerminateJobObject` is a hard kill, so programs
+    /// never run their exit handlers. Claude Code records every fullscreen
+    /// launch on disk and clears the record on a clean exit; a process that
+    /// vanishes before startup finished counts as a fullscreen crash, and after
+    /// two strikes it turns fullscreen off machine-wide. Windows Terminal
+    /// closes the pseudo console instead, which sends CTRL_CLOSE_EVENT to every
+    /// attached process and lets it shut down. We do the same, give the tree
+    /// `KILL_GRACE` to exit, and only then terminate the job — so the
+    /// "no orphans" guarantee still holds.
+    pub fn shutdown(self) -> Option<std::thread::JoinHandle<()>> {
         #[cfg(windows)]
-        if let Some(job) = &self.job {
-            job.terminate();
+        {
+            let ManagedTerminal {
+                writer,
+                master,
+                killer,
+                job,
+                ..
+            } = self;
+            let Some(job) = job else {
+                let mut killer = killer;
+                let _ = killer.kill();
+                return None;
+            };
+            drop(writer);
+            // ClosePseudoConsole: delivers CTRL_CLOSE_EVENT and closes the
+            // output pipe, so the reader sees EOF and emits Exit as before.
+            drop(master);
+            Some(std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + KILL_GRACE;
+                while std::time::Instant::now() < deadline
+                    && job.active_processes().is_some_and(|n| n > 0)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                job.terminate();
+                let mut killer = killer;
+                let _ = killer.kill();
+            }))
         }
-        let _ = self.killer.kill();
+        #[cfg(not(windows))]
+        {
+            let mut killer = self.killer;
+            let _ = killer.kill();
+            None
+        }
     }
 }
+
+/// How long a closed pane's process tree may take to exit on its own before
+/// it is terminated. Windows gives CTRL_CLOSE_EVENT handlers 5 s; most agents
+/// need well under one.
+#[cfg(windows)]
+const KILL_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Global backend state managed by Tauri.
 pub struct AppState {

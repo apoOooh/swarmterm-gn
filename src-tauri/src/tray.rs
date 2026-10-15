@@ -40,10 +40,16 @@ pub fn quit(app: &tauri::AppHandle) {
     crate::voice::shutdown(app);
     // Use `if let Ok` rather than `unwrap` so the process still exits even if the
     // terminals lock was somehow poisoned.
-    if let Ok(mut map) = state.terminals.lock() {
-        for t in map.values_mut() {
-            let _ = t.killer.kill();
-        }
+    // Close every pane gracefully (see ManagedTerminal::shutdown) and wait for
+    // the bounded grace period, so agents exit cleanly instead of being torn
+    // down by kill-on-close when the job handles drop at process exit.
+    let terminals: Vec<_> = match state.terminals.lock() {
+        Ok(mut map) => map.drain().map(|(_, t)| t).collect(),
+        Err(_) => Vec::new(),
+    };
+    let waiters: Vec<_> = terminals.into_iter().filter_map(|t| t.shutdown()).collect();
+    for w in waiters {
+        let _ = w.join();
     }
     app.exit(0);
 }

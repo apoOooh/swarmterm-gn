@@ -164,9 +164,10 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     // The `let` binding releases the map lock BEFORE the kill/drop, so the reader
     // thread can re-lock the map to clear the id without deadlocking.
     let removed = state.terminals.lock().unwrap().remove(&id);
-    if let Some(mut t) = removed {
-        t.kill();
-        // Dropping `t` (and its master PTY) at end of scope forces the reader's EOF.
+    if let Some(t) = removed {
+        // Closes the master PTY (forcing the reader's EOF) and lets the tree
+        // exit cleanly before terminating it; the deadline runs off-thread.
+        let _ = t.shutdown();
     }
     // A dead pane must not linger as a War Room ghost: peers would still see
     // it in list_peers and queue messages for a terminal that can never read
