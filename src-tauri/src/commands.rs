@@ -566,7 +566,12 @@ pub fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
     std::process::Command::new(&bin)
         .args(&args)
         .spawn()
-        .map(|_| ())
+        .map(|mut child| {
+            // Reap it off-thread: an un-waited child stays a zombie on Unix.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        })
         .map_err(|e| e.to_string())
 }
 
