@@ -255,14 +255,12 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
                 .load(Ordering::Relaxed)
                 .then(|| crate::statusline::install::format_command(&exe, cfg!(windows)));
             // A foreign status line remains owned by the user.
-            if let Err(e) = crate::statusline::install::write_settings_to_file(
-                &dir.join("settings.json"),
-                command.as_deref(),
-            ) {
-                if !e.contains("custom statusLine") {
-                    return Err(e);
-                }
-            }
+            crate::statusline::install::tolerate_foreign(
+                crate::statusline::install::write_settings_to_file(
+                    &dir.join("settings.json"),
+                    command.as_deref(),
+                ),
+            )?;
         }
         "codex" => {
             // Dev builds leave the Codex URL to the installed app even in a
