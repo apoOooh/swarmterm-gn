@@ -126,6 +126,7 @@ import { wireVoice } from '@/lib/voice-wiring'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
 import { cleanupWhenResolved } from '@/lib/listener-cleanup'
+import { staleKeys } from '@/lib/stale-sweep'
 
 // Platform never changes at runtime, so a module-level constant is fine.
 const isMac = isMacPlatform()
@@ -741,44 +742,60 @@ export default function App(): ReactElement {
     // warRoomLeave on every layout tick until the room event removes it.
     const leaving = new Set<string>()
     let lastLeaves: Set<string> | undefined
-    let lastTerminals: Set<string> | undefined
-    return useAppStore.subscribe((state, prev) => {
+    let live: Set<string> | undefined
+
+    // Cheap sweeps (O(entries) over small terminalId-keyed maps): run on every
+    // layout change AND whenever those stores change, so an entry that arrives
+    // late for an already-closed pane is dropped even if the layout is stable.
+    const sweepPreviews = (): void => {
+      if (live) for (const id of staleKeys(Object.keys(useBrowserStore.getState().previews), live)) closePreview(id)
+    }
+    // Titles are keyed by terminalId outside the layout tree (see
+    // terminal-title-store) — sweep them the same way previews are, or a
+    // closed pane's title lingers in the store for the rest of the session.
+    const sweepTitles = (): void => {
+      if (!live) return
+      const { titles, clearTitle } = useTerminalTitleStore.getState()
+      for (const id of staleKeys(Object.keys(titles), live)) clearTitle(id)
+    }
+    // War Room members whose terminal left every layout: the Rust auto-leave
+    // on pty death normally beats us here — this sweep is the belt-and-braces
+    // for any path that drops a pane without killing it. Iterate every room's
+    // slice, not just the room shown in the panel.
+    const sweepWarRoom = (): void => {
+      if (!live) return
+      for (const ms of Object.values(useWarRoomStore.getState().membersByRoom)) {
+        for (const m of ms) {
+          if (live.has(m.terminalId) || leaving.has(m.terminalId)) continue
+          leaving.add(m.terminalId)
+          // Rejects when the backend already auto-left the member — harmless.
+          warRoomLeave(m.terminalId).catch(() => {})
+        }
+      }
+    }
+
+    const unsubs = [
+      useAppStore.subscribe((state, prev) => {
         // Liveness only changes with the workspaces array; skip other ticks.
         if (state.workspaces === prev.workspaces) return
-        const { leaves, terminals: live } = liveLayoutIds(state.workspaces)
-        // A reorder/resize keeps the same panes: nothing to sweep.
-        if (lastLeaves && lastTerminals && sameIds(leaves, lastLeaves) && sameIds(live, lastTerminals)) return
-        lastLeaves = leaves
-        lastTerminals = live
-        useDocumentStore.getState().collect(leaves)
-        collectEditorCache(new Set(Object.keys(useDocumentStore.getState().documents)))
-        disposeOrphanTerminals(live)
-        const { previews } = useBrowserStore.getState()
-        for (const terminalId of Object.keys(previews)) {
-          if (!live.has(terminalId)) closePreview(terminalId)
+        const ids = liveLayoutIds(state.workspaces)
+        // Expensive part: skipped when a reorder/resize keeps the same panes.
+        if (!(lastLeaves && live && sameIds(ids.leaves, lastLeaves) && sameIds(ids.terminals, live))) {
+          useDocumentStore.getState().collect(ids.leaves)
+          collectEditorCache(new Set(Object.keys(useDocumentStore.getState().documents)))
+          disposeOrphanTerminals(ids.terminals)
         }
-        // Titles are keyed by terminalId outside the layout tree (see
-        // terminal-title-store) — sweep them the same way previews are, or a
-        // closed pane's title lingers in the store for the rest of the session.
-        const { titles, clearTitle } = useTerminalTitleStore.getState()
-        for (const terminalId of Object.keys(titles)) {
-          if (!live.has(terminalId)) clearTitle(terminalId)
-        }
-        // War Room members whose terminal left every layout: the Rust
-        // auto-leave on pty death normally beats us here — this sweep is the
-        // belt-and-braces for any path that drops a pane without killing it.
-        // warRoomLeave is idempotent, so racing the backend is harmless.
-        // Iterate every room's slice — the sweep doesn't just target whatever
-        // room is currently shown in the panel.
-        for (const ms of Object.values(useWarRoomStore.getState().membersByRoom)) {
-          for (const m of ms) {
-            if (live.has(m.terminalId) || leaving.has(m.terminalId)) continue
-            leaving.add(m.terminalId)
-            // Rejects when the backend already auto-left the member — harmless.
-            warRoomLeave(m.terminalId).catch(() => {})
-          }
-        }
-      })
+        lastLeaves = ids.leaves
+        live = ids.terminals
+        sweepPreviews()
+        sweepTitles()
+        sweepWarRoom()
+      }),
+      useBrowserStore.subscribe((s, p) => { if (s.previews !== p.previews) sweepPreviews() }),
+      useTerminalTitleStore.subscribe((s, p) => { if (s.titles !== p.titles) sweepTitles() }),
+      useWarRoomStore.subscribe((s, p) => { if (s.membersByRoom !== p.membersByRoom) sweepWarRoom() })
+    ]
+    return () => { for (const u of unsubs) u() }
   }, [])
 
   // Wire MCP preview:open events to the per-terminal preview. Background
