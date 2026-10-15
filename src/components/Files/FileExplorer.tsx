@@ -2,7 +2,7 @@ import { insertExplorerPaths } from '@/components/FileDropListener'
 import { canDropInto, dragEffect, dropDirectory } from '@/lib/pointer-drag'
 import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
 import { useExplorerDragStore } from '@/store/explorer-drag-store'
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDownUp, Copy, File, FilePlus, Folder, FolderPlus, History, RefreshCw, X } from 'lucide-react'
 import { useAppStore, focusedVisibleLeaf } from '@/store/app-store'
 import { useExplorerStore, type ExplorerRoot } from '@/store/explorer-store'
@@ -75,7 +75,14 @@ export function FileExplorer(): React.ReactElement {
     window.addEventListener('swarmterm:reveal-file', reveal)
     return () => window.removeEventListener('swarmterm:reveal-file', reveal)
   }, [])
-  const rows = root ? treeRows(root.context.root, root.dirs, new Set(root.expanded), filter) : []
+  // Memoized: scrolling re-renders on every event and must not re-flatten the tree.
+  const rootDir = root?.context.root
+  const dirs = root?.dirs
+  const expanded = root?.expanded
+  const rows = useMemo(
+    () => (rootDir !== undefined && dirs && expanded ? treeRows(rootDir, dirs, new Set(expanded), filter) : []),
+    [rootDir, dirs, expanded, filter]
+  )
   rowsRef.current = rows
   const range = virtualRange(rows.length, scrollTop, height, rowHeight)
   const context = root?.context

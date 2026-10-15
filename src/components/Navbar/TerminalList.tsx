@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import { memo, useMemo, type ReactElement } from 'react'
 import { Archive, ArchiveRestore, EyeOff, Maximize2 } from 'lucide-react'
 import type { LeafNode } from '@/lib/layout-tree'
 import { collectLeaves } from '@/lib/layout-tree'
@@ -31,21 +31,17 @@ import { cn } from '@/lib/utils'
  * dot stays live, so an agent finishing in the drawer still flags itself.
  */
 export function TerminalList(): ReactElement | null {
-  const workspaces = useAppStore((s) => s.workspaces)
-  const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
+  // Only the active workspace: a title/activity/state tick in any pane is
+  // picked up by that pane's own row (TerminalRow), not by re-rendering and
+  // re-walking the whole list.
+  const active = useAppStore((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId))
   const welcomeFocused = useAppStore((s) => s.welcomeFocused)
-  const setFocusedLeaf = useAppStore((s) => s.setFocusedLeaf)
-  const accounts = useAgentAccountsStore(s => s.accounts)
-  const titles = useTerminalTitleStore((s) => s.titles)
-  const activity = useTerminalActivityStore((s) => s.active)
-  const agentStates = useAgentStateStore((s) => s.byId)
+  const leaves = useMemo(() => (active ? collectLeaves(active.layout) : []), [active?.layout])
 
-  const active = workspaces.find((w) => w.id === activeWorkspaceId)
   // Nothing to mirror while the Welcome tab is foreground or before any
   // workspace exists.
   if (welcomeFocused || !active) return null
 
-  const leaves = collectLeaves(active.layout)
   // Drawer order (oldest parked first), not layout order — it is a stack of
   // things set aside, and the newest one belongs at the bottom.
   const openLeaves = leaves.filter((l) => !isDrawered(active, l.id))
@@ -57,68 +53,17 @@ export function TerminalList(): ReactElement | null {
     .filter((l): l is LeafNode => l !== undefined)
 
   function renderRow(leaf: LeafNode, inDrawer: boolean): ReactElement {
-    const agentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
-    const template = templateById(agentId)
-    const title = resolvePaneTitle(agentId, titles[leaf.terminalId])
-    const focused = !inDrawer && leaf.id === active!.focusedLeafId
     const zoomed = zoomActive && !inDrawer && leaf.id === active!.zoomedLeafId
-    // Open but covered by another pane's zoom; it keeps running off-screen.
-    const behindZoom = !inDrawer && !zoomed && zoomActive
-    const dot = paneDot(displayState(agentStates[leaf.terminalId]), activity[leaf.terminalId] === true)
     return (
-      <li key={leaf.id}>
-        <div
-          onClick={() => {
-            useDocumentStore.getState().select(leaf.id, null)
-            useExplorerStore.setState({ visible: true })
-            // setFocusedLeaf also pulls a drawered pane back into its slot.
-            setFocusedLeaf(leaf.id)
-          }}
-          title={inDrawer
-            ? `${title} — in drawer, click to restore`
-            : zoomed
-              ? `${title} — maximized`
-              : behindZoom ? `${title} — hidden behind the maximized pane, click to show` : title}
-          className={cn(
-            'theme-row group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
-            focused
-              ? 'bg-accent text-accent-foreground'
-              : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
-            inDrawer && 'italic opacity-70 hover:opacity-100',
-            zoomed && 'border-l-2 border-zoom pl-1.5'
-          )}
-        >
-          {/* Dim only icon + title of a covered pane: its state dot stays at full
-              strength so an agent needing input behind the zoom still shows. */}
-          <AgentIcon template={template} className={cn('h-3.5 w-3.5 shrink-0', behindZoom && 'opacity-50')} />
-          <span className={cn('flex-1 truncate', behindZoom && 'opacity-50')}>{title}</span>
-          {zoomed && <Maximize2 aria-label="Maximized" className="h-3 w-3 shrink-0 text-zoom" />}
-          {behindZoom && <EyeOff aria-label="Hidden behind maximized pane" className="h-3 w-3 shrink-0 opacity-60" />}
-          {(agentId === 'claude-code' || agentId === 'codex') && <span className="max-w-20 truncate text-[10px]" title={`Account: ${accountLabel(leaf.accountId, accounts)}`}>{accountLabel(leaf.accountId, accounts)}</span>}
-          {dot !== null && (dot === 'activity'
-            ? <ActivityDot />
-            : <StateDot state={dot} sinceMs={agentStates[leaf.terminalId]?.sinceMs} />)}
-          {/* Hover affordance; the row click does the same for drawered rows,
-              so this mainly signals what a click will do. */}
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label={inDrawer ? 'Restore from drawer' : 'Move to drawer'}
-            title={inDrawer ? 'Restore from drawer' : 'Move to drawer'}
-            onClick={(e) => {
-              e.stopPropagation()
-              const st = useAppStore.getState()
-              if (inDrawer) st.restorePane(leaf.id)
-              else st.drawerPane(leaf.id)
-            }}
-            className="hidden shrink-0 rounded p-0.5 hover:bg-accent group-hover:block"
-          >
-            {inDrawer
-              ? <ArchiveRestore className="h-3.5 w-3.5" />
-              : <Archive className="h-3.5 w-3.5" />}
-          </button>
-        </div>
-      </li>
+      <TerminalRow
+        key={leaf.id}
+        leaf={leaf}
+        inDrawer={inDrawer}
+        focused={!inDrawer && leaf.id === active!.focusedLeafId}
+        zoomed={zoomed}
+        // Open but covered by another pane's zoom; it keeps running off-screen.
+        behindZoom={!inDrawer && !zoomed && zoomActive}
+      />
     )
   }
 
@@ -153,3 +98,79 @@ export function TerminalList(): ReactElement | null {
     </div>
   )
 }
+
+interface TerminalRowProps {
+  leaf: LeafNode
+  inDrawer: boolean
+  focused: boolean
+  zoomed: boolean
+  behindZoom: boolean
+}
+
+/** One navbar row; subscribes to its own terminal's title, activity and state. */
+const TerminalRow = memo(function TerminalRow({ leaf, inDrawer, focused, zoomed, behindZoom }: TerminalRowProps): ReactElement {
+  const setFocusedLeaf = useAppStore((s) => s.setFocusedLeaf)
+  const accounts = useAgentAccountsStore(s => s.accounts)
+  const rawTitle = useTerminalTitleStore((s) => s.titles[leaf.terminalId])
+  const isActive = useTerminalActivityStore((s) => s.active[leaf.terminalId] === true)
+  const agentState = useAgentStateStore((s) => s.byId[leaf.terminalId])
+  const agentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
+  const template = templateById(agentId)
+  const title = resolvePaneTitle(agentId, rawTitle)
+  const dot = paneDot(displayState(agentState), isActive)
+  return (
+    <li>
+      <div
+        onClick={() => {
+          useDocumentStore.getState().select(leaf.id, null)
+          useExplorerStore.setState({ visible: true })
+          // setFocusedLeaf also pulls a drawered pane back into its slot.
+          setFocusedLeaf(leaf.id)
+        }}
+        title={inDrawer
+          ? `${title} — in drawer, click to restore`
+          : zoomed
+            ? `${title} — maximized`
+            : behindZoom ? `${title} — hidden behind the maximized pane, click to show` : title}
+        className={cn(
+          'theme-row group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
+          focused
+            ? 'bg-accent text-accent-foreground'
+            : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+          inDrawer && 'italic opacity-70 hover:opacity-100',
+          zoomed && 'border-l-2 border-zoom pl-1.5'
+        )}
+      >
+        {/* Dim only icon + title of a covered pane: its state dot stays at full
+            strength so an agent needing input behind the zoom still shows. */}
+        <AgentIcon template={template} className={cn('h-3.5 w-3.5 shrink-0', behindZoom && 'opacity-50')} />
+        <span className={cn('flex-1 truncate', behindZoom && 'opacity-50')}>{title}</span>
+        {zoomed && <Maximize2 aria-label="Maximized" className="h-3 w-3 shrink-0 text-zoom" />}
+        {behindZoom && <EyeOff aria-label="Hidden behind maximized pane" className="h-3 w-3 shrink-0 opacity-60" />}
+        {(agentId === 'claude-code' || agentId === 'codex') && <span className="max-w-20 truncate text-[10px]" title={`Account: ${accountLabel(leaf.accountId, accounts)}`}>{accountLabel(leaf.accountId, accounts)}</span>}
+        {dot !== null && (dot === 'activity'
+          ? <ActivityDot />
+          : <StateDot state={dot} sinceMs={agentState?.sinceMs} />)}
+        {/* Hover affordance; the row click does the same for drawered rows,
+            so this mainly signals what a click will do. */}
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={inDrawer ? 'Restore from drawer' : 'Move to drawer'}
+          title={inDrawer ? 'Restore from drawer' : 'Move to drawer'}
+          onClick={(e) => {
+            e.stopPropagation()
+            const st = useAppStore.getState()
+            if (inDrawer) st.restorePane(leaf.id)
+            else st.drawerPane(leaf.id)
+          }}
+          className="hidden shrink-0 rounded p-0.5 hover:bg-accent group-hover:block"
+        >
+          {inDrawer
+            ? <ArchiveRestore className="h-3.5 w-3.5" />
+            : <Archive className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+    </li>
+  )
+})
