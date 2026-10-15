@@ -754,16 +754,31 @@ pub fn clear_worktree(repo_cwd: &Path, worktree_path: &Path, branch: &str) -> Re
     // name (no option smuggling) AND be the branch this very worktree has
     // checked out — otherwise a stale value would force-delete an unrelated
     // branch with its unmerged commits. Checked before anything is removed.
-    validate_branch_name(branch)?;
+    // Empty or the "(detached)" label `parse_worktree_list` gives the renderer
+    // both mean "no branch to delete".
+    let requested = Some(branch).filter(|b| !b.is_empty() && *b != "(detached)");
+    if let Some(b) = requested {
+        validate_branch_name(b)?;
+    }
     let root = main_root.to_str().ok_or("non-UTF-8 repo root")?;
     let target = worktree_path.to_str().ok_or("non-UTF-8 worktree path")?;
     let actual = worktree_branch(root, worktree_path)?;
-    if actual.as_deref() != Some(branch) {
-        return Err(format!(
-            "refusing: '{branch}' is not the branch checked out in this worktree ({})",
-            actual.as_deref().unwrap_or("none/detached")
-        ));
-    }
+    // Delete a branch only if it is exactly the one this worktree had checked
+    // out. A detached worktree is still removable, but a passed branch is then
+    // left alone — the renderer's value cannot be verified.
+    let delete = match (requested, actual.as_deref()) {
+        (None, _) => None,
+        (Some(b), Some(a)) if a == b => Some(b),
+        (Some(b), None) => {
+            eprintln!("clear_worktree: worktree is detached; keeping branch '{b}' (not deleted)");
+            None
+        }
+        (Some(b), Some(a)) => {
+            return Err(format!(
+                "refusing: '{b}' is not the branch checked out in this worktree ({a})"
+            ))
+        }
+    };
 
     let out = git_command()
         .args(["-C", root, "worktree", "remove", "--force", target])
@@ -780,6 +795,9 @@ pub fn clear_worktree(repo_cwd: &Path, worktree_path: &Path, branch: &str) -> Re
     // Delete the branch ref from the main repo. `-D` (force) because the UI has
     // already warned about unmerged commits; the branch is no longer checked out
     // anywhere now that its only worktree is gone.
+    let Some(branch) = delete else {
+        return Ok(());
+    };
     let out = git_command()
         .args(["-C", root, "branch", "-D", "--", branch])
         .output()
@@ -1029,6 +1047,46 @@ mod tests {
         let wt = std::path::PathBuf::from(&created.path);
         assert!(clear_worktree(&repo, &wt, "--all").is_err());
         assert!(wt.exists(), "worktree removed despite invalid branch");
+    }
+
+    /// Worktree on `swarm/d`, then detached in place (HEAD → commit).
+    fn detached_worktree(repo: &Path) -> std::path::PathBuf {
+        let created = create_worktree(repo, "swarm/d").unwrap();
+        let wt = std::path::PathBuf::from(&created.path);
+        run_git(&wt, &["checkout", "-q", "--detach"]);
+        wt
+    }
+
+    #[test]
+    fn clear_worktree_detached_without_branch_removes_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        let wt = detached_worktree(&repo);
+        clear_worktree(&repo, &wt, "").unwrap();
+        assert!(!wt.exists(), "detached worktree should be removed");
+        let wt2 = {
+            run_git(&repo, &["branch", "-D", "swarm/d"]);
+            detached_worktree(&repo)
+        };
+        clear_worktree(&repo, &wt2, "(detached)").unwrap();
+        assert!(!wt2.exists());
+    }
+
+    #[test]
+    fn clear_worktree_detached_with_branch_keeps_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        let wt = detached_worktree(&repo);
+        clear_worktree(&repo, &wt, "swarm/d").unwrap();
+        assert!(!wt.exists(), "detached worktree should be removed");
+        assert!(
+            branch_exists(&repo, "swarm/d"),
+            "passed branch must survive"
+        );
     }
 
     #[test]
