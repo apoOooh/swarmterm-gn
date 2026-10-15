@@ -167,35 +167,59 @@ impl CreateTerminalResult {
 /// meant for the old one. A writer parked in `write_all` is not interruptible;
 /// it ends when the master closes the pipe (shutdown drops it), and queued
 /// bytes are then discarded with the dropped receiver.
-pub struct PtyInput(std::sync::mpsc::Sender<Vec<u8>>);
+///
+/// Queued-but-unwritten bytes are capped (INPUT_QUEUE_MAX_BYTES): a hung agent
+/// whose input pipe is full would otherwise grow the queue without limit.
+pub struct PtyInput {
+    tx: std::sync::mpsc::Sender<Vec<u8>>,
+    queued: Arc<std::sync::atomic::AtomicUsize>,
+    cap: usize,
+}
+
+/// Upper bound on bytes waiting for one pty's writer thread.
+const INPUT_QUEUE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 impl PtyInput {
-    pub fn spawn(mut writer: Box<dyn Write + Send>) -> Self {
+    pub fn spawn(writer: Box<dyn Write + Send>) -> Self {
+        Self::with_cap(writer, INPUT_QUEUE_MAX_BYTES)
+    }
+
+    fn with_cap(mut writer: Box<dyn Write + Send>, cap: usize) -> Self {
+        use std::sync::atomic::Ordering;
         let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let drained = queued.clone();
         std::thread::spawn(move || {
             while let Ok(mut bytes) = rx.recv() {
                 // Coalesce whatever queued behind a slow write into one write.
                 while let Ok(more) = rx.try_recv() {
                     bytes.extend_from_slice(&more);
                 }
-                if writer
-                    .write_all(&bytes)
-                    .and_then(|_| writer.flush())
-                    .is_err()
-                {
+                let written = writer.write_all(&bytes).and_then(|_| writer.flush());
+                // Released only once written, so a stuck write still counts.
+                drained.fetch_sub(bytes.len(), Ordering::AcqRel);
+                if written.is_err() {
                     break;
                 }
             }
         });
-        PtyInput(tx)
+        PtyInput { tx, queued, cap }
     }
 
-    /// Queue bytes for the pty. Err only when the writer thread is gone (pipe
-    /// closed), i.e. the terminal is dying.
+    /// Queue bytes for the pty. Err "target-gone" when the writer thread is
+    /// gone (pipe closed), "input-queue-full" when the pty is not draining.
     pub fn send(&self, data: &[u8]) -> Result<(), String> {
-        self.0
-            .send(data.to_vec())
-            .map_err(|_| "target-gone".to_string())
+        use std::sync::atomic::Ordering;
+        let len = data.len();
+        self.queued
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |q| {
+                (q + len <= self.cap).then_some(q + len)
+            })
+            .map_err(|_| "input-queue-full".to_string())?;
+        self.tx.send(data.to_vec()).map_err(|_| {
+            self.queued.fetch_sub(len, Ordering::AcqRel);
+            "target-gone".to_string()
+        })
     }
 }
 
@@ -957,6 +981,37 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(&*buf.lock().unwrap(), b"abcd");
+    }
+
+    /// Blocks every write until the test releases it: a pty that stopped reading.
+    struct StuckSink(std::sync::mpsc::Receiver<()>);
+    impl Write for StuckSink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            let _ = self.0.recv();
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn pty_input_rejects_input_past_the_queue_cap() {
+        let (release, gate) = std::sync::mpsc::channel();
+        let input = PtyInput::with_cap(Box::new(StuckSink(gate)), 4);
+        assert_eq!(input.send(b"abcd"), Ok(()));
+        assert_eq!(input.send(b"e"), Err("input-queue-full".to_string()));
+        drop(release); // writer drains, budget is freed
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut res = Err(String::new());
+        while std::time::Instant::now() < deadline {
+            res = input.send(b"e");
+            if res.is_ok() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(res, Ok(()));
     }
 
     #[test]
