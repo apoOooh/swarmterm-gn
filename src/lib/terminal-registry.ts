@@ -72,6 +72,7 @@ import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import type { BufferView } from '@/lib/agent-state/snapshot'
 import type { AgentHookSignal } from '@/tauri/agent-state'
+import { createFrameBatch } from '@/lib/frame-batch'
 
 export type { TerminalStatus }
 
@@ -270,6 +271,13 @@ function safeFit(entry: Entry): boolean {
     return false
   }
 }
+
+// Observer-driven refits run once per frame across all terminals (see
+// frame-batch.ts). Attach keeps its synchronous fit + flush: the pty must be at
+// the attached size before the session starts.
+const refitBatch = createFrameBatch<Entry>((entry) => {
+  if (entry.observer !== undefined) refitEntry(entry)
+})
 
 /** Re-fit one terminal and push the new size to its pty only when it changed. */
 function refitEntry(entry: Entry): void {
@@ -1108,7 +1116,7 @@ function finishTerminalAttach(entry: Entry, container: HTMLElement): void {
 
   entry.observer?.disconnect()
   entry.observer = new ResizeObserver(() => {
-    refitEntry(entry)
+    refitBatch.schedule(entry)
   })
   entry.observer.observe(container)
 
@@ -1122,6 +1130,7 @@ export function detachTerminal(id: string): void {
   if (!entry) return
   entry.observer?.disconnect()
   entry.observer = undefined
+  refitBatch.cancel(entry)
   entry.ptyResize.cancel()
   entry.host.remove()
 }
@@ -1134,6 +1143,8 @@ export function disposeTerminal(id: string): void {
   const entry = entries.get(id)
   if (!entry) return
   entry.observer?.disconnect()
+  entry.observer = undefined
+  refitBatch.cancel(entry)
   entry.ptyResize.cancel()
   entry.session.dispose()
   entry.term.dispose()

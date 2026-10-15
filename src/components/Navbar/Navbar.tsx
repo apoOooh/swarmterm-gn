@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { memo, useEffect, useRef, useState, type ReactElement } from 'react'
 import { Archive, ArrowDownToLine, Check, Columns2, GripHorizontal, LayoutGrid, MoreVertical, Pencil, Plus, Settings, X } from 'lucide-react'
 import {
   DndContext,
@@ -58,12 +58,105 @@ interface NavbarProps {
  * Drag an item to reorder (synced with the tab strip). Collapses to 0 width when
  * the title bar's toggle button is off.
  */
-export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: NavbarProps): ReactElement {
-  const [sidebarWidth, setSidebarWidth] = useState(280)
-  const resizing = useRef(false)
+const MIN_WIDTH = 224
+const MAX_WIDTH = 520
+const WIDTH_KEY = 'swarmterm.sidebarWidth'
+const clampWidth = (w: number): number => Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, w))
+
+function loadWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(WIDTH_KEY))
+    return Number.isFinite(n) && n > 0 ? clampWidth(n) : 280
+  } catch {
+    return 280
+  }
+}
+
+function saveWidth(w: number): void {
+  try {
+    localStorage.setItem(WIDTH_KEY, String(w))
+  } catch {
+    // Width memory is a convenience; a blocked storage must not break resizing.
+  }
+}
+
+export function Navbar(props: NavbarProps): ReactElement {
+  const [sidebarWidth, setSidebarWidth] = useState(loadWidth)
+  const [resizing, setResizing] = useState(false)
+  const pendingX = useRef<number | null>(null)
+  const frame = useRef<number | null>(null)
+  const visible = useNavbarVisibilityStore((s) => s.visible)
+
+  useEffect(() => () => { if (frame.current !== null) cancelAnimationFrame(frame.current) }, [])
+
+  // Pointer events can arrive several times per frame; commit at most one
+  // width per frame so the layout (and every terminal refit behind it) runs
+  // once per frame instead of once per event.
+  function onPointerMove(x: number): void {
+    pendingX.current = x
+    if (frame.current !== null) return
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null
+      if (pendingX.current !== null) setSidebarWidth(clampWidth(pendingX.current))
+    })
+  }
+
+  return (
+    <nav
+      aria-hidden={!visible}
+      inert={!visible}
+      // The whole sidebar hands the keyboard back to the terminal after a click
+      // — workspace items, the terminal list, New workspace, Account, Settings.
+      // Anything that legitimately claims focus (the rename input, a dropdown,
+      // the Settings dialog) is exempt by lib/terminal-focus.ts's own check.
+      data-focus-return
+      style={{ width: visible ? sidebarWidth : 0 }}
+      // The width transition animates show/hide only. Left on during a drag,
+      // every pointermove restarts a 200 ms animation: the edge trails the
+      // pointer and the whole workspace area re-lays out every frame.
+      className={cn(
+        'relative h-full shrink-0 overflow-hidden border-r border-border bg-card',
+        !resizing && 'transition-[width] duration-200 ease-in-out motion-reduce:transition-none'
+      )}
+    >
+      <div
+        role="separator"
+        aria-label="Resize sidebar"
+        aria-orientation="vertical"
+        tabIndex={0}
+        className="absolute bottom-0 right-0 top-0 z-10 w-1 cursor-col-resize hover:bg-ring focus:bg-ring"
+        onPointerDown={(e) => { setResizing(true); e.currentTarget.setPointerCapture(e.pointerId) }}
+        onPointerMove={(e) => { if (resizing) onPointerMove(e.clientX) }}
+        onPointerUp={(e) => {
+          if (!resizing) return
+          setResizing(false)
+          e.currentTarget.releasePointerCapture(e.pointerId)
+          const w = clampWidth(pendingX.current ?? sidebarWidth)
+          pendingX.current = null
+          setSidebarWidth(w)
+          saveWidth(w)
+        }}
+        // A cancelled pointer (alt-tab, touch cancel) never sends pointerup.
+        onLostPointerCapture={() => setResizing(false)}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault()
+            const w = clampWidth(sidebarWidth + (e.key === 'ArrowRight' ? 16 : -16))
+            setSidebarWidth(w)
+            saveWidth(w)
+          }
+        }}
+      />
+      <SidebarBody {...props} />
+    </nav>
+  )
+}
+
+/** Everything inside the rail. Memoized so a width change re-renders only the
+ * <nav> shell, not the workspace list, terminal list and file explorer. */
+const SidebarBody = memo(function SidebarBody({ onNewWorkspace, settingsOpen, onToggleSettings }: NavbarProps): ReactElement {
   const filesVisible = useExplorerStore((s) => s.visible)
   const sidebarLayout = useSidebarLayoutStore((s) => s.layout)
-  const visible = useNavbarVisibilityStore((s) => s.visible)
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const welcomeFocused = useAppStore((s) => s.welcomeFocused)
@@ -179,18 +272,6 @@ export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: Navba
     )
 
   return (
-    <nav
-      aria-hidden={!visible}
-      inert={!visible}
-      // The whole sidebar hands the keyboard back to the terminal after a click
-      // — workspace items, the terminal list, New workspace, Account, Settings.
-      // Anything that legitimately claims focus (the rename input, a dropdown,
-      // the Settings dialog) is exempt by lib/terminal-focus.ts's own check.
-      data-focus-return
-      style={{ width: visible ? sidebarWidth : 0 }}
-      className="relative h-full shrink-0 overflow-hidden border-r border-border bg-card transition-[width] duration-200 ease-in-out motion-reduce:transition-none"
-    >
-      <div role="separator" aria-label="Resize sidebar" aria-orientation="vertical" tabIndex={0} className="absolute bottom-0 right-0 top-0 z-10 w-1 cursor-col-resize hover:bg-ring focus:bg-ring" onPointerDown={(e) => { resizing.current = true; e.currentTarget.setPointerCapture(e.pointerId) }} onPointerMove={(e) => { if (resizing.current) setSidebarWidth(Math.max(224, Math.min(520, e.clientX))) }} onPointerUp={(e) => { resizing.current = false; e.currentTarget.releasePointerCapture(e.pointerId) }} onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setSidebarWidth((w) => Math.max(224, Math.min(520, w + (e.key === 'ArrowRight' ? 16 : -16)))) } }} />
       <div className="flex h-full w-full flex-col">
         {sidebarLayout === 'manual' ? (
         <Group orientation="vertical" className="min-h-0 flex-1" defaultLayout={{ workspaces: 25, terminals: 25, files: 50 }}>
@@ -235,9 +316,8 @@ export function Navbar({ onNewWorkspace, settingsOpen, onToggleSettings }: Navba
           )}
         </div>
       </div>
-    </nav>
   )
-}
+})
 
 interface WorkspaceItemProps {
   workspace: Workspace
