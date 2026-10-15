@@ -159,7 +159,43 @@ impl CreateTerminalResult {
     }
 }
 
-/// A live pty the manager owns. `master` is kept for resize; `writer` for input;
+/// Input for one pty generation. The blocking `write_all` runs on that
+/// generation's own writer thread: a full ConPTY input pipe (big paste into a
+/// busy agent) used to stall the main thread AND every other `terminals` lock
+/// user. Commands only enqueue, under the lock, so ordering is the enqueue
+/// order and a respawn (new generation, new queue) can never receive bytes
+/// meant for the old one. A writer parked in `write_all` is not interruptible;
+/// it ends when the master closes the pipe (shutdown drops it), and queued
+/// bytes are then discarded with the dropped receiver.
+pub struct PtyInput(std::sync::mpsc::Sender<Vec<u8>>);
+
+impl PtyInput {
+    pub fn spawn(mut writer: Box<dyn Write + Send>) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            while let Ok(mut bytes) = rx.recv() {
+                // Coalesce whatever queued behind a slow write into one write.
+                while let Ok(more) = rx.try_recv() {
+                    bytes.extend_from_slice(&more);
+                }
+                if writer.write_all(&bytes).and_then(|_| writer.flush()).is_err() {
+                    break;
+                }
+            }
+        });
+        PtyInput(tx)
+    }
+
+    /// Queue bytes for the pty. Err only when the writer thread is gone (pipe
+    /// closed), i.e. the terminal is dying.
+    pub fn send(&self, data: &[u8]) -> Result<(), String> {
+        self.0
+            .send(data.to_vec())
+            .map_err(|_| "target-gone".to_string())
+    }
+}
+
+/// A live pty the manager owns. `master` is kept for resize; `input` for input;
 /// `killer` to terminate the child from the command thread. On Windows `job`
 /// (when set) owns the shell's whole process tree so closing the terminal frees
 /// every descendant, not just the shell.
@@ -170,7 +206,7 @@ pub struct ManagedTerminal {
     pub agent_id: Option<String>,
     /// Configured spawn cwd; OSC 7 shell navigation must not change the explorer's root.
     pub cwd: std::path::PathBuf,
-    pub writer: Box<dyn Write + Send>,
+    pub input: PtyInput,
     pub master: Box<dyn MasterPty + Send>,
     pub killer: Box<dyn ChildKiller + Send + Sync>,
     #[cfg(windows)]
@@ -196,7 +232,7 @@ impl ManagedTerminal {
         #[cfg(windows)]
         {
             let ManagedTerminal {
-                writer,
+                input,
                 master,
                 killer,
                 job,
@@ -213,7 +249,9 @@ impl ManagedTerminal {
             // and can never delay the hard kill past KILL_GRACE.
             let deadline = std::time::Instant::now() + KILL_GRACE;
             std::thread::spawn(move || {
-                drop(writer);
+                // Dropping the sender ends the writer thread once it is idle;
+                // one parked in write_all is released by the master close.
+                drop(input);
                 // ClosePseudoConsole: delivers CTRL_CLOSE_EVENT and closes the
                 // output pipe, so the reader sees EOF and emits Exit as before.
                 drop(master);
@@ -608,7 +646,7 @@ pub fn spawn_terminal(
             spawn_id,
             pid,
             agent_id: options.agent_id,
-            writer,
+            input: PtyInput::spawn(writer),
             master: pair.master,
             killer,
             #[cfg(windows)]
@@ -623,8 +661,7 @@ pub fn spawn_terminal(
     // arrive immediately and must never race the terminal registration.
     if let Some(line) = initial_line {
         if let Some(terminal) = state.terminals.lock().unwrap().get_mut(&id) {
-            let _ = terminal.writer.write_all(line.as_bytes());
-            let _ = terminal.writer.flush();
+            let _ = terminal.input.send(line.as_bytes());
         }
     }
 

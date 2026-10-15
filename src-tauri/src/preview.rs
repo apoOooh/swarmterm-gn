@@ -197,11 +197,12 @@ pub fn preview_forward(app: AppHandle, terminal_id: String) {
 #[tauri::command]
 pub fn preview_set_bounds(app: AppHandle, terminal_id: String, bounds: Bounds) {
     if let Some(webview) = app.get_webview(&preview_label(&terminal_id)) {
-        let _ = webview.set_position(LogicalPosition::new(bounds.x, bounds.y));
-        let _ = webview.set_size(LogicalSize::new(
-            bounds.width.max(1.0),
-            bounds.height.max(1.0),
-        ));
+        // One native call instead of set_position + set_size: during a
+        // sidebar/split drag this runs every frame.
+        let _ = webview.set_bounds(tauri::Rect {
+            position: LogicalPosition::new(bounds.x, bounds.y).into(),
+            size: LogicalSize::new(bounds.width.max(1.0), bounds.height.max(1.0)).into(),
+        });
     }
 }
 
