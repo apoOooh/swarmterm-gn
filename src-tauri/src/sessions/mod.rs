@@ -163,12 +163,12 @@ pub(crate) fn read_head(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
+const TITLE_CACHE_PRUNE_AT: usize = 4096;
+
 /// `read_head` + title extraction, memoized per file on (mtime, size). Every
 /// discovery opened and parsed the head of every session file again; an
 /// unchanged file now costs one metadata call. Entries are a path plus a short
 /// title, so the cache stays small even for long histories.
-const TITLE_CACHE_PRUNE_AT: usize = 4096;
-
 pub(crate) fn cached_head_title(
     path: &Path,
     extract: fn(&str) -> Option<String>,
@@ -200,6 +200,11 @@ pub(crate) fn cached_head_title(
         // gone once the map gets large (rare, and costs one stat per entry).
         if cache.len() >= TITLE_CACHE_PRUNE_AT {
             cache.retain(|(p, _), _| p.exists());
+            // Still mostly live: start over rather than re-stat it all on
+            // every later miss.
+            if cache.len() >= TITLE_CACHE_PRUNE_AT * 3 / 4 {
+                cache.clear();
+            }
         }
         cache.insert(key, (stamp.0, stamp.1, title.clone()));
     }

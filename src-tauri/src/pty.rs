@@ -719,7 +719,6 @@ pub fn spawn_terminal(
     }
 }
 
-/// Blocking read loop: stream decoded output, then wait for exit and clean up.
 /// Join `first` with whatever follows it on `rx`: only what is already queued
 /// after a quiet spell (`idle`), else up to OUTPUT_COALESCE / OUTPUT_BATCH_BYTES.
 /// Order is preserved; a closed channel just ends the batch.
@@ -740,6 +739,7 @@ fn next_batch(rx: &std::sync::mpsc::Receiver<String>, mut text: String, idle: bo
     text
 }
 
+/// Blocking read loop: stream decoded output, then wait for exit and clean up.
 fn read_loop(
     app: AppHandle,
     id: String,
