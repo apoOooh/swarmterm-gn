@@ -126,6 +126,8 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   const hiddenCount = props.zoomHiddenCount ?? 0
   const layoutOrder = useHeaderLayoutStore(s => s.order)
   const layoutCore = useHeaderLayoutStore(s => s.core)
+  const layoutOverflow = useHeaderLayoutStore(s => s.overflow)
+  const layoutOff = useHeaderLayoutStore(s => s.off)
   const agent = templateById(agentId)
   const mode = launchMode(agentId, props.launchModeId)
   const agentLabel = agent.name
@@ -554,7 +556,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
     </Button>
   ), true)
 
-  const laidOut = applyHeaderLayout(items, { order: layoutOrder, core: layoutCore })
+  const laidOut = applyHeaderLayout(items, { order: layoutOrder, core: layoutCore, overflow: layoutOverflow, off: layoutOff })
   const { visible, hidden } = resolveHeaderOverflow(width, laidOut)
   const byId = new Map(laidOut.map(i => [i.id, i]))
   const visibleSet = new Set(visible)

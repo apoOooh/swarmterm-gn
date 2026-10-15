@@ -81,6 +81,9 @@ Do not mark them passed from the in-memory fixture alone.
       header; drag Shell to the bottom — it moves to the end of every header and
       is first to collapse. Restart the app: the layout is kept. Reset to
       defaults restores the original header.
+- [ ] Settings → Title bar: set Float pane to "⋯ only" — even a wide header
+      shows `⋯` and Float sits only in the hover row; set Handoff brief to
+      "Off" — it is gone from the header and the hover row.
 
 ## Pane drawer
 

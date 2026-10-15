@@ -114,3 +114,22 @@ describe('resolveHeaderOverflow', () => {
     expect(r.hidden).toEqual(['y'])
   })
 })
+
+describe('resolveHeaderOverflow — overflowOnly', () => {
+  const it3 = [
+    { id: 'title', width: 60, priority: 0, pinned: true },
+    { id: 'a', width: 26, priority: 1 },
+    { id: 'b', width: 26, priority: 2, overflowOnly: true },
+    { id: 'c', width: 26, priority: 3 }
+  ]
+  it('hides overflow-only items at any width, keeping priority order in hidden', () => {
+    expect(resolveHeaderOverflow(5000, it3)).toEqual({ visible: ['title', 'a', 'c'], hidden: ['b'] })
+  })
+  it('reserves the ⋯ chip for them and still collapses the rest by priority', () => {
+    // title + a + chip = 110 fits; c does not.
+    expect(resolveHeaderOverflow(115, it3)).toEqual({ visible: ['title', 'a'], hidden: ['b', 'c'] })
+  })
+  it('a pinned item ignores overflowOnly', () => {
+    expect(resolveHeaderOverflow(5000, [{ id: 'x', width: 10, priority: 0, pinned: true, overflowOnly: true }]).visible).toEqual(['x'])
+  })
+})
