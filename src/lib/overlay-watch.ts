@@ -11,8 +11,14 @@ export interface OverlayRoot {
   querySelector(selectors: string): unknown
 }
 
+/**
+ * Floating chrome that must cover the webview but is NOT an overlay for focus
+ * purposes (e.g. the peeking sidebar) renders a `[data-covers-webview]` marker.
+ */
+const WEBVIEW_COVER_SELECTOR = `${OVERLAY_SELECTOR},[data-covers-webview]`
+
 export function hasOpenOverlay(root: OverlayRoot): boolean {
-  return root.querySelector(OVERLAY_SELECTOR) !== null
+  return root.querySelector(WEBVIEW_COVER_SELECTOR) !== null
 }
 
 /**

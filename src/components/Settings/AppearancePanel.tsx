@@ -5,6 +5,8 @@ import { styleOptions, themeVariables, type StyleOption } from '@/lib/theme-adap
 import { cn } from '@/lib/utils'
 import { useSidebarLayoutStore } from '@/store/sidebar-layout-store'
 import type { SidebarLayout } from '@/lib/sidebar-layout'
+import { useSidebarPeekStore } from '@/store/sidebar-peek-store'
+import { ToggleRow } from '@/components/Settings/NotificationsPanel'
 
 const SIDEBAR_LAYOUTS: { id: SidebarLayout; label: string; description: string }[] = [
   { id: 'auto', label: 'Auto', description: 'Lists take their height, Files fills the rest' },
@@ -16,6 +18,7 @@ export function AppearancePanel(): ReactElement {
   const style = useAppearanceStore((s) => s.style)
   const setStyle = useAppearanceStore((s) => s.setStyle)
   const sidebarLayout = useSidebarLayoutStore((s) => s.layout)
+  const sidebarPeek = useSidebarPeekStore((s) => s.enabled)
 
   return (
     <div className="space-y-8">
@@ -41,6 +44,12 @@ export function AppearancePanel(): ReactElement {
             </button>
           ))}
         </div>
+        <ToggleRow
+          label="Peek sidebar on left edge"
+          description="When the sidebar is hidden, move the pointer to the left edge to show it over the workspace."
+          checked={sidebarPeek}
+          onChange={(on) => useSidebarPeekStore.getState().setEnabled(on)}
+        />
       </section>
 
       <section>

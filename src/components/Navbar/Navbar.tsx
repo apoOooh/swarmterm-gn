@@ -21,6 +21,9 @@ import { GuardedPointerSensor } from '@/lib/dnd-sensors'
 import { collectLeaves } from '@/lib/layout-tree'
 import { useAppStore, type Workspace } from '@/store/app-store'
 import { useNavbarVisibilityStore } from '@/store/navbar-visibility-store'
+import { useSidebarPeekStore } from '@/store/sidebar-peek-store'
+import { PEEK_CLOSE_DELAY_MS, PEEK_OPEN_DELAY_MS, peekCloseDecision } from '@/lib/sidebar-peek'
+import { OVERLAY_SELECTOR } from '@/lib/terminal-focus'
 import { AttentionBadge } from '@/components/Navbar/AttentionBadge'
 import { Button } from '@/components/ui/button'
 import {
@@ -86,8 +89,77 @@ export function Navbar(props: NavbarProps): ReactElement {
   const pendingX = useRef<number | null>(null)
   const frame = useRef<number | null>(null)
   const visible = useNavbarVisibilityStore((s) => s.visible)
+  const peekEnabled = useSidebarPeekStore((s) => s.enabled)
+  const navRef = useRef<HTMLElement>(null)
+  // Peek: with the sidebar hidden, resting the pointer on the left edge slides
+  // it in OVER the workspace (absolute, so no terminal re-lays out); leaving it
+  // slides it back out. `peekClosing` keeps it absolute for the slide-out.
+  const [peek, setPeek] = useState(false)
+  const [peekClosing, setPeekClosing] = useState(false)
+  const peekTimer = useRef<number | null>(null)
+  const canPeek = !visible && peekEnabled
+  const peeking = canPeek && peek
 
   useEffect(() => () => { if (frame.current !== null) cancelAnimationFrame(frame.current) }, [])
+
+  function clearPeekTimer(): void {
+    if (peekTimer.current !== null) window.clearTimeout(peekTimer.current)
+    peekTimer.current = null
+  }
+
+  function schedulePeek(open: boolean): void {
+    clearPeekTimer()
+    peekTimer.current = window.setTimeout(() => {
+      peekTimer.current = null
+      if (open) {
+        setPeekClosing(false)
+        setPeek(true)
+        return
+      }
+      // Stay out while the pointer is back over the rail, or a menu / dialog
+      // opened from it is up (Radix portals those outside the <nav>).
+      const decision = peekCloseDecision({
+        hovered: navRef.current?.matches(':hover') ?? false,
+        overlayOpen: document.querySelector(OVERLAY_SELECTOR) !== null
+      })
+      if (decision === 'defer') {
+        schedulePeek(false)
+        return
+      }
+      setPeek(false)
+    }, open ? PEEK_OPEN_DELAY_MS : PEEK_CLOSE_DELAY_MS)
+  }
+
+  useEffect(() => {
+    if (canPeek) return
+    clearPeekTimer()
+    setPeek(false)
+  }, [canPeek])
+
+  useEffect(() => () => clearPeekTimer(), [])
+
+  // Slide-out: stay absolute until the width transition has finished. Only on
+  // a real open → closed edge, not on mount.
+  const wasPeek = useRef(peek)
+  useEffect(() => {
+    const was = wasPeek.current
+    wasPeek.current = peek
+    if (peek || !was) return
+    setPeekClosing(true)
+    const t = window.setTimeout(() => setPeekClosing(false), 220)
+    return () => window.clearTimeout(t)
+  }, [peek])
+
+  // Alt-tab away while peeking never sends pointerleave.
+  useEffect(() => {
+    if (!peeking) return
+    const onBlur = (): void => { clearPeekTimer(); setPeek(false) }
+    window.addEventListener('blur', onBlur)
+    return () => window.removeEventListener('blur', onBlur)
+  }, [peeking])
+
+  const shown = visible || peeking
+  const overlay = !visible && (peeking || peekClosing)
 
   // Pointer events can arrive several times per frame; commit at most one
   // width per frame so the layout (and every terminal refit behind it) runs
@@ -102,24 +174,44 @@ export function Navbar(props: NavbarProps): ReactElement {
   }
 
   return (
+    <>
+    {canPeek && !peek && (
+      <div
+        aria-hidden
+        data-focus-return
+        className="absolute inset-y-0 left-0 z-40 w-3"
+        onPointerEnter={(e) => { if (e.buttons === 0) schedulePeek(true) }}
+        onPointerLeave={clearPeekTimer}
+      />
+    )}
     <nav
-      aria-hidden={!visible}
-      inert={!visible}
+      ref={navRef}
+      aria-hidden={!shown}
+      inert={!shown}
       // The whole sidebar hands the keyboard back to the terminal after a click
       // — workspace items, the terminal list, New workspace, Account, Settings.
       // Anything that legitimately claims focus (the rename input, a dropdown,
       // the Settings dialog) is exempt by lib/terminal-focus.ts's own check.
       data-focus-return
-      style={{ width: visible ? sidebarWidth : 0 }}
+      style={{ width: shown ? sidebarWidth : 0 }}
+      onPointerEnter={peeking ? clearPeekTimer : undefined}
+      onPointerLeave={peeking ? (e) => {
+        // A drag (workspace reorder) leaving the rail must not close it under
+        // the drag; decide once the button is released.
+        if (e.buttons === 0) schedulePeek(false)
+        else window.addEventListener('pointerup', () => schedulePeek(false), { once: true })
+      } : undefined}
       // The width transition animates show/hide only. Left on during a drag,
       // every pointermove restarts a 200 ms animation: the edge trails the
       // pointer and the whole workspace area re-lays out every frame.
       className={cn(
-        'relative h-full shrink-0 overflow-hidden border-r border-border bg-card',
+        'h-full shrink-0 overflow-hidden border-r border-border bg-card',
+        overlay ? 'absolute inset-y-0 left-0 z-40 shadow-2xl' : 'relative',
         !resizing && 'transition-[width] duration-200 ease-in-out motion-reduce:transition-none'
       )}
     >
-      <div
+      {overlay && <span hidden data-covers-webview />}
+      {!overlay && <div
         role="separator"
         aria-label="Resize sidebar"
         aria-orientation="vertical"
@@ -153,9 +245,10 @@ export function Navbar(props: NavbarProps): ReactElement {
             saveWidth(w)
           }
         }}
-      />
+      />}
       <SidebarBody {...props} />
     </nav>
+    </>
   )
 }
 
