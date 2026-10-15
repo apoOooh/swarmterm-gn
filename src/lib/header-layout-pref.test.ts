@@ -6,10 +6,16 @@ import {
   normalizeHeaderLayout,
   readStoredHeaderLayout,
   storeHeaderLayout,
-  toggleHeaderCore,
+  setHeaderItemVisibility,
+  headerItemVisibility,
+  type HeaderItemId,
+  type HeaderLayoutPref,
   applyHeaderLayout
 } from './header-layout-pref'
 import { OVERFLOW_CHIP_PX, resolveHeaderOverflow } from './header-layout'
+
+const toggleHeaderCore = (p: HeaderLayoutPref, id: HeaderItemId): HeaderLayoutPref =>
+  setHeaderItemVisibility(p, id, headerItemVisibility(p, id) === 'core' ? 'auto' : 'core')
 
 const fakeStorage = (initial: Record<string, string> = {}) => {
   const data = { ...initial }
@@ -103,5 +109,60 @@ describe('default hide order', () => {
   it('new items keep their default core flag only when no core list is stored', () => {
     expect(normalizeHeaderLayout({ order: ['title'] }).core).toEqual(DEFAULT_HEADER_LAYOUT.core)
     expect(normalizeHeaderLayout({ order: ['title'], core: ['title'] }).core).toEqual(['title'])
+  })
+})
+
+describe('overflow-only and off', () => {
+  it('reads a layout saved before these existed unchanged', () => {
+    const p = normalizeHeaderLayout({ order: DEFAULT_HEADER_LAYOUT.order, core: ['title', 'ctx'] })
+    expect(p.overflow).toEqual([])
+    expect(p.off).toEqual([])
+    expect(p.core).toEqual(['title', 'ctx'])
+  })
+
+  it('keeps the lists disjoint and never lets the title go', () => {
+    const p = normalizeHeaderLayout({ order: [], core: ['ctx'], overflow: ['ctx', 'shell', 'title'], off: ['shell', 'drawer'] })
+    expect(p.core).toEqual(['ctx', 'title'])
+    expect(p.overflow).toEqual(['shell'])
+    expect(p.off).toEqual(['drawer'])
+    expect(setHeaderItemVisibility(p, 'title', 'off')).toBe(p)
+  })
+
+  it('switching visibility moves the id between lists', () => {
+    let p = setHeaderItemVisibility(DEFAULT_HEADER_LAYOUT, 'folder', 'overflow')
+    expect(headerItemVisibility(p, 'folder')).toBe('overflow')
+    expect(p.core).not.toContain('folder')
+    p = setHeaderItemVisibility(p, 'folder', 'off')
+    expect(p.overflow).toEqual([])
+    expect(p.off).toEqual(['folder'])
+    p = setHeaderItemVisibility(p, 'folder', 'auto')
+    expect(headerItemVisibility(p, 'folder')).toBe('auto')
+    const s = fakeStorage()
+    storeHeaderLayout(s, setHeaderItemVisibility(p, 'ctx', 'off'))
+    expect(readStoredHeaderLayout(s).off).toEqual(['ctx'])
+  })
+
+  it('drops off items and never puts overflow-only items in the row, even when wide', () => {
+    const items = ['title', 'shell', 'ctx', 'drawer'].map(id => ({ id, width: 30, priority: 0, pinned: false }))
+    let p = setHeaderItemVisibility(DEFAULT_HEADER_LAYOUT, 'drawer', 'off')
+    p = setHeaderItemVisibility(p, 'shell', 'overflow')
+    const out = applyHeaderLayout(items, p)
+    expect(out.map(i => i.id)).toEqual(['title', 'shell', 'ctx'])
+    expect(resolveHeaderOverflow(2000, out)).toEqual({ visible: ['title', 'ctx'], hidden: ['shell'] })
+  })
+})
+
+describe('overflow-only edge cases', () => {
+  it('an id stored as both core and overflow normalizes to core', () => {
+    const p = normalizeHeaderLayout({ order: [], core: ['shell'], overflow: ['shell'] })
+    expect(headerItemVisibility(p, 'shell')).toBe('core')
+    expect(p.overflow).toEqual([])
+  })
+
+  it('all optional items "⋯ only": only core items in the row, hidden in priority order', () => {
+    let p = DEFAULT_HEADER_LAYOUT
+    for (const id of ['shell', 'ctx', 'drawer'] as HeaderItemId[]) p = setHeaderItemVisibility(p, id, 'overflow')
+    const items = ['title', 'drawer', 'ctx', 'shell'].map(id => ({ id, width: 30, priority: 0, pinned: false }))
+    expect(resolveHeaderOverflow(5000, applyHeaderLayout(items, p))).toEqual({ visible: ['title'], hidden: ['shell', 'ctx', 'drawer'] })
   })
 })

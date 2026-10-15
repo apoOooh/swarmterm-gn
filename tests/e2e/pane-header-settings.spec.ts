@@ -23,8 +23,8 @@ test('making an item core keeps it in a narrow header, and it persists', async (
   await expect(inRow(page, 'Split right')).toHaveCount(0)
 
   await titleBarSettings(page)
-  await page.getByRole('switch', { name: 'Split right: can hide' }).click()
-  await expect(page.getByRole('switch', { name: 'Split right: core' })).toBeVisible()
+  await page.getByRole('radio', { name: 'Split right: Core' }).click()
+  await expect(page.getByRole('radio', { name: 'Split right: Core' })).toHaveAttribute('aria-checked', 'true')
   await closeSettings(page)
   await expect(inRow(page, 'Split right')).toHaveCount(1)
 
@@ -50,11 +50,11 @@ test('reordering moves the item in the header', async ({ page }) => {
 
 test('the title cannot be made optional; reset restores defaults', async ({ page }) => {
   await titleBarSettings(page)
-  await expect(page.getByRole('switch', { name: 'Title: core' })).toBeDisabled()
-  await page.getByRole('switch', { name: 'Shell: can hide' }).click()
+  await expect(page.getByRole('radio', { name: 'Title: Off' })).toBeDisabled()
+  await page.getByRole('radio', { name: 'Shell: Off' }).click()
   await page.getByRole('button', { name: 'Move Move to drawer up' }).click()
   await page.getByRole('button', { name: 'Reset to defaults' }).click()
-  await expect(page.getByRole('switch', { name: 'Shell: can hide' })).toBeVisible()
+  await expect(page.getByRole('radio', { name: 'Shell: Can hide' })).toHaveAttribute('aria-checked', 'true')
   const ids = await page.locator('[data-title-bar-items] > li').evaluateAll(els => els.map(e => e.getAttribute('data-item-id')))
   expect(ids.slice(-2)).toEqual(['float', 'drawer'])
 })
@@ -85,4 +85,39 @@ test('dragging a row by its grip reorders it', async ({ page }) => {
   await page.mouse.up()
   const ids = await page.locator('[data-title-bar-items] > li').evaluateAll(els => els.map(e => e.getAttribute('data-item-id')))
   expect(ids.indexOf('drawer')).toBeLessThan(ids.indexOf('split-down'))
+})
+
+test('"⋯ only" keeps an item out of a wide header but reachable in the second row', async ({ page }) => {
+  await titleBarSettings(page)
+  await page.getByRole('radio', { name: 'Split right: ⋯ only' }).click()
+  await closeSettings(page)
+  const header = leftHeader(page)
+  await expect(inRow(page, 'Split right')).toHaveCount(0)
+  await header.hover({ position: { x: 60, y: 10 } })
+  const panel = header.locator('[data-header-overflow]')
+  await expect(panel).toHaveCSS('opacity', '1')
+  await panel.getByRole('button', { name: 'Split right' }).click()
+  await expect(page.locator('[data-leaf-id]')).toHaveCount(3)
+})
+
+test('"Off" removes an item from the header entirely', async ({ page }) => {
+  await titleBarSettings(page)
+  await page.getByRole('radio', { name: 'Handoff brief: Off' }).click()
+  await closeSettings(page)
+  await expect(leftHeader(page).locator('[aria-label="Handoff brief"]')).toHaveCount(0)
+  await squeezeLeft(page, 15)
+  await expect(leftHeader(page).locator('[aria-label="Handoff brief"]')).toHaveCount(0)
+})
+
+test('the visibility group works with arrow keys (one Tab stop)', async ({ page }) => {
+  await titleBarSettings(page)
+  const auto = page.getByRole('radio', { name: 'Shell: Can hide' })
+  await expect(page.getByRole('radio', { name: 'Shell: Core' })).toHaveAttribute('tabindex', '-1')
+  await auto.focus()
+  await page.keyboard.press('ArrowRight')
+  const only = page.getByRole('radio', { name: 'Shell: ⋯ only' })
+  await expect(only).toHaveAttribute('aria-checked', 'true')
+  await expect(only).toBeFocused()
+  await page.keyboard.press('ArrowLeft')
+  await expect(auto).toHaveAttribute('aria-checked', 'true')
 })

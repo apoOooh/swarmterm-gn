@@ -5,14 +5,15 @@ import {
   normalizeHeaderLayout,
   readStoredHeaderLayout,
   storeHeaderLayout,
-  toggleHeaderCore,
+  setHeaderItemVisibility,
   type HeaderItemId,
+  type HeaderItemVisibility,
   type HeaderLayoutPref
 } from '@/lib/header-layout-pref'
 
 export interface HeaderLayoutStore extends HeaderLayoutPref {
   move: (id: HeaderItemId, targetId: HeaderItemId) => void
-  toggleCore: (id: HeaderItemId) => void
+  setVisibility: (id: HeaderItemId, visibility: HeaderItemVisibility) => void
   reset: () => void
 }
 
@@ -27,13 +28,13 @@ export const useHeaderLayoutStore = create<HeaderLayoutStore>((set, get) => {
     try { storeHeaderLayout(window.localStorage, next) } catch (err) { console.warn('[header-layout] not persisted', err) }
     set(next)
   }
-  const current = (): HeaderLayoutPref => ({ order: get().order, core: get().core })
+  const current = (): HeaderLayoutPref => ({ order: get().order, core: get().core, overflow: get().overflow, off: get().off })
   let initial = normalizeHeaderLayout(DEFAULT_HEADER_LAYOUT)
   try { if (typeof window !== 'undefined') initial = readStoredHeaderLayout(window.localStorage) } catch { /* blocked storage → defaults */ }
   return {
     ...initial,
     move: (id, targetId) => apply(moveHeaderItem(current(), id, targetId)),
-    toggleCore: (id) => apply(toggleHeaderCore(current(), id)),
+    setVisibility: (id, visibility) => apply(setHeaderItemVisibility(current(), id, visibility)),
     reset: () => apply(normalizeHeaderLayout(DEFAULT_HEADER_LAYOUT))
   }
 })

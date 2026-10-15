@@ -48,6 +48,8 @@ export interface HeaderOverflowItem {
   priority: number
   /** Pinned items always render in the row (title, close, …). */
   pinned?: boolean
+  /** Never in the row — always in the second row (user chose "⋯ only"). */
+  overflowOnly?: boolean
 }
 
 export interface HeaderOverflow {
@@ -66,11 +68,19 @@ export const OVERFLOW_CHIP_PX = 24
  * rest strictly by priority — the first one that doesn't fit hides itself and
  * everything less important, so the row never shows a minor button while a
  * more important one sits in the overflow. Once anything hides, the ⋯ chip's
- * width is reserved too.
+ * width is reserved too. `overflowOnly` items skip the row entirely.
  */
-export function resolveHeaderOverflow(widthPx: number, items: HeaderOverflowItem[]): HeaderOverflow {
+export function resolveHeaderOverflow(widthPx: number, all: HeaderOverflowItem[]): HeaderOverflow {
+  // Overflow-only items never compete for row space; they just join `hidden`.
+  const forced = all.filter(i => i.overflowOnly && !i.pinned)
+  const items = all.filter(i => !forced.includes(i))
+  const withForced = (r: HeaderOverflow): HeaderOverflow => forced.length === 0 ? r : {
+    visible: r.visible,
+    hidden: [...r.hidden, ...forced.map(i => i.id)]
+      .sort((a, b) => all.find(i => i.id === a)!.priority - all.find(i => i.id === b)!.priority)
+  }
   const total = items.reduce((sum, i) => sum + i.width, 0)
-  if (total <= widthPx) return { visible: items.map(i => i.id), hidden: [] }
+  if (total + (forced.length ? OVERFLOW_CHIP_PX : 0) <= widthPx) return withForced({ visible: items.map(i => i.id), hidden: [] })
 
   let budget = widthPx - OVERFLOW_CHIP_PX
   for (const i of items) if (i.pinned) budget -= i.width
@@ -83,8 +93,8 @@ export function resolveHeaderOverflow(widthPx: number, items: HeaderOverflowItem
     else full = true
   }
 
-  return {
+  return withForced({
     visible: items.filter(i => i.pinned || kept.has(i.id)).map(i => i.id),
     hidden: ranked.filter(i => !kept.has(i.id)).map(i => i.id)
-  }
+  })
 }
