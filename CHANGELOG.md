@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+- Notifications: the bell now reports when the MCP server stops, when voice
+  input fails (cleared again once it recovers) and when a pane stopped
+  reading input so a paste was dropped. These entries show their details and
+  are marked read on click.
+- Pasting a large block (over 8 MiB) into an idle pane is no longer rejected.
+- War Room: messages are limited to 64k characters, and an unread inbox keeps
+  at most 200 messages; older ones are dropped and the reader is told how
+  many were lost.
+- Git: the changed-files list shows renames correctly and handles paths with
+  spaces or non-ASCII characters.
+- Worktrees: clearing a worktree on a detached HEAD works, and clearing
+  refuses to delete a branch that does not match the worktree.
+- Codex: support detection runs at startup, so new Codex panes no longer wait
+  for it; a slow first check is retried later.
+- Performance: the sidebar and the file tree re-render less.
+- Fixes: event listeners are cleaned up when panes and dialogs close, dialogs
+  no longer show results of an earlier request, and closed panes no longer
+  leave titles, previews or War Room members behind.
+
 ## [1.12.0] - 2026-10-15
 
 - Settings: new **Title bar** page. Reorder the pane-header controls by drag

@@ -132,8 +132,11 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
 - **PTY I/O threads.** Input never blocks a command: each generation owns a
   writer thread (`pty::PtyInput`) and `write_terminal(_checked)` only enqueue
   under the `terminals` lock (FIFO = keystroke order; a respawn gets a new
-  queue). Shutdown drops the sender; a writer parked on a full pipe is
-  released by the master close. Output is a reader thread (UTF-8 split stays
+  queue). Queued bytes are capped at 8 MiB per pty, but an empty queue always
+  accepts one write (big paste into an idle pane); the writer drains in 64 KiB
+  slices. `write_terminal` returns `input-queue-full`, which the renderer
+  reports in the bell (`setInputDroppedHandler`). Shutdown drops the sender; a
+  writer parked on a full pipe is released by the master close. Output is a reader thread (UTF-8 split stays
   there) feeding a flusher that coalesces bursts (`next_batch`, 4 ms / 64 KB;
   sent at once after 16 ms quiet); all `Data` precedes `Exit`.
 - **UTF-8 chunk boundaries.** `take_valid_utf8` buffers a split trailing multibyte
