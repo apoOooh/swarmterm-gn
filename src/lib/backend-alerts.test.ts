@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { addEntry, markTerminalRead, unreadCount } from './notification-center'
-import { INPUT_ALERT_ID, MCP_ALERT_ID, VOICE_ALERT_ID, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from './backend-alerts'
+import { INPUT_ALERT_ID, createInputDropThrottle, MCP_ALERT_ID, VOICE_ALERT_ID, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from './backend-alerts'
 import { isInputQueueFull } from '@/tauri/terminal'
 
 describe('backend alerts', () => {
@@ -38,5 +38,14 @@ describe('backend alerts', () => {
     expect(isInputQueueFull('input-queue-full')).toBe(true)
     expect(isInputQueueFull('target-gone')).toBe(false)
     expect(isInputQueueFull(new Error('x'))).toBe(false)
+  })
+
+  it('throttles input-dropped alerts per pane', () => {
+    const allow = createInputDropThrottle(5000)
+    expect(allow('a', 0)).toBe(true)
+    expect(allow('a', 4999)).toBe(false)
+    expect(allow('b', 100)).toBe(true)
+    expect(allow('a', 5000)).toBe(true)
+    expect(allow('a', 6000)).toBe(false)
   })
 })
