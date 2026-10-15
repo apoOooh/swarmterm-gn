@@ -137,7 +137,14 @@ export function Navbar(props: NavbarProps): ReactElement {
           saveWidth(w)
         }}
         // A cancelled pointer (alt-tab, touch cancel) never sends pointerup.
-        onLostPointerCapture={() => setResizing(false)}
+        onLostPointerCapture={() => {
+          setResizing(false)
+          if (pendingX.current === null) return
+          const w = clampWidth(pendingX.current)
+          pendingX.current = null
+          setSidebarWidth(w)
+          saveWidth(w)
+        }}
         onKeyDown={(e) => {
           if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
             e.preventDefault()

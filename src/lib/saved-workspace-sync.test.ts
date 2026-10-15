@@ -14,6 +14,25 @@ function setup() {
   return { app, sync, list: () => list, writes: () => writes }
 }
 describe('workspace auto-save lifecycle', () => {
+  it('a shell preference change is saved on the next store tick, even without a layout change', () => {
+    vi.useFakeTimers()
+    const app = createStore<AppStore>()(appStoreCreator)
+    let shell: 'powershell' | 'cmd' = 'powershell'
+    let list: SavedWorkspace[] = [], writes = 0
+    const sync = startSavedWorkspaceSync({ app, shell: () => shell, save: entries => { list = entries; writes++ } })
+    app.getState().createWorkspace({ cwd: 'C:/project', terminalCount: 1, agentIds: ['terminal'] })
+    vi.advanceTimersByTime(500)
+    const before = writes
+    app.getState().openWelcome()
+    vi.advanceTimersByTime(500)
+    expect(writes).toBe(before)
+    shell = 'cmd'
+    app.getState().closeWelcome()
+    vi.advanceTimersByTime(500)
+    expect(writes).toBe(before + 1)
+    expect(list[0].layout.type === 'leaf' && list[0].layout.shellId).toBe('cmd')
+    sync.dispose()
+  })
   it('focus updates cannot postpone a pending meaningful save', () => {
     const t = setup()
     t.app.getState().createWorkspace({ cwd: 'C:/project', terminalCount: 2, agentIds: ['terminal', 'terminal'] })

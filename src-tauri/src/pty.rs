@@ -720,6 +720,26 @@ pub fn spawn_terminal(
 }
 
 /// Blocking read loop: stream decoded output, then wait for exit and clean up.
+/// Join `first` with whatever follows it on `rx`: only what is already queued
+/// after a quiet spell (`idle`), else up to OUTPUT_COALESCE / OUTPUT_BATCH_BYTES.
+/// Order is preserved; a closed channel just ends the batch.
+fn next_batch(rx: &std::sync::mpsc::Receiver<String>, mut text: String, idle: bool) -> String {
+    let deadline = std::time::Instant::now()
+        + if idle {
+            std::time::Duration::ZERO
+        } else {
+            OUTPUT_COALESCE
+        };
+    while text.len() < OUTPUT_BATCH_BYTES {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(more) => text.push_str(&more),
+            Err(_) => break,
+        }
+    }
+    text
+}
+
 fn read_loop(
     app: AppHandle,
     id: String,
@@ -766,19 +786,8 @@ fn read_loop(
     // read the tail anyway.
     let peer_state = app.try_state::<AppState>();
     let mut last_flush = std::time::Instant::now() - OUTPUT_IDLE;
-    while let Ok(mut text) = rx.recv() {
-        let deadline = if last_flush.elapsed() >= OUTPUT_IDLE {
-            std::time::Instant::now()
-        } else {
-            std::time::Instant::now() + OUTPUT_COALESCE
-        };
-        while text.len() < OUTPUT_BATCH_BYTES {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
-            match rx.recv_timeout(left) {
-                Ok(more) => text.push_str(&more),
-                Err(_) => break,
-            }
-        }
+    while let Ok(first) = rx.recv() {
+        let text = next_batch(&rx, first, last_flush.elapsed() >= OUTPUT_IDLE);
         // Tee into the Rust-side screen tail BEFORE the renderer sees it, so a
         // `read_peer` racing this batch never reads less than xterm shows.
         // Lock scope is the one statement — never held across the send.
@@ -843,6 +852,91 @@ fn read_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_batch_joins_queued_chunks_in_order() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send("b".to_string()).unwrap();
+        tx.send("c".to_string()).unwrap();
+        assert_eq!(next_batch(&rx, "a".into(), false), "abc");
+    }
+
+    #[test]
+    fn next_batch_idle_takes_only_what_is_queued() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send("b".to_string()).unwrap();
+        let start = std::time::Instant::now();
+        assert_eq!(next_batch(&rx, "a".into(), true), "ab");
+        assert!(start.elapsed() < OUTPUT_COALESCE * 10);
+        drop(tx);
+    }
+
+    #[test]
+    fn next_batch_stops_at_the_byte_cap() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send("y".to_string()).unwrap();
+        let big = "x".repeat(OUTPUT_BATCH_BYTES);
+        assert_eq!(next_batch(&rx, big.clone(), false), big);
+        assert_eq!(rx.try_recv().unwrap(), "y");
+    }
+
+    #[test]
+    fn next_batch_ends_on_closed_channel() {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        drop(tx);
+        assert_eq!(next_batch(&rx, "a".into(), false), "a");
+    }
+
+    struct SharedSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl Write for SharedSink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct BrokenSink;
+    impl Write for BrokenSink {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn pty_input_writes_in_enqueue_order() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let input = PtyInput::spawn(Box::new(SharedSink(buf.clone())));
+        for s in ["a", "b", "c", "d"] {
+            input.send(s.as_bytes()).unwrap();
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while buf.lock().unwrap().len() < 4 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(&*buf.lock().unwrap(), b"abcd");
+    }
+
+    #[test]
+    fn pty_input_reports_target_gone_after_writer_dies() {
+        let input = PtyInput::spawn(Box::new(BrokenSink));
+        let _ = input.send(b"x");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut res = Ok(());
+        while std::time::Instant::now() < deadline {
+            res = input.send(b"y");
+            if res.is_err() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(res, Err("target-gone".to_string()));
+    }
 
     #[test]
     fn default_shell_is_nonempty() {

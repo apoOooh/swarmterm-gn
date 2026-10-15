@@ -129,6 +129,13 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   count a failed fullscreen start and disable fullscreen machine-wide. Note
   `Exit` fires when the PTY closes, so a same-id respawn may briefly overlap the
   old tree's clean exit.
+- **PTY I/O threads.** Input never blocks a command: each generation owns a
+  writer thread (`pty::PtyInput`) and `write_terminal(_checked)` only enqueue
+  under the `terminals` lock (FIFO = keystroke order; a respawn gets a new
+  queue). Shutdown drops the sender; a writer parked on a full pipe is
+  released by the master close. Output is a reader thread (UTF-8 split stays
+  there) feeding a flusher that coalesces bursts (`next_batch`, 4 ms / 64 KB;
+  sent at once after 16 ms quiet); all `Data` precedes `Exit`.
 - **UTF-8 chunk boundaries.** `take_valid_utf8` buffers a split trailing multibyte
   sequence across reads to avoid mojibake (emoji/box-drawing). Don't "simplify" it
   into a lossy decode.
@@ -267,8 +274,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   never a command. `begin` asks the renderer who owns the keyboard
   (`lib/voice-focus.ts`, 300 ms) and pins `{terminalId, spawn_id}`
   single-use; `insert` hands the text to the renderer, which writes ONLY via
-  `write_terminal_checked` (spawn_id checked under the `terminals` lock) and
-  reports the ACK back. Draft rules live in `lib/voice-insert.ts` /
+  `write_terminal_checked` (spawn_id check AND enqueue under the `terminals`
+  lock) and reports the ACK back — the ACK means queued for that generation,
+  not yet written to the pty. Draft rules live in `lib/voice-insert.ts` /
   `voice-delivery.ts`: sanitise before framing, plain shells flatten
   CR/LF/TAB, blocked panes refused, reset the IME segment THEN mark dirty,
   Enter is a separate delayed write re-checked against the typing stamp.

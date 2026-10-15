@@ -167,6 +167,8 @@ pub(crate) fn read_head(path: &Path) -> Option<String> {
 /// discovery opened and parsed the head of every session file again; an
 /// unchanged file now costs one metadata call. Entries are a path plus a short
 /// title, so the cache stays small even for long histories.
+const TITLE_CACHE_PRUNE_AT: usize = 4096;
+
 pub(crate) fn cached_head_title(
     path: &Path,
     extract: fn(&str) -> Option<String>,
@@ -193,9 +195,13 @@ pub(crate) fn cached_head_title(
     }
     let title = read_head(path).as_deref().and_then(extract);
     if let Ok(mut cache) = CACHE.lock() {
-        cache
-            .get_or_insert_with(HashMap::new)
-            .insert(key, (stamp.0, stamp.1, title.clone()));
+        let cache = cache.get_or_insert_with(HashMap::new);
+        // Bound growth from deleted/rotated files: drop entries whose file is
+        // gone once the map gets large (rare, and costs one stat per entry).
+        if cache.len() >= TITLE_CACHE_PRUNE_AT {
+            cache.retain(|(p, _), _| p.exists());
+        }
+        cache.insert(key, (stamp.0, stamp.1, title.clone()));
     }
     title
 }
@@ -407,5 +413,37 @@ mod account_tests {
         assert!(result.panes[0].account_available && result.panes[0].session_available);
         assert!(result.panes[1].account_available && !result.panes[1].session_available);
         assert!(!result.panes[2].account_available && !result.panes[2].session_available);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn first_line(head: &str) -> Option<String> {
+        head.lines().next().map(str::to_owned)
+    }
+
+    #[test]
+    fn cached_head_title_reuses_until_the_file_changes() {
+        let dir =
+            std::env::temp_dir().join(format!("swarmterm-title-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.jsonl");
+        std::fs::write(&path, "one\n").unwrap();
+        assert_eq!(cached_head_title(&path, first_line).as_deref(), Some("one"));
+        // Size changes invalidate even within the same mtime tick.
+        std::fs::write(&path, "second\n").unwrap();
+        assert_eq!(
+            cached_head_title(&path, first_line).as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            cached_head_title(&path, first_line).as_deref(),
+            Some("second")
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(cached_head_title(&path, first_line), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
