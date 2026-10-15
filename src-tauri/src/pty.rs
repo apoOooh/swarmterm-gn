@@ -159,7 +159,47 @@ impl CreateTerminalResult {
     }
 }
 
-/// A live pty the manager owns. `master` is kept for resize; `writer` for input;
+/// Input for one pty generation. The blocking `write_all` runs on that
+/// generation's own writer thread: a full ConPTY input pipe (big paste into a
+/// busy agent) used to stall the main thread AND every other `terminals` lock
+/// user. Commands only enqueue, under the lock, so ordering is the enqueue
+/// order and a respawn (new generation, new queue) can never receive bytes
+/// meant for the old one. A writer parked in `write_all` is not interruptible;
+/// it ends when the master closes the pipe (shutdown drops it), and queued
+/// bytes are then discarded with the dropped receiver.
+pub struct PtyInput(std::sync::mpsc::Sender<Vec<u8>>);
+
+impl PtyInput {
+    pub fn spawn(mut writer: Box<dyn Write + Send>) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            while let Ok(mut bytes) = rx.recv() {
+                // Coalesce whatever queued behind a slow write into one write.
+                while let Ok(more) = rx.try_recv() {
+                    bytes.extend_from_slice(&more);
+                }
+                if writer
+                    .write_all(&bytes)
+                    .and_then(|_| writer.flush())
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        PtyInput(tx)
+    }
+
+    /// Queue bytes for the pty. Err only when the writer thread is gone (pipe
+    /// closed), i.e. the terminal is dying.
+    pub fn send(&self, data: &[u8]) -> Result<(), String> {
+        self.0
+            .send(data.to_vec())
+            .map_err(|_| "target-gone".to_string())
+    }
+}
+
+/// A live pty the manager owns. `master` is kept for resize; `input` for input;
 /// `killer` to terminate the child from the command thread. On Windows `job`
 /// (when set) owns the shell's whole process tree so closing the terminal frees
 /// every descendant, not just the shell.
@@ -170,7 +210,7 @@ pub struct ManagedTerminal {
     pub agent_id: Option<String>,
     /// Configured spawn cwd; OSC 7 shell navigation must not change the explorer's root.
     pub cwd: std::path::PathBuf,
-    pub writer: Box<dyn Write + Send>,
+    pub input: PtyInput,
     pub master: Box<dyn MasterPty + Send>,
     pub killer: Box<dyn ChildKiller + Send + Sync>,
     #[cfg(windows)]
@@ -196,7 +236,7 @@ impl ManagedTerminal {
         #[cfg(windows)]
         {
             let ManagedTerminal {
-                writer,
+                input,
                 master,
                 killer,
                 job,
@@ -213,7 +253,9 @@ impl ManagedTerminal {
             // and can never delay the hard kill past KILL_GRACE.
             let deadline = std::time::Instant::now() + KILL_GRACE;
             std::thread::spawn(move || {
-                drop(writer);
+                // Dropping the sender ends the writer thread once it is idle;
+                // one parked in write_all is released by the master close.
+                drop(input);
                 // ClosePseudoConsole: delivers CTRL_CLOSE_EVENT and closes the
                 // output pipe, so the reader sees EOF and emits Exit as before.
                 drop(master);
@@ -419,6 +461,12 @@ pub fn take_valid_utf8(buf: &mut Vec<u8>) -> Option<String> {
     Some(s)
 }
 
+/// Output coalescing (see read_loop): a burst is batched for up to
+/// OUTPUT_COALESCE or OUTPUT_BATCH_BYTES; output after OUTPUT_IDLE of silence
+/// is sent immediately.
+const OUTPUT_COALESCE: std::time::Duration = std::time::Duration::from_millis(4);
+const OUTPUT_IDLE: std::time::Duration = std::time::Duration::from_millis(16);
+const OUTPUT_BATCH_BYTES: usize = 64 * 1024;
 const READ_BUF_BYTES: usize = 64 * 1024;
 
 /// Spawn a pty, register it in state, and start a reader thread that streams
@@ -608,7 +656,7 @@ pub fn spawn_terminal(
             spawn_id,
             pid,
             agent_id: options.agent_id,
-            writer,
+            input: PtyInput::spawn(writer),
             master: pair.master,
             killer,
             #[cfg(windows)]
@@ -623,8 +671,7 @@ pub fn spawn_terminal(
     // arrive immediately and must never race the terminal registration.
     if let Some(line) = initial_line {
         if let Some(terminal) = state.terminals.lock().unwrap().get_mut(&id) {
-            let _ = terminal.writer.write_all(line.as_bytes());
-            let _ = terminal.writer.flush();
+            let _ = terminal.input.send(line.as_bytes());
         }
     }
 
@@ -672,6 +719,26 @@ pub fn spawn_terminal(
     }
 }
 
+/// Join `first` with whatever follows it on `rx`: only what is already queued
+/// after a quiet spell (`idle`), else up to OUTPUT_COALESCE / OUTPUT_BATCH_BYTES.
+/// Order is preserved; a closed channel just ends the batch.
+fn next_batch(rx: &std::sync::mpsc::Receiver<String>, mut text: String, idle: bool) -> String {
+    let deadline = std::time::Instant::now()
+        + if idle {
+            std::time::Duration::ZERO
+        } else {
+            OUTPUT_COALESCE
+        };
+    while text.len() < OUTPUT_BATCH_BYTES {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(more) => text.push_str(&more),
+            Err(_) => break,
+        }
+    }
+    text
+}
+
 /// Blocking read loop: stream decoded output, then wait for exit and clean up.
 fn read_loop(
     app: AppHandle,
@@ -680,40 +747,60 @@ fn read_loop(
     exit_rx: std::sync::mpsc::Receiver<i32>,
     on_data: Channel<PtyOut>,
 ) {
-    let mut pending: Vec<u8> = Vec::new();
-    let mut chunk = vec![0u8; READ_BUF_BYTES];
-    // Resolved once: `try_state` walks Tauri's type map, and this loop runs
-    // per pty chunk. `None` only during teardown, when there is nobody left
-    // to read the tail anyway.
-    let peer_state = app.try_state::<AppState>();
-    loop {
-        match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
-            Ok(n) => {
-                pending.extend_from_slice(&chunk[..n]);
-                if let Some(text) = take_valid_utf8(&mut pending) {
-                    // Tee the chunk into the Rust-side screen tail BEFORE the
-                    // renderer sees it, so a `read_peer` racing this chunk
-                    // never reads less than xterm shows. Lock scope is the
-                    // one statement — never held across the channel send.
-                    if let Some(state) = &peer_state {
-                        state.peer_states.lock().unwrap().push_output(
-                            &id,
-                            &text,
-                            crate::warroom::now_ms(),
-                        );
-                        state.peer_wake.notify_waiters();
+    // Reader → flusher split. ConPTY reads block, so coalescing needs its own
+    // thread: the reader decodes (UTF-8 boundary handling stays HERE, so the
+    // flusher only ever joins whole strings) and the flusher below batches a
+    // TUI redraw's many small reads into one tail push, one waiter wake and
+    // one IPC message. The first chunk after a quiet spell is sent at once
+    // (keystroke echo latency unchanged); only bursts wait up to
+    // OUTPUT_COALESCE. The channel closing means EOF with every byte —
+    // including the lossy trailing flush — already queued, so `Exit` below
+    // can never overtake output.
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let mut pending: Vec<u8> = Vec::new();
+        let mut chunk = vec![0u8; READ_BUF_BYTES];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+                Ok(n) => {
+                    pending.extend_from_slice(&chunk[..n]);
+                    if let Some(text) = take_valid_utf8(&mut pending) {
+                        if tx.send(text).is_err() {
+                            return;
+                        }
                     }
-                    let _ = on_data.send(PtyOut::Data(text));
                 }
             }
         }
-    }
-    // Flush any trailing bytes (lossily) so nothing is lost.
-    if !pending.is_empty() {
-        let _ = on_data.send(PtyOut::Data(String::from_utf8_lossy(&pending).into_owned()));
+        // Flush any trailing bytes (lossily) so nothing is lost.
+        if !pending.is_empty() {
+            let _ = tx.send(String::from_utf8_lossy(&pending).into_owned());
+        }
+    });
+
+    // Resolved once: `try_state` walks Tauri's type map, and this loop runs
+    // per flush. `None` only during teardown, when there is nobody left to
+    // read the tail anyway.
+    let peer_state = app.try_state::<AppState>();
+    let mut last_flush = std::time::Instant::now() - OUTPUT_IDLE;
+    while let Ok(first) = rx.recv() {
+        let text = next_batch(&rx, first, last_flush.elapsed() >= OUTPUT_IDLE);
+        // Tee into the Rust-side screen tail BEFORE the renderer sees it, so a
+        // `read_peer` racing this batch never reads less than xterm shows.
+        // Lock scope is the one statement — never held across the send.
+        if let Some(state) = &peer_state {
+            state
+                .peer_states
+                .lock()
+                .unwrap()
+                .push_output(&id, &text, crate::warroom::now_ms());
+            state.peer_wake.notify_waiters();
+        }
+        let _ = on_data.send(PtyOut::Data(text));
+        last_flush = std::time::Instant::now();
     }
     // The waiter thread owns the child; EOF means it is dead or about to be
     // (kill_terminal dropped the master after killing it).
@@ -765,6 +852,91 @@ fn read_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_batch_joins_queued_chunks_in_order() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send("b".to_string()).unwrap();
+        tx.send("c".to_string()).unwrap();
+        assert_eq!(next_batch(&rx, "a".into(), false), "abc");
+    }
+
+    #[test]
+    fn next_batch_idle_takes_only_what_is_queued() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send("b".to_string()).unwrap();
+        let start = std::time::Instant::now();
+        assert_eq!(next_batch(&rx, "a".into(), true), "ab");
+        assert!(start.elapsed() < OUTPUT_COALESCE * 10);
+        drop(tx);
+    }
+
+    #[test]
+    fn next_batch_stops_at_the_byte_cap() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send("y".to_string()).unwrap();
+        let big = "x".repeat(OUTPUT_BATCH_BYTES);
+        assert_eq!(next_batch(&rx, big.clone(), false), big);
+        assert_eq!(rx.try_recv().unwrap(), "y");
+    }
+
+    #[test]
+    fn next_batch_ends_on_closed_channel() {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        drop(tx);
+        assert_eq!(next_batch(&rx, "a".into(), false), "a");
+    }
+
+    struct SharedSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl Write for SharedSink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct BrokenSink;
+    impl Write for BrokenSink {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn pty_input_writes_in_enqueue_order() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let input = PtyInput::spawn(Box::new(SharedSink(buf.clone())));
+        for s in ["a", "b", "c", "d"] {
+            input.send(s.as_bytes()).unwrap();
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while buf.lock().unwrap().len() < 4 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(&*buf.lock().unwrap(), b"abcd");
+    }
+
+    #[test]
+    fn pty_input_reports_target_gone_after_writer_dies() {
+        let input = PtyInput::spawn(Box::new(BrokenSink));
+        let _ = input.send(b"x");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut res = Ok(());
+        while std::time::Instant::now() < deadline {
+            res = input.send(b"y");
+            if res.is_err() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(res, Err("target-gone".to_string()));
+    }
 
     #[test]
     fn default_shell_is_nonempty() {

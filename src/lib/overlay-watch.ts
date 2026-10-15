@@ -18,9 +18,11 @@ export function hasOpenOverlay(root: OverlayRoot): boolean {
 /**
  * DOM adapter: report overlay open/close transitions. Fires the callback
  * immediately with the current state so subscribers need no separate read.
- * Radix mounts portals as direct children of body, so a subtree childList
- * observer catches every open/close; the querySelector per mutation batch is
- * microseconds.
+ * The observer must stay subtree-wide: OVERLAY_SELECTOR also matches
+ * non-portalled role=listbox/dialog elements deep in the tree. The check is
+ * deliberately not deferred to a later frame — an open overlay must hide the
+ * native webview before it paints, or the page covers the menu. The
+ * querySelector per (microtask-batched) mutation record set is microseconds.
  */
 export function watchOverlays(cb: (open: boolean) => void): () => void {
   let last = hasOpenOverlay(document)

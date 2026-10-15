@@ -1,5 +1,4 @@
 use portable_pty::PtySize;
-use std::io::Write;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -108,17 +107,22 @@ pub async fn create_terminal(
 
 #[tauri::command]
 pub fn write_terminal(state: State<'_, AppState>, id: String, data: String) {
-    if let Some(t) = state.terminals.lock().unwrap().get_mut(&id) {
-        let _ = t.writer.write_all(data.as_bytes());
-        let _ = t.writer.flush();
+    // Enqueue only — the blocking pty write runs on the terminal's writer
+    // thread (pty::PtyInput), so a full input pipe can't freeze the UI.
+    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
+        let _ = t.input.send(data.as_bytes());
     }
 }
 
 /// Write that only lands in the PTY generation the caller pinned. Voice
 /// dictation resolves its target long before the bytes arrive; a same-id
 /// respawn (agent/cwd switch) in between must reject, not type into the new
-/// shell. The check runs under the `terminals` lock, so no respawn can slip
-/// between check and write, and the `Result` is the delivery ACK.
+/// shell. The check AND the enqueue run under the `terminals` lock, and the
+/// queue belongs to that generation, so no respawn can slip between check and
+/// write. The `Result` ACKs the enqueue: once queued the bytes either reach
+/// this generation's pty or are dropped with it as it dies. Kept synchronous
+/// (an awaited write-completion ACK would need an async command, which loses
+/// ordering against plain `write_terminal` keystrokes).
 #[tauri::command]
 pub fn write_terminal_checked(
     state: State<'_, AppState>,
@@ -126,13 +130,10 @@ pub fn write_terminal_checked(
     expected_spawn_id: String,
     data: String,
 ) -> Result<(), String> {
-    let mut terminals = state.terminals.lock().map_err(|e| e.to_string())?;
-    let t = terminals.get_mut(&id).ok_or("target-gone")?;
+    let terminals = state.terminals.lock().map_err(|e| e.to_string())?;
+    let t = terminals.get(&id).ok_or("target-gone")?;
     crate::voice::check_generation(&t.spawn_id, &expected_spawn_id)?;
-    t.writer
-        .write_all(data.as_bytes())
-        .and_then(|_| t.writer.flush())
-        .map_err(|e| format!("write-failed: {e}"))
+    t.input.send(data.as_bytes())
 }
 
 #[tauri::command]
@@ -222,15 +223,18 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
 /// process matching its agent id lives below the pane's shell. Used by the
 /// handoff delivery right before paste and before Enter. Any doubt (unknown
 /// pane, no pid, snapshot failure, non-Windows) answers `false`.
+///
+/// Async + blocking pool: the process snapshot costs tens of ms on Windows and
+/// a sync command would run it on the main (UI) thread.
 #[tauri::command]
-pub fn terminal_agent_alive(state: State<'_, AppState>, id: String) -> bool {
+pub async fn terminal_agent_alive(app: AppHandle, id: String) -> bool {
     // Copy what we need and drop the lock before the (slower) OS snapshot.
-    let (pid, agent_id) = match state.terminals.lock().unwrap().get(&id) {
+    let (pid, agent_id) = match app.state::<AppState>().terminals.lock().unwrap().get(&id) {
         Some(t) => (t.pid, t.agent_id.clone()),
         None => return false,
     };
     let Some(pid) = pid else { return false };
-    match crate::agent_process::snapshot() {
+    tauri::async_runtime::spawn_blocking(move || match crate::agent_process::snapshot() {
         Some(procs) => crate::agent_process::agent_alive_in(
             &procs,
             pid,
@@ -238,7 +242,9 @@ pub fn terminal_agent_alive(state: State<'_, AppState>, id: String) -> bool {
             crate::agent_process::command_line,
         ),
         None => false,
-    }
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Renderer → Rust mirror of a pane's agent display state (`working` /
@@ -269,9 +275,12 @@ pub fn report_agent_state(state: State<'_, AppState>, id: String, display: Strin
     }
 }
 
+/// Async: the first call probes PATH for shells; keep that off the UI thread.
 #[tauri::command]
-pub fn list_available_shells() -> Vec<crate::shell::ShellEntry> {
-    crate::shell::list_shells().to_vec()
+pub async fn list_available_shells() -> Vec<crate::shell::ShellEntry> {
+    tauri::async_runtime::spawn_blocking(|| crate::shell::list_shells().to_vec())
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -279,9 +288,13 @@ pub fn windows_build_number() -> Option<u32> {
     crate::shell::windows_build_number()
 }
 
+/// Async: walks PATH × PATHEXT per agent and, on first call, spawns `codex`
+/// to probe hook support (up to 3 s) — a sync command froze the UI for that.
 #[tauri::command]
-pub fn list_available_agents() -> Vec<crate::agents::AgentEntry> {
-    crate::agents::list_agents()
+pub async fn list_available_agents() -> Vec<crate::agents::AgentEntry> {
+    tauri::async_runtime::spawn_blocking(crate::agents::list_agents)
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -292,7 +305,7 @@ pub async fn list_agent_sessions(
 ) -> Vec<crate::sessions::SessionEntry> {
     crate::sessions::list_all(
         folder,
-        crate::accounts::list(&app).unwrap_or_default(),
+        accounts_blocking(app).await.unwrap_or_default(),
         account_id,
     )
     .await
@@ -310,7 +323,7 @@ pub async fn read_agent_thread(
     crate::sessions::read_thread(
         agent_id,
         session_id,
-        crate::accounts::list(&app).unwrap_or_default(),
+        accounts_blocking(app).await.unwrap_or_default(),
         account_id,
     )
     .await
@@ -326,7 +339,15 @@ pub async fn inspect_saved_workspace(
     files_main_only(&window)?;
     // A broken/unreadable account store is not evidence of deleted accounts.
     // Refuse restoration instead of clearing valid profile/session references.
-    crate::sessions::inspect_saved(cwd, panes, crate::accounts::list(&app)?).await
+    crate::sessions::inspect_saved(cwd, panes, accounts_blocking(app).await?).await
+}
+
+/// `accounts::list` does file IO under a std mutex; run it on the blocking
+/// pool instead of an async worker.
+async fn accounts_blocking(app: AppHandle) -> Result<Vec<crate::accounts::AgentAccount>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::accounts::list(&app))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Install or remove Claude Code's `statusLine` entry. Driven from the renderer
@@ -486,18 +507,31 @@ pub async fn ensure_repo_with_commit(app: AppHandle, path: String) -> Result<(),
 /// Resolve a path candidate the renderer found in terminal output. Returns the
 /// canonical path as a string, or `None` when it does not name an existing file
 /// — in which case the renderer does not draw a link.
+///
+/// Async: `canonicalize` can take long on network drives / under AV hooks, and
+/// it runs per link candidate the renderer finds.
 #[tauri::command]
-pub fn resolve_path_link(cwd: String, candidate: String) -> Option<String> {
-    crate::links::resolve_candidate(std::path::Path::new(&cwd), &candidate)
-        .map(|p| p.to_string_lossy().into_owned())
+pub async fn resolve_path_link(cwd: String, candidate: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::links::resolve_candidate(std::path::Path::new(&cwd), &candidate)
+            .map(|p| p.to_string_lossy().into_owned())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Folder counterpart of [`resolve_path_link`]: canonical path of an existing
 /// directory, or `None`.
 #[tauri::command]
-pub fn resolve_dir_link(cwd: String, candidate: String) -> Option<String> {
-    crate::links::resolve_dir_candidate(std::path::Path::new(&cwd), &candidate)
-        .map(|p| p.to_string_lossy().into_owned())
+pub async fn resolve_dir_link(cwd: String, candidate: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::links::resolve_dir_candidate(std::path::Path::new(&cwd), &candidate)
+            .map(|p| p.to_string_lossy().into_owned())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// One level of subfolders for the in-app folder picker; `""` lists drive

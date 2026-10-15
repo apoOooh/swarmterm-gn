@@ -52,7 +52,9 @@ export function BrowserColumn(): ReactElement {
     const ro = new ResizeObserver(sync)
     ro.observe(el)
     window.addEventListener('resize', sync)
-    const backstop = window.setInterval(sync, 500)
+    // Skipped while the window is hidden: nothing can move, and the forced
+    // layout from getBoundingClientRect would be wasted.
+    const backstop = window.setInterval(() => { if (document.visibilityState === 'visible') sync() }, 500)
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()

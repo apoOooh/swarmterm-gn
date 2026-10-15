@@ -27,8 +27,10 @@ const rowHeight = 26
 const basename = (path: string): string => path.replace(/\\/g, '/').split('/').pop() ?? path
 
 export function FileExplorer(): React.ReactElement {
-  const state = useAppStore()
-  const ws = state.workspaces.find((w) => w.id === state.activeWorkspaceId)
+  // Narrow selectors: the whole-store subscription re-rendered the explorer on
+  // every app tick (focus, titles, drop targets, layout drags).
+  const ws = useAppStore((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId))
+  const welcomeFocused = useAppStore((s) => s.welcomeFocused)
   const leaf = ws ? focusedVisibleLeaf(ws) : undefined
   const explorer = useExplorerStore()
   const root = explorer.current ? explorer.roots[explorer.current] : undefined
@@ -41,7 +43,7 @@ export function FileExplorer(): React.ReactElement {
   const busyOperation = useRef<string | null>(null)
   const typeahead = useRef({ text: '', time: 0 })
   const documentError = useDocumentStore((s) => s.error)
-  const terminalId = state.welcomeFocused ? null : leaf?.terminalId ?? null
+  const terminalId = welcomeFocused ? null : leaf?.terminalId ?? null
   const configuredRoot = leaf?.cwd ?? ws?.cwd
   useEffect(() => { void useExplorerStore.getState().follow(terminalId, configuredRoot) }, [terminalId, configuredRoot])
   useEffect(() => {
@@ -133,7 +135,7 @@ export function FileExplorer(): React.ReactElement {
       const snapshotIds = result.snapshots.filter((s) => result.removed.includes(s.path)).map((s) => s.id)
       if (snapshotIds.length) useExplorerStore.getState().remember({ type: 'removed', context, snapshotIds })
       useDocumentStore.getState().removePaths(result.removed)
-      useDocumentStore.getState().collect(new Set(state.workspaces.flatMap((w) => collectLeaves(w.layout).map((l) => l.id))))
+      useDocumentStore.getState().collect(new Set(useAppStore.getState().workspaces.flatMap((w) => collectLeaves(w.layout).map((l) => l.id))))
       useExplorerStore.getState().select(context.id, [], context.root)
       useExplorerStore.setState({ notice: result.warnings.length ? result.warnings.join('\n') : `Deleted ${result.removed.length} item(s). Restore from local history or press ${isMacPlatform() ? 'Cmd' : 'Ctrl'}+Z.` })
     })

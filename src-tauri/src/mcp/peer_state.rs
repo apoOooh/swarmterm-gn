@@ -204,14 +204,18 @@ impl ScreenTail {
             return;
         }
         self.buf.push_str(s);
-        if self.buf.len() > self.cap {
+        // Trim only past 2× cap: draining down to `cap` on every push memmoved
+        // the whole tail per output chunk once it was full. Readers still see
+        // at most `cap` bytes via `as_str`.
+        if self.buf.len() > 2 * self.cap {
             let cut = ceil_char_boundary(&self.buf, self.buf.len() - self.cap);
             self.buf.drain(..cut);
         }
     }
 
     pub fn as_str(&self) -> &str {
-        &self.buf
+        let start = ceil_char_boundary(&self.buf, self.buf.len().saturating_sub(self.cap));
+        &self.buf[start..]
     }
 }
 
@@ -400,6 +404,17 @@ mod tests {
         assert!(s.len() <= 5, "len {} exceeds cap", s.len());
         assert!(s.chars().count() > 0);
         assert!(s.is_char_boundary(0));
+    }
+
+    #[test]
+    fn screen_tail_stays_bounded_across_many_pushes() {
+        let mut t = ScreenTail::new(4);
+        for c in ["ab", "cd", "ef", "gh", "ij", "kl"] {
+            t.push(c);
+            assert!(t.as_str().len() <= 4);
+            assert!(t.buf.len() <= 2 * 4 + 2);
+        }
+        assert_eq!(t.as_str(), "ijkl");
     }
 
     #[test]
