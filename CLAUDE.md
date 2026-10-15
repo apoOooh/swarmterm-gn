@@ -123,6 +123,12 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
 - **Windows process-tree teardown.** Shells are captured in a kill-on-close **Job
   Object** so closing a pane/workspace kills children/grandchildren, not just the
   shell. See `pty.rs::job`.
+  Closing is graceful first (`ManagedTerminal::shutdown`): the pseudo console is
+  closed so agents get CTRL_CLOSE_EVENT and run their exit handlers, and the job
+  is terminated only after `KILL_GRACE` (3 s). A hard kill makes Claude Code
+  count a failed fullscreen start and disable fullscreen machine-wide. Note
+  `Exit` fires when the PTY closes, so a same-id respawn may briefly overlap the
+  old tree's clean exit.
 - **UTF-8 chunk boundaries.** `take_valid_utf8` buffers a split trailing multibyte
   sequence across reads to avoid mojibake (emoji/box-drawing). Don't "simplify" it
   into a lossy decode.

@@ -207,12 +207,19 @@ impl ManagedTerminal {
                 let _ = killer.kill();
                 return None;
             };
-            drop(writer);
-            // ClosePseudoConsole: delivers CTRL_CLOSE_EVENT and closes the
-            // output pipe, so the reader sees EOF and emits Exit as before.
-            drop(master);
+            // The deadline starts now and is enforced by its own thread: on
+            // pre-24H2 conhost, ClosePseudoConsole can block until the clients
+            // detach, so the close runs off the caller's (command/quit) thread
+            // and can never delay the hard kill past KILL_GRACE.
+            let deadline = std::time::Instant::now() + KILL_GRACE;
+            let job = Arc::new(job);
+            std::thread::spawn(move || {
+                drop(writer);
+                // ClosePseudoConsole: delivers CTRL_CLOSE_EVENT and closes the
+                // output pipe, so the reader sees EOF and emits Exit as before.
+                drop(master);
+            });
             Some(std::thread::spawn(move || {
-                let deadline = std::time::Instant::now() + KILL_GRACE;
                 while std::time::Instant::now() < deadline
                     && job.active_processes().is_some_and(|n| n > 0)
                 {
