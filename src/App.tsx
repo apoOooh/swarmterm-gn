@@ -77,7 +77,7 @@ import { useDocumentStore } from '@/store/document-store'
 import { useExplorerStore } from '@/store/explorer-store'
 import { onFileChange } from '@/tauri/files'
 import { registerCloseGuard } from '@/lib/close-guard'
-import { confirmQuit, onQuitRequested } from '@/tauri/app'
+import { confirmQuit, onMcpServerExited, onQuitRequested, onVoicePipeError, onVoicePipeRecovered } from '@/tauri/app'
 import { RightPanel } from '@/components/RightPanel/RightPanel'
 import { Navbar } from '@/components/Navbar/Navbar'
 import { SettingsView } from '@/components/Settings/SettingsView'
@@ -127,6 +127,7 @@ import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
 import { cleanupWhenResolved } from '@/lib/listener-cleanup'
 import { staleKeys } from '@/lib/stale-sweep'
+import { VOICE_ALERT_ID, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
 
 // Platform never changes at runtime, so a module-level constant is fine.
 const isMac = isMacPlatform()
@@ -796,6 +797,17 @@ export default function App(): ReactElement {
       useWarRoomStore.subscribe((s, p) => { if (s.membersByRoom !== p.membersByRoom) sweepWarRoom() })
     ]
     return () => { for (const u of unsubs) u() }
+  }, [])
+
+  // Backend service failures surface in the notification center (bell).
+  useEffect(() => {
+    const center = useNotificationCenterStore.getState
+    const cleanups = [
+      cleanupWhenResolved(onMcpServerExited((reason) => center().add(mcpExitedEntry(reason, Date.now()))), 'mcp:server-exited'),
+      cleanupWhenResolved(onVoicePipeError((p) => center().add(voicePipeErrorEntry(p, Date.now()))), 'voice:pipe-error'),
+      cleanupWhenResolved(onVoicePipeRecovered(() => center().markTerminalRead(VOICE_ALERT_ID, ['backend'])), 'voice:pipe-recovered')
+    ]
+    return () => { for (const c of cleanups) c() }
   }, [])
 
   // Wire MCP preview:open events to the per-terminal preview. Background

@@ -19,7 +19,8 @@ const KIND_ICON: Record<CenterKind, { icon: typeof Bell; className: string }> = 
   handoff: { icon: ArrowRightLeft, className: 'text-[#3794FF]' },
   prompt: { icon: MessageSquareText, className: 'text-[#3794FF]' },
   routine: { icon: CalendarClock, className: 'text-[#3794FF]' },
-  dictation: { icon: Mic, className: 'text-[#E5C07B]' }
+  dictation: { icon: Mic, className: 'text-[#E5C07B]' },
+  backend: { icon: AlertCircle, className: 'text-[#F14C4C]' }
 }
 
 interface Target {
