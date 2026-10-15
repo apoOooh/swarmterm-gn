@@ -19,7 +19,7 @@
 use std::ffi::c_void;
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tokio::sync::{mpsc, watch};
@@ -116,6 +116,7 @@ async fn accept_loop(
     // transient create failure) must not end dictation for the whole session:
     // log, back off, rebuild the instance and keep accepting until `stop`.
     let mut backoff = BACKOFF_MIN;
+    let mut failing = false;
     loop {
         let connected = tokio::select! {
             _ = stop.changed() => return,
@@ -127,24 +128,40 @@ async fn accept_loop(
         match (connected, next) {
             (Ok(()), Ok(next)) => {
                 backoff = BACKOFF_MIN;
+                if std::mem::take(&mut failing) {
+                    let _ = app.emit("voice:pipe-recovered", ());
+                }
                 let conn = std::mem::replace(&mut server, next);
                 tauri::async_runtime::spawn(serve(app.clone(), token.clone(), conn, stop.clone()));
                 continue;
             }
             // The failed instance is discarded; the fresh one takes over.
             (Err(e), Ok(next)) => {
-                eprintln!("voice: {e}");
+                pipe_error(&app, &e);
                 server = next;
             }
             // No replacement: keep the current instance and retry later.
-            (_, Err(e)) => eprintln!("voice: {e}"),
+            (_, Err(e)) => pipe_error(&app, &e),
         }
+        // Every failure passes through exactly one backoff sleep below, so
+        // the renderer sees at most one `voice:pipe-error` per cycle.
+        failing = true;
         tokio::select! {
             _ = stop.changed() => return,
             _ = tokio::time::sleep(backoff) => {}
         }
         backoff = (backoff * 2).min(BACKOFF_MAX);
     }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PipeError<'a> {
+    message: &'a str,
+}
+
+fn pipe_error(app: &AppHandle, message: &str) {
+    eprintln!("voice: {message}");
+    let _ = app.emit("voice:pipe-error", PipeError { message });
 }
 
 const BACKOFF_MIN: std::time::Duration = std::time::Duration::from_millis(100);
