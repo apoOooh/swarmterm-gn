@@ -4,7 +4,8 @@ Swarmterm GN supports Windows x64 only. Run the Windows checks here; retained
 macOS/Linux notes describe upstream behavior and are outside GN support.
 
 Run this by hand before a release, or after touching pty, focus, War Room or
-worktree code. Start with `npm run tauri dev`.
+worktree code. Start with `npm run tauri dev` (or `npm run tauri:dev:isolated`
+when an installed Swarmterm is running — otherwise it swallows the launch).
 
 A longer scripted War Room scenario lives in [`war-room-demo.md`](war-room-demo.md).
 

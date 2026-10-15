@@ -31,6 +31,7 @@ Run from the repo root unless noted.
 |---|---|
 | `npm install` | Install JS dependencies. |
 | `npm run tauri dev` | Run the full app (Vite HMR frontend + Rust auto-rebuild). |
+| `npm run tauri:dev:isolated` | Same, as a **separate instance** (`com.apooooh.swarmterm.gn.dev`). Use this whenever Swarmterm is already running — see below. |
 | `npm test` | Run the JS/TS unit suite (Vitest, run-once). |
 | `npm run test:watch` | Vitest in watch mode. |
 | `npx tsc --noEmit` | Type-check the whole frontend (strict). |
@@ -39,6 +40,14 @@ Run from the repo root unless noted.
 | `npm run tauri build` | Production bundle (installer). |
 | `npm run tauri build -- --no-bundle` | Release binary, skip installer. |
 | `cargo test` *(from `src-tauri/`)* | Rust unit tests (pty/shell helpers). |
+
+**Running the app from inside Swarmterm.** Swarmterm is single-instance, keyed
+on its identifier: a second launch with the same identifier is handed to the
+running app and exits, so `npm run tauri dev` silently does nothing visible
+when you (or the agent's own pane) already run Swarmterm. Agents working in a
+Swarmterm pane must use `npm run tauri:dev:isolated`, which merges
+`src-tauri/tauri.dev-instance.conf.json` (own identifier, app-data dir and
+saved workspaces; the MCP server binds a free port anyway).
 
 **Before claiming done:** run `npm test`, `npx tsc --noEmit`, and — if you
 touched `src-tauri/` — `cargo test`. Don't assert success without the output.
@@ -114,6 +123,12 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
 - **Windows process-tree teardown.** Shells are captured in a kill-on-close **Job
   Object** so closing a pane/workspace kills children/grandchildren, not just the
   shell. See `pty.rs::job`.
+  Closing is graceful first (`ManagedTerminal::shutdown`): the pseudo console is
+  closed so agents get CTRL_CLOSE_EVENT and run their exit handlers, and the job
+  is terminated only after `KILL_GRACE` (3 s). A hard kill makes Claude Code
+  count a failed fullscreen start and disable fullscreen machine-wide. Note
+  `Exit` fires when the PTY closes, so a same-id respawn may briefly overlap the
+  old tree's clean exit.
 - **UTF-8 chunk boundaries.** `take_valid_utf8` buffers a split trailing multibyte
   sequence across reads to avoid mojibake (emoji/box-drawing). Don't "simplify" it
   into a lossy decode.
