@@ -86,6 +86,36 @@ fn add_tree(
     Ok(())
 }
 
+/// Adds a lease to an already running watcher. Returns the extra paths back when
+/// the context has no watcher yet, so the caller can build one.
+fn lease_existing(
+    watchers: &std::sync::Mutex<std::collections::HashMap<String, WatchHandle>>,
+    context_id: &str,
+    extra: Vec<PathBuf>,
+) -> Result<Option<Vec<PathBuf>>, String> {
+    let mut watchers = watchers.lock().map_err(|e| e.to_string())?;
+    match watchers.get_mut(context_id) {
+        Some(handle) => {
+            handle.leases += 1;
+            for path in extra {
+                let _ = handle.extra.send(path);
+            }
+            Ok(None)
+        }
+        None => Ok(Some(extra)),
+    }
+}
+
+/// Watched directories at or below `path`. Descendants sort directly after their
+/// ancestor in a `BTreeSet<PathBuf>`, so a range scan replaces a full pass.
+fn watched_subtree(watched: &BTreeSet<PathBuf>, path: &Path) -> Vec<PathBuf> {
+    watched
+        .range(path.to_path_buf()..)
+        .take_while(|p| p.starts_with(path))
+        .cloned()
+        .collect()
+}
+
 impl FileService {
     pub fn watch(
         &self,
@@ -96,14 +126,11 @@ impl FileService {
         let root = self.root(context_id)?;
         let extra: Result<Vec<_>, _> = files.iter().map(|p| guarded(&root, p, false)).collect();
         let extra = extra?;
-        let mut watchers = self.watchers.lock().map_err(|e| e.to_string())?;
-        if let Some(handle) = watchers.get_mut(context_id) {
-            handle.leases += 1;
-            for path in extra {
-                let _ = handle.extra.send(path);
-            }
+        // Fast path: an existing watcher just gains a lease. The tree walk below runs
+        // without the lock so a large project never blocks unwatch or other contexts.
+        let Some(extra) = lease_existing(&self.watchers, context_id, extra)? else {
             return Ok(());
-        }
+        };
         let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
         let mut watcher = notify::recommended_watcher(move |e| {
             let _ = tx.send(e);
@@ -146,6 +173,15 @@ impl FileService {
         for path in extra {
             let _ = extra_tx.send(path);
         }
+        let mut watchers = self.watchers.lock().map_err(|e| e.to_string())?;
+        if let Some(handle) = watchers.get_mut(context_id) {
+            // Another call registered this context while we walked the tree; ours is dropped.
+            handle.leases += 1;
+            for path in extra_rx.try_iter() {
+                let _ = handle.extra.send(path);
+            }
+            return Ok(());
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
         let id = context_id.to_owned();
@@ -172,39 +208,34 @@ impl FileService {
                         Err(_) => break,
                     }
                 }
-                let mut paths = BTreeSet::new();
+                let mut changed = BTreeSet::new();
                 let mut error = None;
                 for event in batch {
                     match event {
                         Ok(e) => {
-                            if matches!(e.kind, EventKind::Access(_)) {
-                                continue;
-                            }
-                            for path in e.paths {
-                                // Follow newly created folders; heavy generated directories stay pruned.
-                                if !path.exists() {
-                                    let removed = watched
-                                        .iter()
-                                        .filter(|p| super::path::within(&path, p))
-                                        .cloned()
-                                        .collect::<Vec<_>>();
-                                    for removed in removed {
-                                        let _ = watcher.unwatch(&removed);
-                                        watched.remove(&removed);
-                                    }
-                                }
-                                if path.is_dir() {
-                                    if let Err(e) =
-                                        add_tree(&mut watcher, &path, &root, &mut watched)
-                                    {
-                                        error = Some(e);
-                                    }
-                                }
-                                paths.insert(display(&path));
+                            if !matches!(e.kind, EventKind::Access(_)) {
+                                changed.extend(e.paths);
                             }
                         }
                         Err(e) => error = Some(e.to_string()),
                     }
+                }
+                let mut paths = BTreeSet::new();
+                // Each distinct path is handled once per batch.
+                for path in changed {
+                    // Follow newly created folders; heavy generated directories stay pruned.
+                    if !path.exists() {
+                        for removed in watched_subtree(&watched, &path) {
+                            let _ = watcher.unwatch(&removed);
+                            watched.remove(&removed);
+                        }
+                    }
+                    if path.is_dir() {
+                        if let Err(e) = add_tree(&mut watcher, &path, &root, &mut watched) {
+                            error = Some(e);
+                        }
+                    }
+                    paths.insert(display(&path));
                 }
                 if !paths.is_empty() || error.is_some() {
                     let _ = app.emit_to(
@@ -256,6 +287,16 @@ mod tests {
         add_tree(&mut watcher, t.path(), t.path(), &mut watched).unwrap();
         assert!(watched.contains(&t.path().join("src/nested")));
         assert!(!watched.contains(&t.path().join("node_modules")));
+    }
+    #[test]
+    fn watched_subtree_returns_only_descendants() {
+        let watched: BTreeSet<PathBuf> = ["a", "a/b", "a/b/c", "a/b0", "a/c", "b"]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        let got = watched_subtree(&watched, Path::new("a/b"));
+        assert_eq!(got, vec![PathBuf::from("a/b"), PathBuf::from("a/b/c")]);
+        assert!(watched_subtree(&watched, Path::new("z")).is_empty());
     }
     #[test]
     fn native_watcher_receives_external_creation() {
