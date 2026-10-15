@@ -99,7 +99,10 @@ impl SwarmtermMcpServer {
             .unwrap_or("");
         let token = auth::bearer(header);
         let state = self.app.state::<AppState>();
-        let terminals = state.terminals.lock().unwrap();
+        let terminals = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         auth::resolve(token, |id| terminals.contains_key(id)).map_err(|e| match e {
             AuthError::Missing => rmcp::ErrorData::invalid_request("missing bearer token", None),
             AuthError::Unknown => rmcp::ErrorData::invalid_request("unknown session", None),
@@ -111,7 +114,10 @@ impl SwarmtermMcpServer {
     /// repo folder recorded at spawn time.
     pub(crate) fn worktree_ctx(&self, terminal: &TerminalId) -> Result<String, rmcp::ErrorData> {
         let state = self.app.state::<AppState>();
-        let terminals = state.terminals.lock().unwrap();
+        let terminals = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let t = terminals
             .get(&terminal.0)
             .ok_or_else(|| rmcp::ErrorData::invalid_request("unknown session", None))?;
@@ -238,7 +244,7 @@ async fn record_client(
             .state::<AppState>()
             .mcp_clients
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .touch(&token);
         // A client reaching us (usually `initialize`) is the handshake: a
         // member dragged in earlier flips to connected without first having
@@ -258,7 +264,10 @@ async fn record_client(
 fn live_caller(app: &AppHandle, headers: &HeaderMap) -> Option<String> {
     let token = auth::bearer(bearer_header(headers));
     let state = app.state::<AppState>();
-    let terminals = state.terminals.lock().unwrap();
+    let terminals = state
+        .terminals
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     auth::resolve(token, |id| terminals.contains_key(id))
         .ok()
         .map(|TerminalId(id)| id)
@@ -280,7 +289,7 @@ fn publish_context(app: &AppHandle, terminal_id: &str, pct: Option<f64>) {
         .state::<AppState>()
         .context_usage
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .record(terminal_id, pct);
     if let Some(pct) = change {
         use tauri::Emitter;
@@ -302,7 +311,7 @@ fn publish_usage(app: &AppHandle, terminal_id: &str, limits: rate_limits::RateLi
         .state::<AppState>()
         .rate_limit_usage
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .record(terminal_id, limits);
     if let Some(limits) = change {
         use tauri::Emitter;
@@ -345,7 +354,7 @@ async fn status_handler(
         .state::<AppState>()
         .mcp_clients
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .has_seen(token);
     (
         StatusCode::OK,
@@ -373,7 +382,10 @@ async fn hook_handler(
     use tauri::Emitter;
     if let Some(session) = &body.session {
         let state = app.state::<crate::pty::AppState>();
-        let terminals = state.terminals.lock().unwrap();
+        let terminals = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if terminals
             .get(&terminal_id)
             .is_some_and(|t| session.matches(&t.spawn_id, t.agent_id.as_deref()))
