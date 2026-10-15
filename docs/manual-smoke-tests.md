@@ -26,6 +26,11 @@ Do not mark them passed from the in-memory fixture alone.
       **Stacked**; drop on the bottom slot of **Stacked** → stacked, dragged pane
       at the bottom. With 3+ panes the bar also offers grid, main-left and
       main-top, and hovering a slot outlines the resulting layout.
+- [ ] Maximize a pane with 3+ panes: header has a violet bottom border, violet
+      restore button shows `+N` (floating panes counted, drawered ones not);
+      sidebar marks the maximized row, dims the others with a crossed-out eye
+      while their state dots stay bright, and the heading shows *Maximized*.
+      Clicking a dimmed row ends the zoom and clears all markers.
 - [ ] Snap/dock a zoomed pane (zoom ends), with a pane in the drawer (it stays
       parked and restores at the end), and drop a pane on a War Room tab while
       the bar is showing (still joins the room).

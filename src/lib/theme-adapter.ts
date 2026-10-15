@@ -47,7 +47,9 @@ export function themeVariables(style: Style): Record<string, string> {
     secondary: c.rail, 'secondary-foreground': c.text, muted: c.elevated, 'muted-foreground': c.textDim,
     accent: c.surfaceHover, 'accent-foreground': c.text, border: c.line, 'pane-border': c.lineSoft,
     input: c.lineSoft, ring: c.accent, destructive: '#f14c4c', 'destructive-foreground': '#ffffff',
-    broadcast: '#2dc4b2', activity: '#facb17'
+    broadcast: '#2dc4b2', activity: '#facb17',
+    // Maximized pane; violet so it never reads as the (theme-blue) focus ring.
+    zoom: '#b180f5'
   }
   for (const [name, value] of Object.entries(colors)) {
     const rgba = parseColor(value)!

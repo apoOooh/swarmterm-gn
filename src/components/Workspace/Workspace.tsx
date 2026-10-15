@@ -12,7 +12,7 @@ import { findLeaf } from '@/lib/layout-tree'
 import { AgentIcon } from '@/components/AgentIcon'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
-import { zoomedLeaf } from '@/lib/pane-zoom'
+import { zoomedLeaf, zoomHiddenCount } from '@/lib/pane-zoom'
 import { visibleLayout } from '@/lib/pane-drawer'
 import { splitsToRealign } from '@/lib/split-sync'
 import { Archive } from 'lucide-react'
@@ -70,6 +70,9 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
           }
           worktreeMode={workspace.worktreeMode}
           isZoomed={workspace.zoomedLeafId === node.id}
+          zoomHiddenCount={workspace.zoomedLeafId === node.id
+            ? zoomHiddenCount(workspace.layout, node.id, workspace.drawerLeafIds ?? [])
+            : 0}
           isFloating={isFloating}
         />
     )

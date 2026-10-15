@@ -69,6 +69,8 @@ interface TerminalPaneProps {
   worktreeMode: boolean
   /** Whether this pane is zoomed to fill its workspace. */
   isZoomed?: boolean
+  /** While zoomed: how many other panes are hidden behind this one. */
+  zoomHiddenCount?: number
   /** Whether this pane floats above the split view. */
   isFloating?: boolean
 }
@@ -88,6 +90,7 @@ export function TerminalPane({
   isBroadcastMember,
   worktreeMode,
   isZoomed = false,
+  zoomHiddenCount = 0,
   isFloating = false
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -421,6 +424,7 @@ export function TerminalPane({
         onThread={canShowThread(resolvedAgentId, leaf.sessionId) ? () => setThreadOpen(true) : undefined}
         onDrawer={() => useAppStore.getState().drawerPane(leafId)}
         isZoomed={isZoomed}
+        zoomHiddenCount={zoomHiddenCount}
         onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
         isFloating={isFloating}
         onToggleFloat={() => {

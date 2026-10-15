@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { Archive, ArchiveRestore } from 'lucide-react'
+import { Archive, ArchiveRestore, EyeOff, Maximize2 } from 'lucide-react'
 import type { LeafNode } from '@/lib/layout-tree'
 import { collectLeaves } from '@/lib/layout-tree'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
@@ -49,6 +49,9 @@ export function TerminalList(): ReactElement | null {
   // Drawer order (oldest parked first), not layout order — it is a stack of
   // things set aside, and the newest one belongs at the bottom.
   const openLeaves = leaves.filter((l) => !isDrawered(active, l.id))
+  // Mirrors Workspace: a zoom only takes effect on a docked, non-drawered pane.
+  const zoomActive = openLeaves.some((l) => l.id === active.zoomedLeafId)
+    && !(active.floating ?? []).some((r) => r.leafId === active.zoomedLeafId)
   const drawered = (active.drawerLeafIds ?? [])
     .map((id) => leaves.find((l) => l.id === id))
     .filter((l): l is LeafNode => l !== undefined)
@@ -58,6 +61,9 @@ export function TerminalList(): ReactElement | null {
     const template = templateById(agentId)
     const title = resolvePaneTitle(agentId, titles[leaf.terminalId])
     const focused = !inDrawer && leaf.id === active!.focusedLeafId
+    const zoomed = zoomActive && !inDrawer && leaf.id === active!.zoomedLeafId
+    // Open but covered by another pane's zoom; it keeps running off-screen.
+    const behindZoom = !inDrawer && !zoomed && zoomActive
     const dot = paneDot(displayState(agentStates[leaf.terminalId]), activity[leaf.terminalId] === true)
     return (
       <li key={leaf.id}>
@@ -68,17 +74,26 @@ export function TerminalList(): ReactElement | null {
             // setFocusedLeaf also pulls a drawered pane back into its slot.
             setFocusedLeaf(leaf.id)
           }}
-          title={inDrawer ? `${title} — in drawer, click to restore` : title}
+          title={inDrawer
+            ? `${title} — in drawer, click to restore`
+            : zoomed
+              ? `${title} — maximized`
+              : behindZoom ? `${title} — hidden behind the maximized pane, click to show` : title}
           className={cn(
             'theme-row group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
             focused
               ? 'bg-accent text-accent-foreground'
               : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
-            inDrawer && 'italic opacity-70 hover:opacity-100'
+            inDrawer && 'italic opacity-70 hover:opacity-100',
+            zoomed && 'border-l-2 border-zoom pl-1.5'
           )}
         >
-          <AgentIcon template={template} className="h-3.5 w-3.5 shrink-0" />
-          <span className="flex-1 truncate">{title}</span>
+          {/* Dim only icon + title of a covered pane: its state dot stays at full
+              strength so an agent needing input behind the zoom still shows. */}
+          <AgentIcon template={template} className={cn('h-3.5 w-3.5 shrink-0', behindZoom && 'opacity-50')} />
+          <span className={cn('flex-1 truncate', behindZoom && 'opacity-50')}>{title}</span>
+          {zoomed && <Maximize2 aria-label="Maximized" className="h-3 w-3 shrink-0 text-zoom" />}
+          {behindZoom && <EyeOff aria-label="Hidden behind maximized pane" className="h-3 w-3 shrink-0 opacity-60" />}
           {(agentId === 'claude-code' || agentId === 'codex') && <span className="max-w-20 truncate text-[10px]" title={`Account: ${accountLabel(leaf.accountId, accounts)}`}>{accountLabel(leaf.accountId, accounts)}</span>}
           {dot !== null && (dot === 'activity'
             ? <ActivityDot />
@@ -116,6 +131,11 @@ export function TerminalList(): ReactElement | null {
     <div className="flex min-h-0 flex-1 flex-col border-t border-border">
       <p className="shrink-0 border-b border-border bg-muted/40 px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-foreground/80">
         Terminals
+        {zoomActive && (
+          <span className="ml-2 rounded bg-zoom/15 px-1 py-px text-[10px] normal-case tracking-normal text-zoom">
+            Maximized
+          </span>
+        )}
       </p>
       <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
         {openLeaves.map((leaf) => renderRow(leaf, false))}
