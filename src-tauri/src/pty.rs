@@ -650,6 +650,7 @@ pub fn spawn_terminal(
     });
 
     let waiter_spawn_id = spawn_id.clone();
+    let reader_spawn_id = spawn_id.clone();
     state.terminals.lock().unwrap().insert(
         id.clone(),
         ManagedTerminal {
@@ -708,7 +709,7 @@ pub fn spawn_terminal(
 
     let app = app.clone();
     std::thread::spawn(move || {
-        read_loop(app, id, reader, exit_rx, on_data);
+        read_loop(app, id, reader_spawn_id, reader, exit_rx, on_data);
     });
 
     CreateTerminalResult {
@@ -739,10 +740,25 @@ fn next_batch(rx: &std::sync::mpsc::Receiver<String>, mut text: String, idle: bo
     text
 }
 
+/// Remove `id` only if it still belongs to this generation. Returns the removed
+/// entry and whether a different generation now holds the id (superseded).
+fn remove_generation<T>(
+    map: &mut HashMap<String, T>,
+    id: &str,
+    is_own: impl Fn(&T) -> bool,
+) -> (Option<T>, bool) {
+    match map.get(id) {
+        Some(t) if is_own(t) => (map.remove(id), false),
+        Some(_) => (None, true),
+        None => (None, false),
+    }
+}
+
 /// Blocking read loop: stream decoded output, then wait for exit and clean up.
 fn read_loop(
     app: AppHandle,
     id: String,
+    spawn_id: String,
     mut reader: Box<dyn Read + Send>,
     exit_rx: std::sync::mpsc::Receiver<i32>,
     on_data: Channel<PtyOut>,
@@ -808,8 +824,16 @@ fn read_loop(
 
     // Remove from the registry BEFORE notifying the renderer: a retry triggered by
     // the exit event must find the id free, since create rejects a duplicate live id.
-    if let Some(state) = app.try_state::<AppState>() {
-        state.terminals.lock().unwrap().remove(&id);
+    // A same-id respawn that did not wait for our Exit owns the slot now: leave
+    // its entry and its per-id state alone (mirrors the waiter's spawn_id check).
+    let superseded = app.try_state::<AppState>().is_some_and(|state| {
+        let mut map = state.terminals.lock().unwrap();
+        let (removed, superseded) = remove_generation(&mut map, &id, |t| t.spawn_id == spawn_id);
+        drop(map);
+        drop(removed);
+        superseded
+    });
+    if let Some(state) = app.try_state::<AppState>().filter(|_| !superseded) {
         state.mcp_clients.lock().unwrap().forget(&id);
         // Same-id respawn must start from "no data", not its predecessor's %.
         state.context_usage.lock().unwrap().forget(&id);
@@ -852,6 +876,19 @@ fn read_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remove_generation_spares_a_respawned_entry() {
+        let mut map = HashMap::from([("t".to_string(), "new".to_string())]);
+        // Old generation's reader finishing after a same-id respawn.
+        let (removed, superseded) = remove_generation(&mut map, "t", |g| g == "old");
+        assert!(removed.is_none() && superseded);
+        assert!(map.contains_key("t"));
+        let (removed, superseded) = remove_generation(&mut map, "t", |g| g == "new");
+        assert_eq!(removed.as_deref(), Some("new"));
+        assert!(!superseded && map.is_empty());
+        assert_eq!(remove_generation(&mut map, "t", |_| true), (None, false));
+    }
 
     #[test]
     fn next_batch_joins_queued_chunks_in_order() {
