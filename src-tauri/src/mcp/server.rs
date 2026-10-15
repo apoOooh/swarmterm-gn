@@ -240,12 +240,20 @@ async fn record_client(
         .and_then(|h| h.to_str().ok())
     {
         let token = auth::bearer(header).to_owned();
-        let first = app
-            .state::<AppState>()
-            .mcp_clients
+        let state = app.state::<AppState>();
+        // Only live pane ids are recorded: `seen` is pruned per PTY, so an
+        // arbitrary loopback token would otherwise stay in it forever.
+        let live = state
+            .terminals
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .touch(&token);
+            .contains_key(token.trim());
+        let first = live
+            && state
+                .mcp_clients
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .touch(&token);
         // A client reaching us (usually `initialize`) is the handshake: a
         // member dragged in earlier flips to connected without first having
         // to call a war_room tool (SWA-30). The token is only trusted as a
