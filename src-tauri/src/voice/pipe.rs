@@ -116,7 +116,7 @@ async fn accept_loop(
     // transient create failure) must not end dictation for the whole session:
     // log, back off, rebuild the instance and keep accepting until `stop`.
     let mut backoff = BACKOFF_MIN;
-    let mut failing = false;
+    let mut health = PipeHealth::default();
     loop {
         let connected = tokio::select! {
             _ = stop.changed() => return,
@@ -125,10 +125,10 @@ async fn accept_loop(
         // Open the next instance before serving this one, so a client never
         // finds the name missing between connections.
         let next = create(&name, false, &sd);
-        match (connected, next) {
+        let rebuilt = match (connected, next) {
             (Ok(()), Ok(next)) => {
                 backoff = BACKOFF_MIN;
-                if std::mem::take(&mut failing) {
+                if health.connected() {
                     let _ = app.emit("voice:pipe-recovered", ());
                 }
                 let conn = std::mem::replace(&mut server, next);
@@ -139,18 +139,51 @@ async fn accept_loop(
             (Err(e), Ok(next)) => {
                 pipe_error(&app, &e);
                 server = next;
+                true
             }
             // No replacement: keep the current instance and retry later.
-            (_, Err(e)) => pipe_error(&app, &e),
-        }
+            (_, Err(e)) => {
+                pipe_error(&app, &e);
+                false
+            }
+        };
         // Every failure passes through exactly one backoff sleep below, so
         // the renderer sees at most one `voice:pipe-error` per cycle.
-        failing = true;
+        health.failed();
         tokio::select! {
             _ = stop.changed() => return,
             _ = tokio::time::sleep(backoff) => {}
         }
         backoff = (backoff * 2).min(BACKOFF_MAX);
+        // A fresh instance is listening again: report recovery now rather
+        // than waiting for the next client to connect.
+        if health.after_backoff(rebuilt) {
+            let _ = app.emit("voice:pipe-recovered", ());
+        }
+    }
+}
+
+/// Decides when `voice:pipe-recovered` fires: exactly once after a failure
+/// streak, as soon as a usable instance is listening again.
+#[derive(Default)]
+struct PipeHealth {
+    failing: bool,
+}
+
+impl PipeHealth {
+    fn failed(&mut self) {
+        self.failing = true;
+    }
+
+    /// After the backoff sleep; `rebuilt` = this cycle created a fresh
+    /// instance. True means "emit recovered".
+    fn after_backoff(&mut self, rebuilt: bool) -> bool {
+        rebuilt && std::mem::take(&mut self.failing)
+    }
+
+    /// A client connected and the next instance was created.
+    fn connected(&mut self) -> bool {
+        std::mem::take(&mut self.failing)
     }
 }
 
@@ -364,5 +397,44 @@ mod security {
             LocalFree(wide.cast());
             Ok(sid)
         }
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::PipeHealth;
+
+    #[test]
+    fn recovers_once_after_rebuild() {
+        let mut h = PipeHealth::default();
+        h.failed();
+        assert!(h.after_backoff(true));
+        // Already reported: neither a later rebuild nor a connect re-emits.
+        assert!(!h.after_backoff(true));
+        assert!(!h.connected());
+    }
+
+    #[test]
+    fn no_recovery_without_fresh_instance() {
+        let mut h = PipeHealth::default();
+        h.failed();
+        assert!(!h.after_backoff(false));
+        h.failed();
+        assert!(h.after_backoff(true));
+    }
+
+    #[test]
+    fn connect_after_failed_rebuild_recovers() {
+        let mut h = PipeHealth::default();
+        h.failed();
+        assert!(!h.after_backoff(false));
+        assert!(h.connected());
+    }
+
+    #[test]
+    fn healthy_pipe_never_emits() {
+        let mut h = PipeHealth::default();
+        assert!(!h.connected());
+        assert!(!h.after_backoff(true));
     }
 }
