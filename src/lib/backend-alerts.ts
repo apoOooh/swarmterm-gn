@@ -17,3 +17,20 @@ export function mcpExitedEntry(reason: string, at: number): NewCenterEntry {
 export function voicePipeErrorEntry(payload: { message?: string } | null | undefined, at: number): NewCenterEntry {
   return { kind: 'backend', terminalId: VOICE_ALERT_ID, title: 'Voice input failed', detail: payload?.message ?? '', at }
 }
+
+export const INPUT_ALERT_ID = 'backend:input'
+
+/**
+ * A pane's pty input queue was full (the program stopped reading) and a write
+ * was dropped. Not filed under the pane's own id: an `attention` entry there
+ * would replace the agent's real "needs attention" entry.
+ */
+export function inputDroppedEntry(paneLabel: string, at: number): NewCenterEntry {
+  return {
+    kind: 'backend',
+    terminalId: INPUT_ALERT_ID,
+    title: 'Input dropped',
+    detail: `${paneLabel} is not reading input; the last paste or keystrokes were not sent`,
+    at
+  }
+}

@@ -36,8 +36,26 @@ export function createTerminal(
   return invoke<CreateTerminalResult>('create_terminal', { id, options, onData })
 }
 
+let inputDropped: ((id: string) => void) | undefined
+
+/** Register who tells the user that a pane's input was dropped (queue full). */
+export function setInputDroppedHandler(handler: ((id: string) => void) | undefined): void {
+  inputDropped = handler
+}
+
+/**
+ * Enqueue input for a pty. Never rejects: callers fire and forget. A full
+ * input queue (the pane stopped reading) is reported through the registered
+ * handler; any other failure (pane already gone) is ignored as before.
+ */
 export const writeTerminal = (id: string, data: string): Promise<void> =>
-  invoke('write_terminal', { id, data })
+  invoke<void>('write_terminal', { id, data }).catch((err: unknown) => {
+    if (isInputQueueFull(err)) inputDropped?.(id)
+  })
+
+export function isInputQueueFull(err: unknown): boolean {
+  return String(err) === 'input-queue-full'
+}
 
 export const resizeTerminal = (id: string, cols: number, rows: number): Promise<void> =>
   invoke('resize_terminal', { id, cols, rows })

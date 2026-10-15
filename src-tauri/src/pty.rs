@@ -179,6 +179,9 @@ pub struct PtyInput {
 /// Upper bound on bytes waiting for one pty's writer thread.
 const INPUT_QUEUE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
+/// Slice size for the writer thread's pty writes.
+const WRITE_CHUNK: usize = 64 * 1024;
+
 impl PtyInput {
     pub fn spawn(writer: Box<dyn Write + Send>) -> Self {
         Self::with_cap(writer, INPUT_QUEUE_MAX_BYTES)
@@ -195,10 +198,19 @@ impl PtyInput {
                 while let Ok(more) = rx.try_recv() {
                     bytes.extend_from_slice(&more);
                 }
-                let written = writer.write_all(&bytes).and_then(|_| writer.flush());
-                // Released only once written, so a stuck write still counts.
-                drained.fetch_sub(bytes.len(), Ordering::AcqRel);
-                if written.is_err() {
+                // Written in slices so a big paste frees its queue budget as
+                // it drains, not only after the very last byte. Budget is
+                // released only once written, so a stuck write still counts.
+                let mut written = Ok(());
+                for chunk in bytes.chunks(WRITE_CHUNK) {
+                    written = writer.write_all(chunk);
+                    if written.is_err() {
+                        break;
+                    }
+                    drained.fetch_sub(chunk.len(), Ordering::AcqRel);
+                }
+                if written.and_then(|_| writer.flush()).is_err() {
+                    // The pipe is gone: later sends fail with "target-gone".
                     break;
                 }
             }
@@ -208,12 +220,15 @@ impl PtyInput {
 
     /// Queue bytes for the pty. Err "target-gone" when the writer thread is
     /// gone (pipe closed), "input-queue-full" when the pty is not draining.
+    /// An empty queue always accepts one write, however big: the cap guards
+    /// against a pty that stopped reading, not against one large paste into
+    /// an idle pane (the writer thread drains it in `WRITE_CHUNK` slices).
     pub fn send(&self, data: &[u8]) -> Result<(), String> {
         use std::sync::atomic::Ordering;
         let len = data.len();
         self.queued
             .try_update(Ordering::AcqRel, Ordering::Acquire, |q| {
-                (q + len <= self.cap).then_some(q + len)
+                (q == 0 || q + len <= self.cap).then_some(q + len)
             })
             .map_err(|_| "input-queue-full".to_string())?;
         self.tx.send(data.to_vec()).map_err(|_| {
@@ -696,7 +711,9 @@ pub fn spawn_terminal(
     // arrive immediately and must never race the terminal registration.
     if let Some(line) = initial_line {
         if let Some(terminal) = state.terminals.lock().unwrap().get_mut(&id) {
-            let _ = terminal.input.send(line.as_bytes());
+            if let Err(e) = terminal.input.send(line.as_bytes()) {
+                eprintln!("[pty] initial command for {id} dropped: {e}");
+            }
         }
     }
 
@@ -1012,6 +1029,27 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(res, Ok(()));
+    }
+
+    #[test]
+    fn pty_input_accepts_one_oversized_write_on_an_idle_queue() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let input = PtyInput::with_cap(Box::new(SharedSink(buf.clone())), 4);
+        let big = vec![b'x'; WRITE_CHUNK * 3 + 7];
+        assert_eq!(input.send(&big), Ok(()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while buf.lock().unwrap().len() < big.len() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(buf.lock().unwrap().len(), big.len());
+    }
+
+    #[test]
+    fn pty_input_oversized_write_still_blocks_followups_while_stuck() {
+        let (_release, gate) = std::sync::mpsc::channel::<()>();
+        let input = PtyInput::with_cap(Box::new(StuckSink(gate)), 4);
+        assert_eq!(input.send(b"0123456789"), Ok(()));
+        assert_eq!(input.send(b"e"), Err("input-queue-full".to_string()));
     }
 
     #[test]
