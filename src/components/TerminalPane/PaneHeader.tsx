@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2, Archive, PictureInPicture2, ClipboardList, MessagesSquare, MoreHorizontal } from 'lucide-react'
+import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2, Archive, PictureInPicture2, ClipboardList, MessagesSquare, MoreHorizontal, Mic, Loader2 } from 'lucide-react'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 import { AgentIcon } from '@/components/AgentIcon'
 import { Button } from '@/components/ui/button'
@@ -58,6 +58,11 @@ interface PaneHeaderProps {
   onThread?: () => void
   /** Park the pane in the workspace drawer (hidden, kept running). */
   onDrawer: () => void
+  /**
+   * Built-in speech (SWA-38); absent ⇒ no button (Voice off, no model).
+   * `phase` is this pane's dictation phase, `idle` when it has none.
+   */
+  dictation?: { phase: 'idle' | 'recording' | 'transcribing'; onToggle: () => void }
   isZoomed: boolean
   /** While zoomed: how many other panes are hidden behind this one. */
   zoomHiddenCount?: number
@@ -496,6 +501,30 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
         className={cn(props.isBroadcastMember && 'text-broadcast')}
       >
         <Radio className="h-3.5 w-3.5" />
+      </Button>
+    ))
+  }
+  if (props.dictation) {
+    const { phase, onToggle } = props.dictation
+    const label = phase === 'recording' ? 'Stop dictation and insert' : phase === 'transcribing' ? 'Transcribing…' : 'Dictate into this pane'
+    iconButton('dictate', 13, (
+      <Button
+        key="dictate"
+        variant="ghost"
+        size="icon-sm"
+        title={`${label} (Ctrl+Shift+Space)`}
+        aria-label={label}
+        aria-pressed={phase === 'recording'}
+        disabled={phase === 'transcribing'}
+        // The click must leave the keyboard on the terminal: Rust pins the
+        // pane that owns it when recording starts.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onToggle}
+        className={cn(phase === 'recording' && 'text-[#ef4444] hover:text-[#ef4444]')}
+      >
+        {phase === 'transcribing'
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          : <Mic className={cn('h-3.5 w-3.5', phase === 'recording' && 'animate-pulse')} />}
       </Button>
     ))
   }

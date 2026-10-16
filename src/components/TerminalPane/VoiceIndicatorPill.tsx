@@ -8,10 +8,16 @@
 import type { ReactElement } from 'react'
 import { Mic } from 'lucide-react'
 import { useVoiceIndicatorStore } from '@/store/voice-indicator-store'
+import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import { voiceIndicatorStop } from '@/tauri/voice'
 
 export function VoiceIndicatorPill({ terminalId }: { terminalId: string }): ReactElement | null {
   const pin = useVoiceIndicatorStore((s) => s.byTerminal[terminalId])
+  // The built-in source (SWA-38) keeps its pin while whisper runs; say so
+  // instead of "Listening…" once the microphone is already closed.
+  const transcribing = useVoiceDictationStore(
+    (s) => s.dictation.terminalId === terminalId && s.dictation.phase === 'transcribing'
+  )
   if (pin === undefined) return null
   return (
     <div
@@ -20,7 +26,7 @@ export function VoiceIndicatorPill({ terminalId }: { terminalId: string }): Reac
       className="absolute bottom-2 left-3 z-10 flex items-center gap-1.5 rounded-full border border-[#ef4444]/50 bg-card/95 px-2.5 py-1 text-[11px] text-muted-foreground shadow-lg"
     >
       <Mic className="h-3 w-3 shrink-0 animate-pulse text-[#ef4444]" aria-hidden />
-      Listening…
+      {transcribing ? 'Transcribing…' : 'Listening…'}
       <button
         data-no-dnd
         // Clicking must not pull DOM focus off the terminal; keyboard users
