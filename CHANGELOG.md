@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [1.14.2] - 2026-10-16
+
+- Files: live refresh holds one watch on the explorer root instead of one
+  per folder, so folders below it can be renamed and moved again while the
+  tree is open (Windows refused with "Access denied"). After heavy file
+  churn the tree re-reads its open folders.
+
 ## [1.14.1] - 2026-10-16
 
 - Claude Code hooks and status line: a development build no longer takes
