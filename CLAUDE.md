@@ -306,6 +306,21 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
   the pins lock): never call `voice::drop_terminal` while holding
   `terminals`.
+- **Built-in speech (SWA-38, `docs/adr/0001`).** `voice/speech/` records
+  (cpal, own thread — dropping the stream frees the mic) and transcribes
+  (whisper-rs, CPU, context cached per model) as an in-process client of
+  `voice::handle`: `Conn::in_process` = registered connection with
+  `indicator`, so pins, pill, draft rules and `cancelled` pushes are
+  buzzkey's. It never takes pins/`terminals` locks itself. One dictation at
+  a time (`active` spans begin → insert answer). Models: fixed catalog in
+  `speech/model.rs` (URL + SHA-256), `.part` file renamed only on a hash
+  match. Build: bindgen needs libclang (`LIBCLANG_PATH`; CI uses the
+  runner's LLVM — whisper-rs-sys's bundled bindings are Linux-only), and
+  `src-tauri/.cargo/config.toml` forces `-O2` (the cmake crate drops it for
+  MSVC → 7x slower) plus an AVX2 baseline. After changing those flags run
+  `cargo clean -p whisper-rs-sys` — its build script does not rerun on env
+  changes. Debug builds replay `SWARMTERM_DICTATION_WAV` instead of the mic
+  (testlab).
 - **File watcher: one recursive watch per root (SWA-53).** `files/watch.rs`
   watches the context root with `RecursiveMode::Recursive`, never one watch
   per folder. On Windows every watch is an open directory handle, and Windows

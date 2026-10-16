@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Voice: built-in speech recognition (SWA-38). Settings → Voice downloads
+  a Whisper model (checksum-verified) and enables local dictation without
+  buzzkey: Ctrl+Shift+Space or the pane-header microphone starts and stops,
+  the text arrives as a draft in the pane that had the keyboard. Runs on the
+  CPU; see `docs/adr/0001-builtin-speech-source.md`.
+
 ## [1.14.2] - 2026-10-16
 
 - Files: live refresh holds one watch on the explorer root instead of one

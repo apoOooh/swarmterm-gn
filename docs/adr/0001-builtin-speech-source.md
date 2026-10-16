@@ -29,7 +29,7 @@ size, GPU in the Windows CI, and a hotkey collision with buzzkey.
    from `huggingface.co/ggerganov/whisper.cpp`. URL and SHA-256 are compiled
    in; the download streams into a `.part` file, is hashed while writing and
    renamed only on a match. Stored under the local app data dir (`models/`).
-4. **Trigger: an app shortcut (`Ctrl+Alt+Space`, toggle) and a microphone
+4. **Trigger: an app shortcut (`Ctrl+Shift+Space`, toggle) and a microphone
    button in the pane header.** No global hotkey: it would collide with
    buzzkey and would record while Swarmterm is not in front, where there is no
    pane to type into anyway.

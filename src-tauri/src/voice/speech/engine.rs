@@ -135,10 +135,7 @@ mod tests {
     fn probe() {
         let model = std::env::var("SWA38_MODEL").expect("SWA38_MODEL");
         let wav = std::fs::read(std::env::var("SWA38_WAV").expect("SWA38_WAV")).unwrap();
-        let samples: Vec<f32> = wav[44..]
-            .chunks_exact(2)
-            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
-            .collect();
+        let samples = super::super::capture::pcm16(&wav[44..]);
         let engine = Engine::default();
         for run in 0..2 {
             let t = std::time::Instant::now();

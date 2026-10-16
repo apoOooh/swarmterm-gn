@@ -58,6 +58,17 @@ pub fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
         .collect()
 }
 
+/// Little-endian signed 16-bit PCM to f32.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+pub fn pcm16(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i16::from_le_bytes(*b) as f32 / 32768.0)
+        .collect()
+}
+
 pub struct Recorder {
     stop: mpsc::Sender<()>,
     thread: JoinHandle<Vec<f32>>,
@@ -67,6 +78,23 @@ impl Recorder {
     /// Opens the default input device. Fails fast (before the caller shows a
     /// "recording" state) when there is no microphone or access is denied.
     pub fn start() -> Result<Self, String> {
+        // Testlab hook (debug builds only): replay a 16 kHz mono s16 WAV
+        // instead of opening the microphone, so the whole dictation path
+        // runs headless. Release builds never read this variable.
+        #[cfg(debug_assertions)]
+        if let Some(path) = std::env::var_os("SWARMTERM_DICTATION_WAV") {
+            let (stop_tx, stop_rx) = mpsc::channel::<()>();
+            let thread = std::thread::spawn(move || {
+                let _ = stop_rx.recv();
+                std::fs::read(path)
+                    .map(|wav| pcm16(wav.get(44..).unwrap_or_default()))
+                    .unwrap_or_default()
+            });
+            return Ok(Self {
+                stop: stop_tx,
+                thread,
+            });
+        }
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let thread = std::thread::Builder::new()
@@ -176,6 +204,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pcm16_scales_to_unit_range() {
+        assert_eq!(
+            pcm16(&[0x00, 0x80, 0x00, 0x00, 0x00, 0x40, 0xff]),
+            vec![-1.0, 0.0, 0.5]
+        );
+    }
 
     #[test]
     fn downmix_averages_frames_and_passes_mono_through() {
