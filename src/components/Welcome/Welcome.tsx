@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { Folder, FolderSearch, X, Minus, Plus } from 'lucide-react'
+import { useEffect, useState, type ReactElement } from 'react'
+import { Folder, FolderSearch, X } from 'lucide-react'
 import {
   TEMPLATES,
   DEFAULT_TEMPLATE_ID,
@@ -7,7 +7,7 @@ import {
   templateById
 } from '@/lib/templates'
 import { TERMINAL_COUNTS, layoutSummary } from '@/lib/layout-tree'
-import { allocateAgents, clampCounts } from '@/lib/agent-allocation'
+import { allocateAgents } from '@/lib/agent-allocation'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { allocateAccounts, type AccountSelection } from '@/lib/agent-accounts'
@@ -39,13 +39,10 @@ import { RecentsDialog } from './RecentsDialog'
 import { SessionRow } from './SessionRow'
 import { SessionsDialog } from './SessionsDialog'
 import { SavedWorkspaceCard } from './SavedWorkspaceCard'
+import { AgentCountEditor } from './AgentCountEditor'
 import { useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
-
-const DEFAULT_TERMINAL_COUNT = 2
-
-/** Templates that run an AI agent CLI. Plain Terminal (command: null) is
- *  excluded here because it fills the remainder automatically via allocateAgents. */
-const CODING_TEMPLATES = TEMPLATES.filter((t) => t.command !== null)
+import { useWorkspacePresetsStore } from '@/store/workspace-presets-store'
+import { findTemplateByName, fitPresetToCap, withAvailableAgents, withKnownAccounts, type WorkspacePreset } from '@/lib/workspace-presets'
 
 /**
  * Welcome page shown while creating a workspace (or when none exist). A
@@ -66,16 +63,23 @@ export function Welcome(): ReactElement {
   const codexSessionHooks = useAgentAvailabilityStore(s => s.codexSessionHooks)
 
   const accounts = useAgentAccountsStore(s => s.accounts)
-  const [accountSelections, setAccountSelections] = useState<Record<string, AccountSelection>>({})
-  const [terminalCount, setTerminalCount] = useState<number>(DEFAULT_TERMINAL_COUNT)
+  const defaults = useWorkspacePresetsStore((s) => s.defaults)
+  const templates = useWorkspacePresetsStore((s) => s.templates)
+  // The composer starts from the user's workspace defaults (Settings → Workspaces).
+  const [initial] = useState(() => useWorkspacePresetsStore.getState().defaults)
+  const [templateId, setTemplateId] = useState('')
+  const [accountSelections, setAccountSelections] = useState<Record<string, AccountSelection>>(initial.accountSelections)
+  const [terminalCount, setTerminalCount] = useState<number>(initial.terminalCount)
   // '' ⇒ follow the Settings default (no per-workspace override).
-  const [splitAgent, setSplitAgent] = useState<string>('')
+  const [splitAgent, setSplitAgent] = useState<string>(initial.splitAgent)
   const globalSplitAgent = useAgentPrefStore((s) => s.defaultAgentId)
-  // Optimistic seed: 1 Claude Code assigned until the probe says it's not installed.
-  const [counts, setCounts] = useState<Record<string, number>>({ 'claude-code': 1 })
-  const seededRef = useRef(false)
+  // Optimistic seed: the default agents stay assigned until the probe says they're not installed.
+  const [counts, setCounts] = useState<Record<string, number>>(initial.agentCounts)
 
-  const [isolateWorktrees, setIsolateWorktrees] = useState(false)
+  const [isolateWorktrees, setIsolateWorktrees] = useState(initial.isolateWorktrees)
+  // Inline "Save as template" prompt; null ⇒ closed.
+  const [templateName, setTemplateName] = useState<string | null>(null)
+  const [savedNotice, setSavedNotice] = useState('')
   const [isGitRepo, setIsGitRepo] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -87,43 +91,93 @@ export function Welcome(): ReactElement {
   // deliberately NOT reset by the folder-change effect below.
   const [recentsDialogOpen, setRecentsDialogOpen] = useState(false)
 
-  // Pre-fill the home directory on mount, unless a folder is already chosen.
+  // Pre-fill the default folder (or the home directory) on mount, unless a
+  // folder is already chosen.
   useEffect(() => {
+    if (useAppStore.getState().welcomeFolder !== '') return
+    if (initial.folder.trim() !== '') {
+      setFolder(initial.folder.trim())
+      return
+    }
     void getHomeDir().then((home) => {
       if (useAppStore.getState().welcomeFolder === '') setFolder(home)
     }).catch((e) => console.warn('Welcome: home directory unavailable, leaving folder empty:', e))
-  }, [setFolder])
+  }, [setFolder, initial.folder])
 
   // Re-probe installed agent CLIs every time Welcome mounts so a CLI installed
   // while the app runs is picked up without a restart.
   useEffect(() => {
     void useAgentAvailabilityStore.getState().refresh()
-    void useAgentAccountsStore.getState().refresh()
+    // A default saved with a since-deleted account would select nothing;
+    // fall back to the default account once the profiles are known.
+    void useAgentAccountsStore.getState().refresh().then(() => {
+      const { accounts: known, error } = useAgentAccountsStore.getState()
+      if (error === null) setAccountSelections((prev) => withKnownAccounts(prev, new Set(known.map((a) => a.id))))
+    })
   }, [])
 
-  // Correct the seed once the availability probe resolves: if claude-code
-  // is not installed, clear the optimistic assignment. Runs once only — the
-  // seededRef guard prevents fighting the user's subsequent edits.
-  useEffect(() => {
-    if (seededRef.current) return
-    seededRef.current = true
-    const claude = TEMPLATES.find((t) => t.id === 'claude-code')
-    if (claude && !isTemplateAvailable(claude, availability)) {
-      setCounts({})
+  function isAvailable(agentId: string): boolean {
+    return isTemplateAvailable(templateById(agentId), availability)
+  }
+
+  // Picking "Defaults" or a template replaces every composer choice; an
+  // empty template folder keeps the folder already chosen.
+  const applyTemplate = (id: string): void => {
+    setTemplateId(id)
+    const picked = id === '' ? defaults : templates.find((t) => t.id === id)
+    if (!picked) return
+    // Ticked resume sessions already take slots: shrink the template to fit
+    // the 12-pane cap rather than letting it breach it.
+    const preset = fitPresetToCap(withAvailableAgents(picked, isAvailable), resumePanes.length)
+    setTerminalCount(preset.terminalCount)
+    setCounts(preset.agentCounts)
+    setAccountSelections(withKnownAccounts(preset.accountSelections, new Set(accounts.map((a) => a.id))))
+    setIsolateWorktrees(preset.isolateWorktrees)
+    setSplitAgent(preset.splitAgent)
+    if (preset.folder.trim() !== '') setFolder(preset.folder.trim())
+  }
+
+  const currentPreset = (): WorkspacePreset => ({
+    folder: trimmedFolder,
+    terminalCount,
+    agentCounts: liveCounts,
+    accountSelections,
+    isolateWorktrees,
+    splitAgent
+  })
+
+  const flashNotice = (text: string): void => {
+    setSavedNotice(text)
+    window.setTimeout(() => setSavedNotice(''), 2500)
+  }
+
+  const saveAsDefault = (): void => {
+    useWorkspacePresetsStore.getState().setDefaults(currentPreset())
+    flashNotice('Saved as default')
+  }
+
+  const existingTemplate = templateName === null ? undefined : findTemplateByName(templates, templateName)
+
+  const saveTemplate = (): void => {
+    const name = (templateName ?? '').trim()
+    if (name === '') return
+    const store = useWorkspacePresetsStore.getState()
+    if (existingTemplate) {
+      store.updateTemplate(existingTemplate.id, existingTemplate.name, currentPreset())
+      setTemplateId(existingTemplate.id)
+    } else {
+      setTemplateId(store.addTemplate(name, currentPreset()))
     }
-  }, [availability])
-
-  const totalAssigned = Object.values(counts).reduce((a, b) => a + b, 0)
-
-  const changeTerminalCount = (next: number): void => {
-    setTerminalCount(next)
-    // Clamp assigned counts so they never exceed the new terminal total.
-    setCounts((c) => clampCounts(c, next))
+    setTemplateName(null)
+    flashNotice(`Template “${name}” saved`)
   }
 
   // Ordered agent ids — drives both the layout preview and createWorkspace.
   // Templates appear in TEMPLATES order, unassigned slots fill with 'terminal'.
-  const agentIds = allocateAgents(terminalCount, counts)
+  // Agents the probe has found missing never spawn and are never saved: only
+  // installed agents have a row, and the next count edit drops hidden counts.
+  const liveCounts = withAvailableAgents({ ...initial, agentCounts: counts }, isAvailable).agentCounts
+  const agentIds = allocateAgents(terminalCount, liveCounts)
 
   const trimmedFolder = folder.trim()
   const canCreate = trimmedFolder !== ''
@@ -280,10 +334,6 @@ export function Welcome(): ReactElement {
   const termClause = ` · ${termCount} ${termCount === 1 ? 'Terminal' : 'Terminals'}`
   const resumedClause = resumePanes.length > 0 ? ` · ${resumePanes.length} resumed` : ''
   const caption = `${layoutSummary(totalPaneCount)}${aiClause}${termClause}${resumedClause}`
-
-  // Unique agent types present in the layout, in first-appearance order —
-  // so the legend exactly matches what the preview shows.
-  const legendIds = [...new Set([...agentIds, ...resumePanes.map((p) => p.agentId)])]
 
   const visibleRecents = visibleSlice(recents, false, VISIBLE_RECENT_ROWS)
 
@@ -473,144 +523,38 @@ export function Welcome(): ReactElement {
             Terminals
           </h2>
 
-          {/* How many terminals? */}
-          <div className="mb-4">
-            <p className="mb-2 text-sm font-medium text-foreground">How many terminals?</p>
-            <div className="flex flex-wrap gap-1.5">
-              {TERMINAL_COUNTS.map((count) => {
-                const selected = count === terminalCount
-                // Both sides of the 12-pane cap are enforced at the control that
-                // would breach it (this tile picker, and the session checkboxes
-                // via canTickMore) — so totalPaneCount can never exceed maxTiles
-                // and createWorkspace never needs its own clamp.
-                const disabled = count + resumePanes.length > maxTiles
-                return (
-                  <button
-                    key={count}
-                    type="button"
-                    onClick={() => changeTerminalCount(count)}
-                    aria-pressed={selected}
-                    disabled={disabled}
-                    className={cn(
-                      'flex h-9 min-w-[2.25rem] items-center justify-center rounded-md border px-2 text-sm font-medium transition-colors',
-                      selected
-                        ? 'border-ring bg-accent text-foreground ring-1 ring-ring'
-                        : 'border-border text-muted-foreground hover:border-ring/50 hover:bg-accent/40 hover:text-foreground',
-                      disabled && 'cursor-not-allowed opacity-40'
-                    )}
-                  >
-                    {count}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
+          {/* Template / defaults picker */}
+          {templates.length > 0 && (
+            <label className="mb-4 flex items-center justify-between gap-3">
+              <span className="text-sm font-medium text-foreground">Template</span>
+              <select
+                aria-label="Workspace template"
+                value={templateId}
+                onChange={(e) => applyTemplate(e.target.value)}
+                className="h-8 min-w-0 max-w-[60%] rounded-md border border-pane-border bg-card px-2 text-sm text-foreground"
+              >
+                <option value="">Defaults</option>
+                {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </label>
+          )}
 
-          {/* AI agents — one stepper row per coding template; plain Terminal
-              fills the remaining slots automatically via allocateAgents. */}
-          <div className="mb-4">
-            <div className="mb-1.5 flex items-center justify-between">
-              <p className="text-sm font-medium text-foreground">AI agents</p>
-              <span className="text-xs text-muted-foreground">
-                used {totalAssigned} / {terminalCount}
-              </span>
-            </div>
-            {/* The roster outgrew the dialog: cap the list and scroll —
-                max-h-64 ≈ 9 stepper rows at the common window size. */}
-            <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
-              {CODING_TEMPLATES.map((t) => {
-                const available = isTemplateAvailable(t, availability)
-                const count = counts[t.id] ?? 0
-                // Full when every slot is allocated; block adding more until
-                // the user either increases the terminal count or reduces another agent.
-                const atCapacity = totalAssigned >= terminalCount
-                return (
-                  <div key={t.id} className="flex items-center gap-2">
-                    <AgentIcon template={t} className="h-4 w-4 shrink-0" />
-                    <span className="flex-1 text-sm text-foreground">{t.name}</span>
-                    {(t.id === 'claude-code' || t.id === 'codex') && <select aria-label={`${t.name} account`} className="max-w-36 rounded border border-input bg-background px-1 text-xs" value={accountSelections[t.id]?.mode === 'round-robin' ? '__round-robin__' : (accountSelections[t.id] as { accountId?: string } | undefined)?.accountId ?? ''} onChange={event => setAccountSelections(previous => ({ ...previous, [t.id]: event.target.value === '__round-robin__' ? { mode: 'round-robin' } : { mode: 'fixed', accountId: event.target.value || undefined } }))}>
-                      <option value="">Default account</option>
-                      {accounts.filter(account => account.agentId === t.id).map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
-                      <option value="__round-robin__">Round robin</option>
-                    </select>}
-
-                    {available ? (
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          aria-label={`Remove one ${t.name}`}
-                          disabled={count === 0}
-                          onClick={() =>
-                            setCounts((prev) => {
-                              const next = { ...prev }
-                              const n = (next[t.id] ?? 0) - 1
-                              if (n <= 0) delete next[t.id]
-                              else next[t.id] = n
-                              return next
-                            })
-                          }
-                          className={cn(
-                            'flex h-6 w-6 items-center justify-center rounded border border-border text-muted-foreground transition-colors',
-                            count === 0
-                              ? 'cursor-not-allowed opacity-40'
-                              : 'hover:border-ring/50 hover:bg-accent/40 hover:text-foreground'
-                          )}
-                        >
-                          <Minus className="h-3 w-3" />
-                        </button>
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          value={count}
-                          min={0}
-                          aria-label={`${t.name} count`}
-                          onChange={(e) => {
-                            const parsed = parseInt(e.target.value, 10)
-                            const newVal = isNaN(parsed) ? 0 : parsed
-                            const remaining = terminalCount - totalAssigned
-                            const maxForThis = count + Math.max(0, remaining)
-                            const clamped = Math.max(0, Math.min(newVal, maxForThis))
-                            setCounts((prev) => {
-                              const next = { ...prev }
-                              if (clamped <= 0) delete next[t.id]
-                              else next[t.id] = clamped
-                              return next
-                            })
-                          }}
-                          className="w-[3ch] rounded border border-input bg-background px-1 text-center text-sm tabular-nums text-foreground outline-none focus:ring-1 focus:ring-ring [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                        />
-                        <button
-                          type="button"
-                          aria-label={`Add one ${t.name}`}
-                          disabled={atCapacity}
-                          onClick={() =>
-                            setCounts((prev) => ({ ...prev, [t.id]: (prev[t.id] ?? 0) + 1 }))
-                          }
-                          className={cn(
-                            'flex h-6 w-6 items-center justify-center rounded border border-border text-muted-foreground transition-colors',
-                            atCapacity
-                              ? 'cursor-not-allowed opacity-40'
-                              : 'hover:border-ring/50 hover:bg-accent/40 hover:text-foreground'
-                          )}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">Not installed</span>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          <AgentCountEditor
+            terminalCount={terminalCount}
+            setTerminalCount={setTerminalCount}
+            counts={counts}
+            setCounts={setCounts}
+            accountSelections={accountSelections}
+            setAccountSelections={setAccountSelections}
+            extraPanes={resumePanes.length}
+          />
 
           {/* Live preview — fixed, bounded height so the panel stays compact and
               the whole Welcome fits the window without scrolling; the grid scales
               down within this box at high pane counts. */}
           <div className="mb-3">
             <p className="mb-1.5 text-xs text-muted-foreground">Preview</p>
-            <div className="h-[175px]">
+            <div className="h-[120px]">
               <LayoutPreview
                 terminalCount={totalPaneCount}
                 agents={[...agentIds, ...resumePanes.map((p) => p.agentId)]}
@@ -620,22 +564,6 @@ export function Welcome(): ReactElement {
 
           {/* Caption */}
           <p className="mb-4 text-center text-xs tabular-nums text-muted-foreground">{caption}</p>
-
-          {/* Agent legend — only shown when more than one agent type is used,
-              so an all-Terminal layout (no AI agents) hides the redundant legend. */}
-          {legendIds.length > 1 && (
-            <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
-              {legendIds.map((id) => {
-                const t = templateById(id)
-                return (
-                  <span key={id} className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <AgentIcon template={t} className="h-3.5 w-3.5" />
-                    {t.name}
-                  </span>
-                )
-              })}
-            </div>
-          )}
 
           {/* Worktree isolation — enables the MCP worktree tools per workspace */}
           <label
@@ -676,14 +604,48 @@ export function Welcome(): ReactElement {
               className="h-8 rounded-md border border-pane-border bg-card px-2 text-sm text-foreground"
             >
               <option value="">Settings default ({templateById(globalSplitAgent).name})</option>
-              {TEMPLATES.map((t) => (
-                <option key={t.id} value={t.id} disabled={!isTemplateAvailable(t, availability)}>
+              {TEMPLATES.filter((t) => isTemplateAvailable(t, availability) || t.id === splitAgent).map((t) => (
+                <option key={t.id} value={t.id}>
                   {t.name}
                   {isTemplateAvailable(t, availability) ? '' : ' (not installed)'}
                 </option>
               ))}
             </select>
           </label>
+
+          {/* Save the composer's choices for next time */}
+          <div className="mb-3 flex flex-wrap items-center gap-1.5">
+            <Button variant="outline" size="sm" onClick={saveAsDefault} title="Start every new workspace with these choices">
+              Save as default
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setTemplateName(templateName === null ? '' : null)}>
+              Save as template…
+            </Button>
+            {savedNotice !== '' && <span role="status" className="text-xs text-muted-foreground">{savedNotice}</span>}
+          </div>
+          {templateName !== null && (
+            <form
+              className="mb-3 flex items-center gap-1.5"
+              onSubmit={(e) => { e.preventDefault(); saveTemplate() }}
+            >
+              <input
+                autoFocus
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setTemplateName(null) } }}
+                placeholder="Template name"
+                aria-label="Template name"
+                spellCheck={false}
+                className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+              />
+              <Button type="submit" size="sm" disabled={templateName.trim() === ''}>
+                {existingTemplate ? 'Overwrite' : 'Save'}
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setTemplateName(null)}>
+                Cancel
+              </Button>
+            </form>
+          )}
 
           {/* Create workspace button */}
           <div className="mt-auto">

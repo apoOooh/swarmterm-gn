@@ -79,7 +79,7 @@ import { useExplorerStore } from '@/store/explorer-store'
 import { onFileChange } from '@/tauri/files'
 import { registerCloseGuard } from '@/lib/close-guard'
 import { confirmQuit, onMcpServerExited, onQuitRequested, onVoicePipeError, onVoicePipeRecovered } from '@/tauri/app'
-import { RightPanel } from '@/components/RightPanel/RightPanel'
+import { RightPanel, RightPanelPeek } from '@/components/RightPanel/RightPanel'
 import { Navbar } from '@/components/Navbar/Navbar'
 import { SettingsView } from '@/components/Settings/SettingsView'
 import { FolderPicker } from '@/components/FolderPicker/FolderPicker'
@@ -1191,6 +1191,7 @@ export default function App(): ReactElement {
                     </>
                   )}
                 </Group>
+                <RightPanelPeek />
                 <DragOverlay modifiers={draggingLeaf ? [ghostModifier] : undefined}>
                   {draggingLeaf ? <PaneDragGhost leaf={draggingLeaf} /> : null}
                 </DragOverlay>

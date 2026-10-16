@@ -19,6 +19,7 @@ export function AppearancePanel(): ReactElement {
   const setStyle = useAppearanceStore((s) => s.setStyle)
   const sidebarLayout = useSidebarLayoutStore((s) => s.layout)
   const sidebarPeek = useSidebarPeekStore((s) => s.enabled)
+  const rightPanelPeek = useSidebarPeekStore((s) => s.rightEnabled)
 
   return (
     <div className="space-y-8">
@@ -49,6 +50,12 @@ export function AppearancePanel(): ReactElement {
           description="When the sidebar is hidden, move the pointer to the left edge to show it over the workspace."
           checked={sidebarPeek}
           onChange={(on) => useSidebarPeekStore.getState().setEnabled(on)}
+        />
+        <ToggleRow
+          label="Peek right panel on right edge"
+          description="When the right panel (Preview, Git, War Room) is closed, move the pointer to the right edge to show it over the workspace."
+          checked={rightPanelPeek}
+          onChange={(on) => useSidebarPeekStore.getState().setRightEnabled(on)}
         />
       </section>
 
