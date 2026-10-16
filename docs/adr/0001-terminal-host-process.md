@@ -1,6 +1,6 @@
 # 0001: Terminal host process that outlives quit and update
 
-**Status:** Proposed
+**Status:** Accepted (2026-10-16)
 
 ## Context
 

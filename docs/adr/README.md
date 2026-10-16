@@ -14,4 +14,4 @@ Each record has these sections:
 
 | No. | Title | Status |
 |---|---|---|
-| [0001](0001-terminal-host-process.md) | Terminal host process that outlives quit and update | Proposed |
+| [0001](0001-terminal-host-process.md) | Terminal host process that outlives quit and update | Accepted |
