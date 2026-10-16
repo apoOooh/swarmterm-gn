@@ -7,7 +7,8 @@ export interface TextFile { content: string; version: string; truncated: boolean
 export interface Snapshot { id: string; path: string; created: number; bytes: number; isDir: boolean }
 export interface TransferResult { completed: { source: string; destination: string }[]; errors: string[] }
 export interface RemoveResult { removed: string[]; warnings: string[]; snapshots: Snapshot[] }
-export interface FileChange { contextId: string; paths: string[]; gitChanged: boolean; error?: string }
+/** `rescan`: the watcher may have lost events (native buffer overflow), so everything shown for the context is reloaded. */
+export interface FileChange { contextId: string; paths: string[]; gitChanged: boolean; rescan: boolean; error?: string }
 export interface FileProgress { contextId: string; operationId: string; path: string; bytes: number }
 export interface GitFile { path: string; status: string; added: number; removed: number }
 

@@ -306,6 +306,19 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
   the pins lock): never call `voice::drop_terminal` while holding
   `terminals`.
+- **File watcher: one recursive watch per root (SWA-53).** `files/watch.rs`
+  watches the context root with `RecursiveMode::Recursive`, never one watch
+  per folder. On Windows every watch is an open directory handle, and Windows
+  refuses to rename/move a folder while a handle is open anywhere BELOW it
+  (WinError 5, FILE_SHARE_DELETE doesn't help) — per-folder watches locked
+  the whole workspace against git/npm/cargo/build-tool temp-dir renames and
+  held 100k+ handles. `ignored()` filters events by their PARENT instead of
+  pruning folders; git metadata watches and explicitly requested files pass
+  regardless. notify 8 drops a ReadDirectoryChangesW buffer overflow
+  silently, so a burst (`RESCAN_BURST` raw events) schedules one trailing
+  `rescan` change after `RESCAN_QUIET`; the explorer then reloads every
+  loaded folder and documents re-check disk. Only the root itself stays
+  non-renameable (user-guide Known limits).
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that

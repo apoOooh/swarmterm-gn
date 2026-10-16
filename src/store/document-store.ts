@@ -94,7 +94,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       return true
     } catch (e) {
       set((s) => { const current = s.documents[key]; return { ...(current ? { documents: { ...s.documents, [key]: { ...current, saving: false } } } : {}), error: String(e) } })
-      await get().changed({ contextId: doc.context.id, paths: [doc.path], gitChanged: false })
+      await get().changed({ contextId: doc.context.id, paths: [doc.path], gitChanged: false, rescan: false })
       return false
     }
   },
@@ -146,7 +146,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     return { documents }
   }),
   changed: async (change) => {
-    await Promise.all(Object.values(get().documents).filter((d) => d.context.id === change.contextId && change.paths.some((p) => isSubPath(p, d.path) || isSubPath(d.path, p))).map(async (doc) => {
+    await Promise.all(Object.values(get().documents).filter((d) => d.context.id === change.contextId && (change.rescan || change.paths.some((p) => isSubPath(p, d.path) || isSubPath(d.path, p)))).map(async (doc) => {
       if (doc.kind !== 'text') { set((s) => { const current = s.documents[doc.key]; return current ? { documents: { ...s.documents, [doc.key]: { ...current, revision: current.revision + 1 } } } : {} }); return }
       const generation = ++openGeneration; refreshGeneration.set(doc.key, generation)
       try {
