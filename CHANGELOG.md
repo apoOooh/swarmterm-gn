@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [1.14.1] - 2026-10-16
+
+- Claude Code hooks and status line: a development build no longer takes
+  the `~/.claude/settings.json` entries over from a live installed
+  Swarmterm, so deleting a dev checkout can no longer leave every hook
+  pointing at a missing `target/debug/swarmterm.exe`.
+
 ## [1.14.0] - 2026-10-16
 
 - Composer: new workspaces start from configurable defaults (folder,
