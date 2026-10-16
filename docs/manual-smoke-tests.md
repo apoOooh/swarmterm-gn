@@ -118,8 +118,11 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Workspace ⋮ → Split opens… → Claude Code: splits there open Claude while
       another workspace still opens Codex. "Settings default" reverts it.
 - [ ] Composer "Split opens" = Claude Code: the new workspace's ⋮ menu shows it ticked.
-- [ ] Pick an agent whose CLI is not installed (rename it off PATH, re-probe):
-      it is greyed out; a stale default falls back to a plain shell on split.
+- [ ] Uninstall an agent's CLI (rename it off PATH, re-probe): it disappears
+      from the composer's "Split opens" list unless it is the current choice,
+      shown as "(not installed)"; a stale default falls back to a plain shell
+      on split. A workspace default or template that assigns it creates plain
+      terminals for those slots.
 - [ ] Worktree isolation on: a default-agent split starts in the workspace
       folder, no new `swarm/*` branch appears.
 
@@ -244,6 +247,17 @@ Do not mark them passed from the in-memory fixture alone.
       doesn't close it mid-drag.
 - [ ] Settings → Appearance → *Peek sidebar on left edge* off: the edge does
       nothing; the choice survives a restart.
+- [ ] Right panel closed: resting the mouse on the right window edge slides it in
+      over the terminals (no terminal resizes); moving away slides it out. Git
+      and War Room work in it; a pane dragged onto it joins the War Room without
+      it closing mid-drag. Preview shows "Pin the panel"; the pin button docks
+      the panel. *Peek right panel on right edge* off: the edge does nothing.
+- [ ] Composer: *Save as default* → reopen the composer, the folder, counts,
+      agents, worktree toggle and *Split opens* come back. *Save as template…*
+      with a name → the *Template* picker lists it and applies it.
+- [ ] Settings → Workspaces: editing the defaults changes the next composer;
+      add / edit / duplicate / delete a template; *Reset to built-in* restores
+      2 terminals with 1 Claude Code. Everything survives a restart.
 - [ ] Restart the app → appearance and terminal preferences are remembered.
 
 ## Worktrees
@@ -427,7 +441,7 @@ Amp, Gemini CLI, Cursor Agent, Antigravity, OMP — on a machine that has it:
 
 - [ ] Composer shows the agent with its icon; stepper assigns panes; the
       agent list scrolls past ~9 rows without clipping the dialog.
-- [ ] Uninstalled CLI → the row is greyed out ("Not installed").
+- [ ] Uninstalled CLI → the composer does not list it at all.
 - [ ] Spawn a pane → the CLI starts; state dot turns yellow while it works,
       red on a permission prompt, green when finished in background (OMP:
       plain activity dot only — expected).
