@@ -4,6 +4,7 @@ mod agent_process;
 mod agents;
 mod analytics;
 mod commands;
+mod dev_defer;
 mod devlog;
 mod files;
 mod folder_list;

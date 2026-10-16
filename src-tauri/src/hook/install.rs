@@ -180,6 +180,11 @@ pub fn write_hooks_to_file(path: &Path, command: Option<&str>) -> Result<(), Str
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("read: {e}")),
     };
+    // A dev build next to the installed app leaves its live entries alone
+    // (in both directions), or a deleted worktree breaks every Claude session.
+    if crate::dev_defer::defers(existing.as_deref(), is_ours_hook) {
+        return Ok(());
+    }
     let merged = match merge_hooks(existing.as_deref(), command)? {
         HooksWrite::Unchanged => return Ok(()),
         HooksWrite::Write(s) => s,
