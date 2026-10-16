@@ -11,17 +11,19 @@
 //! build leaves the file alone, in BOTH directions, while it holds a command
 //! of ours that runs a different binary which still exists. The hook and the
 //! status line only read the pane's env, so the installed app's entries serve
-//! dev panes too. If the entry points at a binary that is gone (exactly the
-//! broken state above) or there is none, the dev build writes its own path as
-//! before — a working dev entry beats a dead one, and the installed app
-//! repairs it on its next boot anyway.
+//! dev panes too. If no entry of that kind points at a live other binary —
+//! none at all, or only the dead path above — the dev build writes its own
+//! path as before: a working dev entry beats a dead one, and the installed app
+//! repairs it on its next boot anyway. A file mixing live and dead entries of
+//! one kind is left alone too; only a release build reclaims everything.
 
 use std::path::Path;
 
 use serde_json::Value;
 
 /// The executable inside one of our `"<path>" --flag` commands (the shape both
-/// `format_command`s produce). Anything else is not ours to interpret.
+/// `format_command`s produce). Anything else is not ours to interpret, so an
+/// unquoted legacy entry never makes a dev build defer.
 pub fn command_exe(command: &str) -> Option<&str> {
     let rest = command.trim().strip_prefix('"')?;
     let end = rest.find('"')?;
@@ -98,9 +100,14 @@ pub fn defers(existing: Option<&str>, is_ours: fn(&str) -> bool) -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
-    owned_by_other_live_exe(existing, &exe.to_string_lossy(), is_ours, |p| {
+    let defer = owned_by_other_live_exe(existing, &exe.to_string_lossy(), is_ours, |p| {
         Path::new(p).is_file()
-    })
+    });
+    if defer {
+        // Otherwise a dev build's Settings toggle "succeeds" silently.
+        eprintln!("dev build: leaving Claude Code settings to the installed Swarmterm");
+    }
+    defer
 }
 
 #[cfg(test)]
@@ -217,6 +224,59 @@ mod tests {
     fn nothing_to_defer_to_in_missing_empty_or_malformed_files() {
         for text in [None, Some(""), Some("  "), Some("{not json"), Some("[]")] {
             assert!(!owned_by_other_live_exe(text, DEV, is_ours_hook, |_| true));
+        }
+    }
+
+    #[test]
+    fn finds_ours_among_several_events_and_foreign_entries() {
+        let f = format!(
+            r#"{{"hooks":{{
+                "PreToolUse":[{{"matcher":"Bash","hooks":[{{"type":"command","command":"lint.sh"}}]}}],
+                "Stop":[{{"hooks":[{{"type":"command","command":"notify.sh"}},
+                                  {{"type":"command","command":"\"{INSTALLED}\" --hook"}}]}}]}}}}"#
+        );
+        assert!(owned_by_other_live_exe(
+            Some(&f),
+            DEV,
+            is_ours_hook,
+            live(INSTALLED)
+        ));
+    }
+
+    #[test]
+    fn a_live_entry_wins_over_a_dead_one_of_the_same_kind() {
+        let f = format!(
+            r#"{{"hooks":{{
+                "Stop":[{{"hooks":[{{"type":"command","command":"\"{DEV}\" --hook"}}]}}],
+                "SessionEnd":[{{"hooks":[{{"type":"command","command":"\"{INSTALLED}\" --hook"}}]}}]}}}}"#
+        );
+        assert!(owned_by_other_live_exe(
+            Some(&f),
+            "C:/other/swarmterm.exe",
+            is_ours_hook,
+            live(INSTALLED)
+        ));
+    }
+
+    #[test]
+    fn tolerates_wrongly_typed_hooks_and_status_line() {
+        for text in [
+            r#"{"hooks":[],"statusLine":"x"}"#,
+            r#"{"hooks":{"Stop":{}},"statusLine":{"command":1}}"#,
+            r#"{"hooks":{"Stop":[{"hooks":"x"}, 3]}}"#,
+        ] {
+            assert!(!owned_by_other_live_exe(
+                Some(text),
+                DEV,
+                is_ours_hook,
+                |_| true
+            ));
+            assert!(!owned_by_other_live_exe(
+                Some(text),
+                DEV,
+                is_ours_statusline,
+                |_| true
+            ));
         }
     }
 

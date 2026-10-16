@@ -237,7 +237,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `--statusline` commands runs a different binary that still exists.
   Otherwise a `tauri dev` in a worktree repoints every Claude session at
   `target/debug/swarmterm.exe`, and cleaning up the worktree breaks each hook
-  event. A dead path is still overwritten (that is the repair). Release builds
+  event. Entries pointing only at a dead binary are still overwritten (the
+  repair). Release builds
   always reclaim their entries; Codex has a similar rule (`hook/codex.rs`, which skips whenever any entry of ours exists).
 - **Native preview webviews.** The preview column is a per-terminal native
   child webview (`preview.rs`, label `preview-<terminalId>`, Tauri `unstable`
