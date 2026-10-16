@@ -340,3 +340,34 @@ describe('startNotificationWatch → notification center feed', () => {
     expect(record.mock.calls[0][0]).toMatchObject({ kind: 'command', terminalId: 'sh1' })
   })
 })
+
+describe('startNotificationWatch → voice announcements (SWA-41)', () => {
+  let h: Harness
+  beforeEach(() => { h = harness() })
+
+  it('announces a still-current agent fact on an unwatched pane, prefs or not', () => {
+    const announce = vi.fn()
+    h.prefs.sound = false
+    h.prefs.system = false
+    startNotificationWatch({ ...h.deps, announce })
+    h.emit({ t1: s('blocked'), cx1: s('idle', false) }, { t1: s('working'), cx1: s('working') })
+    h.fireTimers()
+    expect(announce).toHaveBeenCalledTimes(2)
+    expect(announce).toHaveBeenCalledWith({ terminalId: 't1', kind: 'attention', agentId: 'claude-code' })
+    expect(announce).toHaveBeenCalledWith({ terminalId: 'cx1', kind: 'completion', agentId: 'codex' })
+  })
+
+  it('stays silent for watched panes, resolved facts and plain commands', () => {
+    const announce = vi.fn()
+    startNotificationWatch({ ...h.deps, announce })
+    h.emit({ t1: s('blocked') }, { t1: s('working') })
+    h.states.current = { t1: s('working') }
+    h.fireTimers()
+    h.emit({ t2: s('idle', false) }, { t2: s('working') })
+    h.focus.watchedId = 't2'
+    h.fireTimers()
+    h.emitCommands({ sh1: cmd('prompt', fin(60_000)) }, { sh1: cmd('running') })
+    h.fireTimers()
+    expect(announce).not.toHaveBeenCalled()
+  })
+})

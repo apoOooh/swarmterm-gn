@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Voice: optional status announcements. With Settings → Voice → "Announce
+  finished agents" on, a dictation app can subscribe to "agent finished" and
+  "needs your input" for panes you are not watching. Only the status and the
+  pane name leave the app, never text from the pane. Off by default.
+
 ## [1.14.2] - 2026-10-16
 
 - Files: live refresh holds one watch on the explorer root instead of one

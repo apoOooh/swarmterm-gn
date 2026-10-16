@@ -43,6 +43,11 @@ export interface NotificationWatchDeps {
   sendSystemNotification: (opts: { title: string; body: string }) => void
   /** Notification-center feed: every still-current fact on an unwatched pane, regardless of prefs. */
   record?: (entry: { kind: NotificationKind; terminalId: string; title: string; detail: string; at: number }) => void
+  /**
+   * Voice backchannel feed (SWA-41): same facts as `record`, agent panes only.
+   * Prefs-free on purpose — muting chimes must not mute the spoken status.
+   */
+  announce?: (entry: { terminalId: string; kind: NotificationKind; agentId: string }) => void
   setTimer: (fn: () => void, ms: number) => unknown
   clearTimer: (handle: unknown) => void
   now: () => number
@@ -110,6 +115,14 @@ export function startNotificationWatch(deps: NotificationWatchDeps): () => void 
           pending.kind === 'command' ? ctx.command?.last : undefined
         )
         deps.record({ kind: pending.kind, terminalId: pending.terminalId, title, detail: paneTitle, at: now })
+      }
+      if (
+        deps.announce !== undefined &&
+        pending.kind !== 'command' &&
+        !ctx.paneWatched &&
+        isStillCurrent(pending, ctx)
+      ) {
+        deps.announce({ terminalId: pending.terminalId, kind: pending.kind, agentId: pending.agentId })
       }
       const verdict = resolveFire(pending, ctx)
       return verdict.sound || verdict.system ? [{ pending, verdict }] : []

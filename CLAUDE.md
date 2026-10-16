@@ -303,6 +303,15 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   client's clipboard fallback. Answers and pushes share a per-connection
   writer task — never write to the pipe from the reader. `apply()` only
   restarts the endpoint on an on/off switch.
+  SWA-41 status feed: capability `turns`, then `subscribe` turns that
+  connection into a push-only feed (only `ping` allowed after it, 90 s idle
+  timeout, client pings every 30 s; max 4 subscribers → `busy`). The renderer
+  decides what qualifies — `notification-watch`'s `announce` feed, same
+  still-current/unwatched rules as the bell — and calls `voice_turn_event`;
+  Rust gates on `enabled && announceTurns`, numbers it (`seq`, no replay) and
+  fans it out. Status only: `excerpt` stays null until a completion adapter
+  exists (stage 2); the hook layer still never reads transcripts. Every pipe
+  write has a 5 s deadline, so a client that stops reading is dropped.
   Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
   the pins lock): never call `voice::drop_terminal` while holding
   `terminals`.

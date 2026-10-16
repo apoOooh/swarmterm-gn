@@ -3,9 +3,10 @@
 //! glue stays thin.
 //!
 //! Every request carries `v` and the per-launch `token` from the discovery
-//! file. Four ops exist and nothing else: `hello` negotiates capabilities,
+//! file. These ops exist and nothing else: `hello` negotiates capabilities,
 //! `begin` pins the pane that owns the keyboard, `insert` writes a draft into
-//! a pinned pane, `cancel` drops a pin. No op runs a command — the pipe can
+//! a pinned pane, `cancel` drops a pin. SWA-41 adds `subscribe` (status
+//! pushes, see `CAP_TURNS`) and `ping` (keep-alive). No op runs a command — the pipe can
 //! type text, never execute it.
 //!
 //! Versioning (SWA-40): the envelope stays `v: 1` so 1.9.0 and older clients
@@ -27,8 +28,13 @@ pub const PROTO: u64 = 2;
 /// The client holds one connection per dictation; the pinned pane shows a
 /// "listening" pill and the server may push `cancelled` on that connection.
 pub const CAP_INDICATOR: &str = "indicator";
+/// SWA-41: after `subscribe`, the connection is a status feed — the server
+/// pushes `turn` events (agent done / needs input) and the client only pings.
+/// Kept off the dictation connection so a slow reader never backs up
+/// `begin`/`insert`.
+pub const CAP_TURNS: &str = "turns";
 /// What this build offers. Active is the intersection with the client's list.
-pub const CAPABILITIES: &[&str] = &[CAP_INDICATOR];
+pub const CAPABILITIES: &[&str] = &[CAP_INDICATOR, CAP_TURNS];
 /// Longest accepted request line, enforced while reading (not after).
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
 /// Longest dictated text; anything longer is not dictation. Kept small on
@@ -39,7 +45,9 @@ const MAX_ID_LEN: usize = 64;
 const MAX_LABEL_CHARS: usize = 64;
 const MAX_CAPS: usize = 16;
 const MAX_CAP_LEN: usize = 32;
-const KNOWN_OPS: &[&str] = &["hello", "begin", "insert", "cancel"];
+const KNOWN_OPS: &[&str] = &["hello", "begin", "insert", "cancel", "subscribe", "ping"];
+/// Longest pane name pushed in a `turn` event.
+pub const MAX_PANE_NAME_CHARS: usize = 64;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Request {
@@ -62,6 +70,12 @@ pub enum Request {
     Cancel {
         request_id: Option<String>,
         pin: String,
+    },
+    Subscribe {
+        request_id: String,
+    },
+    Ping {
+        request_id: String,
     },
 }
 
@@ -95,6 +109,10 @@ enum Op {
         request_id: Option<String>,
         pin: String,
     },
+    #[serde(rename_all = "camelCase")]
+    Subscribe { request_id: String },
+    #[serde(rename_all = "camelCase")]
+    Ping { request_id: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
@@ -122,6 +140,9 @@ pub struct Response {
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Vec<String>>,
+    /// `subscribe`: the last seq issued so far; the next push is greater.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
 }
 
 impl Response {
@@ -205,6 +226,67 @@ impl Event {
         s.push('\n');
         s
     }
+}
+
+/// Which agent fact a `turn` push announces. Stage 1 knows only these two;
+/// `error`/`interrupted` need a completion adapter (SWA-41 stage 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnKind {
+    Done,
+    NeedsInput,
+}
+
+/// Status push on a subscribed connection. `excerpt` is always null in
+/// stage 1 but already on the wire, so clients treat it as optional now.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnEvent {
+    pub v: u64,
+    pub event: &'static str,
+    pub terminal_id: String,
+    pub pane_name: String,
+    pub agent: String,
+    pub kind: TurnKind,
+    pub excerpt: Option<String>,
+    pub seq: u64,
+}
+
+impl TurnEvent {
+    pub fn new(
+        terminal_id: String,
+        pane_name: &str,
+        agent: String,
+        kind: TurnKind,
+        seq: u64,
+    ) -> Self {
+        Self {
+            v: VERSION,
+            event: "turn",
+            terminal_id,
+            pane_name: clean_label(pane_name),
+            agent: clean_label(&agent),
+            kind,
+            excerpt: None,
+            seq,
+        }
+    }
+    pub fn to_line(&self) -> String {
+        let mut s = serde_json::to_string(self).unwrap_or_else(|_| "{}".into());
+        s.push('\n');
+        s
+    }
+}
+
+/// A pane title comes from the program in the pane (OSC 0/2): strip control
+/// characters and cap it before it reaches a speech engine.
+pub fn clean_label(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_PANE_NAME_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 /// The capabilities both sides announced, in our order. Unknown ones from
@@ -301,6 +383,8 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
             submit,
         },
         Op::Cancel { request_id, pin } => Request::Cancel { request_id, pin },
+        Op::Subscribe { request_id } => Request::Subscribe { request_id },
+        Op::Ping { request_id } => Request::Ping { request_id },
     };
     match &req {
         Request::Hello {
@@ -322,7 +406,13 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
                 Ok(req)
             }
         }
-        Request::Begin { request_id } if !valid_id(request_id) => Err("bad-request"),
+        Request::Begin { request_id }
+        | Request::Subscribe { request_id }
+        | Request::Ping { request_id }
+            if !valid_id(request_id) =>
+        {
+            Err("bad-request")
+        }
         Request::Insert {
             request_id,
             pin,
@@ -353,6 +443,78 @@ mod tests {
     use super::*;
 
     const TOKEN: &str = "secret-token";
+
+    #[test]
+    fn parses_subscribe_and_ping() {
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"subscribe","requestId":"s1"}"#,
+                TOKEN
+            ),
+            Ok(Request::Subscribe {
+                request_id: "s1".into()
+            })
+        );
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"ping","requestId":"p1"}"#,
+                TOKEN
+            ),
+            Ok(Request::Ping {
+                request_id: "p1".into()
+            })
+        );
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"subscribe","requestId":"a b"}"#,
+                TOKEN
+            ),
+            Err("bad-request")
+        );
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"subscribe","requestId":"s","since":3}"#,
+                TOKEN
+            ),
+            Err("bad-request")
+        );
+    }
+
+    #[test]
+    fn offers_turns_only_to_clients_that_ask() {
+        assert_eq!(negotiate(&["turns".into()]), vec!["turns".to_owned()]);
+        assert_eq!(
+            negotiate(&["indicator".into()]),
+            vec!["indicator".to_owned()]
+        );
+    }
+
+    #[test]
+    fn turn_event_wire_format() {
+        let e = TurnEvent::new(
+            "t1".into(),
+            "Refactor\u{1b}[31m",
+            "claude-code".into(),
+            TurnKind::NeedsInput,
+            7,
+        );
+        assert_eq!(
+            e.to_line(),
+            "{\"v\":1,\"event\":\"turn\",\"terminalId\":\"t1\",\"paneName\":\"Refactor[31m\",\"agent\":\"claude-code\",\"kind\":\"needs_input\",\"excerpt\":null,\"seq\":7}\n"
+        );
+        assert_eq!(
+            clean_label(&"x".repeat(100)).chars().count(),
+            MAX_PANE_NAME_CHARS
+        );
+    }
+
+    #[test]
+    fn cancelled_push_is_unchanged() {
+        assert_eq!(
+            Event::cancelled("p1".into(), CancelReason::User).to_line(),
+            "{\"v\":1,\"event\":\"cancelled\",\"pin\":\"p1\",\"reason\":\"user\"}\n"
+        );
+    }
 
     #[test]
     fn parses_the_request_ops() {

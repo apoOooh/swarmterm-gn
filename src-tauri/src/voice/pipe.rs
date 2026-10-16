@@ -33,6 +33,12 @@ const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// While a connection holds a dictation it may stay silent for the whole
 /// recording; the pin's own expiry (pushed as `expired`) ends it first.
 const HOLD_TIMEOUT: std::time::Duration = PIN_TTL.saturating_add(std::time::Duration::from_secs(5));
+/// A status subscriber (SWA-41) is silent by nature; it pings every 30 s, so
+/// this only ends feeds whose client is gone or hung.
+const SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+/// One line that cannot be written within this time means the client stopped
+/// reading; the connection is dropped instead of queueing pushes forever.
+const WRITE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub struct Running {
     stop: watch::Sender<bool>,
@@ -262,7 +268,9 @@ async fn read_loop(
             let _ = tx.send(Outgoing::Line(Response::err(None, "too-large").to_line()));
             return;
         }
-        let idle = if app.state::<VoiceHub>().conn_has_pin(state.id) {
+        let idle = if state.subscribed {
+            SUBSCRIBE_TIMEOUT
+        } else if app.state::<VoiceHub>().conn_has_pin(state.id) {
             HOLD_TIMEOUT
         } else {
             IDLE_TIMEOUT
@@ -290,8 +298,9 @@ async fn write_loop(
     while let Some(out) = rx.recv().await {
         match out {
             Outgoing::Line(line) => {
-                if wr.write_all(line.as_bytes()).await.is_err() {
-                    break;
+                match tokio::time::timeout(WRITE_DEADLINE, wr.write_all(line.as_bytes())).await {
+                    Ok(Ok(())) => {}
+                    _ => break,
                 }
             }
             Outgoing::Close => break,

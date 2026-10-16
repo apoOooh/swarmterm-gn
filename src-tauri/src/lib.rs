@@ -145,6 +145,7 @@ pub fn run() {
             voice::voice_focus_response,
             voice::voice_insert_result,
             voice::voice_indicator_stop,
+            voice::voice_turn_event,
             voice::voice_get_settings,
             voice::voice_set_settings,
             commands::resize_terminal,
