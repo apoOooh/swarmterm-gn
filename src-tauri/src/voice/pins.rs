@@ -129,6 +129,12 @@ impl PinStore {
 
     /// Whether the connection still holds an open dictation (it then gets
     /// the pin's lifetime as idle timeout instead of the short default).
+    /// The pane a live pin points at (the built-in source labels its state).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn terminal_of(&self, pin: &str) -> Option<String> {
+        self.pins.get(pin).map(|p| p.terminal_id.clone())
+    }
+
     pub fn conn_has_pin(&self, conn: u64) -> bool {
         self.pins.values().any(|p| p.conn == Some(conn))
     }

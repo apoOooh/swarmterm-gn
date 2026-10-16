@@ -1,0 +1,15 @@
+# whisper.cpp build flags for the built-in speech source (SWA-38, ADR 0001).
+# whisper-rs-sys forwards every GGML_*/CMAKE_* variable to CMake.
+[env]
+# The cmake crate replaces CMAKE_<LANG>_FLAGS_RELEASE with cc's flags, which
+# carry no optimisation level for MSVC: ggml then builds at /Od and a 5 s
+# dictation takes 7-8 s instead of ~1 s. Name the optimisation explicitly.
+CMAKE_C_FLAGS_RELEASE = "-O2 -Ob2 -DNDEBUG"
+CMAKE_CXX_FLAGS_RELEASE = "-O2 -Ob2 -DNDEBUG"
+# Fixed x86-64-v3 baseline instead of "whatever the build machine has": a
+# release built on an AVX-512 runner must still start on a user's CPU.
+GGML_NATIVE = "OFF"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
