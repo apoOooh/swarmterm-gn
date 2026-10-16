@@ -59,6 +59,13 @@ it('does not resurrect documents after closing during an explicit reload', async
   expect(useDocumentStore.getState().documents[key]).toBeUndefined()
 })
 
+it('re-reads every open document of the context on a rescan', async () => {
+  await useDocumentStore.getState().open('a', context, '/p/one.txt'); await useDocumentStore.getState().open('b', { id: 'other', root: '/o' }, '/o/two.txt')
+  vi.mocked(readFile).mockClear()
+  await useDocumentStore.getState().changed({ contextId: 'project', paths: [], gitChanged: false, rescan: true })
+  expect(readFile).toHaveBeenCalledExactlyOnceWith('project', '/p/one.txt')
+})
+
 it('does not resurrect a discarded document after an in-flight save fails', async () => {
   await useDocumentStore.getState().open('a', context, '/p/file.txt')
   const key = useDocumentStore.getState().panes.a.active!; useDocumentStore.getState().update(key, 'mine')
