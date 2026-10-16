@@ -285,7 +285,7 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
     // A status feed stays a status feed: no dictation on it, so a reader
     // that lags behind pushes can never hold up an insert.
     if conn.subscribed && !matches!(req, Request::Ping { .. } | Request::Subscribe { .. }) {
-        return Response::err(None, "bad-request");
+        return Response::err(req.request_id(), "bad-request");
     }
     match req {
         Request::Hello {

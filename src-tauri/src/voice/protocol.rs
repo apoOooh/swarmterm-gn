@@ -145,6 +145,19 @@ pub struct Response {
     pub seq: Option<u64>,
 }
 
+impl Request {
+    pub fn request_id(&self) -> Option<String> {
+        match self {
+            Self::Hello { request_id, .. }
+            | Self::Begin { request_id }
+            | Self::Insert { request_id, .. }
+            | Self::Subscribe { request_id }
+            | Self::Ping { request_id } => Some(request_id.clone()),
+            Self::Cancel { request_id, .. } => request_id.clone(),
+        }
+    }
+}
+
 impl Response {
     pub fn ok(request_id: Option<String>) -> Self {
         Self {
@@ -279,10 +292,13 @@ impl TurnEvent {
 }
 
 /// A pane title comes from the program in the pane (OSC 0/2): strip control
-/// characters and cap it before it reaches a speech engine.
+/// characters and cap it before it reaches a speech engine. Leading symbols
+/// go too — Claude Code prefixes its title with a status glyph ("✳ ") that a
+/// voice would read out as noise.
 pub fn clean_label(s: &str) -> String {
     s.chars()
         .filter(|c| !c.is_control())
+        .skip_while(|c| !c.is_alphanumeric())
         .take(MAX_PANE_NAME_CHARS)
         .collect::<String>()
         .trim()
@@ -506,6 +522,8 @@ mod tests {
             clean_label(&"x".repeat(100)).chars().count(),
             MAX_PANE_NAME_CHARS
         );
+        assert_eq!(clean_label("✳ Fix login"), "Fix login");
+        assert_eq!(clean_label("⠂ 2 tests"), "2 tests");
     }
 
     #[test]
