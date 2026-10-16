@@ -231,7 +231,14 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `~/.claude/settings.json` (NOT `~/.claude.json`) and a foreign `statusLine` is
   never touched in either direction. On Windows the recorded path uses forward
   slashes: Claude Code runs the command through Git Bash, which eats
-  backslashes.
+  backslashes. **Dev builds defer** (`dev_defer.rs`): `settings.json` is shared
+  with the installed app, so a debug build leaves it alone — install AND
+  removal, default and account profiles — while one of our `--hook` /
+  `--statusline` commands runs a different binary that still exists.
+  Otherwise a `tauri dev` in a worktree repoints every Claude session at
+  `target/debug/swarmterm.exe`, and cleaning up the worktree breaks each hook
+  event. A dead path is still overwritten (that is the repair). Release builds
+  always reclaim their entries; Codex has a similar rule (`hook/codex.rs`, which skips whenever any entry of ours exists).
 - **Native preview webviews.** The preview column is a per-terminal native
   child webview (`preview.rs`, label `preview-<terminalId>`, Tauri `unstable`
   feature for `add_child`). Invariant: a preview webview is visible iff

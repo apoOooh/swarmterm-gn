@@ -205,6 +205,11 @@ pub fn tolerate_foreign(result: Result<(), String>) -> Result<(), String> {
 /// mid-write can never leave the user with a truncated settings file.
 pub fn write_settings_to_file(path: &Path, command: Option<&str>) -> Result<(), String> {
     let existing = read_optional(path)?;
+    // Same dev-build rule as the hooks (`dev_defer`): never swap a live
+    // installed app's command for a `target/debug` path that may vanish.
+    if crate::dev_defer::defers(existing.as_deref(), is_ours) {
+        return Ok(());
+    }
     let merged = match merge_settings(existing.as_deref(), command)? {
         SettingsWrite::Unchanged => return Ok(()),
         SettingsWrite::Foreign => return Err(FOREIGN_STATUS_LINE.into()),
