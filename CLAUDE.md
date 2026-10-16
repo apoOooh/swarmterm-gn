@@ -267,6 +267,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   serializes structure only; `saved-workspace-sync` debounces meaningful changes
   and flushes on close/quit. Restore verifies directories and exact session ids,
   then allocates fresh runtime ids. Forget detaches a live instance from saving.
+  `autoOpen` (startup order) belongs to the stored entry: `upsertSaved` keeps it
+  across live snapshots; `openAutostart` runs once per process and hides Welcome meanwhile.
   Never persist prompts, terminal output, startup commands or unsaved buffers.
   `agent:session` hooks update `sessionId`, independently of `resumeSessionId`
   (changing startup options on capture would respawn a live PTY). Rust checks

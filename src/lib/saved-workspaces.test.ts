@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { collectLeaves } from './layout-tree'
-import { fromSaved, readSaved, toSaved, upsertSaved, SAVED_WORKSPACES_KEY, type SavedWorkspace } from './saved-workspaces'
+import { autoOpenList, fromSaved, moveAutoOpen, readSaved, setAutoOpen, toSaved, upsertSaved, SAVED_WORKSPACES_KEY, type SavedWorkspace } from './saved-workspaces'
 import type { Workspace } from '@/store/app-store'
 
 const session = '018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f'
@@ -72,4 +72,34 @@ it('retains a session together with its profile across storage and restore while
   const loaded = readSaved(storage(JSON.stringify({ version: 1, workspaces: [snapshot] })))[0]
   expect(collectLeaves(fromSaved(loaded, () => crypto.randomUUID()).layout)[0]).toMatchObject({ accountId: 'profile-a', sessionId: session, resumeSessionId: session })
   expect(collectLeaves(fromSaved(saved(), () => crypto.randomUUID()).layout)[0].accountId).toBeUndefined()
+})
+
+describe('open on startup', () => {
+  const entry = (id: string, updatedAt: number): SavedWorkspace => ({ ...saved(), id, updatedAt })
+  it('appends switched-on entries in order and renumbers on removal', () => {
+    let list = [entry('a', 3), entry('b', 2), entry('c', 1)]
+    list = setAutoOpen(list, 'c', true)
+    list = setAutoOpen(list, 'a', true)
+    list = setAutoOpen(list, 'b', true)
+    expect(autoOpenList(list).map(w => w.id)).toEqual(['c', 'a', 'b'])
+    list = setAutoOpen(list, 'c', false)
+    expect(autoOpenList(list).map(w => [w.id, w.autoOpen])).toEqual([['a', 0], ['b', 1]])
+    expect(list.find(w => w.id === 'c')).not.toHaveProperty('autoOpen')
+  })
+  it('moves an entry within the startup order and ignores moves past the ends', () => {
+    let list = setAutoOpen(setAutoOpen([entry('a', 2), entry('b', 1)], 'a', true), 'b', true)
+    list = moveAutoOpen(list, 'b', -1)
+    expect(autoOpenList(list).map(w => w.id)).toEqual(['b', 'a'])
+    expect(autoOpenList(moveAutoOpen(list, 'b', -1)).map(w => w.id)).toEqual(['b', 'a'])
+  })
+  it('keeps the flag when the live sync upserts a snapshot without it', () => {
+    const list = setAutoOpen([entry('a', 1)], 'a', true)
+    expect(upsertSaved(list, entry('a', 5))[0].autoOpen).toBe(0)
+  })
+  it('round-trips through storage and drops invalid values', () => {
+    const on = { ...entry('a', 1), autoOpen: 0 }, bad = { ...entry('b', 2), autoOpen: 'yes' }
+    const list = readSaved(storage(JSON.stringify({ version: 1, workspaces: [on, bad] })))
+    expect(list.find(w => w.id === 'a')?.autoOpen).toBe(0)
+    expect(list.find(w => w.id === 'b')).not.toHaveProperty('autoOpen')
+  })
 })

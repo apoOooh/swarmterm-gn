@@ -9,6 +9,7 @@ import { useWorkspacePresetsStore } from '@/store/workspace-presets-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { pickFolder } from '@/store/folder-picker-store'
+import { StartupWorkspaces } from './StartupWorkspaces'
 
 function resolve<T>(next: SetStateAction<T>, prev: T): T {
   return typeof next === 'function' ? (next as (p: T) => T)(prev) : next
@@ -191,9 +192,11 @@ export function WorkspacesPanel(): ReactElement {
       <section>
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">Workspaces</h1>
         <p className="mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground">
-          What a new workspace starts with, and templates you can pick when creating one.
+          Which saved workspaces open on startup, what a new workspace starts with, and templates you can pick when creating one.
         </p>
       </section>
+
+      <StartupWorkspaces />
 
       <section>
         <div className="mb-3 flex items-center justify-between">

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Saved workspaces can open on startup (pin on the card or Settings →
+  Workspaces → Open on startup, with order); Welcome is skipped while any is set.
 - Docs: ADR 0001 (accepted) adopts a separate terminal host process so terminals
   can outlive quit and app updates (`docs/adr/`).
 

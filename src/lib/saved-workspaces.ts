@@ -18,7 +18,7 @@ export interface SavedLeaf {
   sessionId?: string
 }
 export type SavedNode = SavedLeaf | { type: 'split'; direction: 'horizontal' | 'vertical'; sizes: [number, number]; children: [SavedNode, SavedNode] }
-export interface SavedWorkspace { id: string; name: string; cwd: string; layout: SavedNode; worktreeMode: boolean; updatedAt: number }
+export interface SavedWorkspace { id: string; name: string; cwd: string; layout: SavedNode; worktreeMode: boolean; updatedAt: number; autoOpen?: number }
 export interface SavedStorage { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void }
 
 function validSession(agent: string, id: string | undefined): string | undefined {
@@ -83,7 +83,8 @@ export function readSaved(storage: Pick<SavedStorage, 'getItem'>): SavedWorkspac
     const layout = parseNode(item.layout)
     if (!layout) continue
     seen.add(item.id)
-    list.push({ id: item.id, name: item.name, cwd: item.cwd, worktreeMode: item.worktreeMode, updatedAt: item.updatedAt, layout })
+    const autoOpen = typeof item.autoOpen === 'number' && Number.isInteger(item.autoOpen) && item.autoOpen >= 0 ? { autoOpen: item.autoOpen } : {}
+    list.push({ id: item.id, name: item.name, cwd: item.cwd, worktreeMode: item.worktreeMode, updatedAt: item.updatedAt, layout, ...autoOpen })
   }
   return list.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_SAVED_WORKSPACES)
 }
@@ -91,5 +92,32 @@ export function storeSaved(storage: Pick<SavedStorage, 'setItem'>, list: SavedWo
   storage.setItem(SAVED_WORKSPACES_KEY, JSON.stringify({ version: 1, workspaces: list }))
 }
 export function upsertSaved(list: SavedWorkspace[], entry: SavedWorkspace): SavedWorkspace[] {
+  // Live snapshots (`toSaved`) don't know the startup flag; it belongs to the stored entry.
+  const previous = list.find(w => w.id === entry.id)
+  if (!('autoOpen' in entry) && previous?.autoOpen !== undefined) entry = { ...entry, autoOpen: previous.autoOpen }
   return [entry, ...list.filter(w => w.id !== entry.id)].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_SAVED_WORKSPACES)
+}
+
+/** Workspaces opened on app start, in their startup order. */
+export function autoOpenList(list: SavedWorkspace[]): SavedWorkspace[] {
+  return list.filter(w => w.autoOpen !== undefined).sort((a, b) => a.autoOpen! - b.autoOpen!)
+}
+function renumber(list: SavedWorkspace[], order: string[]): SavedWorkspace[] {
+  return list.map(w => {
+    const i = order.indexOf(w.id)
+    if (i >= 0) return { ...w, autoOpen: i }
+    const { autoOpen: _drop, ...rest } = w
+    return rest
+  })
+}
+export function setAutoOpen(list: SavedWorkspace[], id: string, on: boolean): SavedWorkspace[] {
+  const order = autoOpenList(list).map(w => w.id).filter(x => x !== id)
+  if (on && list.some(w => w.id === id)) order.push(id)
+  return renumber(list, order)
+}
+export function moveAutoOpen(list: SavedWorkspace[], id: string, delta: -1 | 1): SavedWorkspace[] {
+  const order = autoOpenList(list).map(w => w.id), i = order.indexOf(id), j = i + delta
+  if (i < 0 || j < 0 || j >= order.length) return list
+  ;[order[i], order[j]] = [order[j], order[i]]
+  return renumber(list, order)
 }
