@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-10-16
+
+- Composer: new workspaces start from configurable defaults (folder,
+  terminal count, agents and accounts, worktree isolation, Split opens).
+  "Save as default" stores the current choices; Settings → Workspaces can
+  reset them to the built-in values. Agents that aren't installed are left
+  out when a default or template is applied.
+- Workspace templates: "Save as template…" in the composer and a Template
+  picker; Settings → Workspaces edits the defaults and adds, edits,
+  duplicates and deletes templates.
+- Right panel: while closed, rest the mouse on the right edge to slide it in
+  over the workspace; pin docks it (Settings → Appearance → Peek right panel
+  on right edge).
+- Composer: lists only installed agents; smaller layout preview; the agent
+  legend is removed.
+
 ## [1.13.0] - 2026-10-16
 
 - Sidebar: while the sidebar is hidden, rest the mouse on the left edge to
