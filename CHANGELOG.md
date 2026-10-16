@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Docs: ADR 0001 (accepted) adopts a separate terminal host process so terminals
+  can outlive quit and app updates (`docs/adr/`).
+
 ## [1.14.2] - 2026-10-16
 
 - Files: live refresh holds one watch on the explorer root instead of one
