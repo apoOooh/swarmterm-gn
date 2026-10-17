@@ -167,6 +167,13 @@ pub fn newer(candidate: &Version, current: &Version) -> bool {
     }
 }
 
+/// A new first number. The update toast always asks for these, even with
+/// "Update automatically" on: a major buzzkey release may change what the
+/// user's hotkeys and settings do.
+pub fn major_jump(candidate: &Version, current: &Version) -> bool {
+    candidate.major > current.major
+}
+
 fn pick(release: &GhRelease, name: &str) -> Option<Asset> {
     release
         .assets
@@ -309,6 +316,15 @@ mod tests {
         assert!(version_of_tag("v1.9.1").is_none());
         assert!(version_of_tag("buzzkey-1.9.1-rc.1").is_none());
         assert!(version_of_tag("buzzkey-1.9.1-bk.x").is_none());
+    }
+
+    #[test]
+    fn major_jump_only_when_the_first_number_grows() {
+        let v = |s: &str| Version::parse(s).unwrap();
+        assert!(major_jump(&v("2.0.0+bk.1"), &v("1.9.6+bk.3")));
+        assert!(!major_jump(&v("1.10.0+bk.1"), &v("1.9.6+bk.3")));
+        assert!(!major_jump(&v("1.9.6+bk.4"), &v("1.9.6+bk.3")));
+        assert!(!major_jump(&v("1.0.0"), &v("2.0.0")));
     }
 
     #[test]

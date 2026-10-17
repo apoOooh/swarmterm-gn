@@ -4,14 +4,17 @@ import type { CompanionProgress, CompanionStatus } from '@/lib/voice-companion'
 
 /**
  * buzzkey companion bridge (SWA-42): install, start, quit and update buzzkey
- * from Settings → Voice. Every call is a user click; Rust never downloads on
- * its own. Serde camelCase in lockstep with `src-tauri/src/voice/companion/`.
+ * from Settings → Voice. Every download is a click, except the opt-in
+ * automatic update from the update toast (`unattended`, refused by Rust
+ * while a dictation runs). Serde camelCase in lockstep with `src-tauri/src/voice/companion/`.
  */
 
 export interface UpdateCheck {
   latestTag: string | null
   latestVersion: string | null
   updateAvailable: boolean
+  currentVersion: string | null
+  majorJump: boolean
 }
 
 export interface HardwareProbe {
@@ -25,7 +28,8 @@ export const getCompanionStatus = (): Promise<CompanionStatus> => invoke('voice_
 
 export const checkCompanionUpdate = (): Promise<UpdateCheck> => invoke('voice_companion_check')
 
-export const installCompanion = (): Promise<CompanionStatus> => invoke('voice_companion_install')
+export const installCompanion = (unattended = false): Promise<CompanionStatus> =>
+  invoke('voice_companion_install', { unattended })
 
 export const startCompanion = (): Promise<CompanionStatus> => invoke('voice_companion_start')
 

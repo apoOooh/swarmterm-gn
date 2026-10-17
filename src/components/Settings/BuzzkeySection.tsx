@@ -20,6 +20,7 @@ import {
   type UpdateCheck
 } from '@/tauri/voice-companion'
 import { ToggleRow } from './NotificationsPanel'
+import { useBuzzkeyUpdateStore } from '@/store/buzzkey-update-store'
 
 /** Running/connected change outside this panel (tray, dictation); re-poll while open. */
 const POLL_MS = 3000
@@ -43,6 +44,7 @@ export function BuzzkeySection(): ReactElement | null {
   const [error, setError] = useState<string | null>(null)
   const [update, setUpdate] = useState<UpdateCheck | null>(null)
   const [probe, setProbe] = useState<HardwareProbe | null>(null)
+  const autoUpdate = useBuzzkeyUpdateStore((s) => s.prefs.autoUpdate)
 
   const refresh = useCallback(() => {
     void getCompanionStatus().then(setStatus, (e) => setError(String(e)))
@@ -99,7 +101,7 @@ export function BuzzkeySection(): ReactElement | null {
       <h2 className="text-lg font-semibold text-foreground">buzzkey</h2>
       <p className="mt-1 max-w-prose text-sm leading-relaxed text-muted-foreground">
         The dictation app for Swarmterm. It stays a separate program with its own tray icon and works
-        in any app; Swarmterm only installs and starts it when you click.
+        in any app; Swarmterm only installs and starts it when you click, and offers new signed releases.
       </p>
       <div className="mt-3 text-sm text-foreground" data-testid="buzzkey-state" data-state={view.state}>
         {view.label}
@@ -148,6 +150,16 @@ export function BuzzkeySection(): ReactElement | null {
             onChange={(on) =>
               void setCompanionAutostart(on).then(setStatus, (e) => setError(companionErrorText(String(e))))
             }
+          />
+        </div>
+      )}
+      {view.showAutostart && (
+        <div className="mt-2">
+          <ToggleRow
+            label="Update buzzkey automatically"
+            description="Installs new signed releases without asking, never during a dictation. A major new version is always asked first. Off: a notice offers each new version once."
+            checked={autoUpdate}
+            onChange={(on) => useBuzzkeyUpdateStore.getState().setAutoUpdate(on)}
           />
         </div>
       )}

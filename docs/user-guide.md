@@ -306,12 +306,14 @@ While you speak, the target pane shows a **Listening…** pill. Its **Stop** but
 
 ### Installing buzzkey from Swarmterm
 
-**Settings → Voice → buzzkey** shows whether buzzkey is installed, running or connected (with its version) and offers the next step: **Install buzzkey**, **Start**, **Quit**, **Check for update** and **Start buzzkey with Windows**. Nothing happens in the background — Swarmterm only goes online when you click.
+**Settings → Voice → buzzkey** shows whether buzzkey is installed, running or connected (with its version) and offers the next step: **Install buzzkey**, **Start**, **Quit**, **Check for update**, **Start buzzkey with Windows** and **Update buzzkey automatically**. Installing is always a click; the only background access is the update check below.
 
 - Downloads come only from buzzkey's GitHub releases. Swarmterm first checks the release's signature against a key built into Swarmterm, then each file against the signed checksums, and only then installs into `%LOCALAPPDATA%\Programs\buzzkey` (no admin rights). A release that fails any check installs nothing; an update that fails half-way keeps the previous version.
 - buzzkey stays its own program with its own tray icon. **Quit** asks it to close itself; older buzzkey versions are quit from their tray menu instead. Swarmterm never kills it.
 - While the original whisper-key runs, Swarmterm offers nothing: both would fight over the hotkey and the microphone.
 - The autostart switch is the same entry as buzzkey's own tray setting. To uninstall, quit buzzkey, turn autostart off and delete the folder.
+- **Update notice.** While buzzkey is installed and connected, Swarmterm looks for a newer signed buzzkey release about 20 seconds after start and then once a day. A newer one shows a notice in the bottom right: **Update now** runs the same verified install (buzzkey is asked to quit and started again), **Later** hides it until the *next* version. Without a connection or on a network error nothing is shown.
+- **Update buzzkey automatically** (in the notice and in Settings, off by default) installs new versions without asking, but never while a dictation is recording or transcribing — the update then waits a minute and tries again. A major new version (for example 1.x → 2.0) is always asked first, once; **Later** silences that version too.
 - Once installed, buzzkey's hardware check (if the version has one) suggests a model; buzzkey makes the final choice on first start.
 
 ### Built-in speech recognition
