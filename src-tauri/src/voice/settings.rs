@@ -21,6 +21,13 @@ pub struct VoiceSettings {
     pub model: String,
     /// Whisper language code, or `auto` to let the model detect it.
     pub language: String,
+    /// SWA-66: Swarmterm speaks status announcements itself. Independent of
+    /// `announce_turns` (the feed to buzzkey).
+    pub speak_turns: bool,
+    /// SAPI voice token id; empty = the first German voice.
+    pub tts_voice: String,
+    /// 0-100, the app's own volume (no ducking of other apps).
+    pub tts_volume: u8,
 }
 
 impl Default for VoiceSettings {
@@ -32,6 +39,9 @@ impl Default for VoiceSettings {
             builtin_enabled: false,
             model: "base".into(),
             language: "auto".into(),
+            speak_turns: false,
+            tts_voice: String::new(),
+            tts_volume: 80,
         }
     }
 }
@@ -74,6 +84,9 @@ mod tests {
             builtin_enabled: true,
             model: "small".into(),
             language: "de".into(),
+            speak_turns: true,
+            tts_voice: "hedda".into(),
+            tts_volume: 55,
         };
         save(&path, &s).unwrap();
         assert_eq!(load(&path), s);
@@ -95,5 +108,8 @@ mod tests {
         assert!(!s.enabled && s.allow_auto_enter);
         assert!(!s.builtin_enabled);
         assert_eq!((s.model.as_str(), s.language.as_str()), ("base", "auto"));
+        // SWA-66: speaking is opt-in as well.
+        assert!(!s.speak_turns);
+        assert_eq!(s.tts_volume, 80);
     }
 }

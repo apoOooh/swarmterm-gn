@@ -187,6 +187,17 @@ interface Entry {
 /** Live terminals keyed by terminalId, owned outside React's render tree. */
 const entries = new Map<string, Entry>()
 
+let userInput: (() => void) | undefined
+
+/**
+ * Register who hears about genuine user input (SWA-66: typing silences the
+ * announcement voice). Called from `sendInput` only, so programmatic writes —
+ * dictation drafts, War Room deliveries — never trigger it.
+ */
+export function setUserInputHandler(handler: (() => void) | undefined): void {
+  userInput = handler
+}
+
 // Fetched once; terminals created before it resolves start with the
 // build-less ConPTY option and get upgraded in place.
 let windowsBuild: number | null = null
@@ -532,6 +543,7 @@ function getOrCreate(id: string): Entry {
       useTerminalTypingStore.getState().noteInput(target, data)
       void writeTerminal(target, data)
     }
+    userInput?.()
   }
   term.onData(sendInput)
 

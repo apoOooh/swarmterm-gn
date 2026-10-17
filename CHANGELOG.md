@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Voice: spoken announcements (SWA-66). With Settings → Voice → "Speak
+  announcements" on, Swarmterm says "<pane>: fertig" / "<pane> wartet auf
+  Eingabe" itself, using an installed Windows voice (no download). Typing,
+  focusing that pane, dictating or Ctrl+Shift+M stops it; nothing is spoken
+  while a dictation records. `turn` pushes carry `ttsHandled` so buzzkey's
+  fallback voice never talks over it. See `docs/adr/0003-builtin-announcements.md`.
+
 ## [1.15.0] - 2026-10-17
 
 - Voice: install and control buzzkey from Settings → Voice (SWA-42). The

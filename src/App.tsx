@@ -126,7 +126,7 @@ import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
 import { onAgentSession } from '@/tauri/sessions'
 import { wireSavedWorkspaces, flushSavedWorkspaces, useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
-import { toggleDictation, wireVoice } from '@/lib/voice-wiring'
+import { stopAnnouncements, toggleDictation, wireVoice } from '@/lib/voice-wiring'
 import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import { builtinSwitchedOn } from '@/lib/voice-dictation'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
@@ -553,6 +553,14 @@ export default function App(): ReactElement {
         if (!recording && !requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
         e.preventDefault()
         toggleDictation()
+        return
+      }
+      if (action === 'stop-announcement') {
+        // Only claimed while Swarmterm speaks announcements; off, Ctrl+Shift+M
+        // stays the pane's.
+        if (!useVoiceDictationStore.getState().settings?.speakTurns) return
+        e.preventDefault()
+        stopAnnouncements()
         return
       }
       if (action === 'drawer-pane') {

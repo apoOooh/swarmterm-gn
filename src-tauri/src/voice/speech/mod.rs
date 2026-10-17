@@ -127,6 +127,12 @@ fn selected_model(app: &AppHandle) -> Result<(PathBuf, String), String> {
     Ok((model::path(&dir, model), settings.language))
 }
 
+/// Recording or transcribing (begin → insert answer). The announcement
+/// voice stays silent meanwhile: half-duplex, and whisper needs the CPU.
+pub fn busy(app: &AppHandle) -> bool {
+    app.state::<SpeechHub>().active.load(Ordering::SeqCst)
+}
+
 fn release(app: &AppHandle, conn: u64) {
     close_conn(app, conn);
     app.state::<SpeechHub>()

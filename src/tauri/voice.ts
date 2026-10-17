@@ -20,6 +20,25 @@ export interface VoiceSettings {
   model: string
   /** Whisper language code or `auto`. */
   language: string
+  /** Built-in announcements (SWA-66): Swarmterm speaks status itself. */
+  speakTurns: boolean
+  /** SAPI voice id; empty = the first German voice. */
+  ttsVoice: string
+  /** 0-100. */
+  ttsVolume: number
+}
+
+export interface TtsVoice {
+  id: string
+  name: string
+  lang: string
+}
+
+export interface TtsStatus {
+  ready: boolean
+  error: string | null
+  voices: TtsVoice[]
+  speaking: boolean
 }
 
 export interface SpeechStatus {
@@ -82,6 +101,17 @@ export const setVoiceSettings = (settings: VoiceSettings): Promise<VoiceSettings
 
 /** Agent finished / needs input (SWA-41); Rust drops it unless announcing is on. */
 export const voiceTurnEvent = (event: TurnEvent): Promise<void> => invoke('voice_turn_event', { event })
+
+// Built-in announcements (SWA-66). Rust owns the queue and the voice.
+
+/** Silence announcements: all of them, or only one pane's (it was just focused). */
+export const voiceTtsStop = (terminalId?: string): Promise<void> =>
+  invoke('voice_tts_stop', { terminalId: terminalId ?? null })
+
+/** Speak a sample sentence with the selected voice. Rejects when no voice is available. */
+export const voiceTtsTest = (): Promise<void> => invoke('voice_tts_test')
+
+export const getTtsStatus = (): Promise<TtsStatus> => invoke('voice_tts_status')
 
 // Built-in speech source (SWA-38): Rust records and transcribes, then types
 // through the same `voice:insert` path as buzzkey.
