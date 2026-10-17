@@ -300,8 +300,15 @@ fn link_profile_with(
         }
         if let Err(e) = make(&own, &target) {
             // Put the profile's own folder back rather than leave it missing.
+            // That fails too if a live pane recreated `<sub>` meanwhile; say
+            // where the data is instead of hiding it.
             if let Some(saved) = moved_aside {
-                let _ = fs::rename(saved, &own);
+                if let Err(back) = fs::rename(&saved, &own) {
+                    return Err(format!(
+                        "{e}; restoring the folder also failed ({back}), its sessions are in {}",
+                        saved.display()
+                    ));
+                }
             }
             return Err(e);
         }
@@ -314,14 +321,19 @@ fn link_profile_with(
 /// link and swapped in only once it is complete; on failure the link stays,
 /// and the next apply or boot repair retries. The shared store is kept.
 pub fn unlink_profile(dir: &Path, shared: &Path, backups: &Path) -> Result<(), String> {
-    unlink_profile_with(dir, shared, backups, make_link)
+    unlink_profile_with(dir, shared, backups, make_link, |from, to| {
+        fs::rename(from, to)
+    })
 }
+
+type Swap = fn(&Path, &Path) -> std::io::Result<()>;
 
 fn unlink_profile_with(
     dir: &Path,
     shared: &Path,
     backups: &Path,
     make: MakeLink,
+    swap: Swap,
 ) -> Result<(), String> {
     for sub in SHARED_SUBDIRS {
         let own = dir.join(sub);
@@ -333,11 +345,22 @@ fn unlink_profile_with(
         // An empty shared folder copies nothing, so the stage must exist.
         fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
         merge_tree(&target, &staging, &backups.join(stamp()).join(sub))?;
-        remove_link(&own)?;
-        if let Err(e) = fs::rename(&staging, &own) {
+        if let Err(e) = remove_link(&own) {
+            // Nothing changed; drop our own stage so retries don't pile up
+            // full copies (it only duplicates the shared store).
+            let _ = fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+        if let Err(e) = swap(&staging, &own) {
             // Restore the link; the staged copy is left for inspection.
-            make(&own, &target)?;
-            return Err(format!("Cannot replace {}: {e}", own.display()));
+            let failed = format!("Cannot replace {}: {e}", own.display());
+            return Err(match make(&own, &target) {
+                Ok(()) => failed,
+                Err(relink) => format!(
+                    "{failed}; restoring the link also failed ({relink}), a full copy is in {}",
+                    staging.display()
+                ),
+            });
         }
     }
     Ok(())
@@ -691,12 +714,37 @@ mod tests {
         write(&a.join("projects/p/one.jsonl"), "1");
         link_profile(&a, &shared, &backups).unwrap();
         let ok: MakeLink = make_link;
-        unlink_profile_with(&a, &shared, &backups, ok).unwrap();
+        unlink_profile_with(&a, &shared, &backups, ok, |f, t| fs::rename(f, t)).unwrap();
         assert!(!is_link(&a.join("projects")));
         assert!(a.join("projects/p/one.jsonl").is_file());
         assert!(!fs::read_dir(&a)
             .unwrap()
             .flatten()
             .any(|e| e.file_name().to_string_lossy().contains(".unshare-")));
+    }
+
+    #[test]
+    fn unlink_restores_the_link_when_the_swap_fails_and_reports_a_double_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        let (shared, backups) = (root.path().join("shared"), root.path().join("backups"));
+        write(&a.join("projects/p/one.jsonl"), "1");
+        link_profile(&a, &shared, &backups).unwrap();
+        let busy: Swap = |_, _| Err(std::io::Error::other("in use"));
+        let err = unlink_profile_with(&a, &shared, &backups, make_link, busy).unwrap_err();
+        assert!(err.contains("in use"), "{err}");
+        assert!(links_to(&a.join("projects"), &shared.join("projects")));
+        assert!(a.join("projects/p/one.jsonl").is_file());
+
+        let no_links: MakeLink = |_, _| Err("no links".into());
+        let err = unlink_profile_with(&a, &shared, &backups, no_links, busy).unwrap_err();
+        assert!(err.contains("a full copy is in"), "{err}");
+        let stage = fs::read_dir(&a)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.to_string_lossy().contains("projects.unshare-"))
+            .unwrap();
+        assert!(stage.join("p/one.jsonl").is_file());
     }
 }
