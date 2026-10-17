@@ -53,7 +53,15 @@ const MAX_ID_LEN: usize = 64;
 const MAX_LABEL_CHARS: usize = 64;
 const MAX_CAPS: usize = 16;
 const MAX_CAP_LEN: usize = 32;
-const KNOWN_OPS: &[&str] = &["hello", "begin", "insert", "cancel", "subscribe", "ping"];
+const KNOWN_OPS: &[&str] = &[
+    "hello",
+    "begin",
+    "insert",
+    "cancel",
+    "subscribe",
+    "ping",
+    "tts_stop",
+];
 /// Longest pane name pushed in a `turn` event.
 pub const MAX_PANE_NAME_CHARS: usize = 64;
 
@@ -83,6 +91,12 @@ pub enum Request {
         request_id: String,
     },
     Ping {
+        request_id: String,
+    },
+    /// SWA-66: silence Swarmterm's announcement voice (buzzkey's "quiet"
+    /// hotkey). Needs the `tts` capability; allowed on a status feed, since
+    /// it neither dictates nor waits on anything.
+    TtsStop {
         request_id: String,
     },
 }
@@ -121,6 +135,8 @@ enum Op {
     Subscribe { request_id: String },
     #[serde(rename_all = "camelCase")]
     Ping { request_id: String },
+    #[serde(rename = "tts_stop", rename_all = "camelCase")]
+    TtsStop { request_id: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
@@ -164,7 +180,8 @@ impl Request {
             | Self::Begin { request_id }
             | Self::Insert { request_id, .. }
             | Self::Subscribe { request_id }
-            | Self::Ping { request_id } => Some(request_id.clone()),
+            | Self::Ping { request_id }
+            | Self::TtsStop { request_id } => Some(request_id.clone()),
             Self::Cancel { request_id, .. } => request_id.clone(),
         }
     }
@@ -427,6 +444,7 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
         Op::Cancel { request_id, pin } => Request::Cancel { request_id, pin },
         Op::Subscribe { request_id } => Request::Subscribe { request_id },
         Op::Ping { request_id } => Request::Ping { request_id },
+        Op::TtsStop { request_id } => Request::TtsStop { request_id },
     };
     match &req {
         Request::Hello {
@@ -451,6 +469,7 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
         Request::Begin { request_id }
         | Request::Subscribe { request_id }
         | Request::Ping { request_id }
+        | Request::TtsStop { request_id }
             if !valid_id(request_id) =>
         {
             Err("bad-request")
@@ -485,6 +504,26 @@ mod tests {
     use super::*;
 
     const TOKEN: &str = "secret-token";
+
+    #[test]
+    fn parses_tts_stop() {
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"tts_stop","requestId":"q1"}"#,
+                TOKEN
+            ),
+            Ok(Request::TtsStop {
+                request_id: "q1".into()
+            })
+        );
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"tts_stop","requestId":"q1","all":true}"#,
+                TOKEN
+            ),
+            Err("bad-request")
+        );
+    }
 
     #[test]
     fn parses_subscribe_and_ping() {

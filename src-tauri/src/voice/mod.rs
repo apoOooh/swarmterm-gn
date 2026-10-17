@@ -60,7 +60,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::pty::AppState;
 use pins::{Pin, PinStore, PIN_TTL};
 use protocol::{
-    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_QUIT, CAP_TURNS,
+    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_QUIT, CAP_TTS,
+    CAP_TURNS,
 };
 pub use settings::VoiceSettings;
 
@@ -163,6 +164,9 @@ impl Conn {
     }
     fn turns(&self) -> bool {
         self.capabilities.iter().any(|c| c == CAP_TURNS)
+    }
+    fn tts(&self) -> bool {
+        self.capabilities.iter().any(|c| c == CAP_TTS)
     }
 }
 
@@ -364,7 +368,12 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
     conn.requests += 1;
     // A status feed stays a status feed: no dictation on it, so a reader
     // that lags behind pushes can never hold up an insert.
-    if conn.subscribed && !matches!(req, Request::Ping { .. } | Request::Subscribe { .. }) {
+    if conn.subscribed
+        && !matches!(
+            req,
+            Request::Ping { .. } | Request::Subscribe { .. } | Request::TtsStop { .. }
+        )
+    {
         return Response::err(req.request_id(), "bad-request");
     }
     match req {
@@ -409,6 +418,13 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
         }
         Request::Subscribe { request_id } => subscribe(app, &hub, request_id, conn),
         Request::Ping { request_id } => Response::ok(Some(request_id)),
+        Request::TtsStop { request_id } => {
+            if !conn.tts() {
+                return Response::err(Some(request_id), "bad-request");
+            }
+            app.state::<tts::TtsHub>().stop(None);
+            Response::ok(Some(request_id))
+        }
         Request::Cancel { request_id, pin } => {
             let removed = hub.pins.lock().unwrap().remove(&pin);
             if let Some(pin) = removed {

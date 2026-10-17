@@ -177,8 +177,12 @@ mod tests {
         let mut sapi = Sapi::new().expect("sapi");
         let voices = sapi.voices();
         println!("voices: {voices:?}");
-        let voice = super::super::pick_voice(&voices, "").expect("a voice").id.clone();
-        sapi.speak("Backend: fertig.", &voice, 60, &|| false).unwrap();
+        let voice = super::super::pick_voice(&voices, "")
+            .expect("a voice")
+            .id
+            .clone();
+        sapi.speak("Backend: fertig.", &voice, 60, &|| false)
+            .unwrap();
         let t0 = Instant::now();
         let stop_at = Duration::from_millis(700);
         sapi.speak(
