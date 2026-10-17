@@ -8,6 +8,7 @@ import {
   type VoiceSettings
 } from '@/tauri/voice'
 import { useVoiceDictationStore } from '@/store/voice-dictation-store'
+import { modelSelectable } from '@/lib/voice-dictation'
 import { BuzzkeySection } from './BuzzkeySection'
 import { ToggleRow } from './NotificationsPanel'
 
@@ -42,6 +43,9 @@ export function VoicePanel(): ReactElement {
   const [error, setError] = useState<string | null>(null)
   const models = useVoiceDictationStore((s) => s.models)
   const progress = useVoiceDictationStore((s) => s.progress)
+  // A model downloaded from here becomes the selection once it is on disk:
+  // only downloaded models can be picked, so Download is how you choose one.
+  const [pickAfterDownload, setPickAfterDownload] = useState<string | null>(null)
 
   useEffect(() => {
     void getVoiceSettings().then(setSettings, (e) => setError(String(e)))
@@ -61,7 +65,15 @@ export function VoicePanel(): ReactElement {
     void p.then(() => useVoiceDictationStore.getState().refresh(), (e) => setError(String(e)))
   }
 
+  useEffect(() => {
+    if (!pickAfterDownload || !settings) return
+    if (!models.some((m) => m.id === pickAfterDownload && m.ready)) return
+    setPickAfterDownload(null)
+    if (settings.model !== pickAfterDownload) update({ ...settings, model: pickAfterDownload })
+  }, [models, pickAfterDownload, settings])
+
   const selected = models.find((m) => m.id === settings?.model)
+  const modelMissing = !!settings?.enabled && !!settings.builtinEnabled && !selected?.ready
 
   return (
     <div className="space-y-8">
@@ -123,16 +135,25 @@ export function VoicePanel(): ReactElement {
               </select>
             </label>
           </div>
+          {modelMissing && (
+            <p role="alert" className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+              The selected model is not downloaded, so dictation is off. Download it, or pick a downloaded model.
+            </p>
+          )}
           <div className="mt-2 space-y-1" role="radiogroup" aria-label="Speech model">
             {models.map((m) => {
               const received = progress[m.id]
               return (
                 <div key={m.id} className="flex items-center justify-between gap-4 rounded px-1 py-1.5 hover:bg-muted/40">
-                  <label className="flex min-w-0 items-center gap-2 text-sm text-foreground">
+                  <label
+                    className={`flex min-w-0 items-center gap-2 text-sm ${modelSelectable(m, settings.model) ? 'text-foreground' : 'text-muted-foreground'}`}
+                    title={modelSelectable(m, settings.model) ? undefined : 'Download this model to use it'}
+                  >
                     <input
                       type="radio"
                       name="voice-model"
                       checked={settings.model === m.id}
+                      disabled={!modelSelectable(m, settings.model)}
                       onChange={() => update({ ...settings, model: m.id })}
                     />
                     <span className="truncate">{m.label}</span>
@@ -150,12 +171,12 @@ export function VoicePanel(): ReactElement {
                         <span className="w-24 text-right text-xs tabular-nums text-muted-foreground">
                           {megabytes(received ?? 0)} / {megabytes(m.bytes)}
                         </span>
-                        <button className={action} onClick={() => run(cancelVoiceModel(m.id))}>Cancel</button>
+                        <button className={action} onClick={() => { if (pickAfterDownload === m.id) setPickAfterDownload(null); run(cancelVoiceModel(m.id)) }}>Cancel</button>
                       </>
                     ) : m.ready ? (
                       <button className={action} onClick={() => run(deleteVoiceModel(m.id))}>Delete</button>
                     ) : (
-                      <button className={action} onClick={() => run(downloadVoiceModel(m.id))}>Download</button>
+                      <button className={action} onClick={() => { setPickAfterDownload(m.id); run(downloadVoiceModel(m.id)) }}>Download</button>
                     )}
                   </div>
                 </div>

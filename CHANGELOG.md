@@ -5,7 +5,9 @@
 - Voice: built-in speech recognition (SWA-38). Settings → Voice downloads
   a Whisper model (checksum-verified) and enables local dictation without
   buzzkey: Ctrl+Shift+Space or the pane-header microphone starts and stops,
-  the text arrives as a draft in the pane that had the keyboard. Runs on the
+  the text arrives as a draft in the pane that had the keyboard. Only
+  downloaded models can be selected, and the shortcut reports a missing
+  model in the bell instead of doing nothing. Runs on the
   CPU; see `docs/adr/0002-builtin-speech-source.md`.
 - Saved workspaces can open on startup (pin on the card, the navbar workspace menu or Settings →
   Workspaces → Open on startup, with order); Welcome is skipped while any is set.
