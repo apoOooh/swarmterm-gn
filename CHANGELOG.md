@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Settings: toggle switches no longer overflow their track.
+
 ## [1.17.0] - 2026-10-18
 
 - Voice: spoken replies for Claude Code (SWA-58). With Settings → Voice →
