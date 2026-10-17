@@ -310,7 +310,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
       width: Math.min(label.length * CHAR_PX, 96) + 12,
       render: () => (
         <DropdownMenu key="account" onOpenChange={trackMenu}>
-          <DropdownMenuTrigger asChild><button data-no-dnd className="max-w-24 shrink-0 truncate rounded border border-border px-1 text-[10px] text-muted-foreground" title={`Account: ${label}`} aria-label={`Account: ${label}`}>{label}</button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><button data-no-dnd className="max-w-24 shrink-0 truncate rounded border border-border px-1 text-[10px] text-muted-foreground" title={`Subscription: ${label} — click to switch; the conversation moves with the pane`} aria-label={`Account: ${label}`}>{label}</button></DropdownMenuTrigger>
           <DropdownMenuContent><DropdownMenuItem onSelect={() => props.onAccountChange?.(undefined)}>Default</DropdownMenuItem>{accounts.filter(account => account.agentId === agentId).map(account => <DropdownMenuItem key={account.id} onSelect={() => props.onAccountChange?.(account.id)}>{account.name}</DropdownMenuItem>)}</DropdownMenuContent>
         </DropdownMenu>
       )

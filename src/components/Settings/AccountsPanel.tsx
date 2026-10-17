@@ -11,6 +11,7 @@ import { templateById } from '@/lib/templates'
 import type { AgentAccount } from '@/tauri/accounts'
 import { AccountCard } from './AccountCard'
 import { AddAccountWizard } from './AddAccountWizard'
+import { getSessionShare, setSessionShare, type SessionShareSettings } from '@/tauri/sessions'
 
 const AGENTS = ['claude-code', 'codex'] as const
 const USAGE_POLL_MS = 60_000
@@ -24,6 +25,13 @@ export function AccountsPanel({ onLogin }: { onLogin: () => void }): React.React
   const [failure, setFailure] = useState<string | null>(null)
 
   useEffect(() => { void refresh() }, [refresh])
+  const [share, setShare] = useState<SessionShareSettings | undefined>()
+  useEffect(() => { void getSessionShare().then(setShare).catch(() => setShare(undefined)) }, [])
+  // Moves session folders on disk, so it goes through `run` (busy + error);
+  // the reread afterwards shows what actually got stored.
+  const changeShare = (next: SessionShareSettings): void => run(async () => {
+    try { await setSessionShare(next) } finally { setShare(await getSessionShare()) }
+  })
   // Re-check every profile whenever the panel opens or the list changes —
   // logins finished in a pane land here without a manual refresh.
   useEffect(() => {
@@ -89,6 +97,17 @@ export function AccountsPanel({ onLogin }: { onLogin: () => void }): React.React
       {card(agent)}
       {accounts.filter(a => a.agentId === agent).map(a => card(agent, a))}
     </div>)}
+    {share && <div className="space-y-1.5 rounded border border-border p-3">
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={share.claude} disabled={busy} onChange={e => changeShare({ ...share, claude: e.target.checked })} className="h-3.5 w-3.5 accent-primary" />
+        Share Claude Code sessions between all subscriptions
+      </label>
+      <label className={`ml-5 flex items-center gap-2 text-sm ${share.claude ? '' : 'opacity-50'}`}>
+        <input type="checkbox" checked={share.includeDefault} disabled={busy || !share.claude} onChange={e => changeShare({ ...share, includeDefault: e.target.checked })} className="h-3.5 w-3.5 accent-primary" />
+        Include the Default subscription
+      </label>
+      <p className="text-xs text-muted-foreground">Every subscription sees and can resume every session. Each profile's session folders are merged into one shared store; the originals are kept as backups. Close panes of the affected subscriptions before switching. Turning it off gives each subscription a full copy. Codex sessions are not shared; move them one at a time with the subscription switch in a pane's title bar or "Open in" when resuming.</p>
+    </div>}
     <p className="text-xs text-muted-foreground">Credentials stay in each CLI's own folder; Swarmterm stores names and folder references only. Removing a profile leaves its folder on disk. Usage: Claude Code via its status line while a pane runs, Codex from its session logs; the last numbers are kept across restarts.</p>
   </section>
 }

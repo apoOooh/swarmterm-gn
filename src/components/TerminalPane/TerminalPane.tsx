@@ -31,6 +31,8 @@ import {
 } from '@/components/ui/context-menu'
 import { ClearWorktreeDialog, type DialogTarget } from '@/components/Workspace/ClearWorktreeDialog'
 import { getChangedFiles, branchUnmergedCount } from '@/tauri/git'
+import { transferAgentSession } from '@/tauri/sessions'
+import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { classifyWorktree, clearWorktreeMenuLabel } from '@/lib/worktree-cleanup'
 import { agentCommand, DEFAULT_TEMPLATE_ID, templateById, withLaunchMode } from '@/lib/templates'
 import { buildAgentSpawnCommand, shellFlavor } from '@/lib/agent-spawn-command'
@@ -124,6 +126,31 @@ export function TerminalPane({
     })
 
   const { id: leafId, terminalId } = leaf
+
+  // Switching subscription carries the conversation along (SWA-64): the
+  // session is copied into the target profile's store, then the pane resumes
+  // it there. If the copy fails the pane stays as it is — silently starting
+  // a fresh conversation would look like lost history.
+  const switchAccount = async (accountId?: string): Promise<void> => {
+    const sessionId = leaf.sessionId ?? leaf.resumeSessionId
+    const agentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
+    if (!sessionId || (agentId !== 'claude-code' && agentId !== 'codex')) {
+      setPaneAccount(leafId, accountId)
+      return
+    }
+    try {
+      await transferAgentSession(agentId, sessionId, leaf.accountId, accountId)
+      setPaneAccount(leafId, accountId, true)
+    } catch (error) {
+      useNotificationCenterStore.getState().add({
+        kind: 'backend',
+        terminalId,
+        title: `Could not move the session to the other subscription: ${String(error)}`,
+        detail: useTerminalTitleStore.getState().titles[terminalId] ?? '',
+        at: Date.now()
+      })
+    }
+  }
 
   const agentTitle = useTerminalTitleStore((s) => s.titles[terminalId])
   // Per-terminal selector: only this pane wakes when ITS number changes, and the
@@ -408,7 +435,7 @@ export function TerminalPane({
       <PaneHeader
         agentId={resolvedAgentId}
         accountId={leaf.accountId}
-        onAccountChange={accountId => setPaneAccount(leafId, accountId)}
+        onAccountChange={accountId => void switchAccount(accountId)}
         shellId={resolvedShellId}
         resolvedCwd={resolvedCwd}
         hasCwdOverride={leaf.cwd !== undefined}

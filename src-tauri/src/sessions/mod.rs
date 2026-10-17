@@ -8,6 +8,7 @@ pub mod claude;
 pub mod codex;
 pub mod opencode;
 pub mod qwen;
+pub mod share;
 pub mod thread;
 
 use serde::Serialize;
@@ -326,6 +327,10 @@ pub async fn list_all(
         out
     });
     let mut entries = files.await.unwrap_or_default();
+    // Share mode (and transfers) put the same session in several stores;
+    // list it once, under the first store that has it (default first).
+    let mut seen = std::collections::HashSet::new();
+    entries.retain(|e| seen.insert((e.agent_id.clone(), e.session_id.clone())));
     if include_opencode {
         entries.extend(opencode::scan(&folder).await);
     }

@@ -37,6 +37,9 @@ import {
 import { LayoutPreview } from './LayoutPreview'
 import { RecentsDialog } from './RecentsDialog'
 import { SessionRow } from './SessionRow'
+import { retargetResumePanes, type SessionTargets } from '@/lib/session-transfer'
+import { transferAgentSession } from '@/tauri/sessions'
+import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { SessionsDialog } from './SessionsDialog'
 import { SavedWorkspaceCard } from './SavedWorkspaceCard'
 import { AgentCountEditor } from './AgentCountEditor'
@@ -85,6 +88,10 @@ export function Welcome(): ReactElement {
 
   const [sessions, setSessions] = useState<AgentSessionEntry[]>([])
   const [tickedSessions, setTickedSessions] = useState<ReadonlySet<string>>(new Set())
+  // "Open in" choice per ticked session (SWA-64); see lib/session-transfer.
+  const [sessionTargets, setSessionTargets] = useState<SessionTargets>({})
+  const setSessionTarget = (key: string, accountId: string | null): void =>
+    setSessionTargets(prev => ({ ...prev, [key]: accountId }))
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>('all')
   const [sessionsDialogOpen, setSessionsDialogOpen] = useState(false)
   // Recents are global, not per-folder, so unlike sessionsDialogOpen this is
@@ -244,9 +251,8 @@ export function Welcome(): ReactElement {
     if (picked) setFolder(picked)
   }
 
-  const resumePanes = sessions
-    .filter((e) => tickedSessions.has(sessionKey(e)))
-    .map((e) => ({ agentId: e.agentId, sessionId: e.sessionId, cwd: e.cwd, accountId: e.accountId }))
+  const resumePanes = retargetResumePanes(sessions.filter((e) => tickedSessions.has(sessionKey(e))), sessionTargets, sessionKey)
+    .map((e) => ({ agentId: e.agentId, sessionId: e.sessionId, cwd: e.cwd, accountId: e.accountId, moved: 'fromAccountId' in e, fromAccountId: e.fromAccountId }))
   // Ticks are kept against the FULL sessions list (above) so a selection made
   // under one filter still counts once the user switches tabs.
   const tabCounts = sessionTabCounts(sessions)
@@ -297,6 +303,25 @@ export function Welcome(): ReactElement {
         )
       }
 
+      // Copy each session into its chosen subscription before the pane
+      // resumes it there. A failed copy keeps that pane on its original
+      // subscription (the conversation is never dropped) and says so.
+      const failed: string[] = []
+      const panesToResume = await Promise.all(resumePanes.map(async ({ moved, fromAccountId, ...pane }) => {
+        if (!moved) return pane
+        try {
+          await transferAgentSession(pane.agentId, pane.sessionId, fromAccountId, pane.accountId)
+          return pane
+        } catch (error) {
+          failed.push(String(error))
+          return { ...pane, accountId: fromAccountId }
+        }
+      }))
+      // Welcome closes once the workspace exists, so report in the bell.
+      if (failed.length > 0) {
+        useNotificationCenterStore.getState().add({ kind: 'backend', terminalId: '', title: `Some sessions stayed on their original subscription: ${failed.join('; ')}`, detail: '', at: Date.now() })
+      }
+
       createWorkspace({
         cwd: trimmedFolder,
         terminalCount,
@@ -304,7 +329,7 @@ export function Welcome(): ReactElement {
         accountIds: allocateAccounts(agentIds, accounts, accountSelections),
         worktreeMode: isolate,
         paneWorktrees,
-        resumePanes: resumePanes.length > 0 ? resumePanes : undefined,
+        resumePanes: panesToResume.length > 0 ? panesToResume : undefined,
         defaultAgentId: splitAgent === '' ? undefined : splitAgent
       })
     } finally {
@@ -500,6 +525,8 @@ export function Welcome(): ReactElement {
                       ticked={ticked}
                       disabled={!ticked && !canTickMore}
                       onToggle={() => toggleSession(key)}
+                      target={sessionTargets[key]}
+                      onTargetChange={(accountId) => setSessionTarget(key, accountId)}
                     />
                   )
                 })}
@@ -669,6 +696,8 @@ export function Welcome(): ReactElement {
         sessions={sessions}
         tickedKeys={tickedSessions}
         onToggle={toggleSession}
+        targets={sessionTargets}
+        onTargetChange={setSessionTarget}
         canTickMore={canTickMore}
         slotsLeft={maxTiles - totalPaneCount}
       />

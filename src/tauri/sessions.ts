@@ -21,3 +21,14 @@ export interface AgentThread { found: boolean; truncated: boolean; messages: Thr
  *  `src-tauri/src/sessions/thread.rs::Thread`. Fail-open: `found: false`. */
 export const readAgentThread = (agentId: string, sessionId: string, accountId?: string): Promise<AgentThread> =>
   invoke('read_agent_thread', { agentId, sessionId, accountId })
+
+/** Copy one session into another subscription's store (SWA-64) so it can be
+ *  resumed there; the source stays. `undefined` is the default profile. */
+export const transferAgentSession = (agentId: string, sessionId: string, fromAccountId: string | undefined, toAccountId: string | undefined): Promise<void> =>
+  invoke('transfer_agent_session', { agentId, sessionId, fromAccountId: fromAccountId ?? null, toAccountId: toAccountId ?? null })
+
+/** Lockstep with `src-tauri/src/sessions/share.rs::ShareSettings`. */
+export interface SessionShareSettings { claude: boolean; includeDefault: boolean }
+export const getSessionShare = (): Promise<SessionShareSettings> => invoke('get_session_share')
+export const setSessionShare = (settings: SessionShareSettings): Promise<SessionShareSettings> =>
+  invoke('set_session_share', { settings })

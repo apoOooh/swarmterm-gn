@@ -251,6 +251,7 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
                 Some(&crate::hook::install::format_command(&exe, cfg!(windows))),
             )?;
             adopt_default_claude_config(dir);
+            crate::sessions::share::ensure_profile(dir);
             let command = STATUSLINE_ENABLED
                 .load(Ordering::Relaxed)
                 .then(|| crate::statusline::install::format_command(&exe, cfg!(windows)));
