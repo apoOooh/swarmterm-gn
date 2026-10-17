@@ -2,10 +2,15 @@
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-10-17
+
+- Routines: command routines (SWA-67). A routine can run one shell command
+  line on a schedule instead of an agent, in the background without a pane
+  or tokens, stopped at its time limit. Only failures go to the bell; every
+  run's exit code and duration show under Last run.
 - Terminal: Shift+Enter in an agent pane inserts a line break instead of
   submitting the prompt (SWA-60). xterm sent the same carriage return as
   Enter, so Claude Code sent each line of a multi-line prompt on its own.
-
 - Voice: spoken announcements (SWA-66). With Settings → Voice → "Speak
   announcements" on, Swarmterm says "<pane>: fertig" / "<pane> wartet auf
   Eingabe" itself, using an installed Windows voice (no download). Typing,
