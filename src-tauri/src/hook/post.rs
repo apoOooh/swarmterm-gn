@@ -43,6 +43,7 @@ pub fn post_signal(mcp_url: &str, token: &str, signal: Signal, timeout: Duration
         &HookBody {
             signal,
             session: None,
+            turn: None,
         },
         timeout,
     )

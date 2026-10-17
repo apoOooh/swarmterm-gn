@@ -29,6 +29,12 @@
 //! fallback voice in buzzkey whether Swarmterm took it. `begin` holds a
 //! `tts::BeginGuard` and silences the voice before any mic opens.
 //!
+//! Excerpts (SWA-58, docs/adr/0004): `completion/` keeps the turn ledger
+//! fed by Claude's hooks (`hook_turn`) and, with "Allow excerpts" on, reads
+//! the final answer from the pane's transcript into a short excerpt. It is
+//! spoken only on request — Ctrl+Shift+R or a client's `read_excerpt` — and
+//! never leaves this process; feeds see `completionId` + `hasExcerpt`.
+//!
 //! Companion (SWA-42): `companion/` installs and starts buzzkey from
 //! Settings → Voice. It reads "connected" and the version from the live
 //! hello'd connections here and asks buzzkey to leave with a `quit` push.
@@ -49,7 +55,7 @@ mod settings;
 pub mod speech;
 pub mod tts;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -61,8 +67,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::pty::AppState;
 use pins::{Pin, PinStore, PIN_TTL};
 use protocol::{
-    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_QUIT, CAP_TTS,
-    CAP_TURNS,
+    CancelReason, Event, Request, Response, TurnEvent, TurnKind, TurnUpdate, CAP_EXCERPT_READ,
+    CAP_INDICATOR, CAP_QUIT, CAP_TTS, CAP_TURNS, CAP_TURN_KINDS,
 };
 pub use settings::VoiceSettings;
 
@@ -169,6 +175,9 @@ impl Conn {
     fn tts(&self) -> bool {
         self.capabilities.iter().any(|c| c == CAP_TTS)
     }
+    fn excerpt_read(&self) -> bool {
+        self.capabilities.iter().any(|c| c == CAP_EXCERPT_READ)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -206,8 +215,13 @@ pub struct VoiceHub {
     peer: Mutex<Option<PeerInfo>>,
     /// Live hello'd connections: app name and whether it negotiated `quit`.
     hellos: Mutex<HashMap<u64, (String, bool)>>,
-    subscribers: Mutex<HashSet<u64>>,
+    /// Subscribed feeds and what each negotiated: pushes are serialised per
+    /// feed, so a client never sees a kind or field it did not ask for.
+    subscribers: Mutex<HashMap<u64, Vec<String>>>,
     turn_seq: AtomicU64,
+    /// SWA-58. Lock order: never held together with `terminals`, `pins` or
+    /// the TTS hub lock — every caller copies out what it needs and drops it.
+    pub(crate) ledger: Mutex<completion::Ledger>,
     #[cfg(windows)]
     server: Mutex<Option<pipe::Running>>,
 }
@@ -272,6 +286,14 @@ impl VoiceHub {
 
     pub fn conn_has_pin(&self, conn: u64) -> bool {
         self.pins.lock().unwrap().conn_has_pin(conn)
+    }
+
+    pub fn ledger_holds(&self, token: &str) -> bool {
+        self.ledger.lock().unwrap().holds(token, Instant::now())
+    }
+
+    pub fn announced(&self, terminal_id: &str, token: &str) {
+        self.ledger.lock().unwrap().announced(terminal_id, token);
     }
 
     fn remembered(&self, request_id: &str) -> Option<Response> {
@@ -355,8 +377,222 @@ pub fn drop_terminal(app: &AppHandle, terminal_id: &str) {
     };
     let removed = hub.pins.lock().unwrap().remove_terminal(terminal_id);
     finish(app, removed);
+    hub.ledger.lock().unwrap().forget(terminal_id);
     if let Some(tts) = app.try_state::<tts::TtsHub>() {
         tts.drop_terminal(terminal_id);
+    }
+}
+
+/// SWA-58: one Claude turn edge from `POST /hook`, already checked against
+/// the pane's live generation and session. The ledger decides; a Stop it
+/// accepts may start a transcript read (only with "Allow excerpts").
+pub fn hook_turn(
+    app: &AppHandle,
+    terminal_id: &str,
+    spawn_id: &str,
+    session_id: &str,
+    turn: &crate::hook::TurnMark,
+    config_dir: Option<std::path::PathBuf>,
+) {
+    use crate::hook::TurnEdge;
+    let Some(hub) = app.try_state::<VoiceHub>() else {
+        return;
+    };
+    let settings = hub.settings();
+    let excerpts = settings.enabled && settings.allow_excerpts;
+    let (job, correction) = {
+        let mut ledger = hub.ledger.lock().unwrap();
+        match turn.edge {
+            TurnEdge::Prompt => {
+                ledger.prompt(terminal_id, spawn_id, session_id, &turn.prompt_id);
+                return;
+            }
+            TurnEdge::Stop | TurnEdge::StopFailure => {
+                let outcome = if turn.edge == TurnEdge::StopFailure {
+                    completion::Outcome::Error
+                } else {
+                    completion::Outcome::Done
+                };
+                let job = ledger.stop(
+                    terminal_id,
+                    spawn_id,
+                    session_id,
+                    &turn.prompt_id,
+                    outcome,
+                    turn.continued,
+                    excerpts && turn.answer.is_some(),
+                    Instant::now(),
+                );
+                let correction = (outcome == completion::Outcome::Error)
+                    .then(|| ledger.failed_after_publish(terminal_id))
+                    .flatten();
+                (job, correction)
+            }
+        }
+    };
+    // "fertig" already went out, then the turn turned out to have failed:
+    // one correction, spoken and pushed, never more.
+    if let Some((token, published)) = correction {
+        if settings.enabled && settings.speak_turns {
+            app.state::<tts::TtsHub>().announce(
+                terminal_id.to_owned(),
+                spawn_id.to_owned(),
+                &published.pane_name,
+                &published.agent,
+                TurnKind::Error,
+                &settings.tts_voice,
+                None,
+            );
+        }
+        push_update(
+            app,
+            published.seq,
+            terminal_id,
+            Some(TurnKind::Error),
+            &token,
+            false,
+        );
+    }
+    if let (Some(job), Some(answer)) = (job, turn.answer.clone()) {
+        spawn_read(app, job, answer, config_dir);
+    }
+}
+
+/// SessionStart/SessionEnd: the conversation in this pane is over.
+pub fn forget_turns(app: &AppHandle, terminal_id: &str) {
+    if let Some(hub) = app.try_state::<VoiceHub>() {
+        hub.ledger.lock().unwrap().forget(terminal_id);
+    }
+}
+
+/// Read the transcript off the async runtime, within the reader's budget.
+/// The final text lives only inside this closure: reduced to an excerpt
+/// right away and dropped. The opt-in is checked again before the commit,
+/// and the ledger commits only to the turn the read was started for.
+fn spawn_read(
+    app: &AppHandle,
+    job: completion::ReadJob,
+    answer: completion::Fingerprint,
+    config_dir: Option<std::path::PathBuf>,
+) {
+    use completion::{excerpt, reader};
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let excerpt = app.path().home_dir().ok().and_then(|home| {
+            let root = reader::claude_config_dir(config_dir.as_deref(), &home);
+            let path = reader::locate(&root, &job.session_id)?;
+            let text = reader::final_answer_within(
+                || reader::read_tail(&root, &path),
+                &job.prompt_id,
+                &answer,
+                reader::BUDGET,
+            )?;
+            excerpt::excerpt(&text)
+        });
+        let hub = app.state::<VoiceHub>();
+        let settings = hub.settings();
+        let excerpt = excerpt.filter(|_| settings.enabled && settings.allow_excerpts);
+        let late = hub.ledger.lock().unwrap().commit(&job.token, excerpt);
+        if let Some(published) = late {
+            push_update(
+                &app,
+                published.seq,
+                &job.terminal_id,
+                None,
+                &job.token,
+                true,
+            );
+        }
+    });
+}
+
+/// `turn_update` to every feed that negotiated what it carries: the kind
+/// only with `turn-kinds`, the completion fields only with `excerpt-read`.
+fn push_update(
+    app: &AppHandle,
+    seq: u64,
+    terminal_id: &str,
+    kind: Option<TurnKind>,
+    token: &str,
+    has_excerpt: bool,
+) {
+    let hub = app.state::<VoiceHub>();
+    let settings = hub.settings();
+    if !settings.enabled || !settings.announce_turns {
+        return;
+    }
+    let subs: Vec<(u64, Vec<String>)> = hub
+        .subscribers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(id, caps)| (*id, caps.clone()))
+        .collect();
+    let conns = hub.conns.lock().unwrap();
+    for (id, caps) in subs {
+        let has = |c: &str| caps.iter().any(|x| x == c);
+        let mut update = TurnUpdate::new(seq, terminal_id.to_owned());
+        if has(CAP_TURN_KINDS) {
+            update.kind = kind;
+        }
+        if has(CAP_EXCERPT_READ) {
+            update.completion_id = Some(token.to_owned());
+            update.has_excerpt = Some(has_excerpt);
+        }
+        if update.kind.is_none() && update.completion_id.is_none() {
+            continue;
+        }
+        if let Some(tx) = conns.get(&id) {
+            let _ = tx.send(Outgoing::Line(update.to_line()));
+        }
+    }
+}
+
+/// Speak the excerpt of one closed turn (`read_excerpt`, Ctrl+Shift+R). No
+/// await and no lock held across another: the ledger is copied out, then
+/// the TTS hub enqueues, and the worker re-checks the ledger before it
+/// speaks. Errors are the wire reasons.
+fn speak_excerpt(app: &AppHandle, token: &str) -> Result<(), &'static str> {
+    let hub = app.state::<VoiceHub>();
+    let settings = hub.settings();
+    if !settings.enabled || !settings.allow_excerpts {
+        return Err("disabled");
+    }
+    let tts = app.state::<tts::TtsHub>();
+    if tts::busy(app) {
+        return Err("tts-busy");
+    }
+    if !tts.ready() {
+        return Err("unavailable");
+    }
+    let found = hub.ledger.lock().unwrap().lookup(token, Instant::now());
+    match found {
+        completion::Lookup::Stale => Err("stale"),
+        completion::Lookup::NoExcerpt => Err("no-excerpt"),
+        completion::Lookup::Excerpt {
+            terminal_id,
+            spawn_id,
+            text,
+            label,
+        } => {
+            if spawn_id_of(app, &terminal_id).as_deref() != Some(spawn_id.as_str()) {
+                return Err("stale");
+            }
+            let (pane, agent) = label.map(|p| (p.pane_name, p.agent)).unwrap_or_default();
+            if tts.say_excerpt(
+                terminal_id,
+                spawn_id,
+                token.to_owned(),
+                &pane,
+                &agent,
+                &text,
+                &settings.tts_voice,
+            ) {
+                Ok(())
+            } else {
+                Err("unavailable")
+            }
+        }
     }
 }
 
@@ -372,7 +608,10 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
     if conn.subscribed
         && !matches!(
             req,
-            Request::Ping { .. } | Request::Subscribe { .. } | Request::TtsStop { .. }
+            Request::Ping { .. }
+                | Request::Subscribe { .. }
+                | Request::TtsStop { .. }
+                | Request::ReadExcerpt { .. }
         )
     {
         return Response::err(req.request_id(), "bad-request");
@@ -431,6 +670,25 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
                 Response::err(Some(request_id), "tts-busy")
             }
         }
+        Request::ReadExcerpt {
+            request_id,
+            completion_id,
+        } => {
+            if !conn.excerpt_read() {
+                return Response::err(Some(request_id), "bad-request");
+            }
+            // A reconnect or a double hotkey resends the same id: answered
+            // from memory, so one press is one excerpt.
+            if let Some(prev) = hub.remembered(&request_id) {
+                return prev;
+            }
+            let resp = match speak_excerpt(app, &completion_id) {
+                Ok(()) => Response::ok(Some(request_id.clone())),
+                Err(reason) => Response::err(Some(request_id.clone()), reason),
+            };
+            hub.remember(&request_id, &resp);
+            resp
+        }
         Request::Cancel { request_id, pin } => {
             let removed = hub.pins.lock().unwrap().remove(&pin);
             if let Some(pin) = removed {
@@ -461,7 +719,7 @@ fn subscribe(app: &AppHandle, hub: &VoiceHub, request_id: String, conn: &mut Con
         if subs.len() >= MAX_SUBSCRIBERS {
             return Response::err(rid, "busy");
         }
-        subs.insert(conn.id);
+        subs.insert(conn.id, conn.capabilities.clone());
         conn.subscribed = true;
     }
     // No replay: the client learns where the feed stands and only sees
@@ -659,37 +917,96 @@ pub fn voice_turn_event(app: AppHandle, event: TurnInput) {
     let Some(spawn_id) = spawn_id_of(&app, &event.terminal_id) else {
         return;
     };
+    // Numbered even without subscribers: the ledger keeps the seq for a
+    // later `turn_update`. Gaps are fine — there is no replay.
+    let seq = hub.turn_seq.fetch_add(1, Ordering::Relaxed) + 1;
+    // SWA-58: a "done" is tied to the closed turn of this generation, if
+    // that is the latest thing in the pane; anything else goes out plain
+    // and claims nothing (the renderer's status never closes a turn).
+    let view = (event.kind == TurnKind::Done)
+        .then(|| {
+            hub.ledger.lock().unwrap().publish(
+                &event.terminal_id,
+                &spawn_id,
+                completion::Published {
+                    seq,
+                    pane_name: event.pane_name.clone(),
+                    agent: event.agent.clone(),
+                },
+            )
+        })
+        .flatten();
+    let kind = match &view {
+        Some(v) if v.outcome == completion::Outcome::Error => TurnKind::Error,
+        _ => event.kind,
+    };
     let handled = settings.speak_turns
         && app.state::<tts::TtsHub>().announce(
             event.terminal_id.clone(),
             spawn_id,
             &event.pane_name,
             &event.agent,
-            event.kind,
+            kind,
             &settings.tts_voice,
+            view.as_ref().map(|v| v.token.clone()),
         );
     if !settings.announce_turns {
         return;
     }
-    let subs: Vec<u64> = hub.subscribers.lock().unwrap().iter().copied().collect();
+    let subs: Vec<(u64, Vec<String>)> = hub
+        .subscribers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(id, caps)| (*id, caps.clone()))
+        .collect();
     if subs.is_empty() {
         return;
     }
-    let seq = hub.turn_seq.fetch_add(1, Ordering::Relaxed) + 1;
-    let line = TurnEvent::new(
-        event.terminal_id,
-        &event.pane_name,
-        event.agent,
-        event.kind,
-        seq,
-        handled,
-    )
-    .to_line();
     let conns = hub.conns.lock().unwrap();
-    for id in subs {
-        if let Some(tx) = conns.get(&id) {
-            let _ = tx.send(Outgoing::Line(line.clone()));
+    for (id, caps) in subs {
+        let has = |c: &str| caps.iter().any(|x| x == c);
+        // A feed from before SWA-58 knows done/needs_input only.
+        if kind == TurnKind::Error && !has(CAP_TURN_KINDS) {
+            continue;
         }
+        let mut turn = TurnEvent::new(
+            event.terminal_id.clone(),
+            &event.pane_name,
+            event.agent.clone(),
+            kind,
+            seq,
+            handled,
+        );
+        if let (true, Some(v)) = (has(CAP_EXCERPT_READ), &view) {
+            turn.completion_id = Some(v.token.clone());
+            turn.has_excerpt = Some(v.has_excerpt);
+        }
+        if let Some(tx) = conns.get(&id) {
+            let _ = tx.send(Outgoing::Line(turn.to_line()));
+        }
+    }
+}
+
+/// Ctrl+Shift+R: the excerpt of the pane that was last announced, else of
+/// the focused one. Says "no excerpt available" rather than staying silent,
+/// so a missing excerpt is not mistaken for a dead hotkey.
+#[tauri::command]
+pub fn voice_read_excerpt(app: AppHandle, focused: Option<String>) -> Result<(), String> {
+    let hub = app.state::<VoiceHub>();
+    let target = hub.ledger.lock().unwrap().hotkey_target(focused.as_deref());
+    let result = match target {
+        Some(token) => speak_excerpt(&app, &token),
+        None => Err("no-excerpt"),
+    };
+    match result {
+        Ok(()) => Ok(()),
+        Err(reason @ ("no-excerpt" | "stale")) => {
+            app.state::<tts::TtsHub>()
+                .say_no_excerpt(&hub.settings().tts_voice);
+            Err(reason.into())
+        }
+        Err(reason) => Err(reason.into()),
     }
 }
 
@@ -756,6 +1073,12 @@ pub fn voice_set_settings(
     }
     if previous.speak_turns && !settings.speak_turns {
         app.state::<tts::TtsHub>().stop(None);
+    }
+    // Revoking the opt-in drops every excerpt and stops one being spoken;
+    // reads still in flight find it off before they commit.
+    if previous.allow_excerpts && !settings.allow_excerpts {
+        hub.ledger.lock().unwrap().clear_excerpts();
+        app.state::<tts::TtsHub>().stop_excerpts();
     }
     Ok(settings)
 }

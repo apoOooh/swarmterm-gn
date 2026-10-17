@@ -24,6 +24,12 @@ pub struct Item {
     pub spawn_id: String,
     pub text: String,
     pub at: Instant,
+    /// SWA-58: the closed turn this item speaks about (`completionId`). A
+    /// status with a token marks "last announced" when it starts playing.
+    pub token: Option<String>,
+    /// An excerpt, not a status: re-checked against the ledger and the
+    /// opt-in right before it is spoken.
+    pub excerpt: bool,
 }
 
 #[derive(Debug, Default)]
@@ -61,6 +67,10 @@ impl Queue {
         self.items.retain(|i| i.terminal_id != terminal_id);
     }
 
+    pub fn retain(&mut self, keep: impl FnMut(&Item) -> bool) {
+        self.items.retain(keep);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -96,6 +106,8 @@ mod tests {
             spawn_id: "g1".into(),
             text: format!("{t} done"),
             at,
+            token: None,
+            excerpt: false,
         }
     }
 

@@ -48,18 +48,46 @@ pub fn spoken_name(pane_name: &str) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
+fn name_for(pane_name: &str, agent: &str, english: bool) -> String {
+    spoken_name(pane_name)
+        .or_else(|| spoken_name(agent))
+        .unwrap_or_else(|| if english { "An agent" } else { "Ein Agent" }.to_owned())
+}
+
 /// The announcement in the voice's language: German unless the voice is
-/// English. Status only — never output text (that is SWA-58's excerpt).
+/// English. Status only — never output text (that is `excerpt_line`).
 pub fn announcement(pane_name: &str, agent: &str, kind: TurnKind, lang: &str) -> String {
     let english = lang.starts_with("en");
-    let name = spoken_name(pane_name)
-        .or_else(|| spoken_name(agent))
-        .unwrap_or_else(|| if english { "An agent" } else { "Ein Agent" }.to_owned());
+    let name = name_for(pane_name, agent, english);
     match (kind, english) {
         (TurnKind::Done, false) => format!("{name}: fertig."),
         (TurnKind::NeedsInput, false) => format!("{name} wartet auf Eingabe."),
+        (TurnKind::Error, false) => format!("{name}: Fehler."),
         (TurnKind::Done, true) => format!("{name} is done."),
         (TurnKind::NeedsInput, true) => format!("{name} needs input."),
+        (TurnKind::Error, true) => format!("{name} failed."),
+    }
+}
+
+/// SWA-58: an excerpt, honestly labelled as one — it is the first sentences,
+/// not a summary. The excerpt itself was already reduced to speakable prose.
+pub fn excerpt_line(pane_name: &str, agent: &str, excerpt: &str, lang: &str) -> String {
+    let english = lang.starts_with("en");
+    let name = name_for(pane_name, agent, english);
+    if english {
+        format!("{name}, excerpt: {excerpt}")
+    } else {
+        format!("{name}, Auszug: {excerpt}")
+    }
+}
+
+/// What Ctrl+Shift+R says when there is nothing to read — never silence,
+/// or the user cannot tell a missing excerpt from a dead hotkey.
+pub fn no_excerpt(lang: &str) -> &'static str {
+    if lang.starts_with("en") {
+        "No excerpt available."
+    } else {
+        "Kein Auszug verfügbar."
     }
 }
 
@@ -81,6 +109,23 @@ mod tests {
             announcement("Backend", "codex", TurnKind::Done, "en-US"),
             "Backend is done."
         );
+    }
+
+    #[test]
+    fn says_errors_and_labels_excerpts() {
+        assert_eq!(
+            announcement("Backend", "claude-code", TurnKind::Error, "de"),
+            "Backend: Fehler."
+        );
+        assert_eq!(
+            announcement("Backend", "claude-code", TurnKind::Error, "en"),
+            "Backend failed."
+        );
+        assert_eq!(
+            excerpt_line("✳ Backend", "claude-code", "Alles grün.", "de"),
+            "Backend, Auszug: Alles grün."
+        );
+        assert_eq!(no_excerpt("en-US"), "No excerpt available.");
     }
 
     #[test]

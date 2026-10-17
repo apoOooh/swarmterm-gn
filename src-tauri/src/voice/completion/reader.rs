@@ -306,7 +306,7 @@ mod tests {
         );
         let mut body = transcript(None);
         body.push_str(&filler.repeat((MAX_TAIL_BYTES as usize / filler.len()) + 10));
-        body.push_str(&transcript(Some("Ende.")).lines().nth(1).unwrap().to_owned());
+        body.push_str(transcript(Some("Ende.")).lines().nth(1).unwrap());
         body.push('\n');
         std::fs::write(&file, body).unwrap();
         let got = final_answer_within(

@@ -122,6 +122,9 @@ pub enum Lookup {
         terminal_id: String,
         spawn_id: String,
         text: String,
+        /// Pane name and agent of the published status, for the spoken
+        /// prefix; `None` when no status went out for this turn.
+        label: Option<Published>,
     },
     NoExcerpt,
     Stale,
@@ -291,6 +294,7 @@ impl Ledger {
                     terminal_id: terminal_id.clone(),
                     spawn_id: pane.spawn_id.clone(),
                     text: text.clone(),
+                    label: c.published.clone(),
                 },
                 None => Lookup::NoExcerpt,
             };

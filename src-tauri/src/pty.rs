@@ -256,6 +256,9 @@ pub struct ManagedTerminal {
     pub job: Option<job::JobHandle>,
     pub worktree_mode: bool,
     pub repo_root: Option<String>,
+    /// A Claude account profile's own `CLAUDE_CONFIG_DIR` (SWA-58: where the
+    /// excerpt reader looks for this pane's transcripts). `None` = default.
+    pub claude_config_dir: Option<std::path::PathBuf>,
 }
 
 impl ManagedTerminal {
@@ -564,6 +567,10 @@ pub fn spawn_terminal(
     if let Some(account) = &account {
         crate::accounts::apply_environment(&mut cmd, account);
     }
+    let claude_config_dir = account
+        .as_ref()
+        .filter(|a| a.agent_id == "claude-code")
+        .map(|a| std::path::PathBuf::from(&a.config_dir));
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM", "xterm-256color");
     // GUI launches arrive with no locale vars; fill in a UTF-8 LANG so CLIs
@@ -704,6 +711,7 @@ pub fn spawn_terminal(
             worktree_mode,
             repo_root,
             cwd: std::path::PathBuf::from(cwd),
+            claude_config_dir,
         },
     );
 

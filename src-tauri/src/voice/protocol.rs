@@ -6,8 +6,10 @@
 //! file. These ops exist and nothing else: `hello` negotiates capabilities,
 //! `begin` pins the pane that owns the keyboard, `insert` writes a draft into
 //! a pinned pane, `cancel` drops a pin. SWA-41 adds `subscribe` (status
-//! pushes, see `CAP_TURNS`) and `ping` (keep-alive). No op runs a command — the pipe can
-//! type text, never execute it.
+//! pushes, see `CAP_TURNS`) and `ping` (keep-alive). SWA-58 adds
+//! `read_excerpt` (Swarmterm reads an excerpt aloud itself; the text never
+//! crosses the pipe). No op runs a command — the pipe can type text, never
+//! execute it.
 //!
 //! Versioning (SWA-40): the envelope stays `v: 1` so 1.9.0 and older clients
 //! keep talking. `proto` lives only inside `hello`; a client that never says
@@ -41,8 +43,22 @@ pub const CAP_QUIT: &str = "quit";
 /// `subscribe` answer `ttsOwner`. Whether Swarmterm speaks right now is
 /// those fields, never this capability.
 pub const CAP_TTS: &str = "tts";
+/// SWA-58: this feed also receives `error` turns and `turn_update` kind
+/// corrections. Without it a client never sees a kind it does not know.
+pub const CAP_TURN_KINDS: &str = "turn-kinds";
+/// SWA-58: `turn` pushes carry `completionId` + `hasExcerpt`, and the client
+/// may ask Swarmterm to read that excerpt (`read_excerpt`). The excerpt text
+/// itself is never sent, with or without this capability.
+pub const CAP_EXCERPT_READ: &str = "excerpt-read";
 /// What this build offers. Active is the intersection with the client's list.
-pub const CAPABILITIES: &[&str] = &[CAP_INDICATOR, CAP_TURNS, CAP_QUIT, CAP_TTS];
+pub const CAPABILITIES: &[&str] = &[
+    CAP_INDICATOR,
+    CAP_TURNS,
+    CAP_QUIT,
+    CAP_TTS,
+    CAP_TURN_KINDS,
+    CAP_EXCERPT_READ,
+];
 /// Longest accepted request line, enforced while reading (not after).
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
 /// Longest dictated text; anything longer is not dictation. Kept small on
@@ -61,6 +77,7 @@ const KNOWN_OPS: &[&str] = &[
     "subscribe",
     "ping",
     "tts_stop",
+    "read_excerpt",
 ];
 /// Longest pane name pushed in a `turn` event.
 pub const MAX_PANE_NAME_CHARS: usize = 64;
@@ -98,6 +115,12 @@ pub enum Request {
     /// it neither dictates nor waits on anything.
     TtsStop {
         request_id: String,
+    },
+    /// SWA-58: speak the excerpt of one closed turn. Needs `excerpt-read`;
+    /// allowed on a status feed like `tts_stop`. Idempotent per requestId.
+    ReadExcerpt {
+        request_id: String,
+        completion_id: String,
     },
 }
 
@@ -137,6 +160,11 @@ enum Op {
     Ping { request_id: String },
     #[serde(rename = "tts_stop", rename_all = "camelCase")]
     TtsStop { request_id: String },
+    #[serde(rename = "read_excerpt", rename_all = "camelCase")]
+    ReadExcerpt {
+        request_id: String,
+        completion_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
@@ -181,7 +209,8 @@ impl Request {
             | Self::Insert { request_id, .. }
             | Self::Subscribe { request_id }
             | Self::Ping { request_id }
-            | Self::TtsStop { request_id } => Some(request_id.clone()),
+            | Self::TtsStop { request_id }
+            | Self::ReadExcerpt { request_id, .. } => Some(request_id.clone()),
             Self::Cancel { request_id, .. } => request_id.clone(),
         }
     }
@@ -278,17 +307,21 @@ pub fn quit_line() -> String {
     s
 }
 
-/// Which agent fact a `turn` push announces. Stage 1 knows only these two;
-/// `error`/`interrupted` need a completion adapter (SWA-41 stage 2).
+/// Which agent fact a `turn` push announces. `Error` (SWA-58) comes only
+/// from a completion adapter that proved it (Claude's StopFailure hook) and
+/// only to feeds with `turn-kinds`. There is no `interrupted` yet: no CLI
+/// gives a reliable edge for it (Esc fires no hook).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnKind {
     Done,
     NeedsInput,
+    Error,
 }
 
-/// Status push on a subscribed connection. `excerpt` is always null in
-/// stage 1 but already on the wire, so clients treat it as optional now.
+/// Status push on a subscribed connection. `excerpt` is always null: the
+/// text stays in Swarmterm (SWA-58), a client with `excerpt-read` gets
+/// `completionId` + `hasExcerpt` and asks for it to be read instead.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnEvent {
@@ -304,6 +337,10 @@ pub struct TurnEvent {
     /// purpose. A fallback voice speaks only events with `false`; a client
     /// that never saw this field (older Swarmterm) decides on its own.
     pub tts_handled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_excerpt: Option<bool>,
 }
 
 impl TurnEvent {
@@ -325,6 +362,46 @@ impl TurnEvent {
             excerpt: None,
             seq,
             tts_handled,
+            completion_id: None,
+            has_excerpt: None,
+        }
+    }
+    pub fn to_line(&self) -> String {
+        let mut s = serde_json::to_string(self).unwrap_or_else(|_| "{}".into());
+        s.push('\n');
+        s
+    }
+}
+
+/// SWA-58: something about an already pushed `turn` (same `seq`) became
+/// known later — its excerpt is ready, or the turn turned out to have
+/// failed. Never announced again by Swarmterm's own voice for an excerpt;
+/// fields a feed did not negotiate stay off its copy.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUpdate {
+    pub v: u64,
+    pub event: &'static str,
+    pub seq: u64,
+    pub terminal_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<TurnKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_excerpt: Option<bool>,
+}
+
+impl TurnUpdate {
+    pub fn new(seq: u64, terminal_id: String) -> Self {
+        Self {
+            v: VERSION,
+            event: "turn_update",
+            seq,
+            terminal_id,
+            kind: None,
+            completion_id: None,
+            has_excerpt: None,
         }
     }
     pub fn to_line(&self) -> String {
@@ -445,6 +522,13 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
         Op::Subscribe { request_id } => Request::Subscribe { request_id },
         Op::Ping { request_id } => Request::Ping { request_id },
         Op::TtsStop { request_id } => Request::TtsStop { request_id },
+        Op::ReadExcerpt {
+            request_id,
+            completion_id,
+        } => Request::ReadExcerpt {
+            request_id,
+            completion_id,
+        },
     };
     match &req {
         Request::Hello {
@@ -495,6 +579,10 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
         {
             Err("bad-request")
         }
+        Request::ReadExcerpt {
+            request_id,
+            completion_id,
+        } if !valid_id(request_id) || !valid_id(completion_id) => Err("bad-request"),
         _ => Ok(req),
     }
 }
@@ -522,6 +610,48 @@ mod tests {
                 TOKEN
             ),
             Err("bad-request")
+        );
+    }
+
+    #[test]
+    fn parses_read_excerpt() {
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"read_excerpt","requestId":"r1","completionId":"c1"}"#,
+                TOKEN
+            ),
+            Ok(Request::ReadExcerpt {
+                request_id: "r1".into(),
+                completion_id: "c1".into()
+            })
+        );
+        for bad in [
+            r#"{"v":1,"token":"secret-token","op":"read_excerpt","requestId":"r1"}"#,
+            r#"{"v":1,"token":"secret-token","op":"read_excerpt","requestId":"r1","completionId":"a b"}"#,
+            r#"{"v":1,"token":"secret-token","op":"read_excerpt","requestId":"r1","completionId":"c","terminalId":"t"}"#,
+        ] {
+            assert_eq!(parse(bad, TOKEN), Err("bad-request"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn new_capabilities_only_when_asked_and_excerpt_stays_null() {
+        assert_eq!(
+            negotiate(&["excerpt-read".into(), "turns".into(), "turn-kinds".into()]),
+            vec!["turns", "turn-kinds", "excerpt-read"]
+        );
+        let mut e = TurnEvent::new("t".into(), "A", "codex".into(), TurnKind::Error, 3, false);
+        e.completion_id = Some("c1".into());
+        e.has_excerpt = Some(true);
+        let line = e.to_line();
+        assert!(line.contains("\"kind\":\"error\""));
+        assert!(line.contains("\"excerpt\":null"));
+        assert!(line.contains("\"completionId\":\"c1\",\"hasExcerpt\":true"));
+        let mut u = TurnUpdate::new(3, "t".into());
+        u.has_excerpt = Some(true);
+        assert_eq!(
+            u.to_line(),
+            "{\"v\":1,\"event\":\"turn_update\",\"seq\":3,\"terminalId\":\"t\",\"hasExcerpt\":true}\n"
         );
     }
 

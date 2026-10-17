@@ -40,6 +40,8 @@ use queue::{Item, Queue};
 
 /// A "Test voice" utterance; not tied to a pane, so no generation check.
 const TEST_ID: &str = "__test__";
+/// "No excerpt available" — the hotkey's answer, tied to no pane either.
+const NOTICE_ID: &str = "__notice__";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +80,8 @@ struct Inner {
     queue: Queue,
     /// terminalId of the utterance playing right now.
     speaking: Option<String>,
+    /// That utterance is an excerpt (SWA-58).
+    speaking_excerpt: bool,
     ready: bool,
     error: Option<String>,
     voices: Vec<VoiceInfo>,
@@ -93,6 +97,12 @@ pub struct TtsHub {
     /// `begin`s in flight. Counted, not a flag: overlapping begins from
     /// different clients each hold their own guard.
     begins: AtomicUsize,
+}
+
+fn lang_of(voices: &[VoiceInfo], wanted: &str) -> String {
+    pick_voice(voices, wanted)
+        .map(|v| v.lang.clone())
+        .unwrap_or_default()
 }
 
 /// The configured voice, else the first German one, else the first at all.
@@ -139,6 +149,7 @@ impl TtsHub {
 
     /// Take an event (see the module doc for what "taken" promises). False
     /// when the engine is not up, so a fallback voice may step in.
+    #[allow(clippy::too_many_arguments)]
     pub fn announce(
         &self,
         terminal_id: String,
@@ -147,22 +158,89 @@ impl TtsHub {
         agent: &str,
         kind: TurnKind,
         voice: &str,
+        token: Option<String>,
     ) -> bool {
         let mut inner = self.inner.lock().unwrap();
         if !inner.ready {
             return false;
         }
-        let lang = pick_voice(&inner.voices, voice)
-            .map(|v| v.lang.clone())
-            .unwrap_or_default();
+        let lang = lang_of(&inner.voices, voice);
         inner.queue.push(Item {
             text: text::announcement(pane_name, agent, kind, &lang),
             terminal_id,
             spawn_id,
             at: std::time::Instant::now(),
+            token,
+            excerpt: false,
         });
         self.cv.notify_all();
         true
+    }
+
+    /// SWA-58: read an excerpt now. The user asked for exactly this, so it
+    /// replaces whatever plays or waits — by bumping the generation, never by
+    /// waiting for silence (no lock is held across a wait). False = engine
+    /// not up; the caller answers `unavailable`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn say_excerpt(
+        &self,
+        terminal_id: String,
+        spawn_id: String,
+        token: String,
+        pane_name: &str,
+        agent: &str,
+        excerpt: &str,
+        voice: &str,
+    ) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.ready {
+            return false;
+        }
+        let lang = lang_of(&inner.voices, voice);
+        inner.queue.clear();
+        if inner.speaking.is_some() {
+            self.gen.fetch_add(1, Ordering::SeqCst);
+        }
+        inner.queue.push(Item {
+            text: text::excerpt_line(pane_name, agent, excerpt, &lang),
+            terminal_id,
+            spawn_id,
+            at: std::time::Instant::now(),
+            token: Some(token),
+            excerpt: true,
+        });
+        self.cv.notify_all();
+        true
+    }
+
+    /// The hotkey found nothing to read: say so.
+    pub fn say_no_excerpt(&self, voice: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.ready {
+            return false;
+        }
+        let lang = lang_of(&inner.voices, voice);
+        inner.queue.push(Item {
+            terminal_id: NOTICE_ID.into(),
+            spawn_id: String::new(),
+            text: text::no_excerpt(&lang).into(),
+            at: std::time::Instant::now(),
+            token: None,
+            excerpt: false,
+        });
+        self.cv.notify_all();
+        true
+    }
+
+    /// "Allow excerpts" switched off: waiting excerpts go, a playing one
+    /// ends at its next poll; statuses are left alone.
+    pub fn stop_excerpts(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.queue.retain(|i| !i.excerpt);
+        if inner.speaking_excerpt {
+            self.gen.fetch_add(1, Ordering::SeqCst);
+        }
+        self.cv.notify_all();
     }
 
     pub fn test(&self, voice: &str) -> Result<(), String> {
@@ -170,9 +248,7 @@ impl TtsHub {
         if !inner.ready {
             return Err(inner.error.clone().unwrap_or_else(|| "unavailable".into()));
         }
-        let lang = pick_voice(&inner.voices, voice)
-            .map(|v| v.lang.clone())
-            .unwrap_or_default();
+        let lang = lang_of(&inner.voices, voice);
         let text = if lang == "en" {
             "Swarmterm: this is how announcements sound."
         } else {
@@ -183,6 +259,8 @@ impl TtsHub {
             spawn_id: String::new(),
             text: text.into(),
             at: std::time::Instant::now(),
+            token: None,
+            excerpt: false,
         });
         self.cv.notify_all();
         Ok(())
@@ -231,7 +309,18 @@ impl TtsHub {
     }
 }
 
-/// Anything holding the microphone right now.
+/// Anything holding the microphone right now — `read_excerpt` answers
+/// `tts-busy` then instead of queueing speech the worker would drop anyway.
+pub fn busy(app: &AppHandle) -> bool {
+    #[cfg(windows)]
+    return recording(app);
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        false
+    }
+}
+
 #[cfg(windows)]
 fn recording(app: &AppHandle) -> bool {
     let tts = app.state::<TtsHub>();
@@ -325,13 +414,27 @@ fn worker(app: AppHandle) {
             continue;
         };
         inner.speaking = Some(item.terminal_id.clone());
+        inner.speaking_excerpt = item.excerpt;
         // Snapshot under the lock: a stop between pop and play bumps it.
         let snap = hub.gen.load(Ordering::SeqCst);
         drop(inner);
 
         let current = item.terminal_id == TEST_ID
+            || item.terminal_id == NOTICE_ID
             || super::spawn_id_of(&app, &item.terminal_id).as_deref() == Some(&item.spawn_id);
-        if current {
+        // SWA-58: an excerpt is spoken only while its turn is still the
+        // latest and "Allow excerpts" is still on — the ledger re-checked
+        // here, after the hub lock is gone (lock order: never both).
+        let voice_hub = app.state::<VoiceHub>();
+        let allowed = !item.excerpt
+            || item.token.as_deref().is_some_and(|t| {
+                let s = voice_hub.settings();
+                s.enabled && s.allow_excerpts && voice_hub.ledger_holds(t)
+            });
+        if current && allowed {
+            if let (false, Some(token)) = (item.excerpt, item.token.as_deref()) {
+                voice_hub.announced(&item.terminal_id, token);
+            }
             let settings = app.state::<VoiceHub>().settings();
             let voice = {
                 let inner = hub.inner.lock().unwrap();
@@ -350,7 +453,11 @@ fn worker(app: AppHandle) {
                 eprintln!("tts: {e}");
             }
         }
-        hub.inner.lock().unwrap().speaking = None;
+        {
+            let mut inner = hub.inner.lock().unwrap();
+            inner.speaking = None;
+            inner.speaking_excerpt = false;
+        }
         hub.cv.notify_all();
     }
 }
@@ -465,9 +572,25 @@ mod tests {
     #[test]
     fn an_engine_that_is_not_up_never_takes_an_event() {
         let hub = TtsHub::default();
-        assert!(!hub.announce("t".into(), "g".into(), "A", "codex", TurnKind::Done, ""));
+        assert!(!hub.announce(
+            "t".into(),
+            "g".into(),
+            "A",
+            "codex",
+            TurnKind::Done,
+            "",
+            None
+        ));
         let hub = ready_hub();
-        assert!(hub.announce("t".into(), "g".into(), "A", "codex", TurnKind::Done, ""));
+        assert!(hub.announce(
+            "t".into(),
+            "g".into(),
+            "A",
+            "codex",
+            TurnKind::Done,
+            "",
+            None
+        ));
     }
 
     #[test]
@@ -486,12 +609,56 @@ mod tests {
     #[test]
     fn stop_drops_queued_announcements() {
         let hub = ready_hub();
-        hub.announce("a".into(), "g".into(), "A", "", TurnKind::Done, "");
-        hub.announce("b".into(), "g".into(), "B", "", TurnKind::Done, "");
+        hub.announce("a".into(), "g".into(), "A", "", TurnKind::Done, "", None);
+        hub.announce("b".into(), "g".into(), "B", "", TurnKind::Done, "", None);
         hub.stop(Some("a"));
         let now = std::time::Instant::now();
         let mut inner = hub.inner.lock().unwrap();
         assert_eq!(inner.queue.pop_fresh(now).unwrap().terminal_id, "b");
+        assert!(inner.queue.is_empty());
+    }
+
+    #[test]
+    fn an_excerpt_replaces_what_plays_and_opt_out_stops_only_excerpts() {
+        let hub = TtsHub::default();
+        assert!(!hub.say_excerpt("a".into(), "g".into(), "c".into(), "A", "", "x", ""));
+        let hub = ready_hub();
+        hub.announce("b".into(), "g".into(), "B", "", TurnKind::Done, "", None);
+        hub.inner.lock().unwrap().speaking = Some("b".into());
+        let g0 = hub.gen.load(Ordering::SeqCst);
+        assert!(hub.say_excerpt(
+            "a".into(),
+            "g".into(),
+            "c1".into(),
+            "A",
+            "",
+            "Alles grün.",
+            ""
+        ));
+        assert_eq!(hub.gen.load(Ordering::SeqCst), g0 + 1);
+        {
+            let mut inner = hub.inner.lock().unwrap();
+            let item = inner.queue.pop_fresh(std::time::Instant::now()).unwrap();
+            assert_eq!(
+                (item.text.as_str(), item.excerpt, item.token.as_deref()),
+                ("A, Auszug: Alles grün.", true, Some("c1"))
+            );
+            assert!(inner.queue.is_empty());
+        }
+        // Opt-out: a waiting excerpt goes, a waiting status stays; a playing
+        // status is not interrupted, a playing excerpt is.
+        hub.say_excerpt("a".into(), "g".into(), "c2".into(), "A", "", "x", "");
+        hub.announce("b".into(), "g".into(), "B", "", TurnKind::Done, "", None);
+        hub.inner.lock().unwrap().speaking_excerpt = false;
+        let g1 = hub.gen.load(Ordering::SeqCst);
+        hub.stop_excerpts();
+        assert_eq!(hub.gen.load(Ordering::SeqCst), g1);
+        hub.inner.lock().unwrap().speaking_excerpt = true;
+        hub.stop_excerpts();
+        assert_eq!(hub.gen.load(Ordering::SeqCst), g1 + 1);
+        let mut inner = hub.inner.lock().unwrap();
+        let left = inner.queue.pop_fresh(std::time::Instant::now()).unwrap();
+        assert_eq!((left.terminal_id.as_str(), left.excerpt), ("b", false));
         assert!(inner.queue.is_empty());
     }
 

@@ -20,9 +20,12 @@
 //!   permission *decision*; on other events it is shown to the user or fed
 //!   back as context. Silence is the only safe output.
 //!
-//! Only lifecycle names and the session identifier are deserialised. The
-//! rest of the payload (prompt text, `last_assistant_message`, tool input,
-//! cwd) must not leave the pane, so it is never even read into a struct.
+//! Only lifecycle names and identifiers cross the loopback port: the session
+//! id, and (SWA-58) Claude's `prompt_id`. `last_assistant_message` is read
+//! into this process for one reason — to send its length and SHA-256
+//! (`Fingerprint`), never the text — so the app can tell whether the row it
+//! reads from the transcript is the one this Stop saw. Prompt text, tool
+//! input, cwd and `transcript_path` are never read into a struct.
 
 pub mod adopt;
 pub mod codex;
@@ -42,10 +45,11 @@ pub enum Signal {
     Forget,
 }
 
-/// Lifecycle names and the session id. Everything else (prompt, last_assistant_message,
-/// tool_input, cwd) is deliberately never deserialised — it must not leave the
-/// pane. `#[serde(default)]` keeps `{}` and missing fields parseable so an
-/// unknown-shaped payload degrades to "no signal" rather than an error.
+/// Lifecycle names and identifiers. Everything else (prompt, tool_input,
+/// cwd, transcript_path) is deliberately never deserialised — it must not
+/// leave the pane. `#[serde(default)]` keeps `{}` and missing fields
+/// parseable so an unknown-shaped payload degrades to "no signal" rather
+/// than an error.
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct HookInput {
     #[serde(default)]
@@ -54,6 +58,72 @@ pub struct HookInput {
     pub hook_event_name: String,
     #[serde(default)]
     pub notification_type: Option<String>,
+    /// SWA-58: the turn this event belongs to (Claude Code 2.1+).
+    #[serde(default)]
+    pub prompt_id: Option<String>,
+    #[serde(default)]
+    pub stop_hook_active: Option<bool>,
+    /// Only ever fingerprinted, see the module doc. Never sent, never logged.
+    #[serde(default)]
+    pub last_assistant_message: Option<String>,
+}
+
+/// Which edge of a turn a hook event is (SWA-58).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnEdge {
+    Prompt,
+    Stop,
+    StopFailure,
+}
+
+/// The turn identity of one Claude hook event. Ids and a fingerprint only.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TurnMark {
+    pub edge: TurnEdge,
+    pub prompt_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<crate::voice::completion::Fingerprint>,
+    /// `stop_hook_active`: a Stop hook sent Claude back to work.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub continued: bool,
+}
+
+impl TurnMark {
+    /// The mark for one Claude hook payload, or `None` when the event is not
+    /// a turn edge or carries no valid prompt id (older CLI → status only).
+    pub fn from_input(input: &HookInput) -> Option<Self> {
+        let edge = match input.hook_event_name.as_str() {
+            "UserPromptSubmit" => TurnEdge::Prompt,
+            "Stop" => TurnEdge::Stop,
+            "StopFailure" => TurnEdge::StopFailure,
+            _ => return None,
+        };
+        let prompt_id = input
+            .prompt_id
+            .clone()
+            .filter(|id| crate::sessions::is_uuid(id))?;
+        let answer = (edge == TurnEdge::Stop)
+            .then(|| {
+                input
+                    .last_assistant_message
+                    .as_deref()
+                    .map(crate::voice::completion::Fingerprint::of)
+            })
+            .flatten();
+        Some(Self {
+            edge,
+            prompt_id,
+            answer,
+            continued: edge == TurnEdge::Stop && input.stop_hook_active == Some(true),
+        })
+    }
+
+    pub fn is_valid(&self) -> bool {
+        crate::sessions::is_uuid(&self.prompt_id)
+            && self.answer.as_ref().is_none_or(|a| a.is_valid())
+    }
 }
 
 /// Payload of the `agent:hook` Tauri event (camelCase, lockstep with
@@ -66,17 +136,21 @@ pub struct AgentHookEvent {
     pub at_ms: u64,
 }
 
-/// Body of `POST /hook`: a state enum and optional session identity, never
-/// conversation content. Session metadata is validated against the live PTY.
+/// Body of `POST /hook`: a state enum, optional session identity and turn
+/// mark, never conversation content — unknown fields are a 4xx. Session
+/// metadata is validated against the live PTY.
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HookBody {
     pub signal: Signal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<SessionMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<TurnMark>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionMetadata {
     pub agent_id: String,
     pub session_id: String,
@@ -118,7 +192,7 @@ pub fn signal_for(event: &str, notification_type: Option<&str>) -> Option<Signal
         ("Notification", Some("idle_prompt")) => Some(Signal::Idle),
         ("Notification", _) => None,
         ("PostToolUse", _) => Some(Signal::Working),
-        ("Stop", _) => Some(Signal::Idle),
+        ("Stop" | "StopFailure", _) => Some(Signal::Idle),
         ("SessionStart" | "SessionEnd", _) => Some(Signal::Forget),
         _ => None,
     }
@@ -167,12 +241,15 @@ pub fn run_agent_cli(agent_id: &str) {
     let Ok(input) = serde_json::from_str::<HookInput>(&raw) else {
         return;
     };
+    // Stop carries the session too (SWA-58): the app closes a turn only for
+    // the generation and session it was opened in.
     let session = if matches!(
         input.hook_event_name.as_str(),
-        "SessionStart" | "UserPromptSubmit"
+        "SessionStart" | "UserPromptSubmit" | "Stop" | "StopFailure"
     ) {
         input
             .session_id
+            .clone()
             .filter(|id| crate::sessions::is_uuid(id))
             .and_then(|session_id| {
                 std::env::var("SWARMTERM_PTY_GENERATION")
@@ -186,6 +263,9 @@ pub fn run_agent_cli(agent_id: &str) {
     } else {
         None
     };
+    let turn = (agent_id == "claude-code" && session.is_some())
+        .then(|| TurnMark::from_input(&input))
+        .flatten();
     let signal = if agent_id == "codex" {
         if session.is_none() {
             return;
@@ -201,7 +281,11 @@ pub fn run_agent_cli(agent_id: &str) {
     let _ = post::post_body(
         url.trim(),
         token.trim(),
-        &HookBody { signal, session },
+        &HookBody {
+            signal,
+            session,
+            turn,
+        },
         POST_TIMEOUT,
     );
 }
@@ -266,6 +350,7 @@ mod tests {
         assert_eq!(signal_for("Notification", None), None);
         assert_eq!(signal_for("PostToolUse", None), Some(Signal::Working));
         assert_eq!(signal_for("Stop", None), Some(Signal::Idle));
+        assert_eq!(signal_for("StopFailure", None), Some(Signal::Idle));
         assert_eq!(signal_for("SessionStart", None), Some(Signal::Forget));
         assert_eq!(signal_for("SessionEnd", None), Some(Signal::Forget));
     }
@@ -361,5 +446,81 @@ mod tests {
         // The body is an enum only, never free text: anything else is a 4xx.
         assert!(serde_json::from_str::<HookBody>("{\"signal\":\"nope\"}").is_err());
         assert!(serde_json::from_str::<HookBody>("{}").is_err());
+        assert!(serde_json::from_str::<HookBody>(
+            "{\"signal\":\"idle\",\"lastAssistantMessage\":\"text\"}"
+        )
+        .is_err());
+        assert!(serde_json::from_str::<HookBody>(
+            "{\"signal\":\"idle\",\"turn\":{\"edge\":\"stop\",\"promptId\":\"p\",\"text\":\"x\"}}"
+        )
+        .is_err());
+    }
+
+    const PROMPT: &str = "f62f9126-5c26-43d5-8bc8-3943559598b7";
+
+    fn input(json: serde_json::Value) -> HookInput {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn a_stop_mark_carries_ids_and_a_fingerprint_never_the_text() {
+        let i = input(serde_json::json!({
+            "hook_event_name": "Stop", "prompt_id": PROMPT, "stop_hook_active": false,
+            "last_assistant_message": "Geheimer Text.", "transcript_path": "/x"
+        }));
+        let mark = TurnMark::from_input(&i).unwrap();
+        assert_eq!(mark.edge, TurnEdge::Stop);
+        assert_eq!(
+            mark.answer,
+            Some(crate::voice::completion::Fingerprint::of("Geheimer Text."))
+        );
+        let body = HookBody {
+            signal: Signal::Idle,
+            session: None,
+            turn: Some(mark),
+        };
+        let wire = serde_json::to_string(&body).unwrap();
+        assert!(!wire.contains("Geheimer"));
+        assert!(!wire.contains("transcript"));
+        assert!(serde_json::from_str::<HookBody>(&wire)
+            .unwrap()
+            .turn
+            .unwrap()
+            .is_valid());
+    }
+
+    #[test]
+    fn turn_marks_need_a_valid_prompt_id_and_a_turn_edge() {
+        let mark = |j| TurnMark::from_input(&input(j));
+        // Older CLI without prompt_id, or a malformed one: status only.
+        assert_eq!(mark(serde_json::json!({"hook_event_name":"Stop"})), None);
+        assert_eq!(
+            mark(serde_json::json!({"hook_event_name":"Stop","prompt_id":"x; y"})),
+            None
+        );
+        assert_eq!(
+            mark(serde_json::json!({"hook_event_name":"PostToolUse","prompt_id":PROMPT})),
+            None
+        );
+        let p = mark(serde_json::json!({"hook_event_name":"UserPromptSubmit",
+            "prompt_id":PROMPT,"prompt":"private"}))
+        .unwrap();
+        assert_eq!(
+            (p.edge, p.answer, p.continued),
+            (TurnEdge::Prompt, None, false)
+        );
+        // A Stop without last_assistant_message has no anchor for a read.
+        let s = mark(
+            serde_json::json!({"hook_event_name":"Stop","prompt_id":PROMPT,
+            "stop_hook_active":true}),
+        )
+        .unwrap();
+        assert_eq!((s.answer, s.continued), (None, true));
+        let f = mark(
+            serde_json::json!({"hook_event_name":"StopFailure","prompt_id":PROMPT,
+            "error":"rate_limit","last_assistant_message":"x"}),
+        )
+        .unwrap();
+        assert_eq!((f.edge, f.answer), (TurnEdge::StopFailure, None));
     }
 }

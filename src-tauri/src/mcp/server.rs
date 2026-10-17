@@ -377,8 +377,9 @@ async fn status_handler(
 /// event for its own pane. The body is a closed enum (`HookBody`), never the
 /// hook's stdin: prompt text, tool input and cwd stay inside the pane. The
 /// verdict is re-emitted to the renderer as `agent:hook` (payload in lockstep
-/// with `src/tauri/agent-state.ts::AgentHookEvent`); Rust keeps no hook state
-/// itself — precedence over screen-scrape is decided in the renderer.
+/// with `src/tauri/agent-state.ts::AgentHookEvent`); precedence over
+/// screen-scrape is decided in the renderer. The only hook state Rust keeps
+/// is the voice turn ledger (SWA-58), fed by the body's turn mark.
 async fn hook_handler(
     AxumState(app): AxumState<AppHandle>,
     headers: HeaderMap,
@@ -388,15 +389,32 @@ async fn hook_handler(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     use tauri::Emitter;
+    if body.turn.as_ref().is_some_and(|t| !t.is_valid()) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     if let Some(session) = &body.session {
-        let state = app.state::<crate::pty::AppState>();
-        let terminals = state
-            .terminals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if terminals
-            .get(&terminal_id)
-            .is_some_and(|t| session.matches(&t.spawn_id, t.agent_id.as_deref()))
+        // Generation and profile dir copied out under the lock; the voice
+        // side takes its own locks only after this one is released.
+        let matched = {
+            let state = app.state::<crate::pty::AppState>();
+            let terminals = state
+                .terminals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            terminals
+                .get(&terminal_id)
+                .filter(|t| session.matches(&t.spawn_id, t.agent_id.as_deref()))
+                .map(|t| (t.spawn_id.clone(), t.claude_config_dir.clone()))
+        };
+        let Some((spawn_id, config_dir)) = matched else {
+            return StatusCode::NO_CONTENT.into_response();
+        };
+        // A Stop names the session it belongs to but changes nothing about
+        // which one the pane runs; only start and prompt capture it.
+        if body
+            .turn
+            .as_ref()
+            .is_none_or(|t| t.edge == crate::hook::TurnEdge::Prompt)
         {
             let _ = app.emit(
                 "agent:session",
@@ -407,13 +425,26 @@ async fn hook_handler(
                     at_ms: crate::warroom::now_ms(),
                 },
             );
-        } else {
-            return StatusCode::NO_CONTENT.into_response();
+        }
+        if let Some(turn) = &body.turn {
+            crate::voice::hook_turn(
+                &app,
+                &terminal_id,
+                &spawn_id,
+                &session.session_id,
+                turn,
+                config_dir,
+            );
         }
     }
     // Codex capture carries no Claude lifecycle authority.
     if body.session.as_ref().is_some_and(|s| s.agent_id == "codex") {
         return StatusCode::NO_CONTENT.into_response();
+    }
+    // SessionStart/SessionEnd: whatever turn was open belongs to a
+    // conversation that is over.
+    if matches!(body.signal, crate::hook::Signal::Forget) {
+        crate::voice::forget_turns(&app, &terminal_id);
     }
     let _ = app.emit(
         "agent:hook",

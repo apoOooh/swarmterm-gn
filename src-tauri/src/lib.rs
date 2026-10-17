@@ -158,6 +158,7 @@ pub fn run() {
             voice::voice_indicator_stop,
             voice::voice_turn_event,
             voice::voice_tts_stop,
+            voice::voice_read_excerpt,
             voice::voice_tts_test,
             voice::voice_tts_status,
             voice::voice_get_settings,
