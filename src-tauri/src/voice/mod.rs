@@ -39,6 +39,7 @@
 //! it into a respawned shell.
 
 pub mod companion;
+pub mod completion;
 pub mod pins;
 #[cfg(windows)]
 mod pipe;
