@@ -17,6 +17,12 @@
 //! pill on. Every end of such a pin funnels through `finish`, which turns the
 //! pill off and pushes the reason to the client if it is still connected.
 //!
+//! Status feed (SWA-41): a connection that negotiated `turns` may
+//! `subscribe`; from then on it only pings and receives `turn` pushes (agent
+//! done / needs input), fanned out by `voice_turn_event`. The renderer
+//! decides WHICH facts qualify (notification-watch: still current, pane not
+//! watched); Rust gates on Settings → Voice and numbers them.
+//!
 //! The renderer owns focus and xterm state (bracketed paste, IME, typing
 //! signal), Rust owns the PTY generation. Both checks are needed: the
 //! renderer decides WHAT to write, `write_terminal_checked` refuses to write
@@ -30,7 +36,7 @@ mod settings;
 #[cfg(windows)]
 pub mod speech;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -41,7 +47,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::pty::AppState;
 use pins::{Pin, PinStore, PIN_TTL};
-use protocol::{CancelReason, Event, Request, Response, CAP_INDICATOR};
+use protocol::{
+    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_TURNS,
+};
 pub use settings::VoiceSettings;
 
 /// Renderer round trip for "who owns the keyboard". A late answer belongs to
@@ -51,6 +59,10 @@ const FOCUS_TIMEOUT: Duration = Duration::from_millis(300);
 const INSERT_TIMEOUT: Duration = Duration::from_secs(8);
 /// Remembered insert outcomes, so a repeated requestId never types twice.
 const SEEN_REQUESTS: usize = 64;
+/// Status subscribers at once. Pipe instances are not capped, but a runaway
+/// client reconnecting in a loop must not pile up feeds; one dictation app
+/// needs one.
+const MAX_SUBSCRIBERS: usize = 4;
 
 /// A same-id respawn keeps the terminalId but gets a fresh spawn_id; text
 /// pinned to the old shell must not land in the new one.
@@ -117,6 +129,8 @@ pub struct Conn {
     pub id: u64,
     requests: u64,
     capabilities: Vec<String>,
+    /// Set by `subscribe`; the pipe then uses the subscriber idle timeout.
+    pub subscribed: bool,
 }
 
 impl Conn {
@@ -128,12 +142,25 @@ impl Conn {
             id,
             requests: 1,
             capabilities: vec![CAP_INDICATOR.to_owned()],
+            subscribed: false,
         }
     }
 
     fn indicator(&self) -> bool {
         self.capabilities.iter().any(|c| c == CAP_INDICATOR)
     }
+    fn turns(&self) -> bool {
+        self.capabilities.iter().any(|c| c == CAP_TURNS)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnInput {
+    pub terminal_id: String,
+    pub kind: TurnKind,
+    pub pane_name: String,
+    pub agent: String,
 }
 
 /// The client that last said hello. Kept for the companion UI (SWA-42).
@@ -155,6 +182,8 @@ pub struct VoiceHub {
     conns: Mutex<HashMap<u64, mpsc::UnboundedSender<Outgoing>>>,
     next_conn: AtomicU64,
     peer: Mutex<Option<PeerInfo>>,
+    subscribers: Mutex<HashSet<u64>>,
+    turn_seq: AtomicU64,
     #[cfg(windows)]
     server: Mutex<Option<pipe::Running>>,
 }
@@ -245,6 +274,7 @@ fn quiet_off(app: &AppHandle, pin: &Pin) {
 pub fn close_conn(app: &AppHandle, conn: u64) {
     let hub = app.state::<VoiceHub>();
     hub.conns.lock().unwrap().remove(&conn);
+    hub.subscribers.lock().unwrap().remove(&conn);
     let pins = hub.pins.lock().unwrap().remove_conn(conn);
     for pin in &pins {
         quiet_off(app, pin);
@@ -268,6 +298,11 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
         return Response::err(None, "disabled");
     }
     conn.requests += 1;
+    // A status feed stays a status feed: no dictation on it, so a reader
+    // that lags behind pushes can never hold up an insert.
+    if conn.subscribed && !matches!(req, Request::Ping { .. } | Request::Subscribe { .. }) {
+        return Response::err(req.request_id(), "bad-request");
+    }
     match req {
         Request::Hello {
             request_id,
@@ -303,6 +338,8 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
             hub.remember(&request_id, &resp);
             resp
         }
+        Request::Subscribe { request_id } => subscribe(&hub, request_id, conn),
+        Request::Ping { request_id } => Response::ok(Some(request_id)),
         Request::Cancel { request_id, pin } => {
             let removed = hub.pins.lock().unwrap().remove(&pin);
             if let Some(pin) = removed {
@@ -310,6 +347,27 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
             }
             Response::ok(request_id)
         }
+    }
+}
+
+fn subscribe(hub: &VoiceHub, request_id: String, conn: &mut Conn) -> Response {
+    let rid = Some(request_id);
+    if !conn.turns() || hub.conn_has_pin(conn.id) {
+        return Response::err(rid, "bad-request");
+    }
+    if !conn.subscribed {
+        let mut subs = hub.subscribers.lock().unwrap();
+        if subs.len() >= MAX_SUBSCRIBERS {
+            return Response::err(rid, "busy");
+        }
+        subs.insert(conn.id);
+        conn.subscribed = true;
+    }
+    // No replay: the client learns where the feed stands and only sees
+    // what happens from now on — an old "done" read aloud is noise.
+    Response {
+        seq: Some(hub.turn_seq.load(Ordering::Relaxed)),
+        ..Response::ok(rid)
     }
 }
 
@@ -468,6 +526,40 @@ pub fn voice_insert_result(
 ) {
     if let Some(tx) = hub.insert_waiters.lock().unwrap().remove(&request_id) {
         let _ = tx.send(reply);
+    }
+}
+
+/// Agent finished / needs input (SWA-41), from the renderer's notification
+/// watch. Dropped unless the endpoint is on and announcing is opted in, and
+/// for panes that are already gone.
+#[tauri::command]
+pub fn voice_turn_event(app: AppHandle, event: TurnInput) {
+    let hub = app.state::<VoiceHub>();
+    let settings = hub.settings();
+    if !settings.enabled || !settings.announce_turns {
+        return;
+    }
+    if spawn_id_of(&app, &event.terminal_id).is_none() {
+        return;
+    }
+    let subs: Vec<u64> = hub.subscribers.lock().unwrap().iter().copied().collect();
+    if subs.is_empty() {
+        return;
+    }
+    let seq = hub.turn_seq.fetch_add(1, Ordering::Relaxed) + 1;
+    let line = TurnEvent::new(
+        event.terminal_id,
+        &event.pane_name,
+        event.agent,
+        event.kind,
+        seq,
+    )
+    .to_line();
+    let conns = hub.conns.lock().unwrap();
+    for id in subs {
+        if let Some(tx) = conns.get(&id) {
+            let _ = tx.send(Outgoing::Line(line.clone()));
+        }
     }
 }
 

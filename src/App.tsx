@@ -86,6 +86,7 @@ import { FolderPicker } from '@/components/FolderPicker/FolderPicker'
 import { HandoffDialog } from '@/components/TerminalPane/HandoffDialog'
 import { TitleBar } from '@/components/TitleBar/TitleBar'
 import { Workspace, PaneDragGhost } from '@/components/Workspace/Workspace'
+import { FLOATING_LAYER_ID } from '@/lib/floating-panes'
 import { Welcome } from '@/components/Welcome/Welcome'
 import { WorkspaceTabs } from '@/components/WorkspaceTabs/WorkspaceTabs'
 import { useBrowserStore } from '@/store/browser-store'
@@ -100,6 +101,8 @@ import { useShellAvailabilityStore } from '@/store/shell-availability-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useNotificationPrefStore } from '@/store/notification-pref-store'
 import { startNotificationWatch } from '@/lib/notification-watch'
+import { turnEventFor } from '@/lib/voice-turns'
+import { voiceTurnEvent } from '@/tauri/voice'
 import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { startAgentStateMirror } from '@/lib/agent-state-mirror'
@@ -122,7 +125,7 @@ import { closePreview, openPreview, wirePreviewEvents } from '@/lib/preview-regi
 import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
 import { onAgentSession } from '@/tauri/sessions'
-import { wireSavedWorkspaces, flushSavedWorkspaces } from '@/store/saved-workspaces-store'
+import { wireSavedWorkspaces, flushSavedWorkspaces, useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
 import { toggleDictation, wireVoice } from '@/lib/voice-wiring'
 import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
@@ -357,8 +360,10 @@ export default function App(): ReactElement {
   }
 
   const noWorkspaces = workspaces.length === 0
-  // Welcome shows when explicitly focused, or forced (uncloseable) when none exist.
-  const showWelcome = welcomeFocused || noWorkspaces
+  const autostarting = useSavedWorkspacesStore((s) => s.autostarting)
+  // Welcome shows when explicitly focused, or forced (uncloseable) when none exist —
+  // but not while the startup workspaces are still opening.
+  const showWelcome = welcomeFocused || (noWorkspaces && !autostarting)
   const welcomeClosable = !noWorkspaces
 
   useEffect(() => {
@@ -984,6 +989,10 @@ export default function App(): ReactElement {
       playChime,
       sendSystemNotification: (opts) => void sendSystemNotification(opts),
       record: (entry) => useNotificationCenterStore.getState().add(entry),
+      announce: (entry) => {
+        const turn = turnEventFor(entry, useTerminalTitleStore.getState().titles[entry.terminalId] ?? '')
+        if (turn !== null) void voiceTurnEvent(turn).catch(() => {})
+      },
       now: Date.now,
       setTimer: (fn, ms) => window.setTimeout(fn, ms),
       clearTimer: (h) => window.clearTimeout(h as number)
@@ -1220,6 +1229,9 @@ export default function App(): ReactElement {
           </div>
 
         </main>
+
+        {/* Floating panes portal in here (Workspace.tsx), above both sidebars. */}
+        <div id={FLOATING_LAYER_ID} className="pointer-events-none absolute inset-2 z-30 [&>*]:pointer-events-auto" />
 
         {settingsOpen && (
           <SettingsView

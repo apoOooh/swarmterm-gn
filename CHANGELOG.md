@@ -7,6 +7,18 @@
   buzzkey: Ctrl+Shift+Space or the pane-header microphone starts and stops,
   the text arrives as a draft in the pane that had the keyboard. Runs on the
   CPU; see `docs/adr/0001-builtin-speech-source.md`.
+- Saved workspaces can open on startup (pin on the card, the navbar workspace menu or Settings →
+  Workspaces → Open on startup, with order); Welcome is skipped while any is set.
+  Startup workspaces are exempt from the 24-entry limit.
+- Voice: optional status announcements. With Settings → Voice → "Announce
+  finished agents" on, a dictation app can subscribe to "agent finished" and
+  "needs your input" for panes you are not watching. Only the status and the
+  pane title leave the app, never pane output. Off by default.
+- Docs: ADR 0001 (accepted) adopts a separate terminal host process so terminals
+  can outlive quit and app updates (`docs/adr/`).
+- Floating panes: no longer move or resize when the sidebar or the right panel
+  is toggled, can be dragged over both, and move freely by their header
+  (dock with the Dock button).
 
 ## [1.14.2] - 2026-10-16
 

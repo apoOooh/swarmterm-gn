@@ -46,7 +46,7 @@ describe('builtinReady', () => {
     { id: 'base', label: 'Base', bytes: 1, ready: true, downloading: false },
     { id: 'small', label: 'Small', bytes: 1, ready: false, downloading: true }
   ]
-  const on = { enabled: true, allowAutoEnter: false, builtinEnabled: true, model: 'base', language: 'auto' }
+  const on = { enabled: true, allowAutoEnter: false, announceTurns: false, builtinEnabled: true, model: 'base', language: 'auto' }
 
   it('needs Voice, the built-in switch and the selected model on disk', () => {
     expect(builtinReady(on, models)).toBe(true)

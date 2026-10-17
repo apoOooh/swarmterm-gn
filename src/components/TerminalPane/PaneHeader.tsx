@@ -22,6 +22,7 @@ import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { accountLabel } from '@/lib/agent-accounts'
 import { cn } from '@/lib/utils'
 import type { ConnectionStatus } from '@/lib/war-room-connection'
+import { useFloatMove } from '@/components/Workspace/FloatingPane'
 
 interface PaneHeaderProps {
   /** Resolved agent id (leaf override already applied). */
@@ -126,6 +127,7 @@ interface HeaderItem extends HeaderOverflowItem {
  * terminal that shows them. A ResizeObserver on the header row drives it.
  */
 export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
+  const floatMove = useFloatMove()
   const { agentId, shellId, resolvedCwd, hasCwdOverride, worktreeBranch, ctxPct } = props
   const accounts = useAgentAccountsStore(s => s.accounts)
   const hiddenCount = props.zoomHiddenCount ?? 0
@@ -551,7 +553,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
     </Button>
   ))
   iconButton('float', 11, (
-    <Button key="float" variant="ghost" size="icon-sm" title={props.isFloating ? 'Dock pane back into the layout' : 'Float pane — drag freely, drag the header onto a pane to dock'} aria-label={props.isFloating ? 'Dock pane' : 'Float pane'} aria-pressed={props.isFloating} onClick={props.onToggleFloat}>
+    <Button key="float" variant="ghost" size="icon-sm" title={props.isFloating ? 'Dock pane back into the layout' : 'Float pane — drag the header to move it freely'} aria-label={props.isFloating ? 'Dock pane' : 'Float pane'} aria-pressed={props.isFloating} onClick={props.onToggleFloat}>
       <PictureInPicture2 className="h-3.5 w-3.5" />
     </Button>
   ))
@@ -615,8 +617,13 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   return (
     <div
       ref={setRootRef}
-      {...props.dragAttributes}
-      {...props.dragListeners}
+      {...(floatMove ? {} : props.dragAttributes)}
+      {...(floatMove ? {} : props.dragListeners)}
+      // Floating: bare header space moves the window freely instead of
+      // starting a dock drag; controls keep their own clicks.
+      onPointerDown={floatMove ? (e) => {
+        if (!(e.target as HTMLElement).closest('button, [role="menuitem"], input, [data-header-overflow]')) floatMove(e)
+      } : undefined}
       // dnd-kit stamps tabIndex 0 on its drag nodes. Keep the header out of the
       // tab order: it has no keyboard action, and a Tab meant for the shell must
       // never park the focus ring on app chrome (see lib/terminal-focus.ts).

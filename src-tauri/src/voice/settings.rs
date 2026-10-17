@@ -2,7 +2,8 @@
 //! `mcp/toggle.rs`). Missing or unreadable file = defaults: endpoint on,
 //! auto-Enter off — dictation is a draft unless the user opts in. The
 //! built-in speech source (SWA-38) is off until the user downloads a model
-//! and switches it on; older files without its keys keep their values.
+//! and switches it on; status announcements (SWA-41) are opt-in as well.
+//! Older files without the newer keys keep their values.
 
 use std::fs;
 use std::path::Path;
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 pub struct VoiceSettings {
     pub enabled: bool,
     pub allow_auto_enter: bool,
+    pub announce_turns: bool,
     pub builtin_enabled: bool,
     /// Catalog id from `speech::model::CATALOG`.
     pub model: String,
@@ -26,6 +28,7 @@ impl Default for VoiceSettings {
         Self {
             enabled: true,
             allow_auto_enter: false,
+            announce_turns: false,
             builtin_enabled: false,
             model: "base".into(),
             language: "auto".into(),
@@ -63,13 +66,20 @@ mod tests {
         let path = dir.path().join("voice-settings.json");
         assert_eq!(load(&path), VoiceSettings::default());
         assert!(!VoiceSettings::default().allow_auto_enter);
+        assert!(!VoiceSettings::default().announce_turns);
         let s = VoiceSettings {
             enabled: false,
             allow_auto_enter: true,
+            announce_turns: true,
             builtin_enabled: true,
             model: "small".into(),
             language: "de".into(),
         };
+        save(&path, &s).unwrap();
+        assert_eq!(load(&path), s);
+        // A file from before SWA-41 keeps its values; the new switch is off.
+        fs::write(&path, r#"{"enabled":false,"allowAutoEnter":true}"#).unwrap();
+        assert!(!load(&path).announce_turns && !load(&path).enabled);
         save(&path, &s).unwrap();
         assert_eq!(load(&path), s);
         fs::write(&path, "garbage").unwrap();

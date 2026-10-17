@@ -204,6 +204,15 @@ Open a card to restore its split sizes and panes; opening an already running
 workspace brings it into focus. Rename changes its saved name. Forget removes
 the card and stops saving that open instance; its terminals keep running.
 
+**Open on startup:** pin a card (pin icon), choose **Open on startup** in an
+open workspace's **⋯** menu in the navbar, or tick it under **Settings →
+Workspaces → Open on startup** to open it automatically every time Swarmterm
+starts — in the navbar, in the order set there, with agents resuming their
+sessions. While at least one workspace opens on startup, Welcome is skipped;
+**New workspace** still brings it up. If none of them can be opened, Welcome
+appears with the reason. Startup workspaces are never pushed out of the
+saved list by newer ones.
+
 Claude Code and Codex session hooks record each pane's exact conversation,
 including when several panes share a folder. For Codex, review and trust the
 Swarmterm hooks in **`/hooks`**, then send a message so its session is recorded.
@@ -281,6 +290,8 @@ A local dictation app (buzzkey) can type what you say straight into Swarmterm. S
 - With Settings, Welcome, the file editor, a search field or any dialog holding the keyboard, Swarmterm refuses rather than guesses.
 
 While you speak, the target pane shows a **Listening…** pill. Its **Stop** button (also reachable with Tab) throws the dictation away; buzzkey's own hotkey works as before. The pill disappears when the text arrives, when you cancel, when the pane closes or restarts, and after two minutes at the latest. Older buzzkey versions dictate without the pill.
+
+**Announce finished agents** (Settings → Voice, off by default) lets the dictation app tell you when an agent finishes or waits for your input, using the same rules as the bell: nothing for the pane you are looking at, and nothing if the fact resolved itself within a second. Only the pane title (as in its header; agents such as Claude Code set it to the topic of the conversation), the agent and the status are sent; output from the pane never leaves Swarmterm.
 
 **Settings → Voice** turns the endpoint on or off and can allow auto-Enter (off by default; never in plain shells, and only if you did not touch the prompt in the meantime). Only apps running as your Windows user can connect: Swarmterm opens a named pipe restricted to your account and writes its name and a fresh per-launch key to `%LOCALAPPDATA%\<app id>\voice-endpoint.json`.
 

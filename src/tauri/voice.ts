@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { IndicatorEvent } from '@/lib/voice-indicator'
 import type { DictationEvent, DictationPhase, ModelStatus } from '@/lib/voice-dictation'
+import type { TurnEvent } from '@/lib/voice-turns'
 
 /**
  * Voice dictation bridge (SWA-12). Rust owns the buzzkey pipe and the pins;
@@ -13,6 +14,7 @@ import type { DictationEvent, DictationPhase, ModelStatus } from '@/lib/voice-di
 export interface VoiceSettings {
   enabled: boolean
   allowAutoEnter: boolean
+  announceTurns: boolean
   /** Built-in speech source (SWA-38). */
   builtinEnabled: boolean
   model: string
@@ -77,6 +79,9 @@ export const getVoiceSettings = (): Promise<VoiceSettings> => invoke('voice_get_
 
 export const setVoiceSettings = (settings: VoiceSettings): Promise<VoiceSettings> =>
   invoke('voice_set_settings', { settings })
+
+/** Agent finished / needs input (SWA-41); Rust drops it unless announcing is on. */
+export const voiceTurnEvent = (event: TurnEvent): Promise<void> => invoke('voice_turn_event', { event })
 
 // Built-in speech source (SWA-38): Rust records and transcribes, then types
 // through the same `voice:insert` path as buzzkey.

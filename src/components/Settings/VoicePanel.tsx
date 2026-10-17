@@ -85,6 +85,12 @@ export function VoicePanel(): ReactElement {
               checked={settings.allowAutoEnter}
               onChange={(allowAutoEnter) => update({ ...settings, allowAutoEnter })}
             />
+            <ToggleRow
+              label="Announce finished agents"
+              description="Tells the dictation app when an agent you are not watching finishes or waits for input. Sends the status and the pane title, never pane output."
+              checked={settings.announceTurns}
+              onChange={(announceTurns) => update({ ...settings, announceTurns })}
+            />
           </div>
         )}
       </section>
