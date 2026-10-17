@@ -94,7 +94,15 @@ export const useSavedWorkspacesStore = create<SavedState>((set, get) => ({
     try {
       // One after another: the navbar order then matches the startup order, and
       // each `open` keeps its own inspection + fallback warnings.
-      for (const saved of list) await get().open(saved.id)
+      // `open` resets the notice on entry, so collect each one or a later
+      // success would hide why an earlier workspace did not open.
+      const notices: string[] = []
+      for (const saved of list) {
+        await get().open(saved.id)
+        const notice = get().notice
+        if (notice) notices.push(`${saved.name}: ${notice}`)
+      }
+      if (notices.length) set({ notice: notices.join(' ') })
       const first = list.map(w => useAppStore.getState().workspaces.find(ws => ws.savedId === w.id)).find(Boolean)
       if (first) useAppStore.getState().setActiveWorkspace(first.id)
     } finally { set({ autostarting: false }) }
