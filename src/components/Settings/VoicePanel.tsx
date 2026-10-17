@@ -9,6 +9,7 @@ import {
 } from '@/tauri/voice'
 import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import { modelSelectable } from '@/lib/voice-dictation'
+import { BuzzkeySection } from './BuzzkeySection'
 import { ToggleRow } from './NotificationsPanel'
 
 /** Whisper detects the language itself; pinning it avoids misdetections on short phrases. */
@@ -189,6 +190,7 @@ export function VoicePanel(): ReactElement {
         </section>
       )}
       {error && <p className="text-xs text-destructive">{error}</p>}
+      <BuzzkeySection />
     </div>
   )
 }

@@ -295,6 +295,16 @@ While you speak, the target pane shows a **Listening…** pill. Its **Stop** but
 
 **Settings → Voice** turns the endpoint on or off and can allow auto-Enter (off by default; never in plain shells, and only if you did not touch the prompt in the meantime). Only apps running as your Windows user can connect: Swarmterm opens a named pipe restricted to your account and writes its name and a fresh per-launch key to `%LOCALAPPDATA%\<app id>\voice-endpoint.json`.
 
+### Installing buzzkey from Swarmterm
+
+**Settings → Voice → buzzkey** shows whether buzzkey is installed, running or connected (with its version) and offers the next step: **Install buzzkey**, **Start**, **Quit**, **Check for update** and **Start buzzkey with Windows**. Nothing happens in the background — Swarmterm only goes online when you click.
+
+- Downloads come only from buzzkey's GitHub releases. Swarmterm first checks the release's signature against a key built into Swarmterm, then each file against the signed checksums, and only then installs into `%LOCALAPPDATA%\Programs\buzzkey` (no admin rights). A release that fails any check installs nothing; an update that fails half-way keeps the previous version.
+- buzzkey stays its own program with its own tray icon. **Quit** asks it to close itself; older buzzkey versions are quit from their tray menu instead. Swarmterm never kills it.
+- While the original whisper-key runs, Swarmterm offers nothing: both would fight over the hotkey and the microphone.
+- The autostart switch is the same entry as buzzkey's own tray setting. To uninstall, quit buzzkey, turn autostart off and delete the folder.
+- Once installed, buzzkey's hardware check (if the version has one) suggests a model; buzzkey makes the final choice on first start.
+
 ### Built-in speech recognition
 
 Swarmterm can also dictate on its own, without buzzkey. Under **Settings → Voice → Built-in speech recognition**, download a Whisper model once (**Base**, 142 MB, is the recommended choice; **Small** is more accurate and about three times slower) and switch **Enable built-in speech** on. Only downloaded models can be selected; a model you download here is selected once it is on disk. A model is checked against a fixed checksum before it is used and stays in `%LOCALAPPDATA%\<app id>\models`; **Delete** removes it again. Recognition runs locally on the CPU — no audio leaves your computer.

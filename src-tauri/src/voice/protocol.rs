@@ -33,8 +33,12 @@ pub const CAP_INDICATOR: &str = "indicator";
 /// Kept off the dictation connection so a slow reader never backs up
 /// `begin`/`insert`.
 pub const CAP_TURNS: &str = "turns";
+/// SWA-42: the client accepts a `quit` push and then exits on its own, the
+/// same as its tray's Quit. A request to leave, not a command it runs —
+/// Settings → Voice uses it to stop or update buzzkey without a kill.
+pub const CAP_QUIT: &str = "quit";
 /// What this build offers. Active is the intersection with the client's list.
-pub const CAPABILITIES: &[&str] = &[CAP_INDICATOR, CAP_TURNS];
+pub const CAPABILITIES: &[&str] = &[CAP_INDICATOR, CAP_TURNS, CAP_QUIT];
 /// Longest accepted request line, enforced while reading (not after).
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
 /// Longest dictated text; anything longer is not dictation. Kept small on
@@ -239,6 +243,14 @@ impl Event {
         s.push('\n');
         s
     }
+}
+
+/// `{"v":1,"event":"quit"}` — pushed on every live connection of a client
+/// that negotiated `quit`.
+pub fn quit_line() -> String {
+    let mut s = serde_json::json!({ "v": VERSION, "event": "quit" }).to_string();
+    s.push('\n');
+    s
 }
 
 /// Which agent fact a `turn` push announces. Stage 1 knows only these two;
@@ -592,8 +604,18 @@ mod tests {
             panic!("hello did not parse");
         };
         assert_eq!((proto, app.as_str()), (2, "buzzkey"));
-        assert_eq!(negotiate(&capabilities), vec!["indicator".to_owned()]);
+        // "quit" was an unknown capability before SWA-42; now it is ours.
+        assert_eq!(
+            negotiate(&capabilities),
+            vec!["indicator".to_owned(), "quit".to_owned()]
+        );
         assert!(negotiate(&[]).is_empty());
+        assert_eq!(
+            negotiate(&["quit".into(), "turns".into()]),
+            vec!["turns".to_owned(), "quit".to_owned()]
+        );
+        assert_eq!(quit_line(), "{\"v\":1,\"event\":\"quit\"}
+");
     }
 
     #[test]
