@@ -168,11 +168,15 @@ pub fn newer(candidate: &Version, current: &Version) -> bool {
 }
 
 fn pick(release: &GhRelease, name: &str) -> Option<Asset> {
-    release.assets.iter().find(|a| a.name == name).map(|a| Asset {
-        name: a.name.clone(),
-        size: a.size,
-        url: a.browser_download_url.clone(),
-    })
+    release
+        .assets
+        .iter()
+        .find(|a| a.name == name)
+        .map(|a| Asset {
+            name: a.name.clone(),
+            size: a.size,
+            url: a.browser_download_url.clone(),
+        })
 }
 
 /// The newest published buzzkey release that carries the two launchers,
@@ -198,7 +202,13 @@ pub fn select(releases: &[GhRelease]) -> Option<Release> {
                 && r.sums.size <= MAX_SUMS_BYTES
                 && r.sig.size <= MAX_SIG_BYTES
         })
-        .reduce(|best, r| if newer(&r.version, &best.version) { r } else { best })
+        .reduce(|best, r| {
+            if newer(&r.version, &best.version) {
+                r
+            } else {
+                best
+            }
+        })
 }
 
 /// HTTPS to an allowlisted host. `allow_loopback` is the testlab's fake
@@ -292,7 +302,10 @@ mod tests {
     fn tag_versions_keep_the_fork_number() {
         let v = version_of_tag("buzzkey-1.9.1-bk.4").unwrap();
         assert_eq!(v.to_string(), "1.9.1+bk.4");
-        assert_eq!(version_of_tag("buzzkey-2.0.0").unwrap().to_string(), "2.0.0");
+        assert_eq!(
+            version_of_tag("buzzkey-2.0.0").unwrap().to_string(),
+            "2.0.0"
+        );
         assert!(version_of_tag("v1.9.1").is_none());
         assert!(version_of_tag("buzzkey-1.9.1-rc.1").is_none());
         assert!(version_of_tag("buzzkey-1.9.1-bk.x").is_none());
@@ -338,7 +351,10 @@ mod tests {
     fn only_https_to_allowlisted_hosts() {
         let u = |s: &str| url::Url::parse(s).unwrap();
         assert!(url_allowed(&u("https://github.com/a/b"), false));
-        assert!(url_allowed(&u("https://release-assets.githubusercontent.com/x"), false));
+        assert!(url_allowed(
+            &u("https://release-assets.githubusercontent.com/x"),
+            false
+        ));
         assert!(!url_allowed(&u("http://github.com/a/b"), false));
         assert!(!url_allowed(&u("https://github.com.evil.example/a"), false));
         let mut with_user = u("https://github.com/a");
@@ -351,13 +367,19 @@ mod tests {
 
     #[test]
     fn signature_must_match_the_compiled_key_and_the_bytes() {
-        assert_eq!(verify_signature(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE, TEST_SIGNING_KEY), Ok(()));
+        assert_eq!(
+            verify_signature(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE, TEST_SIGNING_KEY),
+            Ok(())
+        );
         let tampered = SUMS_FIXTURE.replace("e3b0", "e3b1");
         assert!(verify_signature(tampered.as_bytes(), SIG_FIXTURE, TEST_SIGNING_KEY).is_err());
         // The release key did not sign the testlab fixture.
         assert!(verify_signature(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE, SIGNING_KEY).is_err());
         // Test builds (debug) also trust the testlab key; release builds do not.
-        assert_eq!(verify_trusted(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE).is_ok(), cfg!(debug_assertions));
+        assert_eq!(
+            verify_trusted(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE).is_ok(),
+            cfg!(debug_assertions)
+        );
         // Another key (same format) must not verify.
         let other = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
         assert!(verify_signature(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE, other).is_err());
@@ -367,7 +389,10 @@ mod tests {
     #[test]
     fn sums_lookup_is_strict_about_the_files_we_install() {
         assert_eq!(expected_hash(SUMS_FIXTURE, EXE).unwrap(), sha256(b""));
-        assert_eq!(expected_hash(SUMS_FIXTURE, CONSOLE_EXE).unwrap(), sha256(b"a"));
+        assert_eq!(
+            expected_hash(SUMS_FIXTURE, CONSOLE_EXE).unwrap(),
+            sha256(b"a")
+        );
         assert!(expected_hash(SUMS_FIXTURE, "other.exe").is_err());
         let twice = format!("{SUMS_FIXTURE}{}  buzzkey.exe\n", "00".repeat(32));
         assert!(expected_hash(&twice, EXE).is_err());

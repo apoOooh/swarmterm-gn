@@ -312,7 +312,10 @@ mod tests {
         assert_eq!(parse_probe("{}"), Some(HardwareProbe::default()));
         assert!(parse_probe("usage: buzzkey [-h]").is_none());
         let long = format!(r#"{{"summary":"{}"}}"#, "x".repeat(500));
-        assert_eq!(parse_probe(&long).unwrap().summary.unwrap().len(), MAX_PROBE_FIELD);
+        assert_eq!(
+            parse_probe(&long).unwrap().summary.unwrap().len(),
+            MAX_PROBE_FIELD
+        );
     }
 
     #[test]
@@ -323,6 +326,9 @@ mod tests {
             r#""c:\users\U\appdata\local\programs\buzzkey\buzzkey.exe""#,
             dir
         ));
-        assert!(!run_value_is_ours(r#""C:\Python\pythonw.exe" -m whisper_key"#, dir));
+        assert!(!run_value_is_ours(
+            r#""C:\Python\pythonw.exe" -m whisper_key"#,
+            dir
+        ));
     }
 }

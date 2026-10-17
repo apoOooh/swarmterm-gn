@@ -614,8 +614,11 @@ mod tests {
             negotiate(&["quit".into(), "turns".into()]),
             vec!["turns".to_owned(), "quit".to_owned()]
         );
-        assert_eq!(quit_line(), "{\"v\":1,\"event\":\"quit\"}
-");
+        assert_eq!(
+            quit_line(),
+            "{\"v\":1,\"event\":\"quit\"}
+"
+        );
     }
 
     #[test]
