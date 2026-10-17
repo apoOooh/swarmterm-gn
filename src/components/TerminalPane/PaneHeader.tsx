@@ -618,12 +618,16 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
     <div
       ref={setRootRef}
       {...(floatMove ? {} : props.dragAttributes)}
-      {...(floatMove ? {} : props.dragListeners)}
       // Floating: bare header space moves the window freely instead of
-      // starting a dock drag; controls keep their own clicks.
-      onPointerDown={floatMove ? (e) => {
-        if (!(e.target as HTMLElement).closest('button, [role="menuitem"], input, [data-header-overflow]')) floatMove(e)
-      } : undefined}
+      // starting a dock drag; controls keep their own clicks. One spread, not
+      // an explicit onPointerDown after the listeners: a later prop wins even
+      // when undefined, which silently removed dnd-kit's pointer sensor from
+      // every docked header (no pane could be dragged).
+      {...(floatMove ? {
+        onPointerDown: (e: React.PointerEvent) => {
+          if (!(e.target as HTMLElement).closest('button, [role="menuitem"], input, [data-header-overflow]')) floatMove(e)
+        }
+      } : props.dragListeners)}
       // dnd-kit stamps tabIndex 0 on its drag nodes. Keep the header out of the
       // tab order: it has no keyboard action, and a Tab meant for the shell must
       // never park the focus ring on app chrome (see lib/terminal-focus.ts).
