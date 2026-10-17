@@ -103,3 +103,12 @@ describe('open on startup', () => {
     expect(list.find(w => w.id === 'b')).not.toHaveProperty('autoOpen')
   })
 })
+
+it('never evicts a workspace that opens on startup, however many newer ones are saved', () => {
+  let list = setAutoOpen([{ ...saved(), id: 'pinned', updatedAt: 0 }], 'pinned', true)
+  for (let i = 1; i <= 30; i++) list = upsertSaved(list, { ...saved(), id: `new-${i}`, updatedAt: i })
+  expect(list).toHaveLength(24)
+  expect(list.find(w => w.id === 'pinned')?.autoOpen).toBe(0)
+  const raw = JSON.stringify({ version: 1, workspaces: list.concat([{ ...saved(), id: 'extra', updatedAt: 99 }]) })
+  expect(readSaved(storage(raw)).some(w => w.id === 'pinned')).toBe(true)
+})
