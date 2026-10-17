@@ -6,6 +6,8 @@
   finished agents" on, a dictation app can subscribe to "agent finished" and
   "needs your input" for panes you are not watching. Only the status and the
   pane title leave the app, never pane output. Off by default.
+- Docs: ADR 0001 (accepted) adopts a separate terminal host process so terminals
+  can outlive quit and app updates (`docs/adr/`).
 
 ## [1.14.2] - 2026-10-16
 
