@@ -377,7 +377,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   the fixed `VOICE_INSTRUCTION` as `additionalContext` (the only stdout it
   ever writes). `voice/completion/`'s `Ledger` is the only thing that
   closes a turn: Stop counts only for the open `prompt_id` of the same
-  spawn and session; the renderer's status is matched once per turn
+  spawn and session, and a Stop for an older prompt while another is open
+  is dropped whole in `/hook` (`stale_stop`: no `agent:hook` idle, so it
+  cannot end or announce the turn in progress); the renderer's status is matched once per turn
   (`publish`). `reader.rs` locates `<config>/projects/*/<session>.jsonl`
   itself, refuses reparse points, checks the final path against the root;
   `claude.rs` anchors on `promptId` and needs a byte-exact fingerprint.
