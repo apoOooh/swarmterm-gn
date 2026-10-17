@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type ReactElement } from 'react'
-import { Archive, ArrowDownToLine, Check, Columns2, GripHorizontal, LayoutGrid, MoreVertical, Pencil, Plus, Settings, X } from 'lucide-react'
+import { Archive, ArrowDownToLine, Check, Columns2, GripHorizontal, LayoutGrid, MoreVertical, Pencil, Pin, Plus, Settings, X } from 'lucide-react'
 import {
   DndContext,
   DragOverlay,
@@ -20,6 +20,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { GuardedPointerSensor } from '@/lib/dnd-sensors'
 import { collectLeaves } from '@/lib/layout-tree'
 import { useAppStore, type Workspace } from '@/store/app-store'
+import { setOpenWorkspaceAutoOpen, useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
 import { useNavbarVisibilityStore } from '@/store/navbar-visibility-store'
 import { useSidebarPeekStore } from '@/store/sidebar-peek-store'
 import { useEdgePeek } from '@/components/use-edge-peek'
@@ -381,6 +382,7 @@ function WorkspaceItem({
   const style = { transform: CSS.Transform.toString(transform), transition }
   const paneCount = collectLeaves(workspace.layout).length
   const drawerCount = workspace.drawerLeafIds?.length ?? 0
+  const pinned = useSavedWorkspacesStore((s) => s.entries.some((e) => e.id === workspace.savedId && e.autoOpen !== undefined))
 
   if (renaming) {
     return (
@@ -415,6 +417,7 @@ function WorkspaceItem({
         )}
       >
         <span className="flex-1 truncate">{workspace.name}</span>
+        {pinned && <Pin className="h-3 w-3 shrink-0 fill-current text-muted-foreground" aria-label="Opens on startup" />}
         {drawerCount > 0 && (
           <span
             className="flex items-center gap-0.5 text-xs tabular-nums text-muted-foreground"
@@ -445,6 +448,14 @@ function WorkspaceItem({
             <DropdownMenuItem onSelect={onTidy} disabled={paneCount < 2}>
               <LayoutGrid className="h-3.5 w-3.5" />
               Tidy layout
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!workspace.savedId}
+              onSelect={() => workspace.savedId && setOpenWorkspaceAutoOpen(workspace.savedId, !pinned)}
+            >
+              <Pin className={cn('h-3.5 w-3.5', pinned && 'fill-current')} />
+              Open on startup
+              {pinned && <Check className="ml-auto h-3.5 w-3.5" />}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

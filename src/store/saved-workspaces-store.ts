@@ -114,6 +114,11 @@ export const useSavedWorkspacesStore = create<SavedState>((set, get) => ({
 let autostartDone = false
 let sync: ReturnType<typeof startSavedWorkspaceSync> | undefined
 export function flushSavedWorkspaces(): void { sync?.flush() }
+/** Pin an open workspace; flush first, since a fresh one may not be saved yet (debounced sync). */
+export function setOpenWorkspaceAutoOpen(savedId: string, on: boolean): void {
+  sync?.flush()
+  useSavedWorkspacesStore.getState().setAutoOpen(savedId, on)
+}
 export function wireSavedWorkspaces(): () => void {
   sync?.dispose()
   useSavedWorkspacesStore.getState().hydrate()
