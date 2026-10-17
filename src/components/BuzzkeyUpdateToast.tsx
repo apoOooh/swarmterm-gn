@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+﻿import type { ReactElement } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useBuzzkeyUpdateStore } from '@/store/buzzkey-update-store'
@@ -27,7 +27,7 @@ export function BuzzkeyUpdateToast(): ReactElement | null {
         <div className="font-medium">buzzkey {toast.version} is available</div>
         <button
           type="button"
-          aria-label="Later"
+          aria-label="Dismiss until the next version"
           className="text-muted-foreground hover:text-foreground disabled:opacity-50"
           disabled={toast.installing}
           onClick={decline}
@@ -37,7 +37,7 @@ export function BuzzkeyUpdateToast(): ReactElement | null {
       </div>
       <div className="mt-1 text-xs text-muted-foreground">
         {toast.majorJump
-          ? 'A major new version — it is never installed automatically.'
+          ? 'A major new version â€” it is never installed automatically.'
           : 'Signed release; buzzkey restarts after the update.'}
       </div>
       {toast.error && (
@@ -54,7 +54,7 @@ export function BuzzkeyUpdateToast(): ReactElement | null {
           Later
         </Button>
         <Button size="sm" disabled={toast.installing} onClick={() => void updateNow()}>
-          {toast.installing ? 'Updating…' : 'Update now'}
+          {toast.installing ? 'Updatingâ€¦' : 'Update now'}
         </Button>
       </div>
     </div>
