@@ -527,6 +527,16 @@ machine that never built Swarmterm. Details in
 - [ ] Bell: a backend alert ("MCP server stopped" / "Voice input failed") shows its reason under the title and is not disabled; clicking it only marks it read.
 
 
+## Voice companion (SWA-42)
+
+- [ ] Settings → Voice → buzzkey on a profile without buzzkey: "Not installed"; Install downloads, verifies and installs into `%LOCALAPPDATA%\Programs\buzzkey`; state becomes "Installed, not running".
+- [ ] Start → buzzkey's tray icon appears; after the first dictation the state reads "Connected — buzzkey <version>".
+- [ ] Quit (buzzkey with `quit` capability) closes it; an older buzzkey shows the tray hint instead.
+- [ ] Check for update on the newest version → "Up to date"; Update over a running buzzkey quits, swaps and restarts it.
+- [ ] Autostart switch on/off adds/removes `HKCU\…\Runuzzkey`; buzzkey's own tray toggle shows the same state.
+- [ ] With whisper-key running, the section offers no action.
+- [ ] Release build: no "testlab key" notice; a release signed with the buzzkey release key installs (SWA-63).
+
 ## Account profiles (SWA-9)
 
 - Add one Claude Code and one Codex profile through Settings > Accounts; verify their names and configuration folders survive an app restart.

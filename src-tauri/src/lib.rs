@@ -36,6 +36,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
         .manage(voice::VoiceHub::default())
+        .manage(voice::companion::Companion::default())
         .manage(voice_speech_hub())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
@@ -149,6 +150,13 @@ pub fn run() {
             voice::voice_turn_event,
             voice::voice_get_settings,
             voice::voice_set_settings,
+            voice::companion::voice_companion_status,
+            voice::companion::voice_companion_check,
+            voice::companion::voice_companion_install,
+            voice::companion::voice_companion_start,
+            voice::companion::voice_companion_quit,
+            voice::companion::voice_companion_set_autostart,
+            voice::companion::voice_companion_probe,
             voice::voice_dictation_toggle,
             voice::voice_dictation_cancel,
             voice::voice_speech_status,

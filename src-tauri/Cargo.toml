@@ -53,6 +53,9 @@ notify = "8.2"
 clipboard-rs = { version = "0.3.5", default-features = false, features = ["image"] }
 dunce = "1"
 sha2 = "0.10"
+# Voice companion (SWA-42): both already in the tree via tauri-plugin-updater.
+minisign-verify = "0.2"
+semver = "1"
 tempfile = "3"
 libc = "0.2"
 
