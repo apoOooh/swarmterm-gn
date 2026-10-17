@@ -204,6 +204,13 @@ Open a card to restore its split sizes and panes; opening an already running
 workspace brings it into focus. Rename changes its saved name. Forget removes
 the card and stops saving that open instance; its terminals keep running.
 
+**Open on startup:** pin a card (pin icon) or tick it under **Settings →
+Workspaces → Open on startup** to open it automatically every time Swarmterm
+starts — in the navbar, in the order set there, with agents resuming their
+sessions. While at least one workspace opens on startup, Welcome is skipped;
+**New workspace** still brings it up. If none of them can be opened, Welcome
+appears with the reason.
+
 Claude Code and Codex session hooks record each pane's exact conversation,
 including when several panes share a folder. For Codex, review and trust the
 Swarmterm hooks in **`/hooks`**, then send a message so its session is recorded.
