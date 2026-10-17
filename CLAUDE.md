@@ -343,6 +343,25 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `cargo clean -p whisper-rs-sys` — its build script does not rerun on env
   changes. Debug builds replay `SWARMTERM_DICTATION_WAV` instead of the mic
   (testlab).
+- **Built-in announcements (SWA-66, `docs/adr/0003`).** `voice/tts/` speaks
+  turn facts with the system's SAPI voices (`ISpVoice`, COM on its own
+  worker thread). `voice_turn_event` builds ONE event; the local voice
+  (`speakTurns`) and the pipe feed (`announceTurns`) are independent gates.
+  `ttsHandled` on the push is decided under the TtsHub lock and means
+  "Swarmterm says it or drops it on purpose" — buzzkey's fallback voice only
+  speaks `false`; never hand an event back. `ttsOwner` is UI info, the
+  `tts` capability is protocol support plus the `tts_stop` op (answers on silence, allowed on a
+  status feed; buzzkey's "quiet" hotkey). Half-duplex is polled, not
+  timed: the worker checks begins-in-flight, `PinStore::any_live` and
+  `speech::busy` and keeps `queue::TAIL` after; queued items are dropped,
+  not replayed. `begin` holds `tts.begin_guard()` BEFORE its first await and
+  `quiesce`s (fails `tts-busy` rather than open a mic on our voice). Stops
+  bump `gen` under the hub lock; the utterance polls it every 20 ms, then a
+  synchronous SAPI purge (~130 ms to silence). Renderer stops: typing via
+  `setUserInputHandler` (registry `sendInput` only — dictation/War Room
+  writes never trigger it), focus change, `stop-announcement` (Ctrl+Shift+M,
+  claimed only while `speakTurns` is on). Debug builds:
+  `SWARMTERM_TTS_FAKE=<file>` logs JSON lines instead of speaking (testlab 36).
 - **File watcher: one recursive watch per root (SWA-53).** `files/watch.rs`
   watches the context root with `RecursiveMode::Recursive`, never one watch
   per folder. On Windows every watch is an open directory handle, and Windows

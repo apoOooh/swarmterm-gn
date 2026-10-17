@@ -36,6 +36,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
         .manage(voice::VoiceHub::default())
+        .manage(voice::tts::TtsHub::default())
         .manage(voice::companion::Companion::default())
         .manage(voice_speech_hub())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -154,6 +155,9 @@ pub fn run() {
             voice::voice_insert_result,
             voice::voice_indicator_stop,
             voice::voice_turn_event,
+            voice::voice_tts_stop,
+            voice::voice_tts_test,
+            voice::voice_tts_status,
             voice::voice_get_settings,
             voice::voice_set_settings,
             voice::companion::voice_companion_status,

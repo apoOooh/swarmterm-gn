@@ -6,8 +6,10 @@ import {
   onVoiceModelProgress,
   voiceDictationToggle,
   voiceFocusResponse,
-  voiceInsertResult
+  voiceInsertResult,
+  voiceTtsStop
 } from '@/tauri/voice'
+import { createTtsStopper, newlyFocusedTerminal } from '@/lib/voice-tts'
 import { DICTATION_ALERT_ID, dictationFailure } from '@/lib/voice-dictation'
 import { writeTerminalChecked } from '@/tauri/terminal'
 import { devLog } from '@/lib/dev-log'
@@ -18,7 +20,8 @@ import {
   getTerminalAgentId,
   getTerminalDraftInfo,
   isAnyTerminalFocused,
-  resetTerminalInputSegment
+  resetTerminalInputSegment,
+  setUserInputHandler
 } from '@/lib/terminal-registry'
 import { SUBMIT_DELAY_MS } from '@/lib/war-room-delivery'
 import { useAppStore, selectFocusedTerminalId } from '@/store/app-store'
@@ -106,7 +109,17 @@ export function wireVoice(isSettingsOpen: () => boolean): () => void {
   const progress = onVoiceModelProgress((e) => useVoiceDictationStore.getState().applyProgress(e))
   void useVoiceDictationStore.getState().refresh()
 
+  // Announcements (SWA-66) stop when the user types, and a pane's own
+  // announcement stops when the user focuses that pane.
+  setUserInputHandler(createTtsStopper(() => void voiceTtsStop().catch(() => {})))
+  const focusWatch = useAppStore.subscribe((s, prev) => {
+    const id = newlyFocusedTerminal(selectFocusedTerminalId(prev), selectFocusedTerminalId(s))
+    if (id) void voiceTtsStop(id).catch(() => {})
+  })
+
   return () => {
+    setUserInputHandler(undefined)
+    focusWatch()
     void focus.then((off) => off())
     void indicator.then((off) => off())
     void insert.then((off) => off())
@@ -128,6 +141,11 @@ function reportDictation(reason: string | undefined, terminalId: string | undefi
     detail: terminalId ? (useTerminalTitleStore.getState().titles[terminalId] ?? '') : '',
     at: Date.now()
   })
+}
+
+/** Shortcut: silence every announcement now (SWA-66). */
+export function stopAnnouncements(): void {
+  void voiceTtsStop().catch(() => {})
 }
 
 /** Shortcut and pane button: start, or stop and transcribe. */

@@ -3,8 +3,11 @@ import {
   cancelVoiceModel,
   deleteVoiceModel,
   downloadVoiceModel,
+  getTtsStatus,
   getVoiceSettings,
   setVoiceSettings,
+  voiceTtsTest,
+  type TtsStatus,
   type VoiceSettings
 } from '@/tauri/voice'
 import { useVoiceDictationStore } from '@/store/voice-dictation-store'
@@ -37,10 +40,14 @@ const megabytes = (bytes: number): string => `${Math.round(bytes / 1_000_000)} M
  *
  * Built-in speech (SWA-38) records and transcribes inside Swarmterm with a
  * downloaded Whisper model and delivers through the same path.
+ *
+ * Spoken announcements (SWA-66) use the system's voices; Rust owns the
+ * queue, the stop rules and who speaks (buzzkey only as a fallback).
  */
 export function VoicePanel(): ReactElement {
   const [settings, setSettings] = useState<VoiceSettings | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [tts, setTts] = useState<TtsStatus | null>(null)
   const models = useVoiceDictationStore((s) => s.models)
   const progress = useVoiceDictationStore((s) => s.progress)
   // A model downloaded from here becomes the selection once it is on disk:
@@ -50,6 +57,7 @@ export function VoicePanel(): ReactElement {
   useEffect(() => {
     void getVoiceSettings().then(setSettings, (e) => setError(String(e)))
     void useVoiceDictationStore.getState().refresh()
+    void getTtsStatus().then(setTts, () => setTts(null))
   }, [])
 
   const update = (next: VoiceSettings): void => {
@@ -107,6 +115,57 @@ export function VoicePanel(): ReactElement {
           </div>
         )}
       </section>
+
+      {settings && (
+        <section>
+          <h2 className="text-lg font-semibold text-foreground">Spoken announcements</h2>
+          <p className="mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground">
+            Swarmterm says when an agent you are not watching finishes or waits for input, using a
+            voice installed in Windows. Only the pane title and the status are spoken, never pane
+            output. Typing, focusing that pane, dictating or Ctrl+Shift+M stops it.
+          </p>
+          <div className="mt-4">
+            <ToggleRow
+              label="Speak announcements"
+              description={tts?.ready ? 'Needs "Accept dictation" on.' : `No voice available${tts?.error ? ` (${tts.error})` : ''}.`}
+              checked={settings.speakTurns}
+              onChange={(speakTurns) => update({ ...settings, speakTurns })}
+            />
+            {tts?.ready && (
+              <>
+                <label className="flex items-center justify-between gap-4 py-2 text-sm text-foreground">
+                  Voice
+                  <select
+                    aria-label="Announcement voice"
+                    className={field}
+                    value={settings.ttsVoice}
+                    onChange={(e) => update({ ...settings, ttsVoice: e.target.value })}
+                  >
+                    <option value="">First German voice</option>
+                    {tts.voices.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                  </select>
+                </label>
+                <label className="flex items-center justify-between gap-4 py-2 text-sm text-foreground">
+                  Volume
+                  <span className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      aria-label="Announcement volume"
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={settings.ttsVolume}
+                      onChange={(e) => update({ ...settings, ttsVolume: Number(e.target.value) })}
+                    />
+                    <span className="w-8 text-right text-xs tabular-nums text-muted-foreground">{settings.ttsVolume}</span>
+                    <button className={action} onClick={() => run(voiceTtsTest())}>Test voice</button>
+                  </span>
+                </label>
+              </>
+            )}
+          </div>
+        </section>
+      )}
 
       {settings && models.length > 0 && (
         <section>

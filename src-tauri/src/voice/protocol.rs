@@ -37,8 +37,12 @@ pub const CAP_TURNS: &str = "turns";
 /// same as its tray's Quit. A request to leave, not a command it runs —
 /// Settings → Voice uses it to stop or update buzzkey without a kill.
 pub const CAP_QUIT: &str = "quit";
+/// SWA-66: protocol support only — `turn` pushes carry `ttsHandled` and the
+/// `subscribe` answer `ttsOwner`. Whether Swarmterm speaks right now is
+/// those fields, never this capability.
+pub const CAP_TTS: &str = "tts";
 /// What this build offers. Active is the intersection with the client's list.
-pub const CAPABILITIES: &[&str] = &[CAP_INDICATOR, CAP_TURNS, CAP_QUIT];
+pub const CAPABILITIES: &[&str] = &[CAP_INDICATOR, CAP_TURNS, CAP_QUIT, CAP_TTS];
 /// Longest accepted request line, enforced while reading (not after).
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
 /// Longest dictated text; anything longer is not dictation. Kept small on
@@ -49,7 +53,15 @@ const MAX_ID_LEN: usize = 64;
 const MAX_LABEL_CHARS: usize = 64;
 const MAX_CAPS: usize = 16;
 const MAX_CAP_LEN: usize = 32;
-const KNOWN_OPS: &[&str] = &["hello", "begin", "insert", "cancel", "subscribe", "ping"];
+const KNOWN_OPS: &[&str] = &[
+    "hello",
+    "begin",
+    "insert",
+    "cancel",
+    "subscribe",
+    "ping",
+    "tts_stop",
+];
 /// Longest pane name pushed in a `turn` event.
 pub const MAX_PANE_NAME_CHARS: usize = 64;
 
@@ -79,6 +91,12 @@ pub enum Request {
         request_id: String,
     },
     Ping {
+        request_id: String,
+    },
+    /// SWA-66: silence Swarmterm's announcement voice (buzzkey's "quiet"
+    /// hotkey). Needs the `tts` capability; allowed on a status feed, since
+    /// it neither dictates nor waits on anything.
+    TtsStop {
         request_id: String,
     },
 }
@@ -117,6 +135,8 @@ enum Op {
     Subscribe { request_id: String },
     #[serde(rename_all = "camelCase")]
     Ping { request_id: String },
+    #[serde(rename = "tts_stop", rename_all = "camelCase")]
+    TtsStop { request_id: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
@@ -147,6 +167,10 @@ pub struct Response {
     /// `subscribe`: the last seq issued so far; the next push is greater.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,
+    /// `subscribe`: "swarmterm" or "none" — UI information for the client.
+    /// The per-event `ttsHandled` decides who speaks, never this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tts_owner: Option<String>,
 }
 
 impl Request {
@@ -156,7 +180,8 @@ impl Request {
             | Self::Begin { request_id }
             | Self::Insert { request_id, .. }
             | Self::Subscribe { request_id }
-            | Self::Ping { request_id } => Some(request_id.clone()),
+            | Self::Ping { request_id }
+            | Self::TtsStop { request_id } => Some(request_id.clone()),
             Self::Cancel { request_id, .. } => request_id.clone(),
         }
     }
@@ -275,6 +300,10 @@ pub struct TurnEvent {
     pub kind: TurnKind,
     pub excerpt: Option<String>,
     pub seq: u64,
+    /// SWA-66: Swarmterm took this event — it says it or drops it on
+    /// purpose. A fallback voice speaks only events with `false`; a client
+    /// that never saw this field (older Swarmterm) decides on its own.
+    pub tts_handled: bool,
 }
 
 impl TurnEvent {
@@ -284,6 +313,7 @@ impl TurnEvent {
         agent: String,
         kind: TurnKind,
         seq: u64,
+        tts_handled: bool,
     ) -> Self {
         Self {
             v: VERSION,
@@ -294,6 +324,7 @@ impl TurnEvent {
             kind,
             excerpt: None,
             seq,
+            tts_handled,
         }
     }
     pub fn to_line(&self) -> String {
@@ -413,6 +444,7 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
         Op::Cancel { request_id, pin } => Request::Cancel { request_id, pin },
         Op::Subscribe { request_id } => Request::Subscribe { request_id },
         Op::Ping { request_id } => Request::Ping { request_id },
+        Op::TtsStop { request_id } => Request::TtsStop { request_id },
     };
     match &req {
         Request::Hello {
@@ -437,6 +469,7 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
         Request::Begin { request_id }
         | Request::Subscribe { request_id }
         | Request::Ping { request_id }
+        | Request::TtsStop { request_id }
             if !valid_id(request_id) =>
         {
             Err("bad-request")
@@ -471,6 +504,26 @@ mod tests {
     use super::*;
 
     const TOKEN: &str = "secret-token";
+
+    #[test]
+    fn parses_tts_stop() {
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"tts_stop","requestId":"q1"}"#,
+                TOKEN
+            ),
+            Ok(Request::TtsStop {
+                request_id: "q1".into()
+            })
+        );
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"tts_stop","requestId":"q1","all":true}"#,
+                TOKEN
+            ),
+            Err("bad-request")
+        );
+    }
 
     #[test]
     fn parses_subscribe_and_ping() {
@@ -525,10 +578,11 @@ mod tests {
             "claude-code".into(),
             TurnKind::NeedsInput,
             7,
+            true,
         );
         assert_eq!(
             e.to_line(),
-            "{\"v\":1,\"event\":\"turn\",\"terminalId\":\"t1\",\"paneName\":\"Refactor[31m\",\"agent\":\"claude-code\",\"kind\":\"needs_input\",\"excerpt\":null,\"seq\":7}\n"
+            "{\"v\":1,\"event\":\"turn\",\"terminalId\":\"t1\",\"paneName\":\"Refactor[31m\",\"agent\":\"claude-code\",\"kind\":\"needs_input\",\"excerpt\":null,\"seq\":7,\"ttsHandled\":true}\n"
         );
         assert_eq!(
             clean_label(&"x".repeat(100)).chars().count(),
@@ -536,6 +590,17 @@ mod tests {
         );
         assert_eq!(clean_label("✳ Fix login"), "Fix login");
         assert_eq!(clean_label("⠂ 2 tests"), "2 tests");
+    }
+
+    #[test]
+    fn subscribe_answer_carries_the_owner_only_when_set() {
+        let plain = Response::ok(Some("s1".into()));
+        assert!(!plain.to_line().contains("ttsOwner"));
+        let owned = Response {
+            tts_owner: Some("swarmterm".into()),
+            ..plain
+        };
+        assert!(owned.to_line().contains("\"ttsOwner\":\"swarmterm\""));
     }
 
     #[test]
@@ -613,6 +678,11 @@ mod tests {
         assert_eq!(
             negotiate(&["quit".into(), "turns".into()]),
             vec!["turns".to_owned(), "quit".to_owned()]
+        );
+        // SWA-66: `tts` only when asked for; a 1.9-era client never sees it.
+        assert_eq!(
+            negotiate(&["tts".into(), "turns".into()]),
+            vec!["turns".to_owned(), "tts".to_owned()]
         );
         assert_eq!(
             quit_line(),

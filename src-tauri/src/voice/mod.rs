@@ -23,6 +23,12 @@
 //! decides WHICH facts qualify (notification-watch: still current, pane not
 //! watched); Rust gates on Settings → Voice and numbers them.
 //!
+//! Announcements (SWA-66): `tts/` speaks the same facts with the system's
+//! voices. `voice_turn_event` builds one event, then runs the local voice
+//! and the subscriber feed independently; `ttsHandled` on the push tells a
+//! fallback voice in buzzkey whether Swarmterm took it. `begin` holds a
+//! `tts::BeginGuard` and silences the voice before any mic opens.
+//!
 //! Companion (SWA-42): `companion/` installs and starts buzzkey from
 //! Settings → Voice. It reads "connected" and the version from the live
 //! hello'd connections here and asks buzzkey to leave with a `quit` push.
@@ -40,6 +46,7 @@ pub mod protocol;
 mod settings;
 #[cfg(windows)]
 pub mod speech;
+pub mod tts;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,7 +60,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::pty::AppState;
 use pins::{Pin, PinStore, PIN_TTL};
 use protocol::{
-    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_QUIT, CAP_TURNS,
+    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_QUIT, CAP_TTS,
+    CAP_TURNS,
 };
 pub use settings::VoiceSettings;
 
@@ -157,6 +165,9 @@ impl Conn {
     fn turns(&self) -> bool {
         self.capabilities.iter().any(|c| c == CAP_TURNS)
     }
+    fn tts(&self) -> bool {
+        self.capabilities.iter().any(|c| c == CAP_TTS)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -184,7 +195,7 @@ const BUZZKEY_APP: &str = "buzzkey";
 
 #[derive(Default)]
 pub struct VoiceHub {
-    pins: Mutex<PinStore>,
+    pub(crate) pins: Mutex<PinStore>,
     focus_waiters: Mutex<HashMap<String, oneshot::Sender<FocusReply>>>,
     insert_waiters: Mutex<HashMap<String, oneshot::Sender<InsertReply>>>,
     seen: Mutex<VecDeque<(String, Response)>>,
@@ -278,7 +289,7 @@ impl VoiceHub {
     }
 }
 
-fn spawn_id_of(app: &AppHandle, terminal_id: &str) -> Option<String> {
+pub(crate) fn spawn_id_of(app: &AppHandle, terminal_id: &str) -> Option<String> {
     let state = app.state::<AppState>();
     let terminals = state.terminals.lock().ok()?;
     terminals.get(terminal_id).map(|t| t.spawn_id.clone())
@@ -343,6 +354,9 @@ pub fn drop_terminal(app: &AppHandle, terminal_id: &str) {
     };
     let removed = hub.pins.lock().unwrap().remove_terminal(terminal_id);
     finish(app, removed);
+    if let Some(tts) = app.try_state::<tts::TtsHub>() {
+        tts.drop_terminal(terminal_id);
+    }
 }
 
 /// Source-independent entry point: one parsed request in, one response out.
@@ -354,7 +368,12 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
     conn.requests += 1;
     // A status feed stays a status feed: no dictation on it, so a reader
     // that lags behind pushes can never hold up an insert.
-    if conn.subscribed && !matches!(req, Request::Ping { .. } | Request::Subscribe { .. }) {
+    if conn.subscribed
+        && !matches!(
+            req,
+            Request::Ping { .. } | Request::Subscribe { .. } | Request::TtsStop { .. }
+        )
+    {
         return Response::err(req.request_id(), "bad-request");
     }
     match req {
@@ -397,8 +416,20 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
             hub.remember(&request_id, &resp);
             resp
         }
-        Request::Subscribe { request_id } => subscribe(&hub, request_id, conn),
+        Request::Subscribe { request_id } => subscribe(app, &hub, request_id, conn),
         Request::Ping { request_id } => Response::ok(Some(request_id)),
+        Request::TtsStop { request_id } => {
+            if !conn.tts() {
+                return Response::err(Some(request_id), "bad-request");
+            }
+            // Answered on silence, like `begin`: buzzkey sends this right
+            // before it opens a mic for a dictation that has no Swarmterm pin.
+            if app.state::<tts::TtsHub>().quiesce(QUIESCE_TIMEOUT).await {
+                Response::ok(Some(request_id))
+            } else {
+                Response::err(Some(request_id), "tts-busy")
+            }
+        }
         Request::Cancel { request_id, pin } => {
             let removed = hub.pins.lock().unwrap().remove(&pin);
             if let Some(pin) = removed {
@@ -409,7 +440,17 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
     }
 }
 
-fn subscribe(hub: &VoiceHub, request_id: String, conn: &mut Conn) -> Response {
+/// Who speaks status by default right now — UI information for a client's
+/// panel. Decisions go by each event's `ttsHandled`.
+fn tts_owner(app: &AppHandle, settings: &VoiceSettings) -> &'static str {
+    if settings.speak_turns && app.state::<tts::TtsHub>().ready() {
+        "swarmterm"
+    } else {
+        "none"
+    }
+}
+
+fn subscribe(app: &AppHandle, hub: &VoiceHub, request_id: String, conn: &mut Conn) -> Response {
     let rid = Some(request_id);
     if !conn.turns() || hub.conn_has_pin(conn.id) {
         return Response::err(rid, "bad-request");
@@ -426,12 +467,26 @@ fn subscribe(hub: &VoiceHub, request_id: String, conn: &mut Conn) -> Response {
     // what happens from now on — an old "done" read aloud is noise.
     Response {
         seq: Some(hub.turn_seq.load(Ordering::Relaxed)),
+        tts_owner: Some(tts_owner(app, &hub.settings()).to_owned()),
         ..Response::ok(rid)
     }
 }
 
+/// How long `begin` waits for the voice to fall silent. SAPI purges at
+/// once; this only trips on a wedged engine, and then the mic stays closed.
+const QUIESCE_TIMEOUT: Duration = Duration::from_millis(300);
+
 async fn begin(app: &AppHandle, hub: &VoiceHub, request_id: String, conn: &Conn) -> Response {
     let rid = Some(request_id.clone());
+    // Before the first await: from here on no announcement may start, and
+    // the client opens its mic only after our answer — so it never records
+    // our own voice. Released when this returns; a live pin keeps the gate
+    // shut from then on.
+    let tts = app.state::<tts::TtsHub>();
+    let _guard = tts.begin_guard();
+    if !tts.quiesce(QUIESCE_TIMEOUT).await {
+        return Response::err(rid, "tts-busy");
+    }
     let (tx, rx) = oneshot::channel();
     let ask = uuid::Uuid::new_v4().simple().to_string();
     hub.focus_waiters.lock().unwrap().insert(ask.clone(), tx);
@@ -589,16 +644,30 @@ pub fn voice_insert_result(
 }
 
 /// Agent finished / needs input (SWA-41), from the renderer's notification
-/// watch. Dropped unless the endpoint is on and announcing is opted in, and
-/// for panes that are already gone.
+/// watch (which already skips panes the user is watching). One event, two
+/// independent consumers: the local voice (`speakTurns`, works without any
+/// pipe client) and the subscriber feed (`announceTurns`). Dropped while the
+/// endpoint is off and for panes that are already gone.
 #[tauri::command]
 pub fn voice_turn_event(app: AppHandle, event: TurnInput) {
     let hub = app.state::<VoiceHub>();
     let settings = hub.settings();
-    if !settings.enabled || !settings.announce_turns {
+    if !settings.enabled || !(settings.speak_turns || settings.announce_turns) {
         return;
     }
-    if spawn_id_of(&app, &event.terminal_id).is_none() {
+    let Some(spawn_id) = spawn_id_of(&app, &event.terminal_id) else {
+        return;
+    };
+    let handled = settings.speak_turns
+        && app.state::<tts::TtsHub>().announce(
+            event.terminal_id.clone(),
+            spawn_id,
+            &event.pane_name,
+            &event.agent,
+            event.kind,
+            &settings.tts_voice,
+        );
+    if !settings.announce_turns {
         return;
     }
     let subs: Vec<u64> = hub.subscribers.lock().unwrap().iter().copied().collect();
@@ -612,6 +681,7 @@ pub fn voice_turn_event(app: AppHandle, event: TurnInput) {
         event.agent,
         event.kind,
         seq,
+        handled,
     )
     .to_line();
     let conns = hub.conns.lock().unwrap();
@@ -620,6 +690,25 @@ pub fn voice_turn_event(app: AppHandle, event: TurnInput) {
             let _ = tx.send(Outgoing::Line(line.clone()));
         }
     }
+}
+
+/// Silence announcements: everything (typing, the shortcut) or only one
+/// pane's (the user just focused it, so they have seen it).
+#[tauri::command]
+pub fn voice_tts_stop(app: AppHandle, terminal_id: Option<String>) {
+    app.state::<tts::TtsHub>().stop(terminal_id.as_deref());
+}
+
+/// Settings → Voice "Test voice".
+#[tauri::command]
+pub fn voice_tts_test(app: AppHandle) -> Result<(), String> {
+    let voice = app.state::<VoiceHub>().settings().tts_voice;
+    app.state::<tts::TtsHub>().test(&voice)
+}
+
+#[tauri::command]
+pub fn voice_tts_status(app: AppHandle) -> tts::TtsStatus {
+    app.state::<tts::TtsHub>().status()
 }
 
 /// The pill's Stop button. Ends the dictation; the client discards it.
@@ -663,6 +752,9 @@ pub fn voice_set_settings(
     // insert, so changing it must not kill a dictation that is running.
     if was_enabled != settings.enabled {
         apply(&app);
+    }
+    if previous.speak_turns && !settings.speak_turns {
+        app.state::<tts::TtsHub>().stop(None);
     }
     Ok(settings)
 }
@@ -745,6 +837,7 @@ pub fn init(app: &AppHandle) {
     if let Ok(path) = settings_path(app) {
         *hub.settings.lock().unwrap() = settings::load(&path);
     }
+    tts::start(app);
     apply(app);
 }
 
@@ -780,8 +873,7 @@ pub fn shutdown(app: &AppHandle) {
     }
     #[cfg(windows)]
     speech::cancel_running(app, "disabled");
-    #[cfg(not(windows))]
-    let _ = app;
+    app.state::<tts::TtsHub>().stop(None);
 }
 
 #[cfg(test)]

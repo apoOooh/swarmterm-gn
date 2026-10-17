@@ -293,6 +293,11 @@ While you speak, the target pane shows a **Listening…** pill. Its **Stop** but
 
 **Announce finished agents** (Settings → Voice, off by default) lets the dictation app tell you when an agent finishes or waits for your input, using the same rules as the bell: nothing for the pane you are looking at, and nothing if the fact resolved itself within a second. Only the pane title (as in its header; agents such as Claude Code set it to the topic of the conversation), the agent and the status are sent; output from the pane never leaves Swarmterm.
 
+**Speak announcements** (Settings → Voice, off by default) lets Swarmterm say the same facts itself — "Backend: fertig." or "Backend wartet auf Eingabe." — with a voice installed in Windows (Settings → Time & language → Speech; German voices such as Hedda come with the German language pack). It works without buzzkey. Pick the voice and volume there; **Test voice** plays a sample. English voices say "Backend is done." instead. Paths and URLs in the pane title are left out.
+
+- An announcement stops as soon as you type, focus the pane it is about, start a dictation, or press **Ctrl+Shift+M**. Swarmterm never speaks while a dictation records or transcribes — so it never dictates its own voice — and what came in meanwhile is dropped, not read out later. Announcements older than ten seconds are dropped too; at most three wait in line, and a newer one for the same pane replaces the older.
+- When Swarmterm speaks, buzzkey's own announcement voice stays quiet for that event; buzzkey only fills in (if you enabled its fallback voice) when Swarmterm does not speak.
+
 **Settings → Voice** turns the endpoint on or off and can allow auto-Enter (off by default; never in plain shells, and only if you did not touch the prompt in the meantime). Only apps running as your Windows user can connect: Swarmterm opens a named pipe restricted to your account and writes its name and a fresh per-launch key to `%LOCALAPPDATA%\<app id>\voice-endpoint.json`.
 
 ### Installing buzzkey from Swarmterm
