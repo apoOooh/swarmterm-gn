@@ -86,6 +86,7 @@ import { FolderPicker } from '@/components/FolderPicker/FolderPicker'
 import { HandoffDialog } from '@/components/TerminalPane/HandoffDialog'
 import { TitleBar } from '@/components/TitleBar/TitleBar'
 import { Workspace, PaneDragGhost } from '@/components/Workspace/Workspace'
+import { FLOATING_LAYER_ID } from '@/lib/floating-panes'
 import { Welcome } from '@/components/Welcome/Welcome'
 import { WorkspaceTabs } from '@/components/WorkspaceTabs/WorkspaceTabs'
 import { useBrowserStore } from '@/store/browser-store'
@@ -1214,6 +1215,9 @@ export default function App(): ReactElement {
           </div>
 
         </main>
+
+        {/* Floating panes portal in here (Workspace.tsx), above both sidebars. */}
+        <div id={FLOATING_LAYER_ID} className="pointer-events-none absolute inset-2 z-30 [&>*]:pointer-events-auto" />
 
         {settingsOpen && (
           <SettingsView

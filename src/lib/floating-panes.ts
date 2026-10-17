@@ -7,8 +7,9 @@ import { collectLeaves, type LayoutNode } from '@/lib/layout-tree'
  * "Dock" drops it back into its original slot, and saved workspaces (which
  * serialize the tree only) restore it docked — no new persisted shape.
  *
- * Rects are fractions of the workspace area so a window resize keeps them
- * proportionally in place.
+ * Rects are fractions of the app content area (below the title bar, across
+ * both sidebars), so a window resize keeps them proportionally in place while
+ * toggling a sidebar leaves them untouched.
  */
 export interface FloatRect {
   leafId: string
@@ -18,7 +19,10 @@ export interface FloatRect {
   h: number
 }
 
-/** Smallest float width/height as a fraction of the workspace. */
+/** DOM id of the app-wide layer (App.tsx) that floating panes portal into. */
+export const FLOATING_LAYER_ID = 'floating-layer'
+
+/** Smallest float width/height as a fraction of the content area. */
 export const MIN_FLOAT_SIZE = 0.15
 const DEFAULT_SIZE = { w: 0.45, h: 0.5 }
 const CASCADE = 0.04

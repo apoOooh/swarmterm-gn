@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, type ReactElement } from 'react'
+import { memo, useEffect, useRef, useState, type ReactElement } from 'react'
+import { createPortal } from 'react-dom'
 import { Group, Panel, Separator, type GroupImperativeHandle } from 'react-resizable-panels'
 import type { LayoutNode, LeafNode } from '@/lib/layout-tree'
 import { useAppStore, type Workspace as WorkspaceModel } from '@/store/app-store'
@@ -7,7 +8,7 @@ import { BroadcastBanner } from '@/components/Workspace/BroadcastBanner'
 import { SnapBar } from '@/components/Workspace/SnapBar'
 import { CornerHandles } from '@/components/Workspace/CornerHandles'
 import { FloatingPane } from '@/components/Workspace/FloatingPane'
-import { hiddenLeafIds } from '@/lib/floating-panes'
+import { FLOATING_LAYER_ID, hiddenLeafIds } from '@/lib/floating-panes'
 import { findLeaf } from '@/lib/layout-tree'
 import { AgentIcon } from '@/components/AgentIcon'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
@@ -29,6 +30,11 @@ export const Workspace = memo(function Workspace({ workspace }: WorkspaceProps):
   const equalizeSplitNode = useAppStore((s) => s.equalizeSplitNode)
   // Live Group handles so CornerHandles can move two splits in one drag.
   const groups = useRef(new Map<string, GroupImperativeHandle>())
+  const isActive = useAppStore((s) => s.activeWorkspaceId === workspace.id)
+  // Floating panes live in App's app-wide layer, not in this workspace's area,
+  // so collapsing either sidebar neither moves nor resizes them.
+  const [floatingHost, setFloatingHost] = useState<HTMLElement | null>(null)
+  useEffect(() => setFloatingHost(document.getElementById(FLOATING_LAYER_ID)), [])
 
   // Groups are uncontrolled: `sizes` only seeds a Group when it mounts. Tidy
   // rewrites the sizes of splits that stay mounted, so push the stored sizes
@@ -143,18 +149,17 @@ export const Workspace = memo(function Workspace({ workspace }: WorkspaceProps):
           ? renderNode(zoomed ?? visible)
           : drawerCount > 0 && <EmptyDrawerState count={drawerCount} />}
         {visible && !zoomed && <CornerHandles layout={visible} groups={groups} inset={8} />}
-        {!zoomed && (
-          <div className="pointer-events-none absolute inset-2 z-30 [&>*]:pointer-events-auto">
-            {floating.map((rect) => {
-              const leaf = findLeaf(workspace.layout, rect.leafId)
-              if (!leaf) return null
-              return (
-                <FloatingPane key={rect.leafId} rect={rect} label={templateById(leaf.agentId ?? DEFAULT_TEMPLATE_ID).name}>
-                  {renderLeaf(leaf, true)}
-                </FloatingPane>
-              )
-            })}
-          </div>
+        {!zoomed && isActive && floatingHost && createPortal(
+          floating.map((rect) => {
+            const leaf = findLeaf(workspace.layout, rect.leafId)
+            if (!leaf) return null
+            return (
+              <FloatingPane key={rect.leafId} rect={rect} label={templateById(leaf.agentId ?? DEFAULT_TEMPLATE_ID).name}>
+                {renderLeaf(leaf, true)}
+              </FloatingPane>
+            )
+          }),
+          floatingHost
         )}
         <SnapBar layout={workspace.layout} drawerLeafIds={workspace.drawerLeafIds ?? []} />
       </div>
