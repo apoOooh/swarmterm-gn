@@ -25,8 +25,10 @@ size, GPU in the Windows CI, and a hotkey collision with buzzkey.
    to mono; a linear resample to 16 kHz runs once on stop. Recording is capped
    at 120 s (= `PIN_TTL`).
 3. **Models are downloaded, not bundled.** Settings → Voice offers a fixed
-   catalog of multilingual ggml models (tiny, base, small, large-v3-turbo q5)
-   from `huggingface.co/ggerganov/whisper.cpp`. URL and SHA-256 are compiled
+   catalog of multilingual ggml models (small q5, medium q5, large-v3-turbo q5
+   and q8, large-v3 q5; tiny/base/small kept as legacy) from
+   `huggingface.co/ggerganov/whisper.cpp`. It suggests one per PC from CPU
+   threads, RAM and AVX2 (`speech/recommend.rs`), with the reason shown. URL and SHA-256 are compiled
    in; the download streams into a `.part` file, is hashed while writing and
    renamed only on a match. Stored under the local app data dir (`models/`).
 4. **Trigger: an app shortcut (`Ctrl+Shift+Space`, toggle) and a microphone

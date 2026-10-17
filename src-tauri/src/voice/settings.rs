@@ -10,6 +10,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+/// Safe on every machine; Settings → Voice suggests a better fit per PC
+/// (`speech::recommend`).
+pub const DEFAULT_MODEL: &str = "small-q5";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct VoiceSettings {
@@ -37,7 +41,7 @@ impl Default for VoiceSettings {
             allow_auto_enter: false,
             announce_turns: false,
             builtin_enabled: false,
-            model: "base".into(),
+            model: DEFAULT_MODEL.into(),
             language: "auto".into(),
             speak_turns: false,
             tts_voice: String::new(),
@@ -107,7 +111,10 @@ mod tests {
         let s = load(&path);
         assert!(!s.enabled && s.allow_auto_enter);
         assert!(!s.builtin_enabled);
-        assert_eq!((s.model.as_str(), s.language.as_str()), ("base", "auto"));
+        assert_eq!(
+            (s.model.as_str(), s.language.as_str()),
+            (DEFAULT_MODEL, "auto")
+        );
         // SWA-66: speaking is opt-in as well.
         assert!(!s.speak_turns);
         assert_eq!(s.tts_volume, 80);

@@ -50,6 +50,7 @@ export function VoicePanel(): ReactElement {
   const [tts, setTts] = useState<TtsStatus | null>(null)
   const models = useVoiceDictationStore((s) => s.models)
   const progress = useVoiceDictationStore((s) => s.progress)
+  const recommendation = useVoiceDictationStore((s) => s.recommendation)
   // A model downloaded from here becomes the selection once it is on disk:
   // only downloaded models can be picked, so Download is how you choose one.
   const [pickAfterDownload, setPickAfterDownload] = useState<string | null>(null)
@@ -81,6 +82,12 @@ export function VoicePanel(): ReactElement {
   }, [models, pickAfterDownload, settings])
 
   const selected = models.find((m) => m.id === settings?.model)
+  const recommended = models.find((m) => m.id === recommendation?.model)
+  const useRecommended = (): void => {
+    if (!settings || !recommended) return
+    if (recommended.ready) update({ ...settings, model: recommended.id })
+    else if (!recommended.downloading) { setPickAfterDownload(recommended.id); run(downloadVoiceModel(recommended.id)) }
+  }
   const modelMissing = !!settings?.enabled && !!settings.builtinEnabled && !selected?.ready
 
   return (
@@ -173,7 +180,7 @@ export function VoicePanel(): ReactElement {
           <p className="mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground">
             Dictate without a separate app: press Ctrl+Shift+Space (or the microphone in the pane
             header), speak, press it again. Recognition runs locally on your CPU with a Whisper
-            model you download once; no audio leaves this computer.
+            model you download once (the suggestion below fits this PC); no audio leaves this computer.
           </p>
           <div className="mt-4">
             <ToggleRow
@@ -199,6 +206,28 @@ export function VoicePanel(): ReactElement {
               The selected model is not downloaded, so dictation is off. Download it, or pick a downloaded model.
             </p>
           )}
+          {recommendation && recommended && (
+            <div className="mt-4 rounded border border-primary/40 bg-primary/5 px-3 py-2 text-sm" aria-label="Recommended model">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-foreground">
+                  Recommended for this PC: <strong>{recommended.label}</strong>
+                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  {settings.model === recommended.id && recommended.ready ? (
+                    <span className="text-xs text-muted-foreground">in use</span>
+                  ) : (
+                    <button className={action} disabled={recommended.downloading} onClick={useRecommended}>
+                      {recommended.ready ? 'Use' : 'Download and use'}
+                    </button>
+                  )}
+                  <button className={action} onClick={() => { void useVoiceDictationStore.getState().refresh() }}>Measure again</button>
+                </div>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {recommendation.reason} Measured {new Date(recommendation.measuredAt).toLocaleString()}: {recommendation.summary}.
+              </p>
+            </div>
+          )}
           <div className="mt-2 space-y-1" role="radiogroup" aria-label="Speech model">
             {models.map((m) => {
               const received = progress[m.id]
@@ -216,6 +245,7 @@ export function VoicePanel(): ReactElement {
                       onChange={() => update({ ...settings, model: m.id })}
                     />
                     <span className="truncate">{m.label}</span>
+                    {m.id === recommendation?.model && <span className="text-xs text-primary">recommended</span>}
                     {m.ready && <span className="text-xs text-muted-foreground">downloaded</span>}
                   </label>
                   <div className="flex shrink-0 items-center gap-2">

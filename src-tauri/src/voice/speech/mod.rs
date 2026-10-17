@@ -17,6 +17,7 @@
 mod capture;
 mod engine;
 pub mod model;
+pub mod recommend;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -86,6 +87,8 @@ pub struct ModelStatus {
 pub struct SpeechStatus {
     models: Vec<ModelStatus>,
     dictation: &'static str,
+    /// Measured on every status query (cheap), so "Measure again" is a refresh.
+    recommendation: recommend::Recommendation,
 }
 
 fn emit_state(
@@ -351,7 +354,12 @@ pub fn status(app: &AppHandle) -> Result<SpeechStatus, String> {
     } else {
         "idle"
     };
-    Ok(SpeechStatus { models, dictation })
+    let recommendation = recommend::recommend(&recommend::detect(), recommend::now_ms());
+    Ok(SpeechStatus {
+        models,
+        dictation,
+        recommendation,
+    })
 }
 
 pub fn download(app: &AppHandle, id: &str) -> Result<(), String> {

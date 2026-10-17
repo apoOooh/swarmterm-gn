@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { IndicatorEvent } from '@/lib/voice-indicator'
-import type { DictationEvent, DictationPhase, ModelStatus } from '@/lib/voice-dictation'
+import type { DictationEvent, DictationPhase, ModelRecommendation, ModelStatus } from '@/lib/voice-dictation'
 import type { TurnEvent } from '@/lib/voice-turns'
 
 /**
@@ -44,6 +44,7 @@ export interface TtsStatus {
 export interface SpeechStatus {
   models: ModelStatus[]
   dictation: DictationPhase
+  recommendation: ModelRecommendation
 }
 
 export interface ModelProgress {

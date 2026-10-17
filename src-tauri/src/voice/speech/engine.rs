@@ -65,10 +65,11 @@ impl Engine {
     }
 }
 
-/// Leave a core for the UI and the PTY threads.
+/// Leave a core for the UI and the PTY threads. Up to 16, so the large
+/// models `recommend` suggests for big CPUs can use them.
 fn threads() -> i32 {
     std::thread::available_parallelism()
-        .map(|n| n.get().saturating_sub(1).clamp(1, 8) as i32)
+        .map(|n| n.get().saturating_sub(1).clamp(1, 16) as i32)
         .unwrap_or(4)
 }
 
