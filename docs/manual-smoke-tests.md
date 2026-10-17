@@ -509,6 +509,7 @@ machine that never built Swarmterm. Details in
 - [ ] Plain terminal pane: yellow output dot behaves exactly as before.
 - [ ] Respawn an agent pane (switch agent) → no stale dot; detection resumes after ~3s.
 - [ ] Scroll an agent pane far up during a working task → dot still tracks the live bottom of the buffer.
+- [ ] Settings → Appearance → **Highlight panes by agent state** on: a working Claude pane wears a yellow inner frame that turns orange over the chosen gradient, red on a permission prompt, green after finishing in the background (cleared on focus); idle and plain Terminal panes stay unframed; switching it off removes every frame at once.
 
 ## Notifications
 
