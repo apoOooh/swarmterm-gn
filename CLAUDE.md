@@ -317,6 +317,17 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
   the pins lock): never call `voice::drop_terminal` while holding
   `terminals`.
+- **Voice companion (SWA-42).** `voice/companion/` installs buzzkey only on
+  click: newest signed `buzzkey-*` release (`release::select`), minisign
+  signature over `SHA256SUMS.txt` against the compiled-in key FIRST, then
+  hash + size per file, HTTPS host allowlist on every redirect hop, staged
+  per-file swap with rollback (`install.rs`). The key is still the testlab
+  TEST key (`SIGNING_KEY_IS_TEST`, SWA-63 swaps it). Quit is the `quit`
+  capability: a push on buzzkey's live hello'd connections, never a kill.
+  Running = buzzkey's `buzzkey_SingleInstance` mutex; whisper-key blocks all
+  actions. Debug-only env overrides (`SWARMTERM_BUZZKEY_RELEASES_URL` with
+  loopback, `_DIR`, `_MUTEX`) exist for testlab scenario 34 — never honour
+  them in release builds.
 - **File watcher: one recursive watch per root (SWA-53).** `files/watch.rs`
   watches the context root with `RecursiveMode::Recursive`, never one watch
   per folder. On Windows every watch is an open directory handle, and Windows

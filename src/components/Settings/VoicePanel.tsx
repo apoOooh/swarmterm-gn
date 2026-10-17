@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactElement } from 'react'
 import { getVoiceSettings, setVoiceSettings, type VoiceSettings } from '@/tauri/voice'
+import { BuzzkeySection } from './BuzzkeySection'
 import { ToggleRow } from './NotificationsPanel'
 
 /**
@@ -54,6 +55,7 @@ export function VoicePanel(): ReactElement {
         )}
         {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
       </section>
+      <BuzzkeySection />
     </div>
   )
 }

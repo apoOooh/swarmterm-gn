@@ -21,11 +21,16 @@
 //! decides WHICH facts qualify (notification-watch: still current, pane not
 //! watched); Rust gates on Settings → Voice and numbers them.
 //!
+//! Companion (SWA-42): `companion/` installs and starts buzzkey from
+//! Settings → Voice. It reads "connected" and the version from the live
+//! hello'd connections here and asks buzzkey to leave with a `quit` push.
+//!
 //! The renderer owns focus and xterm state (bracketed paste, IME, typing
 //! signal), Rust owns the PTY generation. Both checks are needed: the
 //! renderer decides WHAT to write, `write_terminal_checked` refuses to write
 //! it into a respawned shell.
 
+pub mod companion;
 pub mod pins;
 #[cfg(windows)]
 mod pipe;
@@ -44,7 +49,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::pty::AppState;
 use pins::{Pin, PinStore, PIN_TTL};
 use protocol::{
-    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_TURNS,
+    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_QUIT,
+    CAP_TURNS,
 };
 pub use settings::VoiceSettings;
 
@@ -147,14 +153,19 @@ pub struct TurnInput {
     pub agent: String,
 }
 
-/// The client that last said hello. Kept for the companion UI (SWA-42).
+/// What a client said in `hello`. The last one is kept after its connection
+/// closes (buzzkey opens one per dictation), so the panel still shows the
+/// version between dictations.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PeerInfo {
     pub app: String,
     pub version: String,
+    #[allow(dead_code)]
     pub proto: u64,
 }
+
+/// The client app name buzzkey sends in `hello`.
+const BUZZKEY_APP: &str = "buzzkey";
 
 #[derive(Default)]
 pub struct VoiceHub {
@@ -166,6 +177,8 @@ pub struct VoiceHub {
     conns: Mutex<HashMap<u64, mpsc::UnboundedSender<Outgoing>>>,
     next_conn: AtomicU64,
     peer: Mutex<Option<PeerInfo>>,
+    /// Live hello'd connections: app name and whether it negotiated `quit`.
+    hellos: Mutex<HashMap<u64, (String, bool)>>,
     subscribers: Mutex<HashSet<u64>>,
     turn_seq: AtomicU64,
     #[cfg(windows)]
@@ -177,9 +190,50 @@ impl VoiceHub {
         self.settings.lock().unwrap().clone()
     }
 
-    #[allow(dead_code)]
-    pub fn peer(&self) -> Option<PeerInfo> {
-        self.peer.lock().unwrap().clone()
+    /// The last buzzkey that said hello, connected or not.
+    pub fn buzzkey_peer(&self) -> Option<PeerInfo> {
+        self.peer
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|p| p.app == BUZZKEY_APP)
+    }
+
+    pub fn buzzkey_connected(&self) -> bool {
+        self.hellos
+            .lock()
+            .unwrap()
+            .values()
+            .any(|(app, _)| app == BUZZKEY_APP)
+    }
+
+    pub fn buzzkey_can_quit(&self) -> bool {
+        self.hellos
+            .lock()
+            .unwrap()
+            .values()
+            .any(|(app, quit)| app == BUZZKEY_APP && *quit)
+    }
+
+    /// Push `quit` to every live buzzkey connection that negotiated it.
+    /// False = nobody to ask; the user quits from the tray instead.
+    pub fn request_buzzkey_quit(&self) -> bool {
+        let targets: Vec<u64> = self
+            .hellos
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, (app, quit))| app == BUZZKEY_APP && *quit)
+            .map(|(id, _)| *id)
+            .collect();
+        let conns = self.conns.lock().unwrap();
+        let mut sent = false;
+        for id in targets {
+            if let Some(tx) = conns.get(&id) {
+                sent |= tx.send(Outgoing::Line(protocol::quit_line())).is_ok();
+            }
+        }
+        sent
     }
 
     /// A new pipe connection; pushes for it go through `tx`.
@@ -259,6 +313,7 @@ pub fn close_conn(app: &AppHandle, conn: u64) {
     let hub = app.state::<VoiceHub>();
     hub.conns.lock().unwrap().remove(&conn);
     hub.subscribers.lock().unwrap().remove(&conn);
+    hub.hellos.lock().unwrap().remove(&conn);
     let pins = hub.pins.lock().unwrap().remove_conn(conn);
     for pin in &pins {
         quiet_off(app, pin);
@@ -301,6 +356,11 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
                 return Response::err(Some(request_id), "bad-request");
             }
             conn.capabilities = protocol::negotiate(&capabilities);
+            let quit = conn.capabilities.iter().any(|c| c == CAP_QUIT);
+            hub.hellos
+                .lock()
+                .unwrap()
+                .insert(conn.id, (peer_app.clone(), quit));
             *hub.peer.lock().unwrap() = Some(PeerInfo {
                 app: peer_app,
                 version,
