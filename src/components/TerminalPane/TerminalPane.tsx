@@ -47,6 +47,7 @@ import { insertExplorerPaths } from '@/components/FileDropListener'
 import { devLog } from '@/lib/dev-log'
 import { handoffCwd } from '@/lib/handoff-brief'
 import { toggleDictation } from '@/lib/voice-wiring'
+import { PaneStatusFrame } from '@/components/TerminalPane/PaneStatusFrame'
 import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import {
   attachTerminal,
@@ -433,7 +434,7 @@ export function TerminalPane({
       data-agent-id={resolvedAgentId}
       data-cwd={resolvedCwd}
       className={cn(
-        'flex h-full w-full flex-col overflow-hidden rounded-md border bg-background',
+        'relative flex h-full w-full flex-col overflow-hidden rounded-md border bg-background',
         isFocused
           ? 'border-ring'
           : isBroadcastMember
@@ -450,6 +451,7 @@ export function TerminalPane({
         isDragging && 'opacity-40'
       )}
     >
+      <PaneStatusFrame terminalId={terminalId} />
       <PaneHeader
         agentId={resolvedAgentId}
         accountId={leaf.accountId}
