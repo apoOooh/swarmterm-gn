@@ -73,6 +73,7 @@ import { useAgentStateStore } from '@/store/agent-state-store'
 import type { BufferView } from '@/lib/agent-state/snapshot'
 import type { AgentHookSignal } from '@/tauri/agent-state'
 import { createFrameBatch } from '@/lib/frame-batch'
+import { agentNewlineFor } from '@/lib/agent-newline'
 
 export type { TerminalStatus }
 
@@ -975,6 +976,19 @@ function getOrCreate(id: string): Entry {
     // above diffs, still happens. That `input` event — not this handler — is
     // this layer's one and only writer for these corrections.
     if (event.type === 'keypress' && ownsMultiCharKey(event)) return false
+
+    // Shift+Enter in an agent pane: a line break in the prompt, not a submit
+    // (see agent-newline.ts). Sent through `sendInput` so broadcast and the
+    // War Room typing signal see it like any keystroke; the keypress stage is
+    // swallowed too so `_keyPress` cannot add its own `\r`.
+    const newline = agentNewlineFor(event, entries.get(id)?.config.agentId)
+    if (newline !== null) {
+      if (event.type === 'keydown') {
+        event.preventDefault()
+        sendInput(newline)
+      }
+      return false
+    }
 
     const action = decideClipboardAction(event, { hasSelection: term.hasSelection(), isMac })
     if (action === 'copy') {

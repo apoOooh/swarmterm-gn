@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Terminal: Shift+Enter in an agent pane inserts a line break instead of
+  submitting the prompt (SWA-60). xterm sent the same carriage return as
+  Enter, so Claude Code sent each line of a multi-line prompt on its own.
+
 - Voice: spoken announcements (SWA-66). With Settings → Voice → "Speak
   announcements" on, Swarmterm says "<pane>: fertig" / "<pane> wartet auf
   Eingabe" itself, using an installed Windows voice (no download). Typing,
