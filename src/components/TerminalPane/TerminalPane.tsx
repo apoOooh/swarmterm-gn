@@ -32,6 +32,8 @@ import {
 import { ClearWorktreeDialog, type DialogTarget } from '@/components/Workspace/ClearWorktreeDialog'
 import { getChangedFiles, branchUnmergedCount } from '@/tauri/git'
 import { transferAgentSession } from '@/tauri/sessions'
+import { carryBlockedReason } from '@/lib/session-transfer'
+import { useAgentStateStore } from '@/store/agent-state-store'
 import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { classifyWorktree, clearWorktreeMenuLabel } from '@/lib/worktree-cleanup'
 import { agentCommand, DEFAULT_TEMPLATE_ID, templateById, withLaunchMode } from '@/lib/templates'
@@ -130,7 +132,16 @@ export function TerminalPane({
   // Switching subscription carries the conversation along (SWA-64): the
   // session is copied into the target profile's store, then the pane resumes
   // it there. If the copy fails the pane stays as it is — silently starting
-  // a fresh conversation would look like lost history.
+  // a fresh conversation would look like lost history. The copy is taken
+  // while the old agent still runs, so a mid-turn switch is refused.
+  const reportSwitch = (title: string): void =>
+    useNotificationCenterStore.getState().add({
+      kind: 'backend',
+      terminalId,
+      title,
+      detail: useTerminalTitleStore.getState().titles[terminalId] ?? '',
+      at: Date.now()
+    })
   const switchAccount = async (accountId?: string): Promise<void> => {
     const sessionId = leaf.sessionId ?? leaf.resumeSessionId
     const agentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
@@ -138,17 +149,16 @@ export function TerminalPane({
       setPaneAccount(leafId, accountId)
       return
     }
+    const blocked = carryBlockedReason(useAgentStateStore.getState().byId[terminalId]?.state)
+    if (blocked) {
+      reportSwitch(`Subscription not switched. ${blocked}`)
+      return
+    }
     try {
       await transferAgentSession(agentId, sessionId, leaf.accountId, accountId)
       setPaneAccount(leafId, accountId, true)
     } catch (error) {
-      useNotificationCenterStore.getState().add({
-        kind: 'backend',
-        terminalId,
-        title: `Could not move the session to the other subscription: ${String(error)}`,
-        detail: useTerminalTitleStore.getState().titles[terminalId] ?? '',
-        at: Date.now()
-      })
+      reportSwitch(`Could not move the session to the other subscription: ${String(error)}`)
     }
   }
 

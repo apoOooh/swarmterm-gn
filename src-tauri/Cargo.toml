@@ -57,6 +57,7 @@ tempfile = "3"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
+junction = "1"
 # Job Objects so killing a terminal tears down the shell's whole process tree
 # (children/grandchildren) instead of just the shell itself.
 windows-sys = { version = "0.59", features = [

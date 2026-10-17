@@ -37,7 +37,7 @@ import {
 import { LayoutPreview } from './LayoutPreview'
 import { RecentsDialog } from './RecentsDialog'
 import { SessionRow } from './SessionRow'
-import { retargetResumePanes, type SessionTargets } from '@/lib/session-transfer'
+import { carryResumePanes, retargetResumePanes, type SessionTargets } from '@/lib/session-transfer'
 import { transferAgentSession } from '@/tauri/sessions'
 import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { SessionsDialog } from './SessionsDialog'
@@ -306,17 +306,7 @@ export function Welcome(): ReactElement {
       // Copy each session into its chosen subscription before the pane
       // resumes it there. A failed copy keeps that pane on its original
       // subscription (the conversation is never dropped) and says so.
-      const failed: string[] = []
-      const panesToResume = await Promise.all(resumePanes.map(async ({ moved, fromAccountId, ...pane }) => {
-        if (!moved) return pane
-        try {
-          await transferAgentSession(pane.agentId, pane.sessionId, fromAccountId, pane.accountId)
-          return pane
-        } catch (error) {
-          failed.push(String(error))
-          return { ...pane, accountId: fromAccountId }
-        }
-      }))
+      const { panes: panesToResume, failed } = await carryResumePanes(resumePanes, transferAgentSession)
       // Welcome closes once the workspace exists, so report in the bell.
       if (failed.length > 0) {
         useNotificationCenterStore.getState().add({ kind: 'backend', terminalId: '', title: `Some sessions stayed on their original subscription: ${failed.join('; ')}`, detail: '', at: Date.now() })

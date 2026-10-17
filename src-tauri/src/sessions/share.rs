@@ -131,14 +131,19 @@ fn copy_file_newer(src: &Path, dst: &Path, backup: &Path) -> Result<bool, String
 
 /// Recursive merge: files only, newer wins, older targets backed up under
 /// `backup` with the same relative path. Links inside the tree are skipped.
+/// Every read error fails the merge: callers move the source aside next, so
+/// a silently skipped file would vanish from the merged store.
 fn merge_tree(src: &Path, dst: &Path, backup: &Path) -> Result<(), String> {
-    let Ok(entries) = fs::read_dir(src) else {
-        return Ok(());
+    let entries = match fs::read_dir(src) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("Cannot read {}: {e}", src.display())),
     };
-    for entry in entries.flatten() {
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Cannot read {}: {e}", src.display()))?;
+        let kind = entry
+            .file_type()
+            .map_err(|e| format!("Cannot read {}: {e}", entry.path().display()))?;
         let name = entry.file_name();
         if kind.is_symlink() {
             continue;
@@ -223,28 +228,13 @@ fn links_to(link: &Path, target: &Path) -> bool {
         && fs::canonicalize(link).ok() == fs::canonicalize(target).ok()
 }
 
+type MakeLink = fn(&Path, &Path) -> Result<(), String>;
+
 #[cfg(windows)]
 fn make_link(link: &Path, target: &Path) -> Result<(), String> {
     // A junction needs no admin rights or Developer Mode, unlike a symlink.
-    use std::os::windows::process::CommandExt;
-    let out = std::process::Command::new("cmd")
-        .arg("/C")
-        .arg("mklink")
-        .arg("/J")
-        .arg(link)
-        .arg(target)
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-        .output()
-        .map_err(|e| e.to_string())?;
-    if out.status.success() && links_to(link, target) {
-        Ok(())
-    } else {
-        Err(format!(
-            "Cannot link {}: {}",
-            link.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ))
-    }
+    // Created through the API, so cmd.exe never parses `%` or `^` in paths.
+    junction::create(target, link).map_err(|e| format!("Cannot link {}: {e}", link.display()))
 }
 
 #[cfg(not(windows))]
@@ -252,10 +242,29 @@ fn make_link(link: &Path, target: &Path) -> Result<(), String> {
     std::os::unix::fs::symlink(target, link).map_err(|e| e.to_string())
 }
 
+fn remove_link(link: &Path) -> Result<(), String> {
+    // On a junction or dir symlink this removes only the link, never the target.
+    #[cfg(windows)]
+    let result = fs::remove_dir(link);
+    #[cfg(not(windows))]
+    let result = fs::remove_file(link);
+    result.map_err(|e| format!("Cannot remove link {}: {e}", link.display()))
+}
+
 /// Point `<dir>/<sub>` at the shared store for every shared subfolder. The
-/// profile's own folder is merged into the store, then moved (not deleted)
-/// into the backup dir. Idempotent.
+/// profile's own folder is merged into the store, then renamed to a sibling
+/// `<sub>.pre-share-<stamp>` and kept. A sibling is on the same volume, so
+/// the rename can only fail because a file is in use. Idempotent.
 pub fn link_profile(dir: &Path, shared: &Path, backups: &Path) -> Result<(), String> {
+    link_profile_with(dir, shared, backups, make_link)
+}
+
+fn link_profile_with(
+    dir: &Path,
+    shared: &Path,
+    backups: &Path,
+    make: MakeLink,
+) -> Result<(), String> {
     for sub in SHARED_SUBDIRS {
         let target = shared.join(sub);
         fs::create_dir_all(&target).map_err(|e| e.to_string())?;
@@ -272,13 +281,9 @@ pub fn link_profile(dir: &Path, shared: &Path, backups: &Path) -> Result<(), Str
         }
         let mut moved_aside = None;
         if meta.is_ok() {
-            let saved = backups.join(stamp()).join(sub);
-            merge_tree(
-                &own,
-                &target,
-                &saved.with_file_name(format!("{sub}-replaced")),
-            )?;
-            fs::create_dir_all(saved.parent().unwrap()).map_err(|e| e.to_string())?;
+            let losers = backups.join(stamp()).join(format!("{sub}-replaced"));
+            merge_tree(&own, &target, &losers)?;
+            let saved = dir.join(format!("{sub}.pre-share-{}", stamp()));
             // Windows refuses to move a folder with an open handle below it,
             // i.e. while a pane of this profile is writing a transcript.
             fs::rename(&own, &saved).map_err(|e| {
@@ -287,9 +292,13 @@ pub fn link_profile(dir: &Path, shared: &Path, backups: &Path) -> Result<(), Str
                     own.display()
                 )
             })?;
+            // Claude reopens a transcript for each append, so a live pane can
+            // write between the merge and the rename. Merge again from the
+            // moved folder so the store gets those lines too.
+            merge_tree(&saved, &target, &losers)?;
             moved_aside = Some(saved);
         }
-        if let Err(e) = make_link(&own, &target) {
+        if let Err(e) = make(&own, &target) {
             // Put the profile's own folder back rather than leave it missing.
             if let Some(saved) = moved_aside {
                 let _ = fs::rename(saved, &own);
@@ -301,21 +310,35 @@ pub fn link_profile(dir: &Path, shared: &Path, backups: &Path) -> Result<(), Str
 }
 
 /// Undo `link_profile`: replace each junction with a full private copy of
-/// the shared store, so no session is lost. The shared store stays.
+/// the shared store, so no session is lost. The copy is built beside the
+/// link and swapped in only once it is complete; on failure the link stays,
+/// and the next apply or boot repair retries. The shared store is kept.
 pub fn unlink_profile(dir: &Path, shared: &Path, backups: &Path) -> Result<(), String> {
+    unlink_profile_with(dir, shared, backups, make_link)
+}
+
+fn unlink_profile_with(
+    dir: &Path,
+    shared: &Path,
+    backups: &Path,
+    make: MakeLink,
+) -> Result<(), String> {
     for sub in SHARED_SUBDIRS {
         let own = dir.join(sub);
         let target = shared.join(sub);
         if !links_to(&own, &target) {
             continue;
         }
-        // remove_dir on a junction/dir symlink removes only the link.
-        #[cfg(windows)]
-        fs::remove_dir(&own).map_err(|e| e.to_string())?;
-        #[cfg(not(windows))]
-        fs::remove_file(&own).map_err(|e| e.to_string())?;
-        fs::create_dir_all(&own).map_err(|e| e.to_string())?;
-        merge_tree(&target, &own, &backups.join(stamp()).join(sub))?;
+        let staging = dir.join(format!("{sub}.unshare-{}", stamp()));
+        // An empty shared folder copies nothing, so the stage must exist.
+        fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+        merge_tree(&target, &staging, &backups.join(stamp()).join(sub))?;
+        remove_link(&own)?;
+        if let Err(e) = fs::rename(&staging, &own) {
+            // Restore the link; the staged copy is left for inspection.
+            make(&own, &target)?;
+            return Err(format!("Cannot replace {}: {e}", own.display()));
+        }
     }
     Ok(())
 }
@@ -324,6 +347,7 @@ pub fn unlink_profile(dir: &Path, shared: &Path, backups: &Path) -> Result<(), S
 fn claude_dirs(
     accounts: &[crate::accounts::AgentAccount],
     settings: ShareSettings,
+    default_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = accounts
         .iter()
@@ -331,7 +355,7 @@ fn claude_dirs(
         .map(|a| PathBuf::from(&a.config_dir))
         .collect();
     if settings.include_default {
-        dirs.extend(default_base("claude-code"));
+        dirs.extend(default_dir.map(Path::to_path_buf));
     }
     dirs
 }
@@ -344,39 +368,54 @@ pub fn apply(
     next: ShareSettings,
 ) -> Result<ShareSettings, String> {
     let _lock = SHARE_LOCK.lock().map_err(|e| e.to_string())?;
-    let shared = shared_root()?;
-    let backups = backup_root()?;
-    let prev = load();
-    let mut errors = Vec::new();
+    let result = apply_in(
+        accounts,
+        next,
+        default_base("claude-code").as_deref(),
+        &shared_root()?,
+        &backup_root()?,
+    );
+    if load() != next {
+        store(next)?;
+    }
+    result.map(|_| next)
+}
+
+fn apply_in(
+    accounts: &[crate::accounts::AgentAccount],
+    next: ShareSettings,
+    default_dir: Option<&Path>,
+    shared: &Path,
+    backups: &Path,
+) -> Result<(), String> {
     let all = claude_dirs(
         accounts,
         ShareSettings {
             claude: true,
             include_default: true,
         },
+        default_dir,
     );
     let wanted = if next.claude {
-        claude_dirs(accounts, next)
+        claude_dirs(accounts, next, default_dir)
     } else {
         vec![]
     };
+    let mut errors = Vec::new();
     for dir in &all {
         let result = if wanted.contains(dir) {
             fs::create_dir_all(dir)
                 .map_err(|e| e.to_string())
-                .and_then(|_| link_profile(dir, &shared, &backups))
+                .and_then(|_| link_profile(dir, shared, backups))
         } else {
-            unlink_profile(dir, &shared, &backups)
+            unlink_profile(dir, shared, backups)
         };
         if let Err(e) = result {
             errors.push(format!("{}: {e}", dir.display()));
         }
     }
-    if prev != next {
-        store(next)?;
-    }
     if errors.is_empty() {
-        Ok(next)
+        Ok(())
     } else {
         Err(errors.join("\n"))
     }
@@ -385,15 +424,25 @@ pub fn apply(
 /// Re-link one profile if share mode is on: new profiles join automatically.
 /// Called on every enrollment; log-only.
 pub fn ensure_profile(dir: &Path) {
-    let settings = load();
-    if !settings.claude {
+    let (Ok(shared), Ok(backups)) = (shared_root(), backup_root()) else {
         return;
-    }
+    };
     let Ok(_lock) = SHARE_LOCK.lock() else { return };
-    if let (Ok(shared), Ok(backups)) = (shared_root(), backup_root()) {
-        if let Err(e) = link_profile(dir, &shared, &backups) {
-            eprintln!("session-share: cannot link {}: {e}", dir.display());
-        }
+    if let Err(e) = ensure_profile_in(load(), dir, &shared, &backups) {
+        eprintln!("session-share: cannot link {}: {e}", dir.display());
+    }
+}
+
+fn ensure_profile_in(
+    settings: ShareSettings,
+    dir: &Path,
+    shared: &Path,
+    backups: &Path,
+) -> Result<(), String> {
+    if settings.claude {
+        link_profile(dir, shared, backups)
+    } else {
+        Ok(())
     }
 }
 
@@ -499,9 +548,13 @@ mod tests {
         assert!(a.join("projects/p/two.jsonl").is_file());
         assert!(b.join("projects/p/one.jsonl").is_file());
         // The profiles' own folders were moved aside, not deleted.
-        let saved: Vec<_> = walk(&backups);
-        assert!(saved.iter().any(|p| p.ends_with("one.jsonl")));
-        assert!(saved.iter().any(|p| p.ends_with("two.jsonl")));
+        let (in_a, in_b) = (walk(&a), walk(&b));
+        assert!(in_a
+            .iter()
+            .any(|p| p.ends_with("one.jsonl") && p.to_string_lossy().contains(".pre-share-")));
+        assert!(in_b
+            .iter()
+            .any(|p| p.ends_with("two.jsonl") && p.to_string_lossy().contains(".pre-share-")));
 
         unlink_profile(&a, &shared, &backups).unwrap();
         assert!(!fs::symlink_metadata(a.join("projects"))
@@ -523,5 +576,127 @@ mod tests {
             }
         }
         out
+    }
+
+    fn account(dir: &Path) -> crate::accounts::AgentAccount {
+        crate::accounts::AgentAccount {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: "claude-code".into(),
+            name: "t".into(),
+            config_dir: dir.to_string_lossy().into_owned(),
+        }
+    }
+
+    fn is_link(p: &Path) -> bool {
+        fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink())
+    }
+
+    #[test]
+    fn apply_links_named_profiles_default_only_when_included_and_unlinks_on_off() {
+        let root = tempfile::tempdir().unwrap();
+        let (a, def) = (root.path().join("a"), root.path().join("default"));
+        let (shared, backups) = (root.path().join("shared"), root.path().join("backups"));
+        write(&a.join("projects/p/one.jsonl"), "1");
+        write(&def.join("projects/p/two.jsonl"), "2");
+        let accounts = [account(&a)];
+        let on = ShareSettings {
+            claude: true,
+            include_default: false,
+        };
+        apply_in(&accounts, on, Some(&def), &shared, &backups).unwrap();
+        assert!(is_link(&a.join("projects")) && is_link(&a.join("file-history")));
+        assert!(!is_link(&def.join("projects")));
+
+        let with_default = ShareSettings {
+            claude: true,
+            include_default: true,
+        };
+        apply_in(&accounts, with_default, Some(&def), &shared, &backups).unwrap();
+        assert!(is_link(&def.join("projects")));
+        assert!(a.join("projects/p/two.jsonl").is_file());
+
+        apply_in(
+            &accounts,
+            ShareSettings::default(),
+            Some(&def),
+            &shared,
+            &backups,
+        )
+        .unwrap();
+        for dir in [&a, &def] {
+            assert!(!is_link(&dir.join("projects")));
+            assert!(dir.join("projects/p/one.jsonl").is_file());
+            assert!(dir.join("projects/p/two.jsonl").is_file());
+        }
+    }
+
+    #[test]
+    fn link_refuses_a_foreign_link_and_restores_the_folder_when_linking_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let (a, other) = (root.path().join("a"), root.path().join("other"));
+        let (shared, backups) = (root.path().join("shared"), root.path().join("backups"));
+        fs::create_dir_all(&other).unwrap();
+        fs::create_dir_all(&a).unwrap();
+        make_link(&a.join("projects"), &other).unwrap();
+        assert!(link_profile(&a, &shared, &backups).is_err());
+        assert!(links_to(&a.join("projects"), &other));
+
+        let b = root.path().join("b");
+        write(&b.join("projects/p/one.jsonl"), "1");
+        let failing: MakeLink = |_, _| Err("no links here".into());
+        assert!(link_profile_with(&b, &shared, &backups, failing).is_err());
+        assert!(!is_link(&b.join("projects")));
+        assert!(b.join("projects/p/one.jsonl").is_file());
+    }
+
+    #[test]
+    fn ensure_profile_does_nothing_while_sharing_is_off() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        let (shared, backups) = (root.path().join("shared"), root.path().join("backups"));
+        write(&a.join("projects/p/one.jsonl"), "1");
+        ensure_profile_in(ShareSettings::default(), &a, &shared, &backups).unwrap();
+        assert!(!is_link(&a.join("projects")));
+        assert!(!shared.exists());
+        let on = ShareSettings {
+            claude: true,
+            include_default: false,
+        };
+        ensure_profile_in(on, &a, &shared, &backups).unwrap();
+        assert!(is_link(&a.join("projects")));
+    }
+
+    #[test]
+    fn link_keeps_the_profile_folder_beside_it() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        let (shared, backups) = (root.path().join("shared"), root.path().join("backups"));
+        write(&a.join("projects/p/one.jsonl"), "1");
+        link_profile(&a, &shared, &backups).unwrap();
+        let kept: Vec<_> = fs::read_dir(&a)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("projects.pre-share-"))
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert!(a.join(&kept[0]).join("p/one.jsonl").is_file());
+    }
+
+    #[test]
+    fn unlink_swaps_in_a_complete_copy_without_leftovers() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        let (shared, backups) = (root.path().join("shared"), root.path().join("backups"));
+        write(&a.join("projects/p/one.jsonl"), "1");
+        link_profile(&a, &shared, &backups).unwrap();
+        let ok: MakeLink = make_link;
+        unlink_profile_with(&a, &shared, &backups, ok).unwrap();
+        assert!(!is_link(&a.join("projects")));
+        assert!(a.join("projects/p/one.jsonl").is_file());
+        assert!(!fs::read_dir(&a)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().contains(".unshare-")));
     }
 }
