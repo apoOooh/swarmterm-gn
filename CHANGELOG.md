@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-10-17
+
+- Voice: install and control buzzkey from Settings → Voice (SWA-42). The
+  newest signed buzzkey release is downloaded only on click, its signature
+  and checksums are verified before anything is installed, and Quit asks
+  buzzkey to exit instead of killing it.
+- Accounts: sessions can be shared across subscriptions (SWA-64), so a
+  conversation started under one account can be resumed under another.
+- Workspace: docked pane headers can be dragged again.
 - Voice: built-in speech recognition (SWA-38). Settings → Voice downloads
   a Whisper model (checksum-verified) and enables local dictation without
   buzzkey: Ctrl+Shift+Space or the pane-header microphone starts and stops,
