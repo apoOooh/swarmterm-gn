@@ -362,6 +362,15 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   writes never trigger it), focus change, `stop-announcement` (Ctrl+Shift+M,
   claimed only while `speakTurns` is on). Debug builds:
   `SWARMTERM_TTS_FAKE=<file>` logs JSON lines instead of speaking (testlab 36).
+- **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:
+  `run_routine_command` (main webview only) runs ONE line via
+  `cmd.exe /d /s /c` (`raw_arg`, CREATE_NO_WINDOW) in a kill-on-close job
+  (`pty::job`), terminated after exit or the time limit so left-behind
+  children never keep the output pipes open. The scheduler keeps the routine
+  in `inFlight` until the line finishes — that is its overlap guard. Only
+  failures notify (a 15-minute refresh must not flood the bell); every
+  result lands in `lastResult`. Lines come only from the dialog: never add an
+  MCP tool or War Room path that creates or edits one.
 - **File watcher: one recursive watch per root (SWA-53).** `files/watch.rs`
   watches the context root with `RecursiveMode::Recursive`, never one watch
   per folder. On Windows every watch is an open directory handle, and Windows

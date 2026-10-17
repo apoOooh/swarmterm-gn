@@ -14,7 +14,7 @@ use tauri::{AppHandle, Manager};
 /// `KILL_ON_JOB_CLOSE` means terminating — or merely dropping — the job tears
 /// down every descendant, so closing a pane/workspace actually frees the CPU+RAM.
 #[cfg(windows)]
-mod job {
+pub(crate) mod job {
     use std::ffi::c_void;
     use std::mem;
     use std::ptr;

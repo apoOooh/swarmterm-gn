@@ -15,6 +15,7 @@ mod mcp;
 mod paste_image;
 mod preview;
 mod pty;
+mod routine_cmd;
 mod sessions;
 mod shell;
 // Public so `main.rs` can reach `--statusline` without booting Tauri.
@@ -144,6 +145,7 @@ pub fn run() {
             devlog::dev_log,
             commands::files_open_context,
             commands::confirm_quit,
+            commands::run_routine_command,
             commands::save_clipboard_image,
             commands::files_request,
             commands::files_watch,

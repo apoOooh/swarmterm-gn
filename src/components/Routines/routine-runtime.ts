@@ -3,6 +3,8 @@ import { ROUTINE_TICK_MS, tickRoutines, type RoutineDeps } from '@/lib/routine-s
 import { planWorktreeBranches, provisionWorktrees } from '@/lib/worktree-naming'
 import { getTerminalStatus } from '@/lib/terminal-registry'
 import { createWorktree } from '@/tauri/git'
+import { runRoutineCommand } from '@/tauri/routines'
+import { DEFAULT_TIMEOUT_MINUTES } from '@/lib/routines'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import { useAppStore } from '@/store/app-store'
 import { useNotificationCenterStore } from '@/store/notification-center-store'
@@ -34,6 +36,7 @@ export const routineDeps: RoutineDeps = {
     const terminalId = useAppStore.getState().promptPane({ agentId: r.agentId, accountId: r.accountId, prompt: r.brief, worktree })
     return terminalId === undefined ? { error: 'no pane to split in the active workspace' } : { terminalId, branch: worktree?.branch }
   },
+  runCommand: (r) => runRoutineCommand(r.command ?? '', r.cwd ?? '', (r.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES) * 60),
   patch: (id, change) => useRoutineStore.getState().patch(id, change),
   notify: (terminalId, title, detail) =>
     useNotificationCenterStore.getState().add({ kind: 'routine', terminalId, title, detail, at: Date.now() })
