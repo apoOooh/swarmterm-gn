@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Panes: optional agent-state highlight. Settings → Appearance → "Highlight
+  panes by agent state" frames each agent pane in its state colour — yellow
+  while working, drifting to orange over a chosen 5/10/30 minutes, red when
+  blocked, green when it finished in the background until focused. Off by
+  default.
 - Voice: better built-in speech models and a suggestion per PC. Settings →
   Voice now offers quantised Small, Medium, Large v3 Turbo (q5/q8) and
   Large v3 models and recommends the best fit for this computer (CPU
