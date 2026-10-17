@@ -16,6 +16,7 @@ export const HEADER_ITEMS = [
   { id: 'worktree', label: 'Worktree branch' },
   { id: 'ctx', label: 'Context usage' },
   { id: 'broadcast', label: 'Broadcast' },
+  { id: 'dictate', label: 'Dictation (built-in speech)' },
   { id: 'thread', label: 'Conversation thread' },
   { id: 'handoff', label: 'Handoff brief' },
   { id: 'split-right', label: 'Split right' },
@@ -69,7 +70,9 @@ export function headerItemVisibility(pref: HeaderLayoutPref, id: HeaderItemId): 
 const DEFAULT_HIDE_RANK: Record<HeaderItemId, number> = {
   agent: 0, title: 0, folder: 0,
   shell: 1, worktree: 2, ctx: 3, 'war-room': 4, account: 5,
-  broadcast: 6, thread: 7, handoff: 8, 'split-right': 9, 'split-down': 10, float: 11, drawer: 12
+  broadcast: 6, thread: 7, handoff: 8, 'split-right': 9, 'split-down': 10, float: 11, drawer: 12,
+  // Collapses first: the shortcut (Ctrl+Shift+Space) is the primary way.
+  dictate: 13
 }
 
 export const HEADER_LAYOUT_STORAGE_KEY = 'cc-pane-header-layout'

@@ -15,3 +15,4 @@ Each record has these sections:
 | No. | Title | Status |
 |---|---|---|
 | [0001](0001-terminal-host-process.md) | Terminal host process that outlives quit and update | Accepted |
+| [0002](0002-builtin-speech-source.md) | Built-in speech source | Accepted |

@@ -126,7 +126,8 @@ import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
 import { onAgentSession } from '@/tauri/sessions'
 import { wireSavedWorkspaces, flushSavedWorkspaces, useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
-import { wireVoice } from '@/lib/voice-wiring'
+import { toggleDictation, wireVoice } from '@/lib/voice-wiring'
+import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
 import { cleanupWhenResolved } from '@/lib/listener-cleanup'
@@ -536,6 +537,19 @@ export default function App(): ReactElement {
         if (!ws || st.welcomeFocused) return
         e.preventDefault()
         st.toggleZoom(ws.focusedLeafId)
+        return
+      }
+      if (action === 'dictate') {
+        // Built-in speech (SWA-38). Stopping always works — the user may have
+        // clicked elsewhere while speaking; starting needs the keyboard on a
+        // terminal (Rust pins whichever pane owns it). Unavailable (Voice
+        // off, no model) = not claimed, the key reaches the pane as before.
+        const dictation = useVoiceDictationStore.getState()
+        const recording = dictation.dictation.phase === 'recording'
+        if (!recording && (!dictation.ready || state.welcomeFocused)) return
+        if (!recording && !requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
+        e.preventDefault()
+        toggleDictation()
         return
       }
       if (action === 'drawer-pane') {

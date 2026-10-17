@@ -529,7 +529,7 @@ machine that never built Swarmterm. Details in
 
 ## Voice companion (SWA-42)
 
-- [ ] Settings → Voice → buzzkey on a profile without buzzkey: "Not installed"; Install downloads, verifies and installs into `%LOCALAPPDATA%\Programsuzzkey`; state becomes "Installed, not running".
+- [ ] Settings → Voice → buzzkey on a profile without buzzkey: "Not installed"; Install downloads, verifies and installs into `%LOCALAPPDATA%\Programs\buzzkey`; state becomes "Installed, not running".
 - [ ] Start → buzzkey's tray icon appears; after the first dictation the state reads "Connected — buzzkey <version>".
 - [ ] Quit (buzzkey with `quit` capability) closes it; an older buzzkey shows the tray hint instead.
 - [ ] Check for update on the newest version → "Up to date"; Update over a running buzzkey quits, swaps and restarts it.
@@ -597,3 +597,12 @@ Automated native config/UI check against an already running Dev app: `node scrip
 Native check against a stable, running Dev app:
 `node scripts/check-custom-shortcuts-native.mjs <existing isolated test folder>`.
 It restores previous shortcut settings and removes only its own workspaces.
+
+## Built-in speech recognition (SWA-38)
+
+- [ ] Settings → Voice: download **Base**; the bar fills, the row then reads "downloaded".
+- [ ] Enable built-in speech; the pane header shows a microphone.
+- [ ] Click into a shell, Ctrl+Shift+Space, say a sentence, Ctrl+Shift+Space: "Listening…" then
+      "Transcribing…", the sentence arrives as a draft (no Enter).
+- [ ] Start again, click the pill's Stop: nothing is typed.
+- [ ] Windows microphone access off for desktop apps: the bell reports "no microphone available".
