@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-10-18
+
 - Voice: spoken replies for Claude Code (SWA-58). With Settings → Voice →
   "Allow excerpts" on (off by default, needs "Speak announcements"), Claude
   is asked to end each answer with a short `<voice>` line, and Swarmterm
@@ -30,6 +32,10 @@
   threads, RAM, AVX2) with a short reason, "Download and use" and "Measure
   again". New installs default to Small q5 instead of Base; tiny/base/small
   stay available as legacy. Transcription uses up to 16 CPU threads.
+- Fix: a late Stop of an earlier Claude prompt no longer ends the turn in
+  progress or announces it as finished.
+- Fix: Esc after opening a pane header's ⋯ row from the keyboard keeps the
+  focus on ⋯ instead of sometimes moving it into the terminal.
 
 ## [1.16.0] - 2026-10-17
 
