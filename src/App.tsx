@@ -125,7 +125,7 @@ import { closePreview, openPreview, wirePreviewEvents } from '@/lib/preview-regi
 import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
 import { onAgentSession } from '@/tauri/sessions'
-import { wireSavedWorkspaces, flushSavedWorkspaces } from '@/store/saved-workspaces-store'
+import { wireSavedWorkspaces, flushSavedWorkspaces, useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
 import { wireVoice } from '@/lib/voice-wiring'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
@@ -359,8 +359,10 @@ export default function App(): ReactElement {
   }
 
   const noWorkspaces = workspaces.length === 0
-  // Welcome shows when explicitly focused, or forced (uncloseable) when none exist.
-  const showWelcome = welcomeFocused || noWorkspaces
+  const autostarting = useSavedWorkspacesStore((s) => s.autostarting)
+  // Welcome shows when explicitly focused, or forced (uncloseable) when none exist —
+  // but not while the startup workspaces are still opening.
+  const showWelcome = welcomeFocused || (noWorkspaces && !autostarting)
   const welcomeClosable = !noWorkspaces
 
   useEffect(() => {
