@@ -29,6 +29,14 @@
 //! fallback voice in buzzkey whether Swarmterm took it. `begin` holds a
 //! `tts::BeginGuard` and silences the voice before any mic opens.
 //!
+//! Spoken replies (SWA-58, docs/adr/0004): `completion/` keeps the turn
+//! ledger fed by Claude's hooks (`hook_turn`). With "Allow excerpts" on it
+//! reads the final answer from the pane's transcript and Swarmterm says the
+//! agent's `<voice>` line (else quoted prose) instead of "fertig", also for
+//! a watched pane. Error and interrupted turns are said in the same tone.
+//! None of it leaves this process: the pipe keeps done/needs_input only and
+//! `excerpt` stays null.
+//!
 //! Companion (SWA-42): `companion/` installs and starts buzzkey from
 //! Settings → Voice. It reads "connected" and the version from the live
 //! hello'd connections here and asks buzzkey to leave with a `quit` push.
@@ -39,6 +47,7 @@
 //! it into a respawned shell.
 
 pub mod companion;
+pub mod completion;
 pub mod pins;
 #[cfg(windows)]
 mod pipe;
@@ -177,6 +186,10 @@ pub struct TurnInput {
     pub kind: TurnKind,
     pub pane_name: String,
     pub agent: String,
+    /// SWA-58: the user is looking at this pane. Such a turn is never
+    /// pushed and never gets a bare status — only a reply (opt-in).
+    #[serde(default)]
+    pub watched: bool,
 }
 
 /// What a client said in `hello`. The last one is kept after its connection
@@ -207,6 +220,9 @@ pub struct VoiceHub {
     hellos: Mutex<HashMap<u64, (String, bool)>>,
     subscribers: Mutex<HashSet<u64>>,
     turn_seq: AtomicU64,
+    /// SWA-58. Lock order: never held together with `terminals`, `pins` or
+    /// the TTS hub lock — every caller copies out what it needs and drops it.
+    pub(crate) ledger: Mutex<completion::Ledger>,
     #[cfg(windows)]
     server: Mutex<Option<pipe::Running>>,
 }
@@ -271,6 +287,10 @@ impl VoiceHub {
 
     pub fn conn_has_pin(&self, conn: u64) -> bool {
         self.pins.lock().unwrap().conn_has_pin(conn)
+    }
+
+    pub fn ledger_holds(&self, token: &str) -> bool {
+        self.ledger.lock().unwrap().holds(token)
     }
 
     fn remembered(&self, request_id: &str) -> Option<Response> {
@@ -354,8 +374,234 @@ pub fn drop_terminal(app: &AppHandle, terminal_id: &str) {
     };
     let removed = hub.pins.lock().unwrap().remove_terminal(terminal_id);
     finish(app, removed);
+    hub.ledger.lock().unwrap().forget(terminal_id);
     if let Some(tts) = app.try_state::<tts::TtsHub>() {
         tts.drop_terminal(terminal_id);
+    }
+}
+
+/// SWA-58: replies are spoken only with the voice on AND the transcript
+/// opt-in on. Reading without speaking would be reading for nothing.
+fn replies_on(s: &VoiceSettings) -> bool {
+    s.enabled && s.speak_turns && s.allow_excerpts
+}
+
+fn claude_config_dir_of(app: &AppHandle, terminal_id: &str) -> Option<std::path::PathBuf> {
+    let state = app.state::<AppState>();
+    let terminals = state.terminals.lock().ok()?;
+    terminals
+        .get(terminal_id)
+        .and_then(|t| t.claude_config_dir.clone())
+}
+
+/// SWA-58: one Claude turn edge from `POST /hook`, already checked against
+/// the pane's live generation and session. The ledger decides; a Stop it
+/// accepts may start a transcript read (only with replies on). Returns true
+/// for a prompt while replies are on: the hook CLI then asks Claude for the
+/// `<voice>` line (`additionalContext`).
+pub fn hook_turn(
+    app: &AppHandle,
+    terminal_id: &str,
+    spawn_id: &str,
+    session_id: &str,
+    turn: &crate::hook::TurnMark,
+    config_dir: Option<std::path::PathBuf>,
+) -> bool {
+    use crate::hook::TurnEdge;
+    let Some(hub) = app.try_state::<VoiceHub>() else {
+        return false;
+    };
+    let settings = hub.settings();
+    let replies = replies_on(&settings);
+    let (job, correction) = {
+        let mut ledger = hub.ledger.lock().unwrap();
+        match turn.edge {
+            TurnEdge::Prompt => {
+                ledger.prompt(terminal_id, spawn_id, session_id, &turn.prompt_id);
+                return replies;
+            }
+            TurnEdge::Stop | TurnEdge::StopFailure => {
+                let outcome = if turn.edge == TurnEdge::StopFailure {
+                    completion::Outcome::Error
+                } else {
+                    completion::Outcome::Done
+                };
+                let job = ledger.stop(
+                    terminal_id,
+                    spawn_id,
+                    session_id,
+                    &turn.prompt_id,
+                    outcome,
+                    turn.continued,
+                    replies && turn.answer.is_some(),
+                );
+                let correction = (outcome == completion::Outcome::Error)
+                    .then(|| ledger.failed_after_publish(terminal_id))
+                    .flatten();
+                (job, correction)
+            }
+        }
+    };
+    // The status already went out, then the turn turned out to have
+    // failed: one correction, never more.
+    if let Some(published) = correction {
+        speak_status(
+            app,
+            &settings,
+            terminal_id,
+            spawn_id,
+            &published,
+            TurnKind::Error,
+        );
+        emit_turn_kind(app, terminal_id, TurnKind::Error);
+    }
+    if let (Some(job), Some(answer)) = (job, turn.answer.clone()) {
+        spawn_read(app, job, spawn_id.to_owned(), answer, config_dir);
+    }
+    false
+}
+
+/// SessionStart/SessionEnd: the conversation in this pane is over.
+pub fn forget_turns(app: &AppHandle, terminal_id: &str) {
+    if let Some(hub) = app.try_state::<VoiceHub>() {
+        hub.ledger.lock().unwrap().forget(terminal_id);
+    }
+}
+
+/// The local voice for one status. A watched pane gets no bare "fertig" or
+/// "wartet" (the user sees it), but error and interrupted while replies are
+/// on — that is the conversation. Returns whether the voice took it.
+fn speak_status(
+    app: &AppHandle,
+    settings: &VoiceSettings,
+    terminal_id: &str,
+    spawn_id: &str,
+    p: &completion::Published,
+    kind: TurnKind,
+) -> bool {
+    if !settings.enabled || !settings.speak_turns {
+        return false;
+    }
+    if p.watched && !(replies_on(settings) && !kind.on_pipe()) {
+        return false;
+    }
+    app.state::<tts::TtsHub>().announce(
+        terminal_id.to_owned(),
+        spawn_id.to_owned(),
+        &p.pane_name,
+        &p.agent,
+        kind,
+        &settings.tts_voice,
+    )
+}
+
+/// A reply if there is one, else the status fallback.
+fn speak_done(
+    app: &AppHandle,
+    settings: &VoiceSettings,
+    terminal_id: &str,
+    spawn_id: &str,
+    token: &str,
+    p: &completion::Published,
+    reply: Option<completion::Reply>,
+) -> bool {
+    match reply.filter(|_| replies_on(settings)) {
+        Some(reply) => app.state::<tts::TtsHub>().say_reply(
+            terminal_id.to_owned(),
+            spawn_id.to_owned(),
+            token.to_owned(),
+            &p.pane_name,
+            &p.agent,
+            &reply,
+            &settings.tts_voice,
+        ),
+        None => speak_status(app, settings, terminal_id, spawn_id, p, TurnKind::Done),
+    }
+}
+
+/// Error / interrupted for the bell and the notification center. Ids and
+/// the kind only, never text.
+fn emit_turn_kind(app: &AppHandle, terminal_id: &str, kind: TurnKind) {
+    #[derive(Serialize, Clone)]
+    #[serde(rename_all = "camelCase")]
+    struct TurnKindEvent<'a> {
+        terminal_id: &'a str,
+        kind: TurnKind,
+    }
+    let _ = app.emit("voice:turn-kind", TurnKindEvent { terminal_id, kind });
+}
+
+/// Read the transcript off the async runtime, within the reader's budget.
+/// The final text lives only inside this closure: reduced to the reply right
+/// away and dropped. The opt-in is checked again before the commit, and the
+/// ledger commits only to the turn the read was started for. If the status
+/// already arrived, this is where the turn is spoken.
+fn spawn_read(
+    app: &AppHandle,
+    job: completion::ReadJob,
+    spawn_id: String,
+    answer: completion::Fingerprint,
+    config_dir: Option<std::path::PathBuf>,
+) {
+    use completion::{reader, speech_text};
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let reply = app.path().home_dir().ok().and_then(|home| {
+            let root = reader::claude_config_dir(config_dir.as_deref(), &home);
+            let path = reader::locate(&root, &job.session_id)?;
+            let text = reader::final_answer_within(
+                || reader::read_tail(&root, &path),
+                &job.prompt_id,
+                &answer,
+                reader::BUDGET,
+            )?;
+            speech_text::reply(&text)
+        });
+        let hub = app.state::<VoiceHub>();
+        let settings = hub.settings();
+        let reply = reply.filter(|_| replies_on(&settings));
+        let late = hub.ledger.lock().unwrap().commit(&job.token, reply);
+        if let Some(late) = late {
+            speak_done(
+                &app,
+                &settings,
+                &job.terminal_id,
+                &spawn_id,
+                &late.token,
+                &late.published,
+                late.reply,
+            );
+        }
+    });
+}
+
+/// `turn` push to every subscribed feed. Done and needs_input only, never
+/// for a watched pane — exactly what feeds saw before SWA-58.
+fn push_turn(app: &AppHandle, event: &TurnInput, kind: TurnKind, handled: bool) {
+    let hub = app.state::<VoiceHub>();
+    let settings = hub.settings();
+    if !settings.enabled || !settings.announce_turns || event.watched || !kind.on_pipe() {
+        return;
+    }
+    let subs: Vec<u64> = hub.subscribers.lock().unwrap().iter().copied().collect();
+    if subs.is_empty() {
+        return;
+    }
+    let seq = hub.turn_seq.fetch_add(1, Ordering::Relaxed) + 1;
+    let line = TurnEvent::new(
+        event.terminal_id.clone(),
+        &event.pane_name,
+        event.agent.clone(),
+        kind,
+        seq,
+        handled,
+    )
+    .to_line();
+    let conns = hub.conns.lock().unwrap();
+    for id in subs {
+        if let Some(tx) = conns.get(&id) {
+            let _ = tx.send(Outgoing::Line(line.clone()));
+        }
     }
 }
 
@@ -644,10 +890,12 @@ pub fn voice_insert_result(
 }
 
 /// Agent finished / needs input (SWA-41), from the renderer's notification
-/// watch (which already skips panes the user is watching). One event, two
-/// independent consumers: the local voice (`speakTurns`, works without any
-/// pipe client) and the subscriber feed (`announceTurns`). Dropped while the
-/// endpoint is off and for panes that are already gone.
+/// watch. One event, two independent consumers: the local voice
+/// (`speakTurns`, works without any pipe client) and the subscriber feed
+/// (`announceTurns`). SWA-58: a Claude "done" is first matched against the
+/// turn ledger — it may become the agent's reply, an error, or (Esc) an
+/// interruption. Watched panes arrive too (`watched`) and get only replies.
+/// Dropped while the endpoint is off and for panes that are already gone.
 #[tauri::command]
 pub fn voice_turn_event(app: AppHandle, event: TurnInput) {
     let hub = app.state::<VoiceHub>();
@@ -655,41 +903,152 @@ pub fn voice_turn_event(app: AppHandle, event: TurnInput) {
     if !settings.enabled || !(settings.speak_turns || settings.announce_turns) {
         return;
     }
+    if event.watched && !replies_on(&settings) {
+        return;
+    }
     let Some(spawn_id) = spawn_id_of(&app, &event.terminal_id) else {
         return;
     };
-    let handled = settings.speak_turns
-        && app.state::<tts::TtsHub>().announce(
-            event.terminal_id.clone(),
-            spawn_id,
-            &event.pane_name,
-            &event.agent,
-            event.kind,
-            &settings.tts_voice,
-        );
-    if !settings.announce_turns {
-        return;
-    }
-    let subs: Vec<u64> = hub.subscribers.lock().unwrap().iter().copied().collect();
-    if subs.is_empty() {
-        return;
-    }
-    let seq = hub.turn_seq.fetch_add(1, Ordering::Relaxed) + 1;
-    let line = TurnEvent::new(
-        event.terminal_id,
-        &event.pane_name,
-        event.agent,
-        event.kind,
-        seq,
-        handled,
-    )
-    .to_line();
-    let conns = hub.conns.lock().unwrap();
-    for id in subs {
-        if let Some(tx) = conns.get(&id) {
-            let _ = tx.send(Outgoing::Line(line.clone()));
+    let published = completion::Published {
+        pane_name: event.pane_name.clone(),
+        agent: event.agent.clone(),
+        watched: event.watched,
+    };
+    let view = if event.kind == TurnKind::Done {
+        hub.ledger
+            .lock()
+            .unwrap()
+            .publish(&event.terminal_id, &spawn_id, published.clone())
+    } else {
+        completion::View::Plain
+    };
+    match view {
+        completion::View::Pending => {
+            // The read commits within its 200 ms budget and speaks then.
+            let handled = settings.speak_turns && app.state::<tts::TtsHub>().ready();
+            push_turn(&app, &event, TurnKind::Done, handled);
+        }
+        completion::View::Closed {
+            token,
+            outcome,
+            reply,
+        } => match outcome {
+            completion::Outcome::Done => {
+                let handled = speak_done(
+                    &app,
+                    &settings,
+                    &event.terminal_id,
+                    &spawn_id,
+                    &token,
+                    &published,
+                    reply,
+                );
+                push_turn(&app, &event, TurnKind::Done, handled);
+            }
+            completion::Outcome::Error | completion::Outcome::Interrupted => {
+                let kind = if outcome == completion::Outcome::Error {
+                    TurnKind::Error
+                } else {
+                    TurnKind::Interrupted
+                };
+                speak_status(
+                    &app,
+                    &settings,
+                    &event.terminal_id,
+                    &spawn_id,
+                    &published,
+                    kind,
+                );
+                emit_turn_kind(&app, &event.terminal_id, kind);
+            }
+        },
+        completion::View::Plain => {
+            let open = (event.kind == TurnKind::Done && replies_on(&settings))
+                .then(|| {
+                    hub.ledger
+                        .lock()
+                        .unwrap()
+                        .open_turn(&event.terminal_id, &spawn_id)
+                })
+                .flatten();
+            match open {
+                // A Claude turn went idle without a Stop: Esc fires no hook,
+                // so the transcript decides whether it was interrupted.
+                Some((session_id, prompt_id)) => spawn_interrupt_check(
+                    app.clone(),
+                    event,
+                    spawn_id,
+                    session_id,
+                    prompt_id,
+                    published,
+                ),
+                None => {
+                    let handled = speak_status(
+                        &app,
+                        &settings,
+                        &event.terminal_id,
+                        &spawn_id,
+                        &published,
+                        event.kind,
+                    );
+                    push_turn(&app, &event, event.kind, handled);
+                }
+            }
         }
     }
+}
+
+/// Off the main thread: one tail read for the Esc marker, then either the
+/// interruption (spoken, bell, never pushed) or the plain status as before.
+fn spawn_interrupt_check(
+    app: AppHandle,
+    event: TurnInput,
+    spawn_id: String,
+    session_id: String,
+    prompt_id: String,
+    published: completion::Published,
+) {
+    use completion::reader;
+    let config_dir = claude_config_dir_of(&app, &event.terminal_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        let interrupted = app.path().home_dir().ok().is_some_and(|home| {
+            let root = reader::claude_config_dir(config_dir.as_deref(), &home);
+            reader::locate(&root, &session_id).is_some_and(|path| {
+                reader::interrupted_once(|| reader::read_tail(&root, &path), &prompt_id)
+            })
+        });
+        let hub = app.state::<VoiceHub>();
+        let settings = hub.settings();
+        let closed = interrupted
+            && replies_on(&settings)
+            && hub
+                .ledger
+                .lock()
+                .unwrap()
+                .interrupt(&event.terminal_id, &spawn_id, &prompt_id, published.clone())
+                .is_some();
+        if closed {
+            speak_status(
+                &app,
+                &settings,
+                &event.terminal_id,
+                &spawn_id,
+                &published,
+                TurnKind::Interrupted,
+            );
+            emit_turn_kind(&app, &event.terminal_id, TurnKind::Interrupted);
+        } else {
+            let handled = speak_status(
+                &app,
+                &settings,
+                &event.terminal_id,
+                &spawn_id,
+                &published,
+                event.kind,
+            );
+            push_turn(&app, &event, event.kind, handled);
+        }
+    });
 }
 
 /// Silence announcements: everything (typing, the shortcut) or only one
@@ -755,6 +1114,12 @@ pub fn voice_set_settings(
     }
     if previous.speak_turns && !settings.speak_turns {
         app.state::<tts::TtsHub>().stop(None);
+    }
+    // Revoking the opt-in drops every reply and stops one being spoken;
+    // reads still in flight find it off before they commit.
+    if previous.allow_excerpts && !settings.allow_excerpts {
+        hub.ledger.lock().unwrap().clear_replies();
+        app.state::<tts::TtsHub>().stop_replies();
     }
     Ok(settings)
 }

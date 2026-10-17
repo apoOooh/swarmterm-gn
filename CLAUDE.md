@@ -311,8 +311,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   decides what qualifies — `notification-watch`'s `announce` feed, same
   still-current/unwatched rules as the bell — and calls `voice_turn_event`;
   Rust gates on `enabled && announceTurns`, numbers it (`seq`, no replay) and
-  fans it out. Status only: `excerpt` stays null until a completion adapter
-  exists (stage 2); the hook layer still never reads transcripts. Every pipe
+  fans it out. `excerpt` is always null (SWA-58: the text never leaves
+  Swarmterm, see below). Every pipe
   write has a 5 s deadline, so a client that stops reading is dropped.
   Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
   the pins lock): never call `voice::drop_terminal` while holding
@@ -368,6 +368,28 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   writes never trigger it), focus change, `stop-announcement` (Ctrl+Shift+M,
   claimed only while `speakTurns` is on). Debug builds:
   `SWARMTERM_TTS_FAKE=<file>` logs JSON lines instead of speaking (testlab 36).
+- **Spoken replies (SWA-58, `docs/adr/0004`).** Opt-in `allowExcerpts`
+  (only with `speakTurns`); off = no transcript opened, no instruction
+  sent. The Claude hook CLI sends `prompt_id`, the StopFailure edge and a
+  length + SHA-256 fingerprint of `last_assistant_message` — never
+  content; `HookBody` rejects unknown fields, `transcript_path` is ignored.
+  On a prompt edge `/hook` may answer `{"voice":true}`: the CLI then prints
+  the fixed `VOICE_INSTRUCTION` as `additionalContext` (the only stdout it
+  ever writes). `voice/completion/`'s `Ledger` is the only thing that
+  closes a turn: Stop counts only for the open `prompt_id` of the same
+  spawn and session; the renderer's status is matched once per turn
+  (`publish`). `reader.rs` locates `<config>/projects/*/<session>.jsonl`
+  itself, refuses reparse points, checks the final path against the root;
+  `claude.rs` anchors on `promptId` and needs a byte-exact fingerprint.
+  `speech_text.rs`: last `<voice>` block → excerpt filter, else quoted
+  prose, else status. Interrupted = idle with the turn still open AND the
+  Esc marker as last row. Replies, error and interrupted are spoken in
+  Rust (TtsHub, same queue/stops), also for watched panes
+  (`TurnInput.watched`, renderer `diffWatchedCompletions`), and never
+  reach the pipe: feeds see done/needs_input of unwatched panes only,
+  `excerpt` null, no new op or capability. Error/interrupted go to the bell
+  via `voice:turn-kind`. Never hold the ledger lock together with
+  `terminals`, pins or the TTS hub lock. Codex/OpenCode: status only.
 - **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:
   `run_routine_command` (main webview only) runs ONE line via
   `cmd.exe /d /s /c` (`raw_arg`, CREATE_NO_WINDOW) in a kill-on-close job

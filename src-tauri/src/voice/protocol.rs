@@ -278,17 +278,28 @@ pub fn quit_line() -> String {
     s
 }
 
-/// Which agent fact a `turn` push announces. Stage 1 knows only these two;
-/// `error`/`interrupted` need a completion adapter (SWA-41 stage 2).
+/// Which agent fact a turn is. Only `Done` and `NeedsInput` are ever pushed
+/// on the pipe: `Error` and `Interrupted` (SWA-58, proved by the Claude
+/// completion adapter) are spoken by Swarmterm itself and reach no client,
+/// old or new — `voice_turn_event` filters them, there is no capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnKind {
     Done,
     NeedsInput,
+    Error,
+    Interrupted,
 }
 
-/// Status push on a subscribed connection. `excerpt` is always null in
-/// stage 1 but already on the wire, so clients treat it as optional now.
+impl TurnKind {
+    /// What a buzzkey client may see on its status feed.
+    pub fn on_pipe(self) -> bool {
+        matches!(self, Self::Done | Self::NeedsInput)
+    }
+}
+
+/// Status push on a subscribed connection. `excerpt` is always null: the
+/// spoken reply stays in Swarmterm (SWA-58, ADR 0004), clients treat it as optional.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnEvent {

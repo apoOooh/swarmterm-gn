@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentPaneState } from '@/lib/agent-state/rollup'
 import type { CommandState, FinishedCommand } from '@/lib/shell-marks'
-import { diffAgentStates, diffCommands } from './notification-flow'
-import { coalesceNotifications, notificationCopy, resolveFire } from './notification-flow'
+import { diffAgentStates, diffCommands, diffWatchedCompletions } from './notification-flow'
+import { coalesceNotifications, isStillHeld, notificationCopy, resolveFire } from './notification-flow'
 
 const s = (state: AgentPaneState['state'], seen = true): AgentPaneState => ({ state, seen, sinceMs: 0 })
 const fin = (durationMs: number, exitCode?: number): FinishedCommand => ({
@@ -321,5 +321,26 @@ describe('coalesceNotifications', () => {
       title: '3 Codex panes finished',
       body: 'b'
     })
+  })
+})
+
+describe('isStillHeld (SWA-58)', () => {
+  const st = (state: 'idle' | 'blocked' | 'working', seen: boolean) => ({ state, seen, sinceMs: 0 })
+  it('holds a seen idle or blocked fact, never a command or a moved-on pane', () => {
+    expect(isStillHeld({ terminalId: 't', kind: 'completion', agentId: 'claude-code' }, { current: st('idle', true) })).toBe(true)
+    expect(isStillHeld({ terminalId: 't', kind: 'attention', agentId: 'claude-code' }, { current: st('blocked', true) })).toBe(true)
+    expect(isStillHeld({ terminalId: 't', kind: 'completion', agentId: 'claude-code' }, { current: st('working', true) })).toBe(false)
+    expect(isStillHeld({ terminalId: 't', kind: 'completion', agentId: 'claude-code' }, { current: undefined })).toBe(false)
+    expect(isStillHeld({ terminalId: 't', kind: 'command', agentId: 'terminal', finishedAt: 1 }, { current: st('idle', false) })).toBe(false)
+  })
+})
+
+describe('diffWatchedCompletions (SWA-58)', () => {
+  const st = (state: 'idle' | 'blocked' | 'working', seen: boolean) => ({ state, seen, sinceMs: 0 })
+  it('lists idle-and-seen panes that just stopped working, nothing else', () => {
+    expect(diffWatchedCompletions(
+      { a: st('working', true), b: st('working', true), c: st('idle', true), d: st('blocked', true) },
+      { a: st('idle', true), b: st('idle', false), c: st('idle', true), d: st('idle', true) }
+    )).toEqual(['a', 'd'])
   })
 })

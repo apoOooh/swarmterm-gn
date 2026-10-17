@@ -24,6 +24,11 @@ pub struct Item {
     pub spawn_id: String,
     pub text: String,
     pub at: Instant,
+    /// SWA-58: the closed turn a reply speaks about.
+    pub token: Option<String>,
+    /// A reply, not a status: re-checked against the ledger and the opt-in
+    /// right before it is spoken.
+    pub reply: bool,
 }
 
 #[derive(Debug, Default)]
@@ -61,6 +66,10 @@ impl Queue {
         self.items.retain(|i| i.terminal_id != terminal_id);
     }
 
+    pub fn retain(&mut self, keep: impl FnMut(&Item) -> bool) {
+        self.items.retain(keep);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -96,6 +105,8 @@ mod tests {
             spawn_id: "g1".into(),
             text: format!("{t} done"),
             at,
+            token: None,
+            reply: false,
         }
     }
 

@@ -32,6 +32,9 @@ pub struct VoiceSettings {
     pub tts_voice: String,
     /// 0-100, the app's own volume (no ducking of other apps).
     pub tts_volume: u8,
+    /// SWA-58: read the agent's final answer from its transcript to offer a
+    /// spoken reply (`<voice>` line or quoted prose). Off = no file opened.
+    pub allow_excerpts: bool,
 }
 
 impl Default for VoiceSettings {
@@ -46,6 +49,7 @@ impl Default for VoiceSettings {
             speak_turns: false,
             tts_voice: String::new(),
             tts_volume: 80,
+            allow_excerpts: false,
         }
     }
 }
@@ -91,6 +95,7 @@ mod tests {
             speak_turns: true,
             tts_voice: "hedda".into(),
             tts_volume: 55,
+            allow_excerpts: true,
         };
         save(&path, &s).unwrap();
         assert_eq!(load(&path), s);
@@ -115,8 +120,9 @@ mod tests {
             (s.model.as_str(), s.language.as_str()),
             (DEFAULT_MODEL, "auto")
         );
-        // SWA-66: speaking is opt-in as well.
+        // SWA-66: speaking is opt-in as well; SWA-58: reading transcripts too.
         assert!(!s.speak_turns);
+        assert!(!s.allow_excerpts);
         assert_eq!(s.tts_volume, 80);
     }
 }

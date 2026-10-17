@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { IndicatorEvent } from '@/lib/voice-indicator'
 import type { DictationEvent, DictationPhase, ModelRecommendation, ModelStatus } from '@/lib/voice-dictation'
-import type { TurnEvent } from '@/lib/voice-turns'
+import type { TurnEvent, TurnKindEvent } from '@/lib/voice-turns'
 
 /**
  * Voice dictation bridge (SWA-12). Rust owns the buzzkey pipe and the pins;
@@ -26,6 +26,11 @@ export interface VoiceSettings {
   ttsVoice: string
   /** 0-100. */
   ttsVolume: number
+  /**
+   * SWA-58: read Claude's final answer from its transcript and speak its
+   * reply after each turn. Off = no transcript is ever opened.
+   */
+  allowExcerpts: boolean
 }
 
 export interface TtsVoice {
@@ -82,6 +87,10 @@ export const onVoiceInsert = (cb: (e: VoiceInsertEvent) => void): Promise<Unlist
   listen<VoiceInsertEvent>('voice:insert', (e) => cb(e.payload))
 
 /** "Listening" pill on/off for a pinned pane (SWA-40). */
+/** SWA-58: a Claude turn failed or was interrupted (ids and kind only). */
+export const onVoiceTurnKind = (cb: (e: TurnKindEvent) => void): Promise<UnlistenFn> =>
+  listen<TurnKindEvent>('voice:turn-kind', (e) => cb(e.payload))
+
 export const onVoiceIndicator = (cb: (e: IndicatorEvent) => void): Promise<UnlistenFn> =>
   listen<IndicatorEvent>('voice:indicator', (e) => cb(e.payload))
 
@@ -111,6 +120,13 @@ export const voiceTtsStop = (terminalId?: string): Promise<void> =>
 
 /** Speak a sample sentence with the selected voice. Rejects when no voice is available. */
 export const voiceTtsTest = (): Promise<void> => invoke('voice_tts_test')
+
+/**
+ * Ctrl+Shift+R (SWA-58): Rust reads the excerpt of the last announced pane,
+ * else of `focused`, or says that there is none. Rejects with the reason.
+ */
+export const voiceReadExcerpt = (focused: string | null): Promise<void> =>
+  invoke('voice_read_excerpt', { focused })
 
 export const getTtsStatus = (): Promise<TtsStatus> => invoke('voice_tts_status')
 

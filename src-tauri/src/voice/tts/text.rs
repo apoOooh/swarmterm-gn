@@ -3,6 +3,7 @@
 //! "D colon backslash GN underscore AI" is noise, so path- and URL-like words
 //! are dropped and an empty result falls back to a neutral name.
 
+use crate::voice::completion::speech_text::Reply;
 use crate::voice::protocol::{clean_label, TurnKind};
 
 /// Pane names longer than this are cut at a word boundary: an announcement
@@ -48,18 +49,42 @@ pub fn spoken_name(pane_name: &str) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
+fn name_for(pane_name: &str, agent: &str, english: bool) -> String {
+    spoken_name(pane_name)
+        .or_else(|| spoken_name(agent))
+        .unwrap_or_else(|| if english { "An agent" } else { "Ein Agent" }.to_owned())
+}
+
 /// The announcement in the voice's language: German unless the voice is
-/// English. Status only — never output text (that is SWA-58's excerpt).
+/// English. Status only — never output text (that is `reply_line`). Error
+/// and interrupted (SWA-58) are phrased like a person would say them, not
+/// like a log level.
 pub fn announcement(pane_name: &str, agent: &str, kind: TurnKind, lang: &str) -> String {
     let english = lang.starts_with("en");
-    let name = spoken_name(pane_name)
-        .or_else(|| spoken_name(agent))
-        .unwrap_or_else(|| if english { "An agent" } else { "Ein Agent" }.to_owned());
+    let name = name_for(pane_name, agent, english);
     match (kind, english) {
         (TurnKind::Done, false) => format!("{name}: fertig."),
         (TurnKind::NeedsInput, false) => format!("{name} wartet auf Eingabe."),
+        (TurnKind::Error, false) => {
+            format!("{name}: Da ist leider etwas schiefgegangen, ich bin nicht fertig geworden.")
+        }
+        (TurnKind::Interrupted, false) => format!("{name}: Alles klar, ich habe aufgehört."),
         (TurnKind::Done, true) => format!("{name} is done."),
         (TurnKind::NeedsInput, true) => format!("{name} needs input."),
+        (TurnKind::Error, true) => format!("{name}: Sorry, something went wrong, I didn't finish."),
+        (TurnKind::Interrupted, true) => format!("{name}: Okay, I stopped."),
+    }
+}
+
+/// SWA-58: the agent's spoken reply. Its own `<voice>` line is said as its
+/// words; a rule-based excerpt is honestly marked as quoted text.
+pub fn reply_line(pane_name: &str, agent: &str, reply: &Reply, lang: &str) -> String {
+    let english = lang.starts_with("en");
+    let name = name_for(pane_name, agent, english);
+    match (reply, english) {
+        (Reply::Voice(t), _) => format!("{name}: {t}"),
+        (Reply::Quoted(t), false) => format!("{name} schreibt: {t}"),
+        (Reply::Quoted(t), true) => format!("{name} writes: {t}"),
     }
 }
 
@@ -80,6 +105,44 @@ mod tests {
         assert_eq!(
             announcement("Backend", "codex", TurnKind::Done, "en-US"),
             "Backend is done."
+        );
+    }
+
+    #[test]
+    fn says_errors_and_replies_like_a_person() {
+        assert_eq!(
+            announcement("Backend", "claude-code", TurnKind::Interrupted, "de"),
+            "Backend: Alles klar, ich habe aufgehört."
+        );
+        assert!(
+            announcement("Backend", "claude-code", TurnKind::Error, "de")
+                .starts_with("Backend: Da ist leider etwas schiefgegangen")
+        );
+        assert_eq!(
+            announcement("Backend", "claude-code", TurnKind::Error, "en"),
+            "Backend: Sorry, something went wrong, I didn't finish."
+        );
+        assert_eq!(
+            reply_line(
+                "✳ Backend",
+                "claude-code",
+                &Reply::Voice("Alles grün. Soll ich committen?".into()),
+                "de"
+            ),
+            "Backend: Alles grün. Soll ich committen?"
+        );
+        assert_eq!(
+            reply_line(
+                "Backend",
+                "claude-code",
+                &Reply::Quoted("Alles grün.".into()),
+                "de"
+            ),
+            "Backend schreibt: Alles grün."
+        );
+        assert_eq!(
+            reply_line("", "", &Reply::Quoted("Done.".into()), "en"),
+            "An agent writes: Done."
         );
     }
 
