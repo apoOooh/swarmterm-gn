@@ -209,7 +209,8 @@ Workspaces → Open on startup** to open it automatically every time Swarmterm
 starts — in the navbar, in the order set there, with agents resuming their
 sessions. While at least one workspace opens on startup, Welcome is skipped;
 **New workspace** still brings it up. If none of them can be opened, Welcome
-appears with the reason.
+appears with the reason. Startup workspaces are never pushed out of the
+saved list by newer ones.
 
 Claude Code and Codex session hooks record each pane's exact conversation,
 including when several panes share a folder. For Codex, review and trust the

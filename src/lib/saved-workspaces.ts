@@ -86,7 +86,15 @@ export function readSaved(storage: Pick<SavedStorage, 'getItem'>): SavedWorkspac
     const autoOpen = typeof item.autoOpen === 'number' && Number.isInteger(item.autoOpen) && item.autoOpen >= 0 ? { autoOpen: item.autoOpen } : {}
     list.push({ id: item.id, name: item.name, cwd: item.cwd, worktreeMode: item.worktreeMode, updatedAt: item.updatedAt, layout, ...autoOpen })
   }
-  return list.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_SAVED_WORKSPACES)
+  return capSaved(list)
+}
+/** Newest first, at most MAX_SAVED_WORKSPACES; startup workspaces are never evicted by newer ones. */
+function capSaved(list: SavedWorkspace[]): SavedWorkspace[] {
+  const sorted = [...list].sort((a, b) => b.updatedAt - a.updatedAt)
+  const pinned = sorted.filter(w => w.autoOpen !== undefined)
+  const room = Math.max(0, MAX_SAVED_WORKSPACES - pinned.length)
+  const keep = new Set([...pinned, ...sorted.filter(w => w.autoOpen === undefined).slice(0, room)])
+  return sorted.filter(w => keep.has(w))
 }
 export function storeSaved(storage: Pick<SavedStorage, 'setItem'>, list: SavedWorkspace[]): void {
   storage.setItem(SAVED_WORKSPACES_KEY, JSON.stringify({ version: 1, workspaces: list }))
@@ -95,7 +103,7 @@ export function upsertSaved(list: SavedWorkspace[], entry: SavedWorkspace): Save
   // Live snapshots (`toSaved`) don't know the startup flag; it belongs to the stored entry.
   const previous = list.find(w => w.id === entry.id)
   if (!('autoOpen' in entry) && previous?.autoOpen !== undefined) entry = { ...entry, autoOpen: previous.autoOpen }
-  return [entry, ...list.filter(w => w.id !== entry.id)].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_SAVED_WORKSPACES)
+  return capSaved([entry, ...list.filter(w => w.id !== entry.id)])
 }
 
 /** Workspaces opened on app start, in their startup order. */
