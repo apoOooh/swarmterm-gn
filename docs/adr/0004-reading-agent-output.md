@@ -85,7 +85,9 @@ What Claude Code 2.1.302 provides (checked in the binary):
      the pane's account profile, `CLAUDE_CONFIG_DIR` or `~/.claude`.
    - The file is opened with `FILE_FLAG_OPEN_REPARSE_POINT`, and reparse
      points are refused. The handle's final path must lie inside the
-     canonical root, compared component by component.
+     canonical `<config>/projects`, compared component by component. A
+     junction at that folder itself (account profiles sharing one store) is
+     followed; a link below it that leads elsewhere is not.
    - Each attempt reads only the last 2 MiB and whole lines. The total
      budget is 200 ms, retries every 50 ms included.
 9. **Freshness comes from `prompt_id`; the hash only matches content**
