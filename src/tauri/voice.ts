@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { IndicatorEvent } from '@/lib/voice-indicator'
+import type { DictationEvent, DictationPhase, ModelStatus } from '@/lib/voice-dictation'
 import type { TurnEvent } from '@/lib/voice-turns'
 
 /**
@@ -14,6 +15,24 @@ export interface VoiceSettings {
   enabled: boolean
   allowAutoEnter: boolean
   announceTurns: boolean
+  /** Built-in speech source (SWA-38). */
+  builtinEnabled: boolean
+  model: string
+  /** Whisper language code or `auto`. */
+  language: string
+}
+
+export interface SpeechStatus {
+  models: ModelStatus[]
+  dictation: DictationPhase
+}
+
+export interface ModelProgress {
+  id: string
+  received: number
+  total: number
+  done: boolean
+  error?: string
 }
 
 export interface FocusReply {
@@ -63,3 +82,25 @@ export const setVoiceSettings = (settings: VoiceSettings): Promise<VoiceSettings
 
 /** Agent finished / needs input (SWA-41); Rust drops it unless announcing is on. */
 export const voiceTurnEvent = (event: TurnEvent): Promise<void> => invoke('voice_turn_event', { event })
+
+// Built-in speech source (SWA-38): Rust records and transcribes, then types
+// through the same `voice:insert` path as buzzkey.
+
+/** Start when idle, stop + transcribe when recording. Rejects with a reason. */
+export const voiceDictationToggle = (): Promise<void> => invoke('voice_dictation_toggle')
+
+export const voiceDictationCancel = (): Promise<void> => invoke('voice_dictation_cancel')
+
+export const onVoiceDictation = (cb: (e: DictationEvent) => void): Promise<UnlistenFn> =>
+  listen<DictationEvent>('voice:dictation', (e) => cb(e.payload))
+
+export const getSpeechStatus = (): Promise<SpeechStatus> => invoke('voice_speech_status')
+
+export const downloadVoiceModel = (id: string): Promise<void> => invoke('voice_model_download', { id })
+
+export const cancelVoiceModel = (id: string): Promise<void> => invoke('voice_model_cancel', { id })
+
+export const deleteVoiceModel = (id: string): Promise<void> => invoke('voice_model_delete', { id })
+
+export const onVoiceModelProgress = (cb: (e: ModelProgress) => void): Promise<UnlistenFn> =>
+  listen<ModelProgress>('voice:model-progress', (e) => cb(e.payload))

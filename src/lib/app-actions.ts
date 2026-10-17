@@ -1,6 +1,6 @@
 import type { AppShortcutAction } from './keybindings'
 
-export type BuiltinActionId = AppShortcutAction | 'new-workspace' | 'open-settings' | 'split-horizontal' | 'split-vertical' | 'close-pane' | 'close-workspace' | 'next-workspace' | 'previous-workspace' | 'next-pane' | 'previous-pane' | 'tidy-layout' | 'select-all-broadcast' | 'clear-broadcast' | 'save-file' | 'cycle-markdown' | 'open-prompts' | 'open-routines'
+export type BuiltinActionId = AppShortcutAction | 'new-workspace' | 'open-settings' | 'split-horizontal' | 'split-vertical' | 'close-pane' | 'close-workspace' | 'next-workspace' | 'previous-workspace' | 'next-pane' | 'previous-pane' | 'tidy-layout' | 'select-all-broadcast' | 'clear-broadcast' | 'save-file' | 'cycle-markdown' | 'open-prompts' | 'open-routines' | 'dictate'
 export interface AppAction { id: BuiltinActionId; label: string; group: string; defaultBinding?: string; macro?: boolean }
 /** The window handler and terminal gate resolve the same registry and overrides. */
 export const APP_ACTIONS: AppAction[] = [
@@ -25,6 +25,9 @@ export const APP_ACTIONS: AppAction[] = [
   { id: 'jump-to-attention', label: 'Jump to pane needing attention', group: 'Panes', defaultBinding: 'Mod+Shift+J', macro: true },
   { id: 'find-in-terminal', label: 'Find in terminal', group: 'Terminal', defaultBinding: 'Mod+F' },
   { id: 'clear-input', label: 'Clear pending input line', group: 'Terminal', defaultBinding: 'Mod+Shift+Backspace' },
+  // Built-in speech (SWA-38). Shift is mandatory: bare Ctrl+Space is NUL /
+  // set-mark in shells and editors. Not a recipe step — it records audio.
+  { id: 'dictate', label: 'Start / stop dictation (built-in speech)', group: 'Terminal', defaultBinding: 'Mod+Shift+Space' },
   { id: 'toggle-broadcast', label: 'Toggle broadcast', group: 'Broadcast', defaultBinding: 'Mod+Shift+B', macro: true },
   { id: 'select-all-broadcast', label: 'Select all broadcast panes', group: 'Broadcast', macro: true },
   { id: 'clear-broadcast', label: 'Clear broadcast group', group: 'Broadcast', macro: true },

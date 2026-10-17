@@ -1,7 +1,9 @@
 //! Settings → Voice, persisted in the app data dir (tmp + rename like
 //! `mcp/toggle.rs`). Missing or unreadable file = defaults: endpoint on,
-//! auto-Enter off — dictation is a draft unless the user opts in. Status
-//! announcements (SWA-41) are opt-in as well.
+//! auto-Enter off — dictation is a draft unless the user opts in. The
+//! built-in speech source (SWA-38) is off until the user downloads a model
+//! and switches it on; status announcements (SWA-41) are opt-in as well.
+//! Older files without the newer keys keep their values.
 
 use std::fs;
 use std::path::Path;
@@ -14,6 +16,11 @@ pub struct VoiceSettings {
     pub enabled: bool,
     pub allow_auto_enter: bool,
     pub announce_turns: bool,
+    pub builtin_enabled: bool,
+    /// Catalog id from `speech::model::CATALOG`.
+    pub model: String,
+    /// Whisper language code, or `auto` to let the model detect it.
+    pub language: String,
 }
 
 impl Default for VoiceSettings {
@@ -22,6 +29,9 @@ impl Default for VoiceSettings {
             enabled: true,
             allow_auto_enter: false,
             announce_turns: false,
+            builtin_enabled: false,
+            model: "base".into(),
+            language: "auto".into(),
         }
     }
 }
@@ -61,6 +71,9 @@ mod tests {
             enabled: false,
             allow_auto_enter: true,
             announce_turns: true,
+            builtin_enabled: true,
+            model: "small".into(),
+            language: "de".into(),
         };
         save(&path, &s).unwrap();
         assert_eq!(load(&path), s);
@@ -71,5 +84,16 @@ mod tests {
         assert_eq!(load(&path), s);
         fs::write(&path, "garbage").unwrap();
         assert_eq!(load(&path), VoiceSettings::default());
+    }
+
+    #[test]
+    fn a_pre_swa38_file_keeps_its_values_and_gets_builtin_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("voice-settings.json");
+        fs::write(&path, r#"{"enabled":false,"allowAutoEnter":true}"#).unwrap();
+        let s = load(&path);
+        assert!(!s.enabled && s.allow_auto_enter);
+        assert!(!s.builtin_enabled);
+        assert_eq!((s.model.as_str(), s.language.as_str()), ("base", "auto"));
     }
 }

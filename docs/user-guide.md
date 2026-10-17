@@ -295,6 +295,12 @@ While you speak, the target pane shows a **Listening…** pill. Its **Stop** but
 
 **Settings → Voice** turns the endpoint on or off and can allow auto-Enter (off by default; never in plain shells, and only if you did not touch the prompt in the meantime). Only apps running as your Windows user can connect: Swarmterm opens a named pipe restricted to your account and writes its name and a fresh per-launch key to `%LOCALAPPDATA%\<app id>\voice-endpoint.json`.
 
+### Built-in speech recognition
+
+Swarmterm can also dictate on its own, without buzzkey. Under **Settings → Voice → Built-in speech recognition**, download a Whisper model once (**Base**, 142 MB, is the recommended choice; **Small** is more accurate and about three times slower), pick it, and switch **Enable built-in speech** on. A model is checked against a fixed checksum before it is used and stays in `%LOCALAPPDATA%\<app id>\models`; **Delete** removes it again. Recognition runs locally on the CPU — no audio leaves your computer.
+
+Click into a pane and press **Ctrl+Shift+Space** (or the microphone in the pane header), speak, then press it again. The pane shows **Listening…** while you speak and **Transcribing…** while Whisper works (about a second for a short sentence with Base); the text then lands in that pane as a draft, exactly like buzzkey's, even if you clicked elsewhere meanwhile. The pill's **Stop** discards the dictation. Built-in speech never presses Enter. **Language** defaults to automatic detection; pinning it helps with very short phrases. Windows must allow desktop apps to use the microphone (Settings → Privacy & security → Microphone). If nothing arrives, the bell says why (no microphone, no speech recognised, model missing, …).
+
 ## Terminal essentials
 
 - **Real PTYs with 24-bit truecolor** — agent CLIs, emoji and box drawing render exactly as in your normal terminal, and IMEs (Vietnamese Telex, CJK) work without dropped characters.
@@ -456,6 +462,7 @@ the file editor owns the keyboard.
 | `⌘/Ctrl + F` | Find in the focused editor/Markdown preview or terminal |
 | `⌘/Ctrl + Shift + Enter` | Maximize / restore the focused pane (also the header button or a double-click on the header). Hidden panes keep running; focusing one from the sidebar restores the layout. While maximized the pane header gets a violet bottom border, the restore button turns violet and shows how many panes are hidden (`+N`), and the sidebar marks the maximized row (violet edge and icon), dims the hidden rows (crossed-out eye; their status dots stay bright) and shows a *Maximized* badge on the Terminals heading |
 | `⌘/Ctrl + Shift + D` | Move the focused pane to the drawer (keeps running; click it in the sidebar to restore) |
+| `⌘/Ctrl + Shift + Space` | Start / stop a dictation with built-in speech recognition (only while it is enabled and its model is downloaded) |
 | `⌘/Ctrl + Shift + Backspace` | Clear the pending input line of the focused terminal (e.g. after a submit hook refused a prompt). Agents get one Ctrl+C, shells their line-kill; a second press within 2 s is ignored so an agent never quits |
 | `⌘/Ctrl + Shift + J` | Jump to the next pane needing attention (longest-waiting blocked → done → working → idle) |
 
@@ -486,6 +493,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **Any program in any pane can overwrite the clipboard via OSC 52** — like VS Code, there is no per-pane gate. Reads are refused and empty writes never clear it; copies larger than 1 MiB are ignored.
 - **Shell integration is opt-in** — a hand-typed command in a plain Terminal pane is only noticed if that shell emits OSC 133 marks (§Shell integration). Nothing is injected, `cmd.exe` cannot do it, and an interrupted command that redraws the prompt without a `D` mark is simply forgotten.
 - **The explorer's root folder can't be renamed while its tree is open** — live refresh holds one handle on the root (and the repo's `.git` metadata), and Windows refuses to rename a folder with an open handle. Everything below the root renames and moves freely. Close the explorer for that root (or quit from the tray) to rename the root itself. During very heavy churn (a large `npm install`) the tree re-reads its open folders once things go quiet, because Windows may drop individual change events.
+- **Built-in speech recognition runs on the CPU only** — no GPU acceleration yet; larger models (Small, Large v3 Turbo) take several seconds per sentence. One dictation runs at a time, and a recording stops after two minutes.
 - **Claude Code's cursor can lag after a resize** — Claude draws its own cursor block and only redraws it on the next keystroke, so right after dragging a window or pane edge the old block may stay visible. Output and prompt are correct; press any key to refresh.
 
 ## Astera themes

@@ -61,3 +61,14 @@ describe('workspace action recipes',()=>{
     expect(readShortcutSettings(JSON.stringify({version:1,macros:[macro,macro,{...macro,id:'bad'}]})).macros).toHaveLength(1)
   })
 })
+describe('dictate shortcut (SWA-38)',()=>{
+  it('maps Ctrl+Shift+Space and leaves bare Ctrl+Space (NUL, set-mark) to the shell',()=>{
+    expect(resolveShortcut(ctrl(' ',true),false,{})).toBe('dictate')
+    expect(resolveShortcut({key:' ',ctrlKey:false,metaKey:true,altKey:false,shiftKey:true},true,{})).toBe('dictate')
+    expect(resolveShortcut(ctrl(' '),false,{})).toBeNull()
+  })
+  it('collides with no other default and is not a recipe step',()=>{
+    expect(bindingConflict('dictate','Mod+Shift+Space',{})).toBeNull()
+    expect(APP_ACTIONS.find(a=>a.id==='dictate')?.macro).toBeFalsy()
+  })
+})

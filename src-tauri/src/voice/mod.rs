@@ -9,6 +9,8 @@
 //!   redeems the pin, hands the text to the renderer (`voice:insert`) and
 //!   waits for the ACK of the generation-checked write.
 //! - `pipe` (Windows only): named pipe + discovery file, the buzzkey adapter.
+//! - `speech` (Windows only, SWA-38): microphone + whisper.cpp, an
+//!   in-process client of the same layer (no pipe, no token).
 //!
 //! Indicator (SWA-40): on a connection that negotiated `indicator`, `begin`
 //! issues a pin bound to that connection and turns the pane's "listening"
@@ -31,6 +33,8 @@ pub mod pins;
 mod pipe;
 pub mod protocol;
 mod settings;
+#[cfg(windows)]
+pub mod speech;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -130,6 +134,18 @@ pub struct Conn {
 }
 
 impl Conn {
+    /// The built-in speech source: a registered connection (for `cancelled`
+    /// pushes) that negotiated `indicator` without saying hello.
+    #[cfg(windows)]
+    fn in_process(id: u64) -> Self {
+        Self {
+            id,
+            requests: 1,
+            capabilities: vec![CAP_INDICATOR.to_owned()],
+            subscribed: false,
+        }
+    }
+
     fn indicator(&self) -> bool {
         self.capabilities.iter().any(|c| c == CAP_INDICATOR)
     }
@@ -578,14 +594,83 @@ pub fn voice_set_settings(
     let hub = app.state::<VoiceHub>();
     let path = settings_path(&app)?;
     settings::save(&path, &settings)?;
-    let was_enabled =
-        std::mem::replace(&mut *hub.settings.lock().unwrap(), settings.clone()).enabled;
+    let previous = std::mem::replace(&mut *hub.settings.lock().unwrap(), settings.clone());
+    let was_enabled = previous.enabled;
+    #[cfg(windows)]
+    if previous.builtin_enabled && !settings.builtin_enabled {
+        speech::cancel_running(&app, "disabled");
+    }
     // Only an on/off switch restarts the endpoint. Auto-Enter is read per
     // insert, so changing it must not kill a dictation that is running.
     if was_enabled != settings.enabled {
         apply(&app);
     }
     Ok(settings)
+}
+
+// Built-in speech source (SWA-38). Thin wrappers: the logic is in `speech`.
+// Off Windows they answer `unsupported` so the invoke list stays one list.
+
+#[tauri::command]
+pub async fn voice_dictation_toggle(app: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    return speech::toggle(&app).await;
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("unsupported".into())
+    }
+}
+
+#[tauri::command]
+pub fn voice_dictation_cancel(app: AppHandle) {
+    #[cfg(windows)]
+    speech::cancel_running(&app, "user");
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
+#[cfg(windows)]
+#[tauri::command]
+pub fn voice_speech_status(app: AppHandle) -> Result<speech::SpeechStatus, String> {
+    speech::status(&app)
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn voice_speech_status(app: AppHandle) -> Result<(), String> {
+    let _ = app;
+    Err("unsupported".into())
+}
+
+#[tauri::command]
+pub fn voice_model_download(app: AppHandle, id: String) -> Result<(), String> {
+    #[cfg(windows)]
+    return speech::download(&app, &id);
+    #[cfg(not(windows))]
+    {
+        let _ = (app, id);
+        Err("unsupported".into())
+    }
+}
+
+#[tauri::command]
+pub fn voice_model_cancel(app: AppHandle, id: String) {
+    #[cfg(windows)]
+    speech::cancel_download(&app, &id);
+    #[cfg(not(windows))]
+    let _ = (app, id);
+}
+
+#[tauri::command]
+pub fn voice_model_delete(app: AppHandle, id: String) -> Result<(), String> {
+    #[cfg(windows)]
+    return speech::delete(&app, &id);
+    #[cfg(not(windows))]
+    {
+        let _ = (app, id);
+        Err("unsupported".into())
+    }
 }
 
 fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -634,6 +719,8 @@ pub fn shutdown(app: &AppHandle) {
     if let Some(running) = app.state::<VoiceHub>().server.lock().unwrap().take() {
         running.stop();
     }
+    #[cfg(windows)]
+    speech::cancel_running(app, "disabled");
     #[cfg(not(windows))]
     let _ = app;
 }

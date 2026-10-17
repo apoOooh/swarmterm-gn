@@ -42,6 +42,8 @@ import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
 import { insertExplorerPaths } from '@/components/FileDropListener'
 import { devLog } from '@/lib/dev-log'
 import { handoffCwd } from '@/lib/handoff-brief'
+import { toggleDictation } from '@/lib/voice-wiring'
+import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import {
   attachTerminal,
   detachTerminal,
@@ -126,6 +128,12 @@ export function TerminalPane({
   const { id: leafId, terminalId } = leaf
 
   const agentTitle = useTerminalTitleStore((s) => s.titles[terminalId])
+  // Built-in speech (SWA-38): a phase only for the pane the dictation is
+  // pinned to; every other pane shows the idle button.
+  const dictationReady = useVoiceDictationStore((s) => s.ready)
+  const dictationPhase = useVoiceDictationStore((s) =>
+    s.dictation.terminalId === terminalId ? s.dictation.phase : 'idle'
+  )
   // Per-terminal selector: only this pane wakes when ITS number changes, and the
   // store returns the same state on a no-change sample, so streaming stays quiet.
   const ctxPct = useContextUsageStore((s) => s.byId[terminalId])
@@ -429,6 +437,7 @@ export function TerminalPane({
         }}
         onThread={canShowThread(resolvedAgentId, leaf.sessionId) ? () => setThreadOpen(true) : undefined}
         onDrawer={() => useAppStore.getState().drawerPane(leafId)}
+        dictation={dictationReady || dictationPhase !== 'idle' ? { phase: dictationPhase, onToggle: toggleDictation } : undefined}
         isZoomed={isZoomed}
         zoomHiddenCount={zoomHiddenCount}
         onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}

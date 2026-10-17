@@ -36,6 +36,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
         .manage(voice::VoiceHub::default())
+        .manage(voice_speech_hub())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.unminimize();
@@ -148,6 +149,12 @@ pub fn run() {
             voice::voice_turn_event,
             voice::voice_get_settings,
             voice::voice_set_settings,
+            voice::voice_dictation_toggle,
+            voice::voice_dictation_cancel,
+            voice::voice_speech_status,
+            voice::voice_model_download,
+            voice::voice_model_cancel,
+            voice::voice_model_delete,
             commands::resize_terminal,
             commands::kill_terminal,
             commands::war_room_join,
@@ -213,3 +220,12 @@ pub fn run() {
             }
         });
 }
+
+/// Built-in speech source state (SWA-38); Windows-only like the voice pipe.
+#[cfg(windows)]
+fn voice_speech_hub() -> voice::speech::SpeechHub {
+    voice::speech::SpeechHub::default()
+}
+
+#[cfg(not(windows))]
+fn voice_speech_hub() {}

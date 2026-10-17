@@ -60,6 +60,9 @@ jobs:
     needs: [validate, checks]
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      # bindgen for whisper-rs-sys (SWA-38); LLVM ships with the runner image.
+      LIBCLANG_PATH: C:/Program Files/LLVM/bin
     steps:
       - uses: actions/checkout@v4
         with:

@@ -587,3 +587,12 @@ Automated native config/UI check against an already running Dev app: `node scrip
 Native check against a stable, running Dev app:
 `node scripts/check-custom-shortcuts-native.mjs <existing isolated test folder>`.
 It restores previous shortcut settings and removes only its own workspaces.
+
+## Built-in speech recognition (SWA-38)
+
+- [ ] Settings → Voice: download **Base**; the bar fills, the row then reads "downloaded".
+- [ ] Enable built-in speech; the pane header shows a microphone.
+- [ ] Click into a shell, Ctrl+Shift+Space, say a sentence, Ctrl+Shift+Space: "Listening…" then
+      "Transcribing…", the sentence arrives as a draft (no Enter).
+- [ ] Start again, click the pill's Stop: nothing is typed.
+- [ ] Windows microphone access off for desktop apps: the bell reports "no microphone available".

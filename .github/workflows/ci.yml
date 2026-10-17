@@ -42,6 +42,9 @@ jobs:
   rust:
     name: Rust (Windows)
     runs-on: windows-latest
+    env:
+      # bindgen for whisper-rs-sys (SWA-38); LLVM ships with the runner image.
+      LIBCLANG_PATH: C:/Program Files/LLVM/bin
     defaults:
       run:
         working-directory: src-tauri
