@@ -2,19 +2,20 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useModalFocus } from '@/components/ui/use-modal-focus'
 import { handoffTargets } from '@/lib/handoff-flow'
-import { runRoutine } from '@/lib/routine-scheduler'
-import { describeSchedule, nextSlot, type MissedPolicy, type Routine, type RoutineSchedule } from '@/lib/routines'
+import { describeOutcome, isCommandRunning, runRoutine } from '@/lib/routine-scheduler'
+import { DEFAULT_TIMEOUT_MINUTES, MAX_TIMEOUT_MINUTES, describeSchedule, nextSlot, type MissedPolicy, type Routine, type RoutineSchedule } from '@/lib/routines'
 import { listAvailableAgents } from '@/tauri/agents'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { selectFocusedTerminalId, useAppStore } from '@/store/app-store'
 import { usePromptLibraryStore } from '@/store/prompt-library-store'
+import { pickFolder } from '@/store/folder-picker-store'
 import { useRoutineStore } from '@/store/routine-store'
 import { routineDeps } from './routine-runtime'
 
 const field = 'rounded border border-input bg-background p-1.5 text-sm text-foreground'
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-type Draft = Omit<Routine, 'lastScheduledAt' | 'lastRunAt' | 'activeTerminalId'> & { isNew: boolean }
+type Draft = Omit<Routine, 'lastScheduledAt' | 'lastRunAt' | 'activeTerminalId' | 'lastResult'> & { isNew: boolean }
 
 function emptyDraft(): Draft {
   return {
@@ -22,9 +23,13 @@ function emptyDraft(): Draft {
     isNew: true,
     name: '',
     enabled: true,
+    kind: 'agent',
     agentId: 'claude-code',
     brief: '',
     worktree: false,
+    command: '',
+    cwd: '',
+    timeoutMinutes: DEFAULT_TIMEOUT_MINUTES,
     schedule: { kind: 'daily', time: '09:00', weekdays: [1, 2, 3, 4, 5] },
     missed: 'run-once'
   }
@@ -35,7 +40,8 @@ const when = (t: number | undefined): string => (t === undefined ? '—' : new D
 /**
  * Routines (SWA-24): named agent + brief + schedule. Runs only while the app
  * is open; each run starts a new pane in the active workspace and reports to
- * the notification bell. role="dialog" is what overlay-watch and
+ * the notification bell. Command routines (SWA-67) run one shell line in the
+ * background instead — no pane, no tokens; only failures reach the bell. role="dialog" is what overlay-watch and
  * terminal-focus key on.
  */
 export function RoutinesDialog(): React.ReactElement | null {
@@ -72,13 +78,17 @@ export function RoutinesDialog(): React.ReactElement | null {
   const now = Date.now()
 
   const pick = (r: Routine): void => {
-    setDraft({ id: r.id, isNew: false, name: r.name, enabled: r.enabled, agentId: r.agentId, accountId: r.accountId, brief: r.brief, worktree: r.worktree, schedule: r.schedule, missed: r.missed })
+    setDraft({
+      id: r.id, isNew: false, name: r.name, enabled: r.enabled, kind: r.kind, agentId: r.agentId, accountId: r.accountId, brief: r.brief,
+      worktree: r.worktree, command: r.command ?? '', cwd: r.cwd ?? '', timeoutMinutes: r.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES,
+      schedule: r.schedule, missed: r.missed
+    })
     setConfirmDelete(false)
     setStatus(null)
   }
   const save = (): void => {
     const { isNew: _n, ...rest } = draft
-    const ok = useRoutineStore.getState().save({ ...rest, lastScheduledAt: saved?.lastScheduledAt ?? Date.now(), lastRunAt: saved?.lastRunAt })
+    const ok = useRoutineStore.getState().save({ ...rest, lastScheduledAt: saved?.lastScheduledAt ?? Date.now(), lastRunAt: saved?.lastRunAt, lastResult: saved?.lastResult })
     if (ok) {
       setDraft({ ...draft, isNew: false })
       setStatus('Saved.')
@@ -93,9 +103,11 @@ export function RoutinesDialog(): React.ReactElement | null {
   }
   const runNow = async (): Promise<void> => {
     if (!saved) return
-    if (routineDeps.isBusy(saved.activeTerminalId)) return setStatus('The previous run is still busy.')
+    const busy = saved.kind === 'command' ? isCommandRunning(saved.id) : routineDeps.isBusy(saved.activeTerminalId)
+    if (busy) return setStatus('The previous run is still busy.')
+    if (saved.kind === 'command') setStatus('Running…')
     const res = await runRoutine(saved, routineDeps)
-    setStatus('error' in res ? `Not started: ${res.error}` : 'Started.')
+    setStatus('error' in res ? `Not started: ${res.error}` : 'outcome' in res ? `Finished: ${describeOutcome(res.outcome)}` : 'Started.')
   }
   const setSchedule = (s: RoutineSchedule): void => setDraft({ ...draft, schedule: s })
   const s = draft.schedule
@@ -126,6 +138,7 @@ export function RoutinesDialog(): React.ReactElement | null {
               >
                 <div className={`truncate ${r.enabled ? '' : 'text-muted-foreground line-through'}`}>{r.name}</div>
                 <div className="truncate text-muted-foreground">
+                  {r.kind === 'command' && 'Command · '}
                   {describeSchedule(r.schedule)}
                   {r.enabled && ` · next ${when(nextSlot(r.schedule, r.lastScheduledAt, now))}`}
                 </div>
@@ -135,7 +148,7 @@ export function RoutinesDialog(): React.ReactElement | null {
           <Button size="sm" variant="ghost" onClick={() => { setDraft(emptyDraft()); setConfirmDelete(false); setStatus(null) }}>
             New routine
           </Button>
-          <div className="text-[11px] text-muted-foreground">Routines run only while Swarmterm is open, in a new pane of the active workspace.</div>
+          <div className="text-[11px] text-muted-foreground">Routines run only while Swarmterm is open. Agent routines start a new pane in the active workspace; command routines run in the background without a pane.</div>
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col gap-2 overflow-y-auto">
@@ -146,43 +159,75 @@ export function RoutinesDialog(): React.ReactElement | null {
               Enabled
             </label>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <select aria-label="Routine agent" className={field} value={key(draft)} onChange={(e) => {
-              const t = agents.find((a) => key(a) === e.target.value)
-              if (t) setDraft({ ...draft, agentId: t.agentId, accountId: t.accountId })
-            }}>
-              {!agents.some((a) => key(a) === key(draft)) && <option value={key(draft)}>{draft.agentId}</option>}
-              {agents.map((t) => (
-                <option key={key(t)} value={key(t)}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-            <label className="flex items-center gap-1 text-xs text-muted-foreground">
-              <input type="checkbox" checked={draft.worktree} onChange={(e) => setDraft({ ...draft, worktree: e.target.checked })} />
-              In a new git worktree
-            </label>
-            {prompts.length > 0 && (
-              <select aria-label="Insert saved prompt" className={field} value="" onChange={(e) => {
-                const p = prompts.find((x) => x.id === e.target.value)
-                if (p) setDraft({ ...draft, brief: p.body, name: draft.name || p.title })
+          <select aria-label="Routine kind" className={`${field} self-start`} value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value === 'command' ? 'command' : 'agent' })}>
+            <option value="agent">Agent with a brief</option>
+            <option value="command">Shell command (no agent, no tokens)</option>
+          </select>
+          {draft.kind === 'command' ? (
+            <>
+              <input
+                aria-label="Routine command"
+                placeholder="Command — one line, run by cmd.exe without a window"
+                className={`${field} font-mono text-xs`}
+                value={draft.command ?? ''}
+                onChange={(e) => setDraft({ ...draft, command: e.target.value })}
+              />
+              <div className="flex items-center gap-2">
+                <input aria-label="Routine working folder" placeholder="Working folder" className={`${field} min-w-0 flex-1 text-xs`} value={draft.cwd ?? ''} onChange={(e) => setDraft({ ...draft, cwd: e.target.value })} />
+                <Button size="sm" variant="ghost" onClick={() => void pickFolder().then((path) => path && setDraft((d) => ({ ...d, cwd: path })))}>
+                  Browse
+                </Button>
+                <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                  stop after
+                  <input aria-label="Time limit minutes" type="number" min={1} max={MAX_TIMEOUT_MINUTES} className={`${field} w-16`} value={draft.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES} onChange={(e) => setDraft({ ...draft, timeoutMinutes: Number(e.target.value) })} />
+                  minutes
+                </label>
+              </div>
+              <div className="flex-1 text-[11px] text-muted-foreground">
+                The bell only reports failures and timeouts; the last result shows below. The command and its whole process tree are stopped at the time limit.
+              </div>
+            </>
+          ) : (
+            <>
+            <div className="flex flex-wrap items-center gap-2">
+              <select aria-label="Routine agent" className={field} value={key(draft)} onChange={(e) => {
+                const t = agents.find((a) => key(a) === e.target.value)
+                if (t) setDraft({ ...draft, agentId: t.agentId, accountId: t.accountId })
               }}>
-                <option value="">Use a saved prompt…</option>
-                {prompts.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.title}
+                {!agents.some((a) => key(a) === key(draft)) && <option value={key(draft)}>{draft.agentId}</option>}
+                {agents.map((t) => (
+                  <option key={key(t)} value={key(t)}>
+                    {t.label}
                   </option>
                 ))}
               </select>
-            )}
-          </div>
-          <textarea
-            aria-label="Routine brief"
-            placeholder="Brief — what the agent should do on each run"
-            className={`${field} min-h-[160px] flex-1 resize-none font-mono text-xs`}
-            value={draft.brief}
-            onChange={(e) => setDraft({ ...draft, brief: e.target.value })}
-          />
+              <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                <input type="checkbox" checked={draft.worktree} onChange={(e) => setDraft({ ...draft, worktree: e.target.checked })} />
+                In a new git worktree
+              </label>
+              {prompts.length > 0 && (
+                <select aria-label="Insert saved prompt" className={field} value="" onChange={(e) => {
+                  const p = prompts.find((x) => x.id === e.target.value)
+                  if (p) setDraft({ ...draft, brief: p.body, name: draft.name || p.title })
+                }}>
+                  <option value="">Use a saved prompt…</option>
+                  {prompts.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.title}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <textarea
+              aria-label="Routine brief"
+              placeholder="Brief — what the agent should do on each run"
+              className={`${field} min-h-[160px] flex-1 resize-none font-mono text-xs`}
+              value={draft.brief}
+              onChange={(e) => setDraft({ ...draft, brief: e.target.value })}
+            />
+            </>
+          )}
 
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <select aria-label="Schedule kind" className={field} value={s.kind} onChange={(e) =>
@@ -221,7 +266,7 @@ export function RoutinesDialog(): React.ReactElement | null {
               <option value="skip">skip it</option>
             </select>
           </label>
-          {saved && <div className="text-xs text-muted-foreground">Last run: {when(saved.lastRunAt)}</div>}
+          {saved && <div className="text-xs text-muted-foreground">Last run: {when(saved.lastRunAt)}{saved.kind === 'command' && saved.lastResult ? ` · ${saved.lastResult}` : ''}</div>}
 
           <div className="flex items-center gap-2 border-t border-border pt-2">
             <Button size="sm" onClick={save}>

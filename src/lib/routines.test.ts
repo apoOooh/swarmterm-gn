@@ -23,6 +23,7 @@ function routine(over: Partial<Routine> = {}): Routine {
     id: 'r1',
     name: 'Nightly',
     enabled: true,
+    kind: 'agent',
     agentId: 'claude-code',
     brief: 'Review open PRs',
     worktree: false,
@@ -135,5 +136,28 @@ describe('describeSchedule', () => {
     expect(describeSchedule({ kind: 'interval', everyMinutes: 120 })).toBe('every 2 hours')
     expect(describeSchedule({ kind: 'daily', time: '09:30', weekdays: [] })).toBe('daily at 09:30')
     expect(describeSchedule({ kind: 'daily', time: '09:30', weekdays: [5, 1] })).toBe('Mon, Fri at 09:30')
+  })
+})
+
+describe('command routines', () => {
+  const cmd = (over: Partial<Routine> = {}): Routine =>
+    routine({ kind: 'command', agentId: '', brief: '', command: 'python refresh.py', cwd: 'C:/work', timeoutMinutes: 5, ...over })
+
+  it('validate the line, folder and time limit instead of agent and brief', () => {
+    expect(validateRoutine(cmd())).toBeNull()
+    expect(validateRoutine(cmd({ command: ' ' }))).toMatch(/command is empty/)
+    expect(validateRoutine(cmd({ command: 'a' + String.fromCharCode(10) + 'b' }))).toMatch(/one line/)
+    expect(validateRoutine(cmd({ cwd: '' }))).toMatch(/working folder/)
+    expect(validateRoutine(cmd({ timeoutMinutes: 0 }))).toMatch(/time limit/)
+    expect(validateRoutine(cmd({ timeoutMinutes: 61 }))).toMatch(/time limit/)
+  })
+  it('round-trip, and lists from before SWA-67 load as agent routines', () => {
+    const c = cmd({ lastResult: 'exit 0 · 1.0 s', worktree: false })
+    expect(parseRoutines(serializeRoutines([c]))).toEqual([c])
+    const { kind: _k, ...old } = routine()
+    expect(parseRoutines(JSON.stringify({ version: 1, routines: [old] }))[0].kind).toBe('agent')
+  })
+  it('never carries the worktree flag', () => {
+    expect(parseRoutines(serializeRoutines([cmd({ worktree: true })]))[0].worktree).toBe(false)
   })
 })

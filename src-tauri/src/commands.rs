@@ -1105,3 +1105,23 @@ pub async fn set_swarmterm_mcp(
     .await
     .map_err(|_| "MCP switch interrupted")?
 }
+
+/// Command routines (SWA-67): one shell line from the user's routine list,
+/// run without a pane. Main webview only — a preview page must never reach it.
+#[tauri::command]
+pub async fn run_routine_command(
+    webview: tauri::Webview,
+    command: String,
+    cwd: String,
+    timeout_secs: u64,
+) -> Result<crate::routine_cmd::CommandOutcome, String> {
+    if webview.label() != "main" {
+        return Err("Routines are available only in the main application".into());
+    }
+    crate::routine_cmd::validate(&command, &cwd, timeout_secs)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::routine_cmd::run(&command, &cwd, std::time::Duration::from_secs(timeout_secs))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}

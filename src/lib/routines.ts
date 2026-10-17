@@ -10,6 +10,11 @@
  *   (or waiting for the user), the slot is dropped, not queued.
  * - A slot is consumed whatever the outcome (run, skip, overlap), so a
  *   decision is never repeated on the next tick.
+ *
+ * Command routines (SWA-67) share all of that but start no agent: one shell
+ * line runs in the background (no pane, no tokens) and its exit code and
+ * output tail come back. The line is typed by the user in the dialog and
+ * stored only here — no MCP tool or War Room message can create one.
  */
 
 export type RoutineSchedule =
@@ -19,15 +24,26 @@ export type RoutineSchedule =
 
 export type MissedPolicy = 'run-once' | 'skip'
 
+export type RoutineKind = 'agent' | 'command'
+
 export interface Routine {
   id: string
   name: string
   enabled: boolean
+  /** Missing in lists saved before SWA-67: those are agent routines. */
+  kind: RoutineKind
+  /** Agent routines only (empty for commands). */
   agentId: string
   accountId?: string
   /** Brief text sent as the agent's start argument. */
   brief: string
   worktree: boolean
+  /** Command routines: one shell line, its working folder and time limit. */
+  command?: string
+  cwd?: string
+  timeoutMinutes?: number
+  /** Short outcome of the last command run ("exit 0 · 2 s"), shown in the dialog. */
+  lastResult?: string
   schedule: RoutineSchedule
   missed: MissedPolicy
   /** Last slot that was decided (run, skipped or dropped); anchors the next one. */
@@ -40,6 +56,10 @@ export interface Routine {
 export const MAX_ROUTINES = 50
 export const MIN_INTERVAL_MINUTES = 5
 export const MAX_INTERVAL_MINUTES = 7 * 24 * 60
+export const DEFAULT_TIMEOUT_MINUTES = 5
+export const MAX_TIMEOUT_MINUTES = 60
+/** Same bound as the backend (`routine_cmd::MAX_COMMAND_CHARS`). */
+export const MAX_COMMAND_CHARS = 4000
 /** A slot found within this window of its time counts as on time, not missed. */
 export const GRACE_MS = 2 * 60_000
 const MAX_NAME_CHARS = 80
@@ -53,12 +73,23 @@ function parseTime(time: string): { h: number; m: number } | undefined {
   return m ? { h: Number(m[1]), m: Number(m[2]) } : undefined
 }
 
-export function validateRoutine(r: Pick<Routine, 'name' | 'brief' | 'agentId' | 'schedule'>): string | null {
+export function validateRoutine(
+  r: Pick<Routine, 'name' | 'brief' | 'agentId' | 'schedule'> & Partial<Pick<Routine, 'kind' | 'command' | 'cwd' | 'timeoutMinutes'>>
+): string | null {
   const name = r.name.trim()
   if (!name || name.length > MAX_NAME_CHARS) return `Give the routine a name (up to ${MAX_NAME_CHARS} characters).`
-  if (!r.agentId) return 'Choose an agent.'
-  if (!r.brief.trim()) return 'The brief is empty.'
-  if (r.brief.length > MAX_BRIEF_CHARS) return `The brief is too long (max ${MAX_BRIEF_CHARS} characters).`
+  if (r.kind === 'command') {
+    const c = (r.command ?? '').trim()
+    if (!c) return 'The command is empty.'
+    if (c.length > MAX_COMMAND_CHARS || /[\r\n]/.test(c)) return `The command must be one line (max ${MAX_COMMAND_CHARS} characters).`
+    if (!(r.cwd ?? '').trim()) return 'Choose a working folder.'
+    const t = r.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES
+    if (!Number.isInteger(t) || t < 1 || t > MAX_TIMEOUT_MINUTES) return `The time limit must be whole minutes between 1 and ${MAX_TIMEOUT_MINUTES}.`
+  } else {
+    if (!r.agentId) return 'Choose an agent.'
+    if (!r.brief.trim()) return 'The brief is empty.'
+    if (r.brief.length > MAX_BRIEF_CHARS) return `The brief is too long (max ${MAX_BRIEF_CHARS} characters).`
+  }
   const s = r.schedule
   if (s.kind === 'interval') {
     if (!Number.isInteger(s.everyMinutes) || s.everyMinutes < MIN_INTERVAL_MINUTES || s.everyMinutes > MAX_INTERVAL_MINUTES)
@@ -182,14 +213,24 @@ export function parseRoutines(raw: string | null): Routine[] {
   for (const x of d.routines as Partial<Routine>[]) {
     const schedule = parseSchedule(x?.schedule)
     if (typeof x?.id !== 'string' || typeof x.name !== 'string' || typeof x.brief !== 'string' || typeof x.agentId !== 'string' || !schedule) continue
+    const kind: RoutineKind = x.kind === 'command' ? 'command' : 'agent'
     const r: Routine = {
       id: x.id,
       name: x.name,
       enabled: x.enabled === true,
+      kind,
       agentId: x.agentId,
       ...(typeof x.accountId === 'string' ? { accountId: x.accountId } : {}),
       brief: x.brief,
-      worktree: x.worktree === true,
+      worktree: kind === 'agent' && x.worktree === true,
+      ...(kind === 'command'
+        ? {
+            command: typeof x.command === 'string' ? x.command : '',
+            cwd: typeof x.cwd === 'string' ? x.cwd : '',
+            timeoutMinutes: typeof x.timeoutMinutes === 'number' ? x.timeoutMinutes : DEFAULT_TIMEOUT_MINUTES,
+            ...(typeof x.lastResult === 'string' ? { lastResult: x.lastResult } : {})
+          }
+        : {}),
       schedule,
       missed: x.missed === 'skip' ? 'skip' : 'run-once',
       lastScheduledAt: typeof x.lastScheduledAt === 'number' ? x.lastScheduledAt : Date.now(),
