@@ -44,7 +44,7 @@ const SILENT = new Set(['user', 'superseded'])
 const COPY: Record<string, string> = {
   disabled: 'Voice is switched off in Settings → Voice',
   'builtin-off': 'built-in speech recognition is off in Settings → Voice',
-  'model-missing': 'download a speech model in Settings → Voice first',
+  'model-missing': 'the selected speech model is not downloaded — download it in Settings → Voice',
   'mic-unavailable': 'no microphone available, or access was denied in Windows privacy settings',
   busy: 'another dictation is still running',
   'no-focus': 'click into a terminal first',
@@ -65,8 +65,22 @@ export function dictationFailure(reason: string | undefined): string | null {
   return COPY[reason] ?? `dictation failed (${reason})`
 }
 
-/** Pane button and shortcut are offered only when a dictation can start. */
+/** The user switched built-in speech on, whether or not its model is on disk. */
+export function builtinSwitchedOn(settings: VoiceSettings | null): boolean {
+  return !!settings?.enabled && settings.builtinEnabled
+}
+
+/** The pane button is offered only when a dictation can start. */
 export function builtinReady(settings: VoiceSettings | null, models: ModelStatus[]): boolean {
-  if (!settings?.enabled || !settings.builtinEnabled) return false
-  return models.some((m) => m.id === settings.model && m.ready)
+  if (!builtinSwitchedOn(settings)) return false
+  return models.some((m) => m.id === settings!.model && m.ready)
+}
+
+/**
+ * Only downloaded models can be picked: choosing one that is not on disk
+ * silently switched dictation off. The current choice stays selectable so a
+ * stale setting (model deleted, or picked before this rule) is still shown.
+ */
+export function modelSelectable(model: ModelStatus, selected: string): boolean {
+  return model.ready || model.id === selected
 }

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   applyDictation,
   builtinReady,
+  builtinSwitchedOn,
+  modelSelectable,
   dictationFailure,
   IDLE,
   type ModelStatus
@@ -55,5 +57,33 @@ describe('builtinReady', () => {
     expect(builtinReady({ ...on, model: 'small' }, models)).toBe(false)
     expect(builtinReady(on, [])).toBe(false)
     expect(builtinReady(null, models)).toBe(false)
+  })
+})
+
+describe('builtinSwitchedOn', () => {
+  const on = { enabled: true, allowAutoEnter: false, announceTurns: false, builtinEnabled: true, model: 'large', language: 'auto' }
+
+  it('ignores the model: the shortcut then explains what is missing', () => {
+    expect(builtinSwitchedOn(on)).toBe(true)
+    expect(builtinSwitchedOn({ ...on, enabled: false })).toBe(false)
+    expect(builtinSwitchedOn({ ...on, builtinEnabled: false })).toBe(false)
+    expect(builtinSwitchedOn(null)).toBe(false)
+  })
+})
+
+describe('modelSelectable', () => {
+  const ready = { id: 'base', label: 'Base', bytes: 1, ready: true, downloading: false }
+  const missing = { id: 'large', label: 'Large', bytes: 1, ready: false, downloading: false }
+
+  it('offers only models on disk, but never hides the current choice', () => {
+    expect(modelSelectable(ready, 'large')).toBe(true)
+    expect(modelSelectable(missing, 'base')).toBe(false)
+    expect(modelSelectable(missing, 'large')).toBe(true)
+  })
+})
+
+describe('model-missing copy', () => {
+  it('says the selected model is not downloaded', () => {
+    expect(dictationFailure('model-missing')).toMatch(/selected speech model is not downloaded/)
   })
 })

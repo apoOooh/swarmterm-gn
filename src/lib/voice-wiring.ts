@@ -10,6 +10,7 @@ import {
 } from '@/tauri/voice'
 import { DICTATION_ALERT_ID, dictationFailure } from '@/lib/voice-dictation'
 import { writeTerminalChecked } from '@/tauri/terminal'
+import { devLog } from '@/lib/dev-log'
 import { dictationTarget } from '@/lib/voice-focus'
 import { deliverDictation } from '@/lib/voice-delivery'
 import { describeFocusedElement } from '@/lib/terminal-focus'
@@ -96,6 +97,8 @@ export function wireVoice(isSettingsOpen: () => boolean): () => void {
   // notification above (same voice:insert path); this covers what happens
   // before it: no speech, no microphone, cancelled by a server-side end.
   const dictation = onVoiceDictation((e) => {
+    // Phases only, never text: the dev log is how a silent failure is traced.
+    devLog('voice.dictation', { state: e.state, terminalId: e.terminalId, reason: e.reason })
     useVoiceDictationStore.getState().applyEvent(e)
     if (e.state !== 'idle' || INSERT_REASONS.has(e.reason ?? '')) return
     reportDictation(e.reason, e.terminalId)
@@ -129,5 +132,8 @@ function reportDictation(reason: string | undefined, terminalId: string | undefi
 
 /** Shortcut and pane button: start, or stop and transcribe. */
 export function toggleDictation(): void {
-  voiceDictationToggle().catch((e) => reportDictation(String(e), undefined))
+  voiceDictationToggle().catch((e) => {
+    devLog('voice.dictation.refused', { reason: String(e) }, 'warn')
+    reportDictation(String(e), undefined)
+  })
 }
