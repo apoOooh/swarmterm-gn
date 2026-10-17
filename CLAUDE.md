@@ -327,7 +327,13 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   Running = buzzkey's `buzzkey_SingleInstance` mutex; whisper-key blocks all
   actions. Debug-only env overrides (`SWARMTERM_BUZZKEY_RELEASES_URL` with
   loopback, `_DIR`, `_MUTEX`) exist for testlab scenario 34 — never honour
-  them in release builds.
+  them in release builds. Only exception to "on click": the update toast
+  (`lib/buzzkey-update.ts`, store `buzzkey-update-store`) checks at start
+  + every 24 h for a connected buzzkey; "Later" stores the version, opt-in
+  auto-update calls `voice_companion_install(unattended)`, which Rust
+  refuses (`dictating`) while a pin is live or built-in speech is busy —
+  checked before the download and again before `quit`. Major jumps
+  (`release::major_jump`) always go through the toast.
 - **Built-in speech (SWA-38, `docs/adr/0002`).** `voice/speech/` records
   (cpal, own thread — dropping the stream frees the mic) and transcribes
   (whisper-rs, CPU, context cached per model) as an in-process client of

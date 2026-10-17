@@ -134,6 +134,8 @@ import type { CategoryId } from '@/components/Settings/SettingsView'
 import { cleanupWhenResolved } from '@/lib/listener-cleanup'
 import { staleKeys } from '@/lib/stale-sweep'
 import { VOICE_ALERT_ID, createInputDropThrottle, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
+import { BuzzkeyUpdateToast } from '@/components/BuzzkeyUpdateToast'
+import { useBuzzkeyUpdateStore } from '@/store/buzzkey-update-store'
 
 // Platform never changes at runtime, so a module-level constant is fine.
 const isMac = isMacPlatform()
@@ -912,6 +914,10 @@ export default function App(): ReactElement {
     }
   }, [])
 
+  // buzzkey update toast: start + every 24 h, only for an installed and
+  // connected buzzkey (rules in lib/buzzkey-update.ts).
+  useEffect(() => useBuzzkeyUpdateStore.getState().startWatch(), [])
+
   // Tray "Check for Updates…" → manual check (talkative: reports up-to-date
   // and failures in a native dialog).
   useEffect(() => {
@@ -1166,6 +1172,7 @@ export default function App(): ReactElement {
     >
       <FileDropListener />
       <FileDialog />
+      <BuzzkeyUpdateToast />
       <TitleBar fullscreen={isFullscreen} />
       <SavedWorkspaceNotice />
 

@@ -12,6 +12,18 @@
   agent's own session file, filtered, kept only in memory and never sent
   anywhere; the voice pipe is unchanged. See
   `docs/adr/0004-reading-agent-output.md`.
+- Voice: buzzkey update notice. With buzzkey installed and connected,
+  Swarmterm checks for a newer signed buzzkey release at start and every
+  24 h and offers "Update now" or "Later" (remembered until the next
+  version). Opt-in "Update buzzkey automatically" installs without asking,
+  never during a dictation and never across a major version without
+  asking once. Same signature-first install as before; buzzkey is quit
+  over the pipe, never killed.
+- Panes: optional agent-state highlight. Settings → Appearance → "Highlight
+  panes by agent state" frames each agent pane in its state colour — yellow
+  while working, drifting to orange over a chosen 5/10/30 minutes, red when
+  blocked, green when it finished in the background until focused. Off by
+  default.
 - Voice: better built-in speech models and a suggestion per PC. Settings →
   Voice now offers quantised Small, Medium, Large v3 Turbo (q5/q8) and
   Large v3 models and recommends the best fit for this computer (CPU

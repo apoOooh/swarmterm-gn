@@ -164,6 +164,10 @@ A workspace tab in the navbar rolls this up across all its panes and shows the h
 
 The sidebar header also shows a small counter across **all** workspaces — a red pill for blocked panes and a green one for panes that finished while you were away. Hover any dot to see how long the pane has been in that state ("Blocked for 4m — needs your input"), and hover the red pill to see the longest wait among them. Click a pill, or press `⌘/Ctrl + Shift + J`, to jump to the next pane that needs you: blocked panes first — the one that has waited longest ahead of the rest — then finished (earliest first), then working, then idle in sidebar order, cycling on repeat presses (and switching workspaces when needed). Landing on a finished pane marks it seen, so the green count drops as you go. Hiding the sidebar hides the counter; the shortcut keeps working.
 
+### Pane highlighting
+
+Turn on **Settings → Appearance → Highlight panes by agent state** to frame the agent panes themselves in the same colours as their dots — a thin inner border with a soft glow, so you can tell at a glance across a split layout which pane needs you: **red** while it's blocked, **green** after it finished in the background (cleared the moment you focus it, like the dot), and **yellow** while it's working. A long turn drifts from yellow to orange over the **Working gradient** you pick (5, 10 or 30 minutes, or off to stay yellow), so the pane that has been busy for a while stands out. Idle panes and plain Terminal panes are never framed, and the focus and broadcast borders stay visible underneath. Off by default.
+
 ## Notifications
 
 A background agent pane chimes when it blocks (needs your input) or finishes — a short WebAudio tone, so you don't have to keep watching the dots. The chime fires about a second after the state change, and Swarmterm re-checks at that moment: a blocked flash that resolves itself, or a pane you've since switched to, never sounds. Several panes changing within about half a second share one chime and one banner — a pane that needs your input wins the tone, and the banner lists them ("Claude Code needs your input · Codex finished", "2 Claude Code panes finished").
@@ -315,12 +319,14 @@ This is the contract for **Allow excerpts**:
 
 ### Installing buzzkey from Swarmterm
 
-**Settings → Voice → buzzkey** shows whether buzzkey is installed, running or connected (with its version) and offers the next step: **Install buzzkey**, **Start**, **Quit**, **Check for update** and **Start buzzkey with Windows**. Nothing happens in the background — Swarmterm only goes online when you click.
+**Settings → Voice → buzzkey** shows whether buzzkey is installed, running or connected (with its version) and offers the next step: **Install buzzkey**, **Start**, **Quit**, **Check for update**, **Start buzzkey with Windows** and **Update buzzkey automatically**. Installing is always a click; the only background access is the update check below.
 
 - Downloads come only from buzzkey's GitHub releases. Swarmterm first checks the release's signature against a key built into Swarmterm, then each file against the signed checksums, and only then installs into `%LOCALAPPDATA%\Programs\buzzkey` (no admin rights). A release that fails any check installs nothing; an update that fails half-way keeps the previous version.
 - buzzkey stays its own program with its own tray icon. **Quit** asks it to close itself; older buzzkey versions are quit from their tray menu instead. Swarmterm never kills it.
 - While the original whisper-key runs, Swarmterm offers nothing: both would fight over the hotkey and the microphone.
 - The autostart switch is the same entry as buzzkey's own tray setting. To uninstall, quit buzzkey, turn autostart off and delete the folder.
+- **Update notice.** While buzzkey is installed and connected, Swarmterm looks for a newer signed buzzkey release about 20 seconds after start and then once a day. A newer one shows a notice in the bottom right: **Update now** runs the same verified install (buzzkey is asked to quit and started again), **Later** hides it until the *next* version. Without a connection or on a network error nothing is shown.
+- **Update buzzkey automatically** (in the notice and in Settings, off by default) installs new versions without asking, but never while a dictation is recording or transcribing — the update then waits a minute and tries again. A major new version (for example 1.x → 2.0) is always asked first, once; **Later** silences that version too.
 - Once installed, buzzkey's hardware check (if the version has one) suggests a model; buzzkey makes the final choice on first start.
 
 ### Built-in speech recognition
@@ -516,7 +522,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **Terminal search covers the visible scrollback only** — matches beyond xterm's own buffer, and search-and-replace, aren't available.
 - **Windows x64 only** — this fork does not support macOS or Linux releases.
 - **Claude Code hooks are written at every launch** — the `swarmterm --hook` entries in `~/.claude/settings.json` are re-checked on each boot (no write when nothing changed; your own hooks are left alone). The installed app always points them (and the status line) at itself, which also repairs entries left by a moved or deleted Swarmterm binary — if every Claude Code tool call reports `swarmterm.exe: No such file or directory`, restart Swarmterm and then the Claude sessions. A development build (`npm run tauri dev`) never takes these entries over from an installed Swarmterm that still exists.
-- **`claude` started by hand in a plain Terminal pane gets no coloured dot** — only panes created as Claude Code agents are wired to the hooks.
+- **`claude` started by hand in a plain Terminal pane gets no coloured dot or pane highlight** — only panes created as Claude Code agents are wired to the hooks.
 - **After Esc (interrupt) a Claude Code pane can read "working" for up to 30 s** — Claude fires no Stop hook on an interrupt, so the working signal has to time out before screen reading takes over again.
 - **Find widget with regex on shows "Invalid regex" while you type** — a pattern that does not parse yet (for example `foo(`) reads **Invalid regex** in the counter and clears the previous highlights until the pattern is valid again. Toggle regex off to search it as literal text.
 - **Any program in any pane can overwrite the clipboard via OSC 52** — like VS Code, there is no per-pane gate. Reads are refused and empty writes never clear it; copies larger than 1 MiB are ignored.
