@@ -89,7 +89,7 @@ describe('command routines', () => {
   it('reports a failure with the last output line', async () => {
     const d = deps({ runCommand: vi.fn(async () => ({ exitCode: 2, timedOut: false, output: 'a' + String.fromCharCode(10) + 'boom', durationMs: 50 })) })
     await tickRoutines([cmd()], anchor + 61 * MIN, d)
-    expect(d.notify).toHaveBeenCalledWith('', 'Routine "Board" failed: exit 2 · 0.1 s', 'Board · boom')
+    expect(d.notify).toHaveBeenCalledWith('', 'Routine "Board" failed: exit 2 · 0.1 s — boom', 'Board')
   })
   it('reports a timeout and a start error', async () => {
     const t = deps({ runCommand: vi.fn(async () => ({ exitCode: null, timedOut: true, output: '', durationMs: 300_000 })) })

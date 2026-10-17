@@ -99,8 +99,9 @@ async function runCommandRoutine(r: Routine, deps: RoutineDeps): Promise<RunResu
   const result = describeOutcome(outcome)
   deps.patch(r.id, { lastRunAt: Date.now(), lastResult: result })
   if (outcome.timedOut || outcome.exitCode !== 0) {
-    const last = outcome.output.split('\n').pop() ?? ''
-    deps.notify('', `Routine "${r.name}" failed: ${result}`, last ? `${r.name} · ${last}` : r.name)
+    // The bell renders only the title, so the last output line goes there.
+    const last = (outcome.output.split('\n').pop() ?? '').slice(0, 160)
+    deps.notify('', `Routine "${r.name}" failed: ${result}${last ? ` — ${last}` : ''}`, r.name)
   }
   return { outcome }
 }
