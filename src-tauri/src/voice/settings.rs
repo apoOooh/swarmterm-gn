@@ -1,6 +1,7 @@
 //! Settings → Voice, persisted in the app data dir (tmp + rename like
 //! `mcp/toggle.rs`). Missing or unreadable file = defaults: endpoint on,
-//! auto-Enter off — dictation is a draft unless the user opts in.
+//! auto-Enter off — dictation is a draft unless the user opts in. Status
+//! announcements (SWA-41) are opt-in as well.
 
 use std::fs;
 use std::path::Path;
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct VoiceSettings {
     pub enabled: bool,
     pub allow_auto_enter: bool,
+    pub announce_turns: bool,
 }
 
 impl Default for VoiceSettings {
@@ -19,6 +21,7 @@ impl Default for VoiceSettings {
         Self {
             enabled: true,
             allow_auto_enter: false,
+            announce_turns: false,
         }
     }
 }
@@ -53,10 +56,17 @@ mod tests {
         let path = dir.path().join("voice-settings.json");
         assert_eq!(load(&path), VoiceSettings::default());
         assert!(!VoiceSettings::default().allow_auto_enter);
+        assert!(!VoiceSettings::default().announce_turns);
         let s = VoiceSettings {
             enabled: false,
             allow_auto_enter: true,
+            announce_turns: true,
         };
+        save(&path, &s).unwrap();
+        assert_eq!(load(&path), s);
+        // A file from before SWA-41 keeps its values; the new switch is off.
+        fs::write(&path, r#"{"enabled":false,"allowAutoEnter":true}"#).unwrap();
+        assert!(!load(&path).announce_turns && !load(&path).enabled);
         save(&path, &s).unwrap();
         assert_eq!(load(&path), s);
         fs::write(&path, "garbage").unwrap();

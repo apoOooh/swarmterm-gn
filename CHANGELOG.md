@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Voice: optional status announcements. With Settings → Voice → "Announce
+  finished agents" on, a dictation app can subscribe to "agent finished" and
+  "needs your input" for panes you are not watching. Only the status and the
+  pane title leave the app, never pane output. Off by default.
 - Docs: ADR 0001 (accepted) adopts a separate terminal host process so terminals
   can outlive quit and app updates (`docs/adr/`).
 
