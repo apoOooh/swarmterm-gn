@@ -26,6 +26,11 @@ export interface VoiceSettings {
   ttsVoice: string
   /** 0-100. */
   ttsVolume: number
+  /**
+   * SWA-58: read the agent's final answer from its transcript to offer a
+   * spoken excerpt on Ctrl+Shift+R. Off = no transcript is ever opened.
+   */
+  allowExcerpts: boolean
 }
 
 export interface TtsVoice {
@@ -111,6 +116,13 @@ export const voiceTtsStop = (terminalId?: string): Promise<void> =>
 
 /** Speak a sample sentence with the selected voice. Rejects when no voice is available. */
 export const voiceTtsTest = (): Promise<void> => invoke('voice_tts_test')
+
+/**
+ * Ctrl+Shift+R (SWA-58): Rust reads the excerpt of the last announced pane,
+ * else of `focused`, or says that there is none. Rejects with the reason.
+ */
+export const voiceReadExcerpt = (focused: string | null): Promise<void> =>
+  invoke('voice_read_excerpt', { focused })
 
 export const getTtsStatus = (): Promise<TtsStatus> => invoke('voice_tts_status')
 

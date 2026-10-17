@@ -170,6 +170,12 @@ export function VoicePanel(): ReactElement {
                 </label>
               </>
             )}
+            <ToggleRow
+              label="Allow excerpts"
+              description="Ctrl+Shift+R reads the first one or two sentences of the last announced agent's final answer. Swarmterm reads only that answer from the agent's own session file, keeps the excerpt in memory and never sends it anywhere. Code, paths and links are never spoken."
+              checked={settings.allowExcerpts}
+              onChange={(allowExcerpts) => update({ ...settings, allowExcerpts })}
+            />
           </div>
         </section>
       )}

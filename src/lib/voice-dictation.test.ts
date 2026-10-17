@@ -48,7 +48,7 @@ describe('builtinReady', () => {
     { id: 'base', label: 'Base', bytes: 1, ready: true, downloading: false },
     { id: 'small', label: 'Small', bytes: 1, ready: false, downloading: true }
   ]
-  const on = { enabled: true, allowAutoEnter: false, announceTurns: false, builtinEnabled: true, model: 'base', language: 'auto', speakTurns: false, ttsVoice: '', ttsVolume: 80 }
+  const on = { enabled: true, allowAutoEnter: false, announceTurns: false, builtinEnabled: true, model: 'base', language: 'auto', speakTurns: false, ttsVoice: '', ttsVolume: 80, allowExcerpts: false }
 
   it('needs Voice, the built-in switch and the selected model on disk', () => {
     expect(builtinReady(on, models)).toBe(true)
@@ -61,7 +61,7 @@ describe('builtinReady', () => {
 })
 
 describe('builtinSwitchedOn', () => {
-  const on = { enabled: true, allowAutoEnter: false, announceTurns: false, builtinEnabled: true, model: 'large', language: 'auto', speakTurns: false, ttsVoice: '', ttsVolume: 80 }
+  const on = { enabled: true, allowAutoEnter: false, announceTurns: false, builtinEnabled: true, model: 'large', language: 'auto', speakTurns: false, ttsVoice: '', ttsVolume: 80, allowExcerpts: false }
 
   it('ignores the model: the shortcut then explains what is missing', () => {
     expect(builtinSwitchedOn(on)).toBe(true)

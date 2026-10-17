@@ -297,6 +297,19 @@ While you speak, the target pane shows a **Listening…** pill. Its **Stop** but
 
 - An announcement stops as soon as you type, focus the pane it is about, start a dictation, or press **Ctrl+Shift+M**. Swarmterm never speaks while a dictation records or transcribes — so it never dictates its own voice — and what came in meanwhile is dropped, not read out later. Announcements older than ten seconds are dropped too; at most three wait in line, and a newer one for the same pane replaces the older.
 - When Swarmterm speaks, buzzkey's own announcement voice stays quiet for that event; buzzkey only fills in (if you enabled its fallback voice) when Swarmterm does not speak.
+- A Claude Code turn that ended in an API error is announced as "Backend: Fehler." ("Backend failed.") instead of "fertig".
+
+**Allow excerpts** (Settings → Voice, off by default): press **Ctrl+Shift+R** to hear the first one or two sentences of the final answer of the agent that was announced last — or, if none was, of the focused pane — as "Backend, Auszug: …". It is an excerpt, not a summary, and it is only ever read when you press the key. **Ctrl+Shift+M** or typing stops it. Without an excerpt Swarmterm says "Kein Auszug verfügbar." While the setting is off, both keys reach the pane as before. Excerpts currently work for Claude Code; Codex and OpenCode get the status only.
+
+#### What is read
+
+This is the contract for **Allow excerpts**:
+
+- **Read:** only with the setting on, only for a Claude Code turn Swarmterm saw start, and only the text of that turn's final answer. Swarmterm reads it from the agent's own session file (`projects/…/<session>.jsonl` in the pane's Claude config folder; the last 2 MiB of it, for at most 200 ms) and checks that it is exactly the answer Claude Code reported when it stopped.
+- **Never read:** tool output, thinking, your prompts, subagent conversations, other files, or any file outside the Claude config folder (links pointing out of it are refused).
+- **Never spoken:** code, tables, paths, file names, links, hashes and shell lines. A sentence containing one is skipped whole.
+- **Kept:** only the excerpt (at most 300 characters), in memory, for ten minutes or until the pane's next prompt, a restart, or switching the setting off. It is never written to disk or a log, never sent to buzzkey, the War Room or any agent. buzzkey can only ask Swarmterm to read it aloud.
+- **Nothing is read** when the setting is off, for panes that were already running when Swarmterm started (until their next prompt), when Claude Code continued after a Stop hook, or when the answer is not in the file in time. In those cases only the status is announced.
 
 **Settings → Voice** turns the endpoint on or off and can allow auto-Enter (off by default; never in plain shells, and only if you did not touch the prompt in the meantime). Only apps running as your Windows user can connect: Swarmterm opens a named pipe restricted to your account and writes its name and a fresh per-launch key to `%LOCALAPPDATA%\<app id>\voice-endpoint.json`.
 
@@ -479,6 +492,7 @@ the file editor owns the keyboard.
 | `⌘/Ctrl + Shift + Enter` | Maximize / restore the focused pane (also the header button or a double-click on the header). Hidden panes keep running; focusing one from the sidebar restores the layout. While maximized the pane header gets a violet bottom border, the restore button turns violet and shows how many panes are hidden (`+N`), and the sidebar marks the maximized row (violet edge and icon), dims the hidden rows (crossed-out eye; their status dots stay bright) and shows a *Maximized* badge on the Terminals heading |
 | `⌘/Ctrl + Shift + D` | Move the focused pane to the drawer (keeps running; click it in the sidebar to restore) |
 | `⌘/Ctrl + Shift + Space` | Start / stop a dictation with built-in speech recognition (only while it is enabled; without its model on disk the bell says so) |
+| `⌘/Ctrl + Shift + R` | Read the excerpt of the last announced agent's answer (only while **Allow excerpts** is on) |
 | `⌘/Ctrl + Shift + Backspace` | Clear the pending input line of the focused terminal (e.g. after a submit hook refused a prompt). Agents get one Ctrl+C, shells their line-kill; a second press within 2 s is ignored so an agent never quits |
 | `⌘/Ctrl + Shift + J` | Jump to the next pane needing attention (longest-waiting blocked → done → working → idle) |
 

@@ -24,3 +24,23 @@ export function createTtsStopper(stop: () => void, now: () => number = Date.now)
 export function newlyFocusedTerminal(prev: string | null | undefined, next: string | null | undefined): string | null {
   return next && next !== prev ? next : null
 }
+
+interface VoiceSwitches {
+  enabled: boolean
+  speakTurns: boolean
+  allowExcerpts: boolean
+}
+
+/**
+ * Ctrl+Shift+M is the app's only while something of ours can speak: the
+ * status voice OR an excerpt (SWA-58) — with only excerpts on, an excerpt
+ * must still be stoppable. Otherwise the key stays the pane's.
+ */
+export function claimsStopAnnouncement(s: VoiceSwitches | null | undefined): boolean {
+  return s != null && (s.speakTurns || s.allowExcerpts)
+}
+
+/** Ctrl+Shift+R: only while "Allow excerpts" is on (it shadows the pane). */
+export function claimsReadExcerpt(s: VoiceSwitches | null | undefined): boolean {
+  return s != null && s.enabled && s.allowExcerpts
+}

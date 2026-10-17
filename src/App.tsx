@@ -126,7 +126,8 @@ import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
 import { onAgentSession } from '@/tauri/sessions'
 import { wireSavedWorkspaces, flushSavedWorkspaces, useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
-import { stopAnnouncements, toggleDictation, wireVoice } from '@/lib/voice-wiring'
+import { readExcerpt, stopAnnouncements, toggleDictation, wireVoice } from '@/lib/voice-wiring'
+import { claimsReadExcerpt, claimsStopAnnouncement } from '@/lib/voice-tts'
 import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import { builtinSwitchedOn } from '@/lib/voice-dictation'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
@@ -556,11 +557,17 @@ export default function App(): ReactElement {
         return
       }
       if (action === 'stop-announcement') {
-        // Only claimed while Swarmterm speaks announcements; off, Ctrl+Shift+M
-        // stays the pane's.
-        if (!useVoiceDictationStore.getState().settings?.speakTurns) return
+        // Only claimed while Swarmterm can speak (status voice or excerpts);
+        // off, Ctrl+Shift+M stays the pane's.
+        if (!claimsStopAnnouncement(useVoiceDictationStore.getState().settings)) return
         e.preventDefault()
         stopAnnouncements()
+        return
+      }
+      if (action === 'read-excerpt') {
+        if (!claimsReadExcerpt(useVoiceDictationStore.getState().settings)) return
+        e.preventDefault()
+        readExcerpt()
         return
       }
       if (action === 'drawer-pane') {

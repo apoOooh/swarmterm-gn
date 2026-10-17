@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createTtsStopper, newlyFocusedTerminal, TTS_STOP_THROTTLE_MS } from './voice-tts'
+import { claimsReadExcerpt, claimsStopAnnouncement, createTtsStopper, newlyFocusedTerminal, TTS_STOP_THROTTLE_MS } from './voice-tts'
 
 describe('createTtsStopper', () => {
   it('stops on the first keystroke and throttles the rest', () => {
@@ -21,5 +21,29 @@ describe('newlyFocusedTerminal', () => {
     expect(newlyFocusedTerminal(null, 'a')).toBe('a')
     expect(newlyFocusedTerminal('a', 'a')).toBeNull()
     expect(newlyFocusedTerminal('a', null)).toBeNull()
+  })
+})
+
+describe('announcement shortcuts (SWA-58)', () => {
+  const s = (o: Partial<{ enabled: boolean; speakTurns: boolean; allowExcerpts: boolean }>) => ({
+    enabled: true,
+    speakTurns: false,
+    allowExcerpts: false,
+    ...o
+  })
+
+  it('claims the stop key while either the status voice or excerpts are on', () => {
+    expect(claimsStopAnnouncement(undefined)).toBe(false)
+    expect(claimsStopAnnouncement(s({}))).toBe(false)
+    expect(claimsStopAnnouncement(s({ speakTurns: true }))).toBe(true)
+    // Excerpts only, status voice off: an excerpt must still be stoppable.
+    expect(claimsStopAnnouncement(s({ allowExcerpts: true }))).toBe(true)
+  })
+
+  it('claims the read key only while excerpts are allowed and voice is on', () => {
+    expect(claimsReadExcerpt(undefined)).toBe(false)
+    expect(claimsReadExcerpt(s({ speakTurns: true }))).toBe(false)
+    expect(claimsReadExcerpt(s({ allowExcerpts: true }))).toBe(true)
+    expect(claimsReadExcerpt(s({ allowExcerpts: true, enabled: false }))).toBe(false)
   })
 })

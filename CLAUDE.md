@@ -311,8 +311,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   decides what qualifies — `notification-watch`'s `announce` feed, same
   still-current/unwatched rules as the bell — and calls `voice_turn_event`;
   Rust gates on `enabled && announceTurns`, numbers it (`seq`, no replay) and
-  fans it out. Status only: `excerpt` stays null until a completion adapter
-  exists (stage 2); the hook layer still never reads transcripts. Every pipe
+  fans it out. `excerpt` is always null (SWA-58: the text never leaves
+  Swarmterm, see below). Every pipe
   write has a 5 s deadline, so a client that stops reading is dropped.
   Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
   the pins lock): never call `voice::drop_terminal` while holding
@@ -360,8 +360,25 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   synchronous SAPI purge (~130 ms to silence). Renderer stops: typing via
   `setUserInputHandler` (registry `sendInput` only — dictation/War Room
   writes never trigger it), focus change, `stop-announcement` (Ctrl+Shift+M,
-  claimed only while `speakTurns` is on). Debug builds:
+  claimed while `speakTurns` or `allowExcerpts` is on). Debug builds:
   `SWARMTERM_TTS_FAKE=<file>` logs JSON lines instead of speaking (testlab 36).
+- **Spoken excerpts (SWA-58, `docs/adr/0004`).** Opt-in `allowExcerpts`;
+  off = no transcript is opened. The Claude hook CLI sends `prompt_id`, the
+  StopFailure edge and a length + SHA-256 fingerprint of
+  `last_assistant_message` — never content; `HookBody` rejects unknown
+  fields and `transcript_path` is ignored. `voice/completion/`'s `Ledger`
+  is the only thing that closes a turn (renderer status never does): Stop
+  counts only for the open `prompt_id` of the same spawn and session.
+  `reader.rs` locates `<config>/projects/*/<session>.jsonl` itself,
+  refuses reparse points and checks the handle's final path against the
+  root; `claude.rs` anchors on `promptId` and needs a byte-exact fingerprint
+  match, else no excerpt (never an older one). The excerpt lives only in
+  the ledger (RAM, 10 min). The pipe gets `completionId`/`hasExcerpt`
+  (`excerpt-read`) and `read_excerpt`; `error` turns and `turn_update`
+  only with `turn-kinds`, so old feeds see identical pushes. Never hold the
+  ledger lock together with `terminals`, pins or the TTS hub lock.
+  Ctrl+Shift+R (`voice_read_excerpt`) = last announced pane, else focused.
+  Codex/OpenCode: status only for now.
 - **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:
   `run_routine_command` (main webview only) runs ONE line via
   `cmd.exe /d /s /c` (`raw_arg`, CREATE_NO_WINDOW) in a kill-on-close job

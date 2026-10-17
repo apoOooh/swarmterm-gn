@@ -1,6 +1,6 @@
 import type { AppShortcutAction } from './keybindings'
 
-export type BuiltinActionId = AppShortcutAction | 'new-workspace' | 'open-settings' | 'split-horizontal' | 'split-vertical' | 'close-pane' | 'close-workspace' | 'next-workspace' | 'previous-workspace' | 'next-pane' | 'previous-pane' | 'tidy-layout' | 'select-all-broadcast' | 'clear-broadcast' | 'save-file' | 'cycle-markdown' | 'open-prompts' | 'open-routines' | 'dictate' | 'stop-announcement'
+export type BuiltinActionId = AppShortcutAction | 'new-workspace' | 'open-settings' | 'split-horizontal' | 'split-vertical' | 'close-pane' | 'close-workspace' | 'next-workspace' | 'previous-workspace' | 'next-pane' | 'previous-pane' | 'tidy-layout' | 'select-all-broadcast' | 'clear-broadcast' | 'save-file' | 'cycle-markdown' | 'open-prompts' | 'open-routines' | 'dictate' | 'stop-announcement' | 'read-excerpt'
 export interface AppAction { id: BuiltinActionId; label: string; group: string; defaultBinding?: string; macro?: boolean }
 /** The window handler and terminal gate resolve the same registry and overrides. */
 export const APP_ACTIONS: AppAction[] = [
@@ -31,6 +31,9 @@ export const APP_ACTIONS: AppAction[] = [
   // Built-in announcements (SWA-66). Claimed only while announcing is on;
   // otherwise the key reaches the pane untouched.
   { id: 'stop-announcement', label: 'Stop the spoken announcement', group: 'Terminal', defaultBinding: 'Mod+Shift+M' },
+  // SWA-58. Claimed only while "Allow excerpts" is on; then preventDefault
+  // also keeps WebView2 from treating Ctrl+Shift+R as a hard reload.
+  { id: 'read-excerpt', label: 'Read the excerpt of the last announced agent', group: 'Terminal', defaultBinding: 'Mod+Shift+R' },
   { id: 'toggle-broadcast', label: 'Toggle broadcast', group: 'Broadcast', defaultBinding: 'Mod+Shift+B', macro: true },
   { id: 'select-all-broadcast', label: 'Select all broadcast panes', group: 'Broadcast', macro: true },
   { id: 'clear-broadcast', label: 'Clear broadcast group', group: 'Broadcast', macro: true },
