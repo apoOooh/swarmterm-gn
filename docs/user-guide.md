@@ -320,6 +320,7 @@ Click into a pane and press **Ctrl+Shift+Space** (or the microphone in the pane 
 
 - **Real PTYs with 24-bit truecolor** — agent CLIs, emoji and box drawing render exactly as in your normal terminal, and IMEs (Vietnamese Telex, CJK) work without dropped characters.
 - `⌘/Ctrl + C` copies when text is selected and otherwise interrupts; `⌘/Ctrl + V` pastes — like VS Code.
+- `Shift + Enter` in an agent pane (Claude Code, Codex, OpenCode, …) starts a new line in the prompt instead of sending it; plain shells treat it as Enter.
 - **Paste a screenshot** into a Claude Code or Codex pane with `Ctrl + V`: when the clipboard holds an image and no text, Swarmterm saves it as a PNG under your temp folder (`%TEMP%\swarmterm-paste`, pruned after a day) and pastes its path, which the agent attaches as an image. Other panes paste text only.
 - **Programs can copy to your clipboard** — nvim `"+y`, tmux `set -s set-clipboard on`, yazi and `gh` copy through OSC 52, exactly as in VS Code's terminal. Only writes are honoured: a program can never read your clipboard.
 - **Click a URL** to open it in your browser; `⌘/Ctrl + click` a file path (`src/foo.ts:42:9`, `src/foo.ts(42,9)`, `File "x.py", line 42`) to open project files in the integrated editor at that line; the file is also selected in **Files**, with its folders expanded and the row scrolled into view. Hold `⌘/Ctrl` on a detected path and drag it onto another pane to insert it there (as a path, or an `@` mention in Claude Code). Paths outside the configured project retain the external-editor behavior.
