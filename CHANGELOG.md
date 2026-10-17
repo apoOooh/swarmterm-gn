@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- Voice: spoken replies for Claude Code (SWA-58). With Settings → Voice →
+  "Allow excerpts" on (off by default, needs "Speak announcements"), Claude
+  is asked to end each answer with a short `<voice>` line, and Swarmterm
+  says that line after the turn instead of "fertig" — also for the pane you
+  are looking at — else the first sentences of the answer, else the status.
+  Failed turns (StopFailure) and turns stopped with Esc are said in the same
+  conversational tone and shown in the bell. The text is read from the
+  agent's own session file, filtered, kept only in memory and never sent
+  anywhere; the voice pipe is unchanged. See
+  `docs/adr/0004-reading-agent-output.md`.
 - Voice: better built-in speech models and a suggestion per PC. Settings →
   Voice now offers quantised Small, Medium, Large v3 Turbo (q5/q8) and
   Large v3 models and recommends the best fit for this computer (CPU
