@@ -350,7 +350,7 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `ttsHandled` on the push is decided under the TtsHub lock and means
   "Swarmterm says it or drops it on purpose" — buzzkey's fallback voice only
   speaks `false`; never hand an event back. `ttsOwner` is UI info, the
-  `tts` capability is protocol support plus the `tts_stop` op (allowed on a
+  `tts` capability is protocol support plus the `tts_stop` op (answers on silence, allowed on a
   status feed; buzzkey's "quiet" hotkey). Half-duplex is polled, not
   timed: the worker checks begins-in-flight, `PinStore::any_live` and
   `speech::busy` and keeps `queue::TAIL` after; queued items are dropped,

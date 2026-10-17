@@ -422,8 +422,13 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
             if !conn.tts() {
                 return Response::err(Some(request_id), "bad-request");
             }
-            app.state::<tts::TtsHub>().stop(None);
-            Response::ok(Some(request_id))
+            // Answered on silence, like `begin`: buzzkey sends this right
+            // before it opens a mic for a dictation that has no Swarmterm pin.
+            if app.state::<tts::TtsHub>().quiesce(QUIESCE_TIMEOUT).await {
+                Response::ok(Some(request_id))
+            } else {
+                Response::err(Some(request_id), "tts-busy")
+            }
         }
         Request::Cancel { request_id, pin } => {
             let removed = hub.pins.lock().unwrap().remove(&pin);
