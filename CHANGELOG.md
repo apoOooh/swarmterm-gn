@@ -6,7 +6,7 @@
   a Whisper model (checksum-verified) and enables local dictation without
   buzzkey: Ctrl+Shift+Space or the pane-header microphone starts and stops,
   the text arrives as a draft in the pane that had the keyboard. Runs on the
-  CPU; see `docs/adr/0001-builtin-speech-source.md`.
+  CPU; see `docs/adr/0002-builtin-speech-source.md`.
 - Saved workspaces can open on startup (pin on the card, the navbar workspace menu or Settings →
   Workspaces → Open on startup, with order); Welcome is skipped while any is set.
   Startup workspaces are exempt from the 24-entry limit.

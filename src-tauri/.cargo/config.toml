@@ -1,4 +1,4 @@
-# whisper.cpp build flags for the built-in speech source (SWA-38, ADR 0001).
+# whisper.cpp build flags for the built-in speech source (SWA-38, ADR 0002).
 # whisper-rs-sys forwards every GGML_*/CMAKE_* variable to CMake.
 [env]
 # The cmake crate replaces CMAKE_<LANG>_FLAGS_RELEASE with cc's flags, which

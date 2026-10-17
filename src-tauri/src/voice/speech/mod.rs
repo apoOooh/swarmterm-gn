@@ -1,4 +1,4 @@
-//! Built-in speech source (SWA-38, docs/adr/0001-builtin-speech-source.md):
+//! Built-in speech source (SWA-38, docs/adr/0002-builtin-speech-source.md):
 //! microphone → whisper.cpp → the same `voice::handle` the buzzkey pipe uses.
 //!
 //! It is just another client of the source-independent layer. It registers

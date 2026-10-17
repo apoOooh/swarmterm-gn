@@ -57,7 +57,7 @@ tempfile = "3"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-# Built-in speech source (SWA-38, docs/adr/0001): whisper.cpp on the CPU and
+# Built-in speech source (SWA-38, docs/adr/0002): whisper.cpp on the CPU and
 # WASAPI capture. Windows-only like the voice pipe; no GPU backend so the CI
 # needs no Vulkan SDK.
 whisper-rs = "0.16"

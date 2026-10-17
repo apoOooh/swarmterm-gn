@@ -317,7 +317,7 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
   the pins lock): never call `voice::drop_terminal` while holding
   `terminals`.
-- **Built-in speech (SWA-38, `docs/adr/0001`).** `voice/speech/` records
+- **Built-in speech (SWA-38, `docs/adr/0002`).** `voice/speech/` records
   (cpal, own thread — dropping the stream frees the mic) and transcribes
   (whisper-rs, CPU, context cached per model) as an in-process client of
   `voice::handle`: `Conn::in_process` = registered connection with

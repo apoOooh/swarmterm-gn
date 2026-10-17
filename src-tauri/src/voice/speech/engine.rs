@@ -1,4 +1,4 @@
-//! whisper.cpp on the CPU (SWA-38, ADR 0001). The context (model weights) is
+//! whisper.cpp on the CPU (SWA-38, ADR 0002). The context (model weights) is
 //! loaded on first use and kept until the user picks another model — loading
 //! `base` takes about as long as transcribing a sentence, so reloading per
 //! dictation would double the wait. A fresh `WhisperState` per run keeps one

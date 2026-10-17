@@ -1,4 +1,4 @@
-# ADR 0001: Built-in speech source
+# ADR 0002: Built-in speech source
 
 - Status: accepted
 - Date: 2026-10-16
