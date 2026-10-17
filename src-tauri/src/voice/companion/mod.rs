@@ -9,6 +9,13 @@
 //! (`install`). A running buzzkey is asked to quit over the pipe first
 //! (capability `quit`); without that capability the user quits it from its
 //! tray. "Connected" and the version come from `hello` (`VoiceHub`).
+//!
+//! The one exception to "only on a click" is the update toast (renderer,
+//! `lib/buzzkey-update.ts`): it runs `voice_companion_check` at start and
+//! every 24 h, and with the opt-in "Update automatically" calls the same
+//! install with `unattended`. That path refuses while a dictation holds the
+//! microphone (`update_gate`), checked before anything is fetched and again
+//! right before buzzkey is asked to quit.
 
 mod install;
 pub mod release;
@@ -57,6 +64,10 @@ pub struct UpdateCheck {
     pub latest_tag: Option<String>,
     pub latest_version: Option<String>,
     pub update_available: bool,
+    /// What the running buzzkey reported in `hello`; `None` = unknown.
+    pub current_version: Option<String>,
+    /// The first number grows: the toast asks even with auto-update on.
+    pub major_jump: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,7 +204,7 @@ pub fn voice_companion_status(app: AppHandle) -> CompanionStatus {
     status(&app)
 }
 
-/// "Check for update" — only on click. Compares against the version the
+/// "Check for update" (click, or the update toast's schedule). Compares against the version the
 /// running buzzkey reported in `hello`; without one, any signed release
 /// counts as available (fresh install).
 #[tauri::command]
@@ -208,10 +219,16 @@ pub async fn voice_companion_check(app: AppHandle) -> Result<UpdateCheck, String
         (Some(_), None) => true,
         (None, _) => false,
     };
+    let major_jump = match (&latest, &current) {
+        (Some(l), Some(c)) => release::major_jump(&l.version, c),
+        _ => false,
+    };
     Ok(UpdateCheck {
         latest_tag: latest.as_ref().map(|r| r.tag.clone()),
         latest_version: latest.as_ref().map(|r| r.version.to_string()),
         update_available,
+        current_version: current.map(|c| c.to_string()),
+        major_jump,
     })
 }
 
@@ -222,15 +239,43 @@ impl Drop for BusyGuard<'_> {
     }
 }
 
+/// An automatic update must never cut into a dictation: quitting buzzkey
+/// mid-recording loses the audio. A click is the user's own call.
+fn update_gate(unattended: bool, dictating: bool) -> Result<(), &'static str> {
+    if unattended && dictating {
+        Err("dictating")
+    } else {
+        Ok(())
+    }
+}
+
+/// Anyone holding a dictation: a live pin (buzzkey or another client) or
+/// the built-in speech source.
+fn dictating(app: &AppHandle) -> bool {
+    let live = app
+        .state::<VoiceHub>()
+        .pins
+        .lock()
+        .unwrap()
+        .any_live(std::time::Instant::now());
+    live || super::speech::busy(app)
+}
+
 /// Install or update. Restarts buzzkey afterwards if it was running.
+/// `unattended` = the toast's auto-update, gated on no dictation.
 #[tauri::command]
-pub async fn voice_companion_install(app: AppHandle) -> Result<CompanionStatus, String> {
+pub async fn voice_companion_install(
+    app: AppHandle,
+    unattended: Option<bool>,
+) -> Result<CompanionStatus, String> {
+    let unattended = unattended.unwrap_or(false);
+    update_gate(unattended, dictating(&app))?;
     let companion = app.state::<Companion>();
     if companion.busy.swap(true, Ordering::Relaxed) {
         return Err("busy".into());
     }
     let _guard = BusyGuard(&companion.busy);
-    let result = install_inner(&app).await;
+    let result = install_inner(&app, unattended).await;
     emit_progress(
         &app,
         if result.is_ok() { "done" } else { "failed" },
@@ -241,7 +286,7 @@ pub async fn voice_companion_install(app: AppHandle) -> Result<CompanionStatus, 
     result.map(|()| status(&app))
 }
 
-async fn install_inner(app: &AppHandle) -> Result<(), String> {
+async fn install_inner(app: &AppHandle, unattended: bool) -> Result<(), String> {
     if !cfg!(windows) {
         return Err("unsupported".into());
     }
@@ -292,6 +337,8 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
         files.push((*name, bytes));
     }
 
+    // The download took a while; a dictation may have started meanwhile.
+    update_gate(unattended, dictating(app))?;
     let was_running = system::buzzkey_running();
     if was_running {
         quit_and_wait(app).await?;
@@ -357,4 +404,17 @@ pub fn voice_companion_set_autostart(app: AppHandle, on: bool) -> Result<Compani
 #[tauri::command]
 pub async fn voice_companion_probe() -> Option<HardwareProbe> {
     system::probe(&system::install_dir()?).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unattended_update_waits_for_a_dictation() {
+        assert_eq!(update_gate(true, true), Err("dictating"));
+        assert_eq!(update_gate(true, false), Ok(()));
+        // A click is the user's decision; the dictation check is for automation.
+        assert_eq!(update_gate(false, true), Ok(()));
+    }
 }

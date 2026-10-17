@@ -84,6 +84,7 @@ const ERRORS: Record<string, string> = {
   'quit-unsupported': 'This buzzkey cannot be stopped from here. Quit it from its tray icon.',
   'not-installed': 'buzzkey is not installed.',
   busy: 'An install is already running.',
+  dictating: 'A dictation is running. The update waits until it is done.',
   unsupported: 'Only available on Windows.'
 }
 

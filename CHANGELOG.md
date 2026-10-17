@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Voice: buzzkey update notice. With buzzkey installed and connected,
+  Swarmterm checks for a newer signed buzzkey release at start and every
+  24 h and offers "Update now" or "Later" (remembered until the next
+  version). Opt-in "Update buzzkey automatically" installs without asking,
+  never during a dictation and never across a major version without
+  asking once. Same signature-first install as before; buzzkey is quit
+  over the pipe, never killed.
 - Voice: better built-in speech models and a suggestion per PC. Settings →
   Voice now offers quantised Small, Medium, Large v3 Turbo (q5/q8) and
   Large v3 models and recommends the best fit for this computer (CPU
