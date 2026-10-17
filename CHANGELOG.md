@@ -4,6 +4,7 @@
 
 - Saved workspaces can open on startup (pin on the card or Settings →
   Workspaces → Open on startup, with order); Welcome is skipped while any is set.
+  Startup workspaces are exempt from the 24-entry limit.
 - Voice: optional status announcements. With Settings → Voice → "Announce
   finished agents" on, a dictation app can subscribe to "agent finished" and
   "needs your input" for panes you are not watching. Only the status and the
