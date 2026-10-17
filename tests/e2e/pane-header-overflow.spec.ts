@@ -91,6 +91,25 @@ test('keyboard: Enter on ⋯ moves focus into the row, Esc hands it back to ⋯'
   await expect(header.locator('[data-header-overflow]')).toHaveCSS('opacity', '0')
 })
 
+// Regression: Enter on ⋯ is a click, which also reaches App's window click
+// listener. Its deferred focus return (rAF + timeout) used to land after a
+// quick Esc and pull the keyboard from ⋯ into the terminal — flaky on slow CI
+// runners. Stretch the zero timeouts so the late return always loses the race.
+test('a late focus return after Enter on ⋯ does not steal the focus from ⋯', async ({ page }) => {
+  await squeezeLeft(page, 15)
+  await page.evaluate(() => {
+    const orig = window.setTimeout
+    ;(window as any).setTimeout = (fn: TimerHandler, ms?: number, ...a: unknown[]) => orig(fn, ms ? ms : 300, ...a)
+  })
+  const more = leftHeader(page).getByLabel('Show hidden controls')
+  await more.focus()
+  await page.keyboard.press('Enter')
+  await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[data-header-overflow]'))).toBe(true)
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(500)
+  await expect(more).toBeFocused()
+})
+
 test('a menu opened from the row keeps it up after the mouse leaves', async ({ page }) => {
   await squeezeLeft(page, 15)
   const header = leftHeader(page)

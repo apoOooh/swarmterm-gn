@@ -610,6 +610,10 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
     if (!next) setHover(false)
     setViaKeyboard(next && e.detail === 0)
     if (next && e.detail === 0) {
+      // The keyboard click would also reach App's window click listener, whose
+      // deferred focus return can land after a quick Esc handed the focus back
+      // to ⋯ — and pull it into the terminal. The panel owns the keyboard now.
+      e.stopPropagation()
       requestAnimationFrame(() => panelRef.current?.querySelector<HTMLElement>('button')?.focus())
     }
   }
