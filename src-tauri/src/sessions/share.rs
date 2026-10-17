@@ -352,10 +352,15 @@ fn unlink_profile_with(
             return Err(e);
         }
         if let Err(e) = swap(&staging, &own) {
-            // Restore the link; the staged copy is left for inspection.
+            // Restore the link. With the link back, the stage is only a
+            // duplicate of the shared store, so drop it (retries would pile
+            // up full copies); it is kept only when relinking fails too.
             let failed = format!("Cannot replace {}: {e}", own.display());
             return Err(match make(&own, &target) {
-                Ok(()) => failed,
+                Ok(()) => {
+                    let _ = fs::remove_dir_all(&staging);
+                    failed
+                }
                 Err(relink) => format!(
                     "{failed}; restoring the link also failed ({relink}), a full copy is in {}",
                     staging.display()
@@ -735,6 +740,10 @@ mod tests {
         assert!(err.contains("in use"), "{err}");
         assert!(links_to(&a.join("projects"), &shared.join("projects")));
         assert!(a.join("projects/p/one.jsonl").is_file());
+        assert!(!fs::read_dir(&a)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().contains(".unshare-")));
 
         let no_links: MakeLink = |_, _| Err("no links".into());
         let err = unlink_profile_with(&a, &shared, &backups, no_links, busy).unwrap_err();
