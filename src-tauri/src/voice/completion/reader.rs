@@ -133,11 +133,19 @@ fn open_checked(root: &Path, path: &Path) -> Result<std::fs::File, ReadError> {
         return Err(ReadError::Refused);
     }
     let final_path = PathBuf::from(std::ffi::OsString::from_wide(&buf[..n]));
-    let root = std::fs::canonicalize(root).map_err(|_| ReadError::Refused)?;
+    let root = allowed_root(root)?;
     if !within(&root, &final_path) {
         return Err(ReadError::Refused);
     }
     Ok(file)
+}
+
+/// The directory a transcript must resolve into: `<config>/projects`,
+/// canonical. A junction AT that folder is the user's own setup (several
+/// account profiles sharing one store) and is followed once; a reparse
+/// point on the file itself, or a link below it that leads elsewhere, is not.
+fn allowed_root(config: &Path) -> Result<PathBuf, ReadError> {
+    std::fs::canonicalize(config.join("projects")).map_err(|_| ReadError::Refused)
 }
 
 #[cfg(not(windows))]
@@ -147,7 +155,7 @@ fn open_checked(root: &Path, path: &Path) -> Result<std::fs::File, ReadError> {
         return Err(ReadError::Refused);
     }
     let real = std::fs::canonicalize(path).map_err(|_| ReadError::Refused)?;
-    let root = std::fs::canonicalize(root).map_err(|_| ReadError::Refused)?;
+    let root = allowed_root(root)?;
     if !within(&root, &real) {
         return Err(ReadError::Refused);
     }
@@ -300,6 +308,38 @@ mod tests {
         std::fs::write(outside.join(format!("{S}.jsonl")), transcript(Some("x"))).unwrap();
         junction::create(&outside, root.join("projects").join("p")).unwrap();
         let path = locate(&root, S).unwrap();
+        assert_eq!(read_tail(&root, &path), Err(ReadError::Refused));
+    }
+
+    /// Account profiles that share one store: `<config>/projects` itself is
+    /// a junction. That is followed; a junction below it that leads out of
+    /// the store still is not.
+    #[cfg(windows)]
+    #[test]
+    fn a_projects_folder_that_is_a_junction_is_followed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cfg");
+        let store = dir.path().join("store");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(store.join("p")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        junction::create(&store, root.join("projects")).unwrap();
+        std::fs::write(
+            store.join("p").join(format!("{S}.jsonl")),
+            transcript(Some("x")),
+        )
+        .unwrap();
+        let path = locate(&root, S).unwrap();
+        assert_eq!(read_tail(&root, &path), Ok(transcript(Some("x"))));
+        let other = "11111111-2222-3333-4444-555555555555";
+        std::fs::write(
+            outside.join(format!("{other}.jsonl")),
+            transcript(Some("y")),
+        )
+        .unwrap();
+        junction::create(&outside, store.join("q")).unwrap();
+        let path = locate(&root, other).unwrap();
         assert_eq!(read_tail(&root, &path), Err(ReadError::Refused));
     }
 
