@@ -1,4 +1,4 @@
-import { useRef, type ReactElement, type ReactNode } from 'react'
+import { createContext, useContext, useRef, type ReactElement, type ReactNode } from 'react'
 import { GripHorizontal } from 'lucide-react'
 import type { FloatRect } from '@/lib/floating-panes'
 import { useAppStore } from '@/store/app-store'
@@ -13,10 +13,14 @@ const GRIPS: { dir: string; className: string; x: 0 | 1; y: 0 | 1; w: -1 | 0 | 1
   { dir: 'sw', className: 'bottom-0 left-0 h-3 w-3 cursor-nesw-resize', x: 1, y: 0, w: -1, h: 1 }
 ]
 
+/** Starts a free move of the enclosing floating window (pane header drag). */
+const FloatMoveContext = createContext<((e: React.PointerEvent) => void) | null>(null)
+export const useFloatMove = (): ((e: React.PointerEvent) => void) | null => useContext(FloatMoveContext)
+
 /**
- * A floating window for one pane. The grip bar moves it freely; the pane's own
- * header keeps its dnd-kit drag, so dropping it on a docked pane's DockPicker
- * docks it there (store: dockPane/reorderPane unfloat the source). Geometry is
+ * A floating window for one pane. The grip bar and the pane's own header move
+ * it freely (the header drops its dnd-kit drag while floating, so no DockPicker
+ * shows); docking goes through the header's Dock button. Geometry is
  * in workspace fractions — the store clamps every write.
  */
 export function FloatingPane({ rect, label, children }: { rect: FloatRect; label: string; children: ReactNode }): ReactElement {
@@ -47,6 +51,8 @@ export function FloatingPane({ rect, label, children }: { rect: FloatRect; label
     setFloatRect(rect)
   }
 
+  const move = (e: React.PointerEvent): void => drag(e, (dx, dy) => ({ ...rect, x: rect.x + dx, y: rect.y + dy }))
+
   return (
     <div
       ref={frameRef}
@@ -64,11 +70,11 @@ export function FloatingPane({ rect, label, children }: { rect: FloatRect; label
         title={`Move ${label}`}
         aria-label="Move floating pane"
         className="flex h-3.5 shrink-0 cursor-move items-center justify-center bg-card text-muted-foreground hover:bg-ring/40"
-        onPointerDown={(e) => drag(e, (dx, dy) => ({ ...rect, x: rect.x + dx, y: rect.y + dy }))}
+        onPointerDown={move}
       >
         <GripHorizontal className="h-3 w-3" />
       </div>
-      <div className="min-h-0 flex-1">{children}</div>
+      <div className="min-h-0 flex-1"><FloatMoveContext.Provider value={move}>{children}</FloatMoveContext.Provider></div>
       {GRIPS.map((g) => (
         <div
           key={g.dir}

@@ -11,7 +11,8 @@
 - Docs: ADR 0001 (accepted) adopts a separate terminal host process so terminals
   can outlive quit and app updates (`docs/adr/`).
 - Floating panes: no longer move or resize when the sidebar or the right panel
-  is toggled, and can be dragged over both.
+  is toggled, can be dragged over both, and move freely by their header
+  (dock with the Dock button).
 
 ## [1.14.2] - 2026-10-16
 
