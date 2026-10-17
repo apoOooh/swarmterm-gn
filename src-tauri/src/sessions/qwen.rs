@@ -8,7 +8,7 @@
 //! carry one). Its display text lives in `systemPayload.displayText` (what
 //! qwen itself titles sessions with) or in `message.parts[].text`.
 
-use super::{clean_title, is_uuid, mtime_ms, read_head, SessionEntry};
+use super::{cached_head_title, clean_title, is_uuid, mtime_ms, SessionEntry};
 use serde_json::Value;
 use std::path::Path;
 
@@ -88,7 +88,7 @@ pub fn scan(projects_root: &Path, folder: &str) -> Vec<SessionEntry> {
         if !is_uuid(stem) {
             continue;
         }
-        let Some(title) = read_head(&path).as_deref().and_then(extract_title) else {
+        let Some(title) = cached_head_title(&path, extract_title) else {
             continue;
         };
         out.push(SessionEntry {

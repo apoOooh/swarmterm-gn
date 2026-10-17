@@ -322,6 +322,39 @@ export function tidyLayout(tree: LayoutNode, hiddenLeafIds: readonly string[] = 
   return walk(tree)
 }
 
+/**
+ * Even out one split, the one whose separator was double-clicked: its sides are
+ * sized by the units they span along its axis (as in `tidyLayout`), so every
+ * pane beside that separator ends up the same size. Nested splits keep their
+ * own sizes. Returns the input by reference when nothing changes (unknown id,
+ * a hidden side, or already even).
+ */
+export function equalizeSplit(
+  tree: LayoutNode,
+  splitId: string,
+  hiddenLeafIds: readonly string[] = []
+): LayoutNode {
+  const hidden = new Set(hiddenLeafIds)
+  const walk = (node: LayoutNode): LayoutNode => {
+    if (node.type === 'leaf') return node
+    if (node.id === splitId) {
+      const a = axisUnits(node.children[0], node.direction, hidden)
+      const b = axisUnits(node.children[1], node.direction, hidden)
+      if (a === 0 || b === 0) return node
+      const share = (a / (a + b)) * 100
+      if (Math.abs(share - node.sizes[0]) <= TIDY_EPSILON && Math.abs(100 - share - node.sizes[1]) <= TIDY_EPSILON) {
+        return node
+      }
+      return { ...node, sizes: [share, 100 - share] }
+    }
+    const left = walk(node.children[0])
+    const right = walk(node.children[1])
+    if (left === node.children[0] && right === node.children[1]) return node
+    return { ...node, children: [left, right] }
+  }
+  return walk(tree)
+}
+
 /** A terminal grid: `rows` stacked rows, each holding `cols` columns. */
 export interface GridShape {
   rows: number

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RotateCw } from 'lucide-react'
 import type { FileDocument } from '@/lib/files/documents'
 import { previewFrameUrl } from '@/lib/files/preview-kind'
@@ -19,15 +19,21 @@ const DEBOUNCE_MS = 300
 export function HtmlPreview({ doc }: { doc: FileDocument }): React.ReactElement {
   const [revision, setRevision] = useState(0)
   const [failed, setFailed] = useState<string | null>(null)
+  // Last draft upload still in flight: the clear on unmount must run after it,
+  // or a reordered upload could leave a stale draft registered.
+  const pending = useRef<Promise<unknown>>(Promise.resolve())
   useEffect(() => {
+    let alive = true
     const timer = setTimeout(() => {
-      setPreviewDraft(doc.context.id, doc.path, doc.dirty ? doc.content : null)
-        .then(() => { setFailed(null); setRevision((r) => r + 1) }, (e) => setFailed(String(e)))
+      pending.current = setPreviewDraft(doc.context.id, doc.path, doc.dirty ? doc.content : null)
+        .then(() => { if (alive) { setFailed(null); setRevision((r) => r + 1) } }, (e) => { if (alive) setFailed(String(e)) })
     }, DEBOUNCE_MS)
-    return () => clearTimeout(timer)
+    return () => { alive = false; clearTimeout(timer) }
   }, [doc.context.id, doc.path, doc.content, doc.dirty, doc.revision])
   // Drafts are memory-only; drop ours when the view goes away.
-  useEffect(() => () => { void setPreviewDraft(doc.context.id, doc.path, null).catch(() => {}) }, [doc.context.id, doc.path])
+  useEffect(() => () => {
+    void pending.current.then(() => setPreviewDraft(doc.context.id, doc.path, null)).catch(() => {})
+  }, [doc.context.id, doc.path])
   return <div className="flex h-full min-h-0 flex-col">
     <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1 text-[11px]">
       <span className="flex-1 text-muted-foreground">{doc.dirty ? 'Preview of unsaved changes' : 'Preview'} · scripts sandboxed</span>

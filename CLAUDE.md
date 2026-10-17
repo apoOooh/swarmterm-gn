@@ -31,6 +31,7 @@ Run from the repo root unless noted.
 |---|---|
 | `npm install` | Install JS dependencies. |
 | `npm run tauri dev` | Run the full app (Vite HMR frontend + Rust auto-rebuild). |
+| `npm run tauri:dev:isolated` | Same, as a **separate instance** (`com.apooooh.swarmterm.gn.dev`). Use this whenever Swarmterm is already running — see below. |
 | `npm test` | Run the JS/TS unit suite (Vitest, run-once). |
 | `npm run test:watch` | Vitest in watch mode. |
 | `npx tsc --noEmit` | Type-check the whole frontend (strict). |
@@ -39,6 +40,14 @@ Run from the repo root unless noted.
 | `npm run tauri build` | Production bundle (installer). |
 | `npm run tauri build -- --no-bundle` | Release binary, skip installer. |
 | `cargo test` *(from `src-tauri/`)* | Rust unit tests (pty/shell helpers). |
+
+**Running the app from inside Swarmterm.** Swarmterm is single-instance, keyed
+on its identifier: a second launch with the same identifier is handed to the
+running app and exits, so `npm run tauri dev` silently does nothing visible
+when you (or the agent's own pane) already run Swarmterm. Agents working in a
+Swarmterm pane must use `npm run tauri:dev:isolated`, which merges
+`src-tauri/tauri.dev-instance.conf.json` (own identifier, app-data dir and
+saved workspaces; the MCP server binds a free port anyway).
 
 **Before claiming done:** run `npm test`, `npx tsc --noEmit`, and — if you
 touched `src-tauri/` — `cargo test`. Don't assert success without the output.
@@ -114,6 +123,23 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
 - **Windows process-tree teardown.** Shells are captured in a kill-on-close **Job
   Object** so closing a pane/workspace kills children/grandchildren, not just the
   shell. See `pty.rs::job`.
+  Closing is graceful first (`ManagedTerminal::shutdown`): the pseudo console is
+  closed so agents get CTRL_CLOSE_EVENT and run their exit handlers, and the job
+  is terminated only after `KILL_GRACE` (3 s). A hard kill makes Claude Code
+  count a failed fullscreen start and disable fullscreen machine-wide. Note
+  `Exit` fires when the PTY closes, so a same-id respawn may briefly overlap the
+  old tree's clean exit.
+- **PTY I/O threads.** Input never blocks a command: each generation owns a
+  writer thread (`pty::PtyInput`) and `write_terminal(_checked)` only enqueue
+  under the `terminals` lock (FIFO = keystroke order; a respawn gets a new
+  queue). Queued bytes are capped at 8 MiB per pty, but an empty queue always
+  accepts one write (big paste into an idle pane); the writer drains in 64 KiB
+  slices. `write_terminal` returns `input-queue-full`, which the renderer
+  reports in the bell (`setInputDroppedHandler`, at most once per pane every
+  5 s). Shutdown drops the sender; a writer parked on a full pipe is released
+  by the master close. Output is a reader thread (UTF-8 split stays there)
+  feeding a flusher that coalesces bursts (`next_batch`, 4 ms / 64 KB; sent at
+  once after 16 ms quiet); all `Data` precedes `Exit`.
 - **UTF-8 chunk boundaries.** `take_valid_utf8` buffers a split trailing multibyte
   sequence across reads to avoid mojibake (emoji/box-drawing). Don't "simplify" it
   into a lossy decode.
@@ -205,7 +231,15 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `~/.claude/settings.json` (NOT `~/.claude.json`) and a foreign `statusLine` is
   never touched in either direction. On Windows the recorded path uses forward
   slashes: Claude Code runs the command through Git Bash, which eats
-  backslashes.
+  backslashes. **Dev builds defer** (`dev_defer.rs`): `settings.json` is shared
+  with the installed app, so a debug build leaves it alone — install AND
+  removal, default and account profiles — while one of our `--hook` /
+  `--statusline` commands runs a different binary that still exists.
+  Otherwise a `tauri dev` in a worktree repoints every Claude session at
+  `target/debug/swarmterm.exe`, and cleaning up the worktree breaks each hook
+  event. Entries pointing only at a dead binary are still overwritten (the
+  repair). Release builds
+  always reclaim their entries; Codex has a similar rule (`hook/codex.rs`, which skips whenever any entry of ours exists).
 - **Native preview webviews.** The preview column is a per-terminal native
   child webview (`preview.rs`, label `preview-<terminalId>`, Tauri `unstable`
   feature for `add_child`). Invariant: a preview webview is visible iff
@@ -233,6 +267,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   serializes structure only; `saved-workspace-sync` debounces meaningful changes
   and flushes on close/quit. Restore verifies directories and exact session ids,
   then allocates fresh runtime ids. Forget detaches a live instance from saving.
+  `autoOpen` (startup order) belongs to the stored entry: `upsertSaved` keeps it
+  across live snapshots; `openAutostart` runs once per process and hides Welcome meanwhile.
   Never persist prompts, terminal output, startup commands or unsaved buffers.
   `agent:session` hooks update `sessionId`, independently of `resumeSessionId`
   (changing startup options on capture would respawn a live PTY). Rust checks
@@ -252,8 +288,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   never a command. `begin` asks the renderer who owns the keyboard
   (`lib/voice-focus.ts`, 300 ms) and pins `{terminalId, spawn_id}`
   single-use; `insert` hands the text to the renderer, which writes ONLY via
-  `write_terminal_checked` (spawn_id checked under the `terminals` lock) and
-  reports the ACK back. Draft rules live in `lib/voice-insert.ts` /
+  `write_terminal_checked` (spawn_id check AND enqueue under the `terminals`
+  lock) and reports the ACK back — the ACK means queued for that generation,
+  not yet written to the pty. Draft rules live in `lib/voice-insert.ts` /
   `voice-delivery.ts`: sanitise before framing, plain shells flatten
   CR/LF/TAB, blocked panes refused, reset the IME segment THEN mark dirty,
   Enter is a separate delayed write re-checked against the typing stamp.
@@ -268,9 +305,115 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   client's clipboard fallback. Answers and pushes share a per-connection
   writer task — never write to the pipe from the reader. `apply()` only
   restarts the endpoint on an on/off switch.
+  SWA-41 status feed: capability `turns`, then `subscribe` turns that
+  connection into a push-only feed (only `ping` allowed after it, 90 s idle
+  timeout, client pings every 30 s; max 4 subscribers → `busy`). The renderer
+  decides what qualifies — `notification-watch`'s `announce` feed, same
+  still-current/unwatched rules as the bell — and calls `voice_turn_event`;
+  Rust gates on `enabled && announceTurns`, numbers it (`seq`, no replay) and
+  fans it out. `excerpt` is always null (SWA-58: the text never leaves
+  Swarmterm, see below). Every pipe
+  write has a 5 s deadline, so a client that stops reading is dropped.
   Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
   the pins lock): never call `voice::drop_terminal` while holding
   `terminals`.
+- **Voice companion (SWA-42).** `voice/companion/` installs buzzkey only on
+  click: newest signed `buzzkey-*` release (`release::select`), minisign
+  signature over `SHA256SUMS.txt` against the compiled-in key FIRST, then
+  hash + size per file, HTTPS host allowlist on every redirect hop, staged
+  per-file swap with rollback (`install.rs`). Release builds trust only the
+  buzzkey release key; debug builds also the testlab key (`trusted_keys`). Quit is the `quit`
+  capability: a push on buzzkey's live hello'd connections, never a kill.
+  Running = buzzkey's `buzzkey_SingleInstance` mutex; whisper-key blocks all
+  actions. Debug-only env overrides (`SWARMTERM_BUZZKEY_RELEASES_URL` with
+  loopback, `_DIR`, `_MUTEX`) exist for testlab scenario 34 — never honour
+  them in release builds. Only exception to "on click": the update toast
+  (`lib/buzzkey-update.ts`, store `buzzkey-update-store`) checks at start
+  + every 24 h for a connected buzzkey; "Later" stores the version, opt-in
+  auto-update calls `voice_companion_install(unattended)`, which Rust
+  refuses (`dictating`) while a pin is live or built-in speech is busy —
+  checked before the download and again before `quit`. Major jumps
+  (`release::major_jump`) always go through the toast.
+- **Built-in speech (SWA-38, `docs/adr/0002`).** `voice/speech/` records
+  (cpal, own thread — dropping the stream frees the mic) and transcribes
+  (whisper-rs, CPU, context cached per model) as an in-process client of
+  `voice::handle`: `Conn::in_process` = registered connection with
+  `indicator`, so pins, pill, draft rules and `cancelled` pushes are
+  buzzkey's. It never takes pins/`terminals` locks itself. One dictation at
+  a time (`active` spans begin → insert answer). Models: fixed catalog in
+  `speech/model.rs` (URL + SHA-256), `.part` file renamed only on a hash
+  match. Build: bindgen needs libclang (`LIBCLANG_PATH`; CI uses the
+  runner's LLVM — whisper-rs-sys's bundled bindings are Linux-only), and
+  `src-tauri/.cargo/config.toml` forces `-O2` (the cmake crate drops it for
+  MSVC → 7x slower) plus an AVX2 baseline. After changing those flags run
+  `cargo clean -p whisper-rs-sys` — its build script does not rerun on env
+  changes. Debug builds replay `SWARMTERM_DICTATION_WAV` instead of the mic
+  (testlab).
+- **Built-in announcements (SWA-66, `docs/adr/0003`).** `voice/tts/` speaks
+  turn facts with the system's SAPI voices (`ISpVoice`, COM on its own
+  worker thread). `voice_turn_event` builds ONE event; the local voice
+  (`speakTurns`) and the pipe feed (`announceTurns`) are independent gates.
+  `ttsHandled` on the push is decided under the TtsHub lock and means
+  "Swarmterm says it or drops it on purpose" — buzzkey's fallback voice only
+  speaks `false`; never hand an event back. `ttsOwner` is UI info, the
+  `tts` capability is protocol support plus the `tts_stop` op (answers on silence, allowed on a
+  status feed; buzzkey's "quiet" hotkey). Half-duplex is polled, not
+  timed: the worker checks begins-in-flight, `PinStore::any_live` and
+  `speech::busy` and keeps `queue::TAIL` after; queued items are dropped,
+  not replayed. `begin` holds `tts.begin_guard()` BEFORE its first await and
+  `quiesce`s (fails `tts-busy` rather than open a mic on our voice). Stops
+  bump `gen` under the hub lock; the utterance polls it every 20 ms, then a
+  synchronous SAPI purge (~130 ms to silence). Renderer stops: typing via
+  `setUserInputHandler` (registry `sendInput` only — dictation/War Room
+  writes never trigger it), focus change, `stop-announcement` (Ctrl+Shift+M,
+  claimed only while `speakTurns` is on). Debug builds:
+  `SWARMTERM_TTS_FAKE=<file>` logs JSON lines instead of speaking (testlab 36).
+- **Spoken replies (SWA-58, `docs/adr/0004`).** Opt-in `allowExcerpts`
+  (only with `speakTurns`); off = no transcript opened, no instruction
+  sent. The Claude hook CLI sends `prompt_id`, the StopFailure edge and a
+  length + SHA-256 fingerprint of `last_assistant_message` — never
+  content; `HookBody` rejects unknown fields, `transcript_path` is ignored.
+  On a prompt edge `/hook` may answer `{"voice":true}`: the CLI then prints
+  the fixed `VOICE_INSTRUCTION` as `additionalContext` (the only stdout it
+  ever writes). `voice/completion/`'s `Ledger` is the only thing that
+  closes a turn: Stop counts only for the open `prompt_id` of the same
+  spawn and session, and a Stop for an older prompt while another is open
+  is dropped whole in `/hook` (`stale_stop`: no `agent:hook` idle, so it
+  cannot end or announce the turn in progress); the renderer's status is matched once per turn
+  (`publish`). `reader.rs` locates `<config>/projects/*/<session>.jsonl`
+  itself, refuses reparse points, checks the final path against the root;
+  `claude.rs` anchors on `promptId` and needs a byte-exact fingerprint.
+  `speech_text.rs`: last `<voice>` block → excerpt filter, else quoted
+  prose, else status. Interrupted = idle with the turn still open AND the
+  Esc marker as last row. Replies, error and interrupted are spoken in
+  Rust (TtsHub, same queue/stops), also for watched panes
+  (`TurnInput.watched`, renderer `diffWatchedCompletions`), and never
+  reach the pipe: feeds see done/needs_input of unwatched panes only,
+  `excerpt` null, no new op or capability. Error/interrupted go to the bell
+  via `voice:turn-kind`. Never hold the ledger lock together with
+  `terminals`, pins or the TTS hub lock. Codex/OpenCode: status only.
+- **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:
+  `run_routine_command` (main webview only) runs ONE line via
+  `cmd.exe /d /s /c` (`raw_arg`, CREATE_NO_WINDOW) in a kill-on-close job
+  (`pty::job`), terminated after exit or the time limit so left-behind
+  children never keep the output pipes open. The scheduler keeps the routine
+  in `inFlight` until the line finishes — that is its overlap guard. Only
+  failures notify (a 15-minute refresh must not flood the bell); every
+  result lands in `lastResult`. Lines come only from the dialog: never add an
+  MCP tool or War Room path that creates or edits one.
+- **File watcher: one recursive watch per root (SWA-53).** `files/watch.rs`
+  watches the context root with `RecursiveMode::Recursive`, never one watch
+  per folder. On Windows every watch is an open directory handle, and Windows
+  refuses to rename/move a folder while a handle is open anywhere BELOW it
+  (WinError 5, FILE_SHARE_DELETE doesn't help) — per-folder watches locked
+  the whole workspace against git/npm/cargo/build-tool temp-dir renames and
+  held 100k+ handles. `ignored()` filters events by their PARENT instead of
+  pruning folders; git metadata watches and explicitly requested files pass
+  regardless. notify 8 drops a ReadDirectoryChangesW buffer overflow
+  silently, so a burst (`RESCAN_BURST` raw events) schedules one trailing
+  `rescan` change after `RESCAN_QUIET`; the explorer then reloads every
+  loaded folder and documents re-check disk. Only the root itself stays
+  non-renameable (user-guide Known limits).
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that

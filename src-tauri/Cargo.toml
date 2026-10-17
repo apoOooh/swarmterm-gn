@@ -1,6 +1,6 @@
 [package]
 name = "swarmterm"
-version = "1.11.0"
+version = "1.17.0"
 description = "One window for a whole swarm of AI coding agents — split terminals, per-agent git worktrees, live web previews, and a War Room where agents collaborate"
 authors = ["Duong Duc Nguyen"]
 license = "GPL-3.0-only"
@@ -53,10 +53,22 @@ notify = "8.2"
 clipboard-rs = { version = "0.3.5", default-features = false, features = ["image"] }
 dunce = "1"
 sha2 = "0.10"
+# Voice companion (SWA-42): both already in the tree via tauri-plugin-updater.
+minisign-verify = "0.2"
+semver = "1"
 tempfile = "3"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
+# Built-in speech source (SWA-38, docs/adr/0002): whisper.cpp on the CPU and
+# WASAPI capture. Windows-only like the voice pipe; no GPU backend so the CI
+# needs no Vulkan SDK.
+whisper-rs = "0.16"
+cpal = "0.18"
+# Built-in announcements (SWA-66, docs/adr/0003): the system's SAPI voices.
+# Same version tauri/wry already pull in, so this adds features, not a crate.
+windows = { version = "0.61", features = ["Win32_Media_Speech", "Win32_System_Com"] }
+junction = "1"
 # Job Objects so killing a terminal tears down the shell's whole process tree
 # (children/grandchildren) instead of just the shell itself.
 windows-sys = { version = "0.59", features = [
@@ -67,6 +79,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_JobObjects",
   "Win32_System_Registry",
+  "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_Storage_FileSystem",
 ] }

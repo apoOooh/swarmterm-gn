@@ -30,9 +30,61 @@ pub fn execute_refusal(peer_name: &str, state: Option<&str>) -> Option<String> {
     ))
 }
 
+/// Split the synthetic "messages were dropped" marker (seq 0, from the War
+/// Room itself — see `Room::drain_inbox`) out of a drained inbox. Left in
+/// `messages` it looks like a peer message an agent might try to answer; it
+/// is surfaced as `droppedNotice` and leads the `note` instead.
+pub fn split_dropped_marker(mut messages: Vec<RoomMessage>) -> (Vec<RoomMessage>, Option<String>) {
+    let notice = match messages.first() {
+        Some(m) if m.seq == 0 => Some(messages.remove(0).content),
+        _ => None,
+    };
+    (messages, notice)
+}
+
+pub fn read_inbox_note(has_messages: bool, dropped: Option<&str>) -> String {
+    let base = if has_messages {
+        "Reply with war_room.send — keep the conversation in the tools, not the terminal."
+    } else {
+        "No unread messages. If a sender reported delivery, an earlier read may have consumed it — call again with includeRead true."
+    };
+    match dropped {
+        Some(d) => format!("{d} (ask peers to resend if needed). {base}"),
+        None => base.into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn msg(seq: u64, content: &str) -> RoomMessage {
+        RoomMessage {
+            seq,
+            from_id: "x".into(),
+            from_name: "X".into(),
+            content: content.into(),
+            mode: crate::warroom::MessageMode::Probe,
+            ts: 0,
+        }
+    }
+
+    #[test]
+    fn dropped_marker_moves_into_the_note() {
+        let (messages, notice) = split_dropped_marker(vec![msg(0, "3 dropped"), msg(7, "hi")]);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].seq, 7);
+        assert_eq!(notice.as_deref(), Some("3 dropped"));
+        assert!(read_inbox_note(true, notice.as_deref()).starts_with("3 dropped"));
+    }
+
+    #[test]
+    fn inbox_without_marker_is_untouched() {
+        let (messages, notice) = split_dropped_marker(vec![msg(1, "a"), msg(2, "b")]);
+        assert_eq!(messages.len(), 2);
+        assert!(notice.is_none());
+        assert!(read_inbox_note(false, None).starts_with("No unread"));
+    }
 
     #[test]
     fn peer_entry_serializes_camelcase() {
@@ -138,7 +190,8 @@ pub struct WarRoomSendArgs {
     /// Target peer's terminalId (from war_room.list_peers). Omit to broadcast
     /// to every other member. Required when mode is "execute".
     pub to: Option<String>,
-    /// The message (probe) or the exact prompt to run in the peer's terminal (execute).
+    /// The message (probe) or the exact prompt to run in the peer's terminal
+    /// (execute). At most 65536 characters (64k); longer content is refused.
     pub content: String,
     /// "probe" (default): deliver to the peer's inbox; they read it with
     /// war_room.read_inbox. "execute": paste into the peer's terminal and run.
@@ -158,6 +211,9 @@ pub struct ReadInboxResult {
     /// Recently read messages (oldest first); only filled with includeRead.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub previously_read: Vec<RoomMessage>,
+    /// Set when older unread messages were evicted (inbox cap) before this read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dropped_notice: Option<String>,
     pub note: String,
 }
 
@@ -225,7 +281,7 @@ impl SwarmtermMcpServer {
 
     #[tool(
         name = "war_room.send",
-        description = "Send to War Room peers. mode \"probe\" (default): the content goes to the peer's inbox and they are nudged to read it — use for questions, debate, coordination. mode \"execute\": the content is pasted into the peer's terminal and run as their next prompt — use to hand over an agreed task. Omit \"to\" to broadcast a probe to all peers. An execute toward a peer that is blocked on a prompt is refused — war_room.wait_peer for idle/done first."
+        description = "Send to War Room peers. mode \"probe\" (default): the content goes to the peer's inbox and they are nudged to read it — use for questions, debate, coordination. mode \"execute\": the content is pasted into the peer's terminal and run as their next prompt — use to hand over an agreed task. Omit \"to\" to broadcast a probe to all peers. content is limited to 65536 characters (64k) — send a summary or a file path for anything longer. An execute toward a peer that is blocked on a prompt is refused — war_room.wait_peer for idle/done first."
     )]
     pub async fn war_room_send(
         &self,
@@ -353,16 +409,12 @@ impl SwarmtermMcpServer {
                 .app
                 .emit("warroom:event", &crate::warroom::scoped(&room_id, ev));
         }
-        let note = if messages.is_empty() {
-            "No unread messages. If a sender reported delivery, an earlier read may have consumed it — call again with includeRead true."
-                .into()
-        } else {
-            "Reply with war_room.send — keep the conversation in the tools, not the terminal."
-                .to_string()
-        };
+        let (messages, dropped_notice) = split_dropped_marker(messages);
+        let note = read_inbox_note(!messages.is_empty(), dropped_notice.as_deref());
         Ok(Json(ReadInboxResult {
             messages,
             previously_read,
+            dropped_notice,
             note,
         }))
     }

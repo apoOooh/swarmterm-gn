@@ -19,7 +19,7 @@
 use std::ffi::c_void;
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tokio::sync::{mpsc, watch};
@@ -33,6 +33,12 @@ const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// While a connection holds a dictation it may stay silent for the whole
 /// recording; the pin's own expiry (pushed as `expired`) ends it first.
 const HOLD_TIMEOUT: std::time::Duration = PIN_TTL.saturating_add(std::time::Duration::from_secs(5));
+/// A status subscriber (SWA-41) is silent by nature; it pings every 30 s, so
+/// this only ends feeds whose client is gone or hung.
+const SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+/// One line that cannot be written within this time means the client stopped
+/// reading; the connection is dropped instead of queueing pushes forever.
+const WRITE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub struct Running {
     stop: watch::Sender<bool>,
@@ -112,29 +118,93 @@ async fn accept_loop(
     sd: security::CurrentUserOnly,
     mut stop: watch::Receiver<bool>,
 ) {
+    // Per-connection errors (a client that connects and drops at once, a
+    // transient create failure) must not end dictation for the whole session:
+    // log, back off, rebuild the instance and keep accepting until `stop`.
+    let mut backoff = BACKOFF_MIN;
+    let mut health = PipeHealth::default();
     loop {
-        tokio::select! {
+        let connected = tokio::select! {
             _ = stop.changed() => return,
-            res = server.connect() => {
-                if let Err(e) = res {
-                    eprintln!("voice: connect: {e}");
-                    return;
-                }
-            }
-        }
+            res = server.connect() => res.map_err(|e| format!("connect: {e}")),
+        };
         // Open the next instance before serving this one, so a client never
         // finds the name missing between connections.
-        let next = match create(&name, false, &sd) {
-            Ok(next) => next,
-            Err(e) => {
-                eprintln!("voice: {e}");
-                return;
+        let next = create(&name, false, &sd);
+        let rebuilt = match (connected, next) {
+            (Ok(()), Ok(next)) => {
+                backoff = BACKOFF_MIN;
+                if health.connected() {
+                    let _ = app.emit("voice:pipe-recovered", ());
+                }
+                let conn = std::mem::replace(&mut server, next);
+                tauri::async_runtime::spawn(serve(app.clone(), token.clone(), conn, stop.clone()));
+                continue;
+            }
+            // The failed instance is discarded; the fresh one takes over.
+            (Err(e), Ok(next)) => {
+                pipe_error(&app, &e);
+                server = next;
+                true
+            }
+            // No replacement: keep the current instance and retry later.
+            (_, Err(e)) => {
+                pipe_error(&app, &e);
+                false
             }
         };
-        let conn = std::mem::replace(&mut server, next);
-        tauri::async_runtime::spawn(serve(app.clone(), token.clone(), conn, stop.clone()));
+        // Every failure passes through exactly one backoff sleep below, so
+        // the renderer sees at most one `voice:pipe-error` per cycle.
+        health.failed();
+        tokio::select! {
+            _ = stop.changed() => return,
+            _ = tokio::time::sleep(backoff) => {}
+        }
+        backoff = (backoff * 2).min(BACKOFF_MAX);
+        // A fresh instance is listening again: report recovery now rather
+        // than waiting for the next client to connect.
+        if health.after_backoff(rebuilt) {
+            let _ = app.emit("voice:pipe-recovered", ());
+        }
     }
 }
+
+/// Decides when `voice:pipe-recovered` fires: exactly once after a failure
+/// streak, as soon as a usable instance is listening again.
+#[derive(Default)]
+struct PipeHealth {
+    failing: bool,
+}
+
+impl PipeHealth {
+    fn failed(&mut self) {
+        self.failing = true;
+    }
+
+    /// After the backoff sleep; `rebuilt` = this cycle created a fresh
+    /// instance. True means "emit recovered".
+    fn after_backoff(&mut self, rebuilt: bool) -> bool {
+        rebuilt && std::mem::take(&mut self.failing)
+    }
+
+    /// A client connected and the next instance was created.
+    fn connected(&mut self) -> bool {
+        std::mem::take(&mut self.failing)
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PipeError<'a> {
+    message: &'a str,
+}
+
+fn pipe_error(app: &AppHandle, message: &str) {
+    eprintln!("voice: {message}");
+    let _ = app.emit("voice:pipe-error", PipeError { message });
+}
+
+const BACKOFF_MIN: std::time::Duration = std::time::Duration::from_millis(100);
+const BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(5);
 
 async fn serve(
     app: AppHandle,
@@ -198,7 +268,9 @@ async fn read_loop(
             let _ = tx.send(Outgoing::Line(Response::err(None, "too-large").to_line()));
             return;
         }
-        let idle = if app.state::<VoiceHub>().conn_has_pin(state.id) {
+        let idle = if state.subscribed {
+            SUBSCRIBE_TIMEOUT
+        } else if app.state::<VoiceHub>().conn_has_pin(state.id) {
             HOLD_TIMEOUT
         } else {
             IDLE_TIMEOUT
@@ -226,8 +298,9 @@ async fn write_loop(
     while let Some(out) = rx.recv().await {
         match out {
             Outgoing::Line(line) => {
-                if wr.write_all(line.as_bytes()).await.is_err() {
-                    break;
+                match tokio::time::timeout(WRITE_DEADLINE, wr.write_all(line.as_bytes())).await {
+                    Ok(Ok(())) => {}
+                    _ => break,
                 }
             }
             Outgoing::Close => break,
@@ -333,5 +406,44 @@ mod security {
             LocalFree(wide.cast());
             Ok(sid)
         }
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::PipeHealth;
+
+    #[test]
+    fn recovers_once_after_rebuild() {
+        let mut h = PipeHealth::default();
+        h.failed();
+        assert!(h.after_backoff(true));
+        // Already reported: neither a later rebuild nor a connect re-emits.
+        assert!(!h.after_backoff(true));
+        assert!(!h.connected());
+    }
+
+    #[test]
+    fn no_recovery_without_fresh_instance() {
+        let mut h = PipeHealth::default();
+        h.failed();
+        assert!(!h.after_backoff(false));
+        h.failed();
+        assert!(h.after_backoff(true));
+    }
+
+    #[test]
+    fn connect_after_failed_rebuild_recovers() {
+        let mut h = PipeHealth::default();
+        h.failed();
+        assert!(!h.after_backoff(false));
+        assert!(h.connected());
+    }
+
+    #[test]
+    fn healthy_pipe_never_emits() {
+        let mut h = PipeHealth::default();
+        assert!(!h.connected());
+        assert!(!h.after_backoff(true));
     }
 }

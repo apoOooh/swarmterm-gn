@@ -1,4 +1,5 @@
-import { useEffect, useRef, type ReactElement } from 'react'
+import { memo, useEffect, useRef, useState, type ReactElement } from 'react'
+import { createPortal } from 'react-dom'
 import { Group, Panel, Separator, type GroupImperativeHandle } from 'react-resizable-panels'
 import type { LayoutNode, LeafNode } from '@/lib/layout-tree'
 import { useAppStore, type Workspace as WorkspaceModel } from '@/store/app-store'
@@ -7,12 +8,12 @@ import { BroadcastBanner } from '@/components/Workspace/BroadcastBanner'
 import { SnapBar } from '@/components/Workspace/SnapBar'
 import { CornerHandles } from '@/components/Workspace/CornerHandles'
 import { FloatingPane } from '@/components/Workspace/FloatingPane'
-import { hiddenLeafIds } from '@/lib/floating-panes'
+import { FLOATING_LAYER_ID, hiddenLeafIds } from '@/lib/floating-panes'
 import { findLeaf } from '@/lib/layout-tree'
 import { AgentIcon } from '@/components/AgentIcon'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
-import { zoomedLeaf } from '@/lib/pane-zoom'
+import { zoomedLeaf, zoomHiddenCount } from '@/lib/pane-zoom'
 import { visibleLayout } from '@/lib/pane-drawer'
 import { splitsToRealign } from '@/lib/split-sync'
 import { Archive } from 'lucide-react'
@@ -21,11 +22,19 @@ interface WorkspaceProps {
   workspace: WorkspaceModel
 }
 
-/** Render one workspace: its binary split-tree of resizable terminal panes. */
-export function Workspace({ workspace }: WorkspaceProps): ReactElement {
+/** Render one workspace: its binary split-tree of resizable terminal panes.
+ * Memoized: workspace objects are immutable store values, so App re-rendering
+ * for a change in ONE workspace no longer re-renders every (hidden) other. */
+export const Workspace = memo(function Workspace({ workspace }: WorkspaceProps): ReactElement {
   const resizeSplitNode = useAppStore((s) => s.resizeSplitNode)
+  const equalizeSplitNode = useAppStore((s) => s.equalizeSplitNode)
   // Live Group handles so CornerHandles can move two splits in one drag.
   const groups = useRef(new Map<string, GroupImperativeHandle>())
+  const isActive = useAppStore((s) => s.activeWorkspaceId === workspace.id)
+  // Floating panes live in App's app-wide layer, not in this workspace's area,
+  // so collapsing either sidebar neither moves nor resizes them.
+  const [floatingHost, setFloatingHost] = useState<HTMLElement | null>(null)
+  useEffect(() => setFloatingHost(document.getElementById(FLOATING_LAYER_ID)), [])
 
   // Groups are uncontrolled: `sizes` only seeds a Group when it mounts. Tidy
   // rewrites the sizes of splits that stay mounted, so push the stored sizes
@@ -69,6 +78,9 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
           }
           worktreeMode={workspace.worktreeMode}
           isZoomed={workspace.zoomedLeafId === node.id}
+          zoomHiddenCount={workspace.zoomedLeafId === node.id
+            ? zoomHiddenCount(workspace.layout, node.id, workspace.drawerLeafIds ?? [])
+            : 0}
           isFloating={isFloating}
         />
     )
@@ -101,6 +113,11 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
           {renderNode(node.children[0])}
         </Panel>
         <Separator
+          title="Double-click to even out"
+          // Our own reset replaces the library one (which only targets a
+          // Panel defaultSize, and we have none).
+          disableDoubleClick
+          onDoubleClick={() => equalizeSplitNode(node.id)}
           className={cn(
             'shrink-0 bg-canvas transition-colors hover:bg-ring data-[separator]:bg-canvas',
             node.direction === 'horizontal' ? 'w-2 cursor-col-resize' : 'h-2 cursor-row-resize'
@@ -132,24 +149,23 @@ export function Workspace({ workspace }: WorkspaceProps): ReactElement {
           ? renderNode(zoomed ?? visible)
           : drawerCount > 0 && <EmptyDrawerState count={drawerCount} />}
         {visible && !zoomed && <CornerHandles layout={visible} groups={groups} inset={8} />}
-        {!zoomed && (
-          <div className="pointer-events-none absolute inset-2 z-30 [&>*]:pointer-events-auto">
-            {floating.map((rect) => {
-              const leaf = findLeaf(workspace.layout, rect.leafId)
-              if (!leaf) return null
-              return (
-                <FloatingPane key={rect.leafId} rect={rect} label={templateById(leaf.agentId ?? DEFAULT_TEMPLATE_ID).name}>
-                  {renderLeaf(leaf, true)}
-                </FloatingPane>
-              )
-            })}
-          </div>
+        {!zoomed && isActive && floatingHost && createPortal(
+          floating.map((rect) => {
+            const leaf = findLeaf(workspace.layout, rect.leafId)
+            if (!leaf) return null
+            return (
+              <FloatingPane key={rect.leafId} rect={rect} label={templateById(leaf.agentId ?? DEFAULT_TEMPLATE_ID).name}>
+                {renderLeaf(leaf, true)}
+              </FloatingPane>
+            )
+          }),
+          floatingHost
         )}
         <SnapBar layout={workspace.layout} drawerLeafIds={workspace.drawerLeafIds ?? []} />
       </div>
     </div>
   )
-}
+})
 
 /** Shown when every pane of the workspace sits in the drawer. */
 function EmptyDrawerState({ count }: { count: number }): ReactElement {

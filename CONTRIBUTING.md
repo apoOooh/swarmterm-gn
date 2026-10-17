@@ -11,6 +11,7 @@ The GN fork supports Windows x64. Install the prerequisites from the
 ```bash
 npm install
 npm run tauri dev   # full app: Vite HMR frontend + auto-rebuilding Rust backend
+npm run tauri:dev:isolated   # same, as a separate instance — use when Swarmterm is already running
 ```
 
 [`CLAUDE.md`](CLAUDE.md) is the architecture guide — the renderer/backend

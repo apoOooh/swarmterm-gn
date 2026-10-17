@@ -18,6 +18,11 @@ export type CenterKind =
   | 'prompt'
   | 'routine'
   | 'dictation'
+  /** Backend service failure (MCP server, voice pipe); not tied to a pane. */
+  | 'backend'
+  /** SWA-58: a Claude turn ended in an API error / was stopped with Esc. */
+  | 'error'
+  | 'interrupted'
 
 export interface NewCenterEntry {
   kind: CenterKind

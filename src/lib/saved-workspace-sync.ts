@@ -17,10 +17,25 @@ export function startSavedWorkspaceSync({ app, shell, save }: SyncDependencies) 
     pending.clear()
     save(entries)
   }
-  const snapshot = () => new Map(app.getState().workspaces.flatMap(ws => {
-    const saved = toSaved(ws, shell(), 0)
-    return saved ? [[saved.id, saved] as const] : []
-  }))
+  // Workspaces are immutable store objects: an unchanged object with the same
+  // shell yields the same snapshot, so its toSaved + JSON are reused instead of
+  // re-walking and re-serializing every layout on every store tick.
+  const cache = new WeakMap<object, { shell: ShellId; saved: SavedWorkspace | undefined; json: string }>()
+  const json = new WeakMap<SavedWorkspace, string>()
+  const snapshot = () => {
+    const sh = shell()
+    return new Map(app.getState().workspaces.flatMap(ws => {
+      let hit = cache.get(ws)
+      if (!hit || hit.shell !== sh) {
+        const saved = toSaved(ws, sh, 0)
+        hit = { shell: sh, saved, json: saved ? JSON.stringify(saved) : '' }
+        cache.set(ws, hit)
+        if (saved) json.set(saved, hit.json)
+      }
+      return hit.saved ? [[hit.saved.id, hit.saved] as const] : []
+    }))
+  }
+  const serialized = (saved: SavedWorkspace | undefined) => saved === undefined ? undefined : json.get(saved) ?? JSON.stringify(saved)
   let previous = new Map<string, SavedWorkspace>()
   const update = () => {
     let changed = false
@@ -36,8 +51,8 @@ export function startSavedWorkspaceSync({ app, shell, save }: SyncDependencies) 
       else { pending.set(id, pending.get(id) ?? { ...old, updatedAt: Date.now() }); flush() }
     }
     for (const [id, next] of current) {
-      if (JSON.stringify(next) !== JSON.stringify(previous.get(id))) {
-        const old = previous.get(id)
+      const old = previous.get(id)
+      if (next !== old && serialized(next) !== serialized(old)) {
         closedPane ||= !!old && savedLeaves(next.layout).length < savedLeaves(old.layout).length
         pending.set(id, { ...next, updatedAt: Date.now() }); changed = true
       }
@@ -49,6 +64,14 @@ export function startSavedWorkspaceSync({ app, shell, save }: SyncDependencies) 
   }
   let owners = new Map<string, string>()
   update()
-  const unsubscribe = app.subscribe(update)
+  // Only a new workspaces array (or shell) can change a snapshot; focus, drop
+  // target and other ticks are skipped. `refresh` stays a full rebuild.
+  let lastShell = shell()
+  const unsubscribe = app.subscribe((state, prev) => {
+    const sh = shell()
+    if (state.workspaces === prev.workspaces && sh === lastShell) return
+    lastShell = sh
+    update()
+  })
   return { flush, refresh: update, dispose: () => { unsubscribe(); flush() } }
 }

@@ -4,6 +4,7 @@ import { useModalFocus } from '@/components/ui/use-modal-focus'
 import { threadItems, threadTime } from '@/lib/thread-view'
 import { readAgentThread, type AgentThread } from '@/tauri/sessions'
 import { cn } from '@/lib/utils'
+import { latestRequest } from '@/lib/listener-cleanup'
 
 interface ThreadDialogProps {
   open: boolean
@@ -31,17 +32,26 @@ export function ThreadDialog(props: ThreadDialogProps): React.ReactElement | nul
   const list = useRef<HTMLDivElement>(null)
   const root = useModalFocus(open, onClose, terminalId)
 
+  // Only the newest read may land: a slow response for a previous session (or
+  // one arriving after close/unmount) must not overwrite the current view.
+  const requests = useRef(latestRequest())
+  useEffect(() => () => requests.current.dispose(), [])
+
   const load = useCallback(() => {
     if (!sessionId) return
+    const current = requests.current.begin()
     setLoading(true)
     readAgentThread(agentId, sessionId, accountId)
-      .then(setThread)
-      .catch(() => setThread({ found: false, truncated: false, messages: [] }))
-      .finally(() => setLoading(false))
+      .then((t) => { if (current()) setThread(t) })
+      .catch(() => { if (current()) setThread({ found: false, truncated: false, messages: [] }) })
+      .finally(() => { if (current()) setLoading(false) })
   }, [agentId, accountId, sessionId])
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      requests.current.dispose()
+      return
+    }
     setThread(undefined)
     load()
   }, [open, load])

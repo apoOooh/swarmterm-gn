@@ -340,3 +340,44 @@ describe('startNotificationWatch → notification center feed', () => {
     expect(record.mock.calls[0][0]).toMatchObject({ kind: 'command', terminalId: 'sh1' })
   })
 })
+
+describe('startNotificationWatch → voice announcements (SWA-41)', () => {
+  let h: Harness
+  beforeEach(() => { h = harness() })
+
+  it('announces a still-current agent fact on an unwatched pane, prefs or not', () => {
+    const announce = vi.fn()
+    h.prefs.sound = false
+    h.prefs.system = false
+    startNotificationWatch({ ...h.deps, announce })
+    h.emit({ t1: s('blocked'), cx1: s('idle', false) }, { t1: s('working'), cx1: s('working') })
+    h.fireTimers()
+    expect(announce).toHaveBeenCalledTimes(2)
+    expect(announce).toHaveBeenCalledWith({ terminalId: 't1', kind: 'attention', agentId: 'claude-code', watched: false })
+    expect(announce).toHaveBeenCalledWith({ terminalId: 'cx1', kind: 'completion', agentId: 'codex', watched: false })
+  })
+
+  it('stays silent for resolved facts and plain commands', () => {
+    const announce = vi.fn()
+    startNotificationWatch({ ...h.deps, announce })
+    h.emit({ t1: s('blocked') }, { t1: s('working') })
+    h.states.current = { t1: s('working') }
+    h.fireTimers()
+    h.emitCommands({ sh1: cmd('prompt', fin(60_000)) }, { sh1: cmd('running') })
+    h.fireTimers()
+    expect(announce).not.toHaveBeenCalled()
+  })
+
+  // SWA-58: a watched pane is still announced, flagged — Rust speaks only the
+  // agent's reply for it (opt-in), never a bare "done", and never pushes it.
+  it('flags watched panes instead of dropping them, even once seen', () => {
+    const announce = vi.fn()
+    const record = vi.fn()
+    startNotificationWatch({ ...h.deps, announce, record })
+    h.emit({ t2: s('idle', true) }, { t2: s('working') })
+    h.focus.watchedId = 't2'
+    h.fireTimers()
+    expect(announce).toHaveBeenCalledWith({ terminalId: 't2', kind: 'completion', agentId: 'claude-code', watched: true })
+    expect(record).not.toHaveBeenCalled()
+  })
+})

@@ -72,6 +72,8 @@ import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import type { BufferView } from '@/lib/agent-state/snapshot'
 import type { AgentHookSignal } from '@/tauri/agent-state'
+import { createFrameBatch } from '@/lib/frame-batch'
+import { agentNewlineFor } from '@/lib/agent-newline'
 
 export type { TerminalStatus }
 
@@ -186,6 +188,17 @@ interface Entry {
 /** Live terminals keyed by terminalId, owned outside React's render tree. */
 const entries = new Map<string, Entry>()
 
+let userInput: (() => void) | undefined
+
+/**
+ * Register who hears about genuine user input (SWA-66: typing silences the
+ * announcement voice). Called from `sendInput` only, so programmatic writes —
+ * dictation drafts, War Room deliveries — never trigger it.
+ */
+export function setUserInputHandler(handler: (() => void) | undefined): void {
+  userInput = handler
+}
+
 // Fetched once; terminals created before it resolves start with the
 // build-less ConPTY option and get upgraded in place.
 let windowsBuild: number | null = null
@@ -195,7 +208,8 @@ if (isWindowsPlatform()) {
       windowsBuild = build
       for (const entry of entries.values()) entry.term.options.windowsPty = windowsPtyOption(true, build)
     })
-    .catch(() => {})
+    // Terminals keep the build-less ConPTY option; say so instead of failing silently.
+    .catch((e) => console.warn('terminal-registry: Windows build number unavailable, using build-less ConPTY option:', e))
 }
 
 function recordExit(id: string, exitCode: number): void {
@@ -270,6 +284,13 @@ function safeFit(entry: Entry): boolean {
     return false
   }
 }
+
+// Observer-driven refits run once per frame across all terminals (see
+// frame-batch.ts). Attach keeps its synchronous fit + flush: the pty must be at
+// the attached size before the session starts.
+const refitBatch = createFrameBatch<Entry>((entry) => {
+  if (entry.observer !== undefined) refitEntry(entry)
+})
 
 /** Re-fit one terminal and push the new size to its pty only when it changed. */
 function refitEntry(entry: Entry): void {
@@ -523,6 +544,7 @@ function getOrCreate(id: string): Entry {
       useTerminalTypingStore.getState().noteInput(target, data)
       void writeTerminal(target, data)
     }
+    userInput?.()
   }
   term.onData(sendInput)
 
@@ -955,6 +977,19 @@ function getOrCreate(id: string): Entry {
     // this layer's one and only writer for these corrections.
     if (event.type === 'keypress' && ownsMultiCharKey(event)) return false
 
+    // Shift+Enter in an agent pane: a line break in the prompt, not a submit
+    // (see agent-newline.ts). Sent through `sendInput` so broadcast and the
+    // War Room typing signal see it like any keystroke; the keypress stage is
+    // swallowed too so `_keyPress` cannot add its own `\r`.
+    const newline = agentNewlineFor(event, entries.get(id)?.config.agentId)
+    if (newline !== null) {
+      if (event.type === 'keydown') {
+        event.preventDefault()
+        sendInput(newline)
+      }
+      return false
+    }
+
     const action = decideClipboardAction(event, { hasSelection: term.hasSelection(), isMac })
     if (action === 'copy') {
       event.preventDefault()
@@ -1108,7 +1143,7 @@ function finishTerminalAttach(entry: Entry, container: HTMLElement): void {
 
   entry.observer?.disconnect()
   entry.observer = new ResizeObserver(() => {
-    refitEntry(entry)
+    refitBatch.schedule(entry)
   })
   entry.observer.observe(container)
 
@@ -1122,6 +1157,7 @@ export function detachTerminal(id: string): void {
   if (!entry) return
   entry.observer?.disconnect()
   entry.observer = undefined
+  refitBatch.cancel(entry)
   entry.ptyResize.cancel()
   entry.host.remove()
 }
@@ -1134,6 +1170,8 @@ export function disposeTerminal(id: string): void {
   const entry = entries.get(id)
   if (!entry) return
   entry.observer?.disconnect()
+  entry.observer = undefined
+  refitBatch.cancel(entry)
   entry.ptyResize.cancel()
   entry.session.dispose()
   entry.term.dispose()

@@ -16,7 +16,8 @@ import {
   paneLayoutFor,
   layoutSummary,
   moveLeafBeside,
-  tidyLayout
+  tidyLayout,
+  equalizeSplit
 } from './layout-tree'
 
 // --- helpers ---------------------------------------------------------------
@@ -690,5 +691,43 @@ describe('tidyLayout', () => {
       const t = split('S1', 'horizontal', [leaf('A'), leaf('B')], [30, 70])
       expect(tidyLayout(t, ['A', 'B'])).toBe(t)
     })
+  })
+})
+
+describe('equalizeSplit', () => {
+  it('evens out two panes', () => {
+    const out = equalizeSplit(split('S', 'horizontal', [leaf('A'), leaf('B')], [30, 70]), 'S') as SplitNode
+    expect(out.sizes).toEqual([50, 50])
+  })
+
+  it('sizes by panes along its axis: [A | [B | C]] gives A a third', () => {
+    const t = split('S1', 'horizontal', [leaf('A'), split('S2', 'horizontal', [leaf('B'), leaf('C')], [20, 80])], [50, 50])
+    const out = equalizeSplit(t, 'S1')
+    expect(splitById(out, 'S1').sizes[0]).toBeCloseTo(100 / 3, 6)
+    // Only the double-clicked split changes.
+    expect(splitById(out, 'S2').sizes).toEqual([20, 80])
+  })
+
+  it('counts a perpendicular subtree as one unit', () => {
+    const t = split('S1', 'horizontal', [leaf('A'), split('S2', 'vertical', [leaf('B'), leaf('C')], [80, 20])], [30, 70])
+    const out = equalizeSplit(t, 'S1')
+    expect(splitById(out, 'S1').sizes).toEqual([50, 50])
+    expect(splitById(out, 'S2').sizes).toEqual([80, 20])
+  })
+
+  it('evens out a nested split by id', () => {
+    const out = equalizeSplit(nestedTree(), 'S2')
+    expect(splitById(out, 'S2').sizes).toEqual([50, 50])
+  })
+
+  it('ignores hidden panes', () => {
+    const t = split('S1', 'horizontal', [leaf('A'), split('S2', 'horizontal', [leaf('B'), leaf('C')])], [30, 70])
+    expect(splitById(equalizeSplit(t, 'S1', ['C']), 'S1').sizes).toEqual([50, 50])
+  })
+
+  it('returns the input for an unknown id or an already even split', () => {
+    const t = nestedTree()
+    expect(equalizeSplit(t, 'nope')).toBe(t)
+    expect(equalizeSplit(t, 'S1')).toBe(t)
   })
 })

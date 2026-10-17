@@ -2,7 +2,9 @@ import {
   coalesceNotifications,
   diffAgentStates,
   diffCommands,
+  diffWatchedCompletions,
   isStillCurrent,
+  isStillHeld,
   notificationCopy,
   resolveFire,
   type FiredNotification,
@@ -43,6 +45,13 @@ export interface NotificationWatchDeps {
   sendSystemNotification: (opts: { title: string; body: string }) => void
   /** Notification-center feed: every still-current fact on an unwatched pane, regardless of prefs. */
   record?: (entry: { kind: NotificationKind; terminalId: string; title: string; detail: string; at: number }) => void
+  /**
+   * Voice backchannel feed (SWA-41): same facts as `record`, agent panes only.
+   * Prefs-free on purpose — muting chimes must not mute the spoken status.
+   * SWA-58: watched panes come too, flagged `watched` (Rust then speaks only
+   * the agent's own reply, opt-in, and never pushes them to a client).
+   */
+  announce?: (entry: { terminalId: string; kind: NotificationKind; agentId: string; watched: boolean }) => void
   setTimer: (fn: () => void, ms: number) => unknown
   clearTimer: (handle: unknown) => void
   now: () => number
@@ -111,6 +120,18 @@ export function startNotificationWatch(deps: NotificationWatchDeps): () => void 
         )
         deps.record({ kind: pending.kind, terminalId: pending.terminalId, title, detail: paneTitle, at: now })
       }
+      if (
+        deps.announce !== undefined &&
+        pending.kind !== 'command' &&
+        (ctx.paneWatched ? isStillHeld(pending, ctx) : isStillCurrent(pending, ctx))
+      ) {
+        deps.announce({
+          terminalId: pending.terminalId,
+          kind: pending.kind,
+          agentId: pending.agentId,
+          watched: ctx.paneWatched
+        })
+      }
       const verdict = resolveFire(pending, ctx)
       return verdict.sound || verdict.system ? [{ pending, verdict }] : []
     })
@@ -152,11 +173,30 @@ export function startNotificationWatch(deps: NotificationWatchDeps): () => void 
     })
   }
 
+  // SWA-58: a completion the user watched never reaches `armed` (it is seen
+  // at once). It still goes to the voice, flagged, after the same delay — the
+  // Stop hook has landed by then — and only if the pane is still idle and
+  // still watched. No bell, no record: the user saw it.
+  const watchedTimers = new Map<string, unknown>()
+  const armWatched = (terminalId: string): void => {
+    const agentId = deps.getAgentId(terminalId)
+    if (deps.announce === undefined || agentId === undefined) return
+    const prevTimer = watchedTimers.get(terminalId)
+    if (prevTimer !== undefined) deps.clearTimer(prevTimer)
+    watchedTimers.set(terminalId, deps.setTimer(() => {
+      watchedTimers.delete(terminalId)
+      const pending: PendingNotification = { terminalId, kind: 'completion', agentId }
+      if (!deps.isPaneWatched(terminalId) || !isStillHeld(pending, { current: deps.getAgentStates()[terminalId] })) return
+      deps.announce?.({ terminalId, kind: 'completion', agentId, watched: true })
+    }, NOTIFY_DELAY_MS))
+  }
+
   const unsubscribe = deps.subscribeAgentStates((next, prev) => {
     for (const t of diffAgentStates(prev, next)) {
       if (t.kind === 'removed') cancel(t.terminalId)
       else arm(t.terminalId, t.kind)
     }
+    for (const id of diffWatchedCompletions(prev, next)) armWatched(id)
   })
 
   // diffCommands already keeps only long commands and keys on the identity of
@@ -170,6 +210,8 @@ export function startNotificationWatch(deps: NotificationWatchDeps): () => void 
 
   return () => {
     for (const id of [...armed.keys()]) cancel(id)
+    for (const h of watchedTimers.values()) deps.clearTimer(h)
+    watchedTimers.clear()
     unsubscribe()
     unsubscribeCommands()
   }

@@ -6,7 +6,7 @@ use std::{
     io::Read,
     path::Path,
     process::{Command, Stdio},
-    sync::OnceLock,
+    sync::{Condvar, Mutex},
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
@@ -14,20 +14,88 @@ use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
 
 const EVENTS: [&str; 2] = ["SessionStart", "UserPromptSubmit"];
 
-pub fn supported() -> bool {
-    static SUPPORTED: OnceLock<bool> = OnceLock::new();
-    *SUPPORTED.get_or_init(probe)
+/// Probe cache. A definite answer is kept for the process; a timed-out probe
+/// (cold disk, AV scan) is retried, but no more often than `RETRY_AFTER`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ProbeState {
+    Unknown,
+    Probing,
+    Known(bool),
+    TimedOut(Instant),
 }
 
-fn probe() -> bool {
+const RETRY_AFTER: Duration = Duration::from_secs(60);
+
+/// How long a caller waits for a probe another thread is running (the probe
+/// itself gives up after 3 s).
+const PROBE_WAIT: Duration = Duration::from_millis(3_500);
+
+/// Whether the installed Codex supports hook isolation. Warmed off-thread at
+/// startup (`warm`), so pane spawns normally hit the cache. The lock is never
+/// held across the probe: a caller arriving while another probe runs waits up
+/// to `PROBE_WAIT` for its answer (then `false`); within `RETRY_AFTER` of a
+/// timeout it gets `false` without probing again.
+pub fn supported() -> bool {
+    static STATE: Mutex<ProbeState> = Mutex::new(ProbeState::Unknown);
+    static DONE: Condvar = Condvar::new();
+    supported_with(&STATE, &DONE, PROBE_WAIT, Instant::now, probe)
+}
+
+fn supported_with(
+    state: &Mutex<ProbeState>,
+    done: &Condvar,
+    wait: Duration,
+    now: impl Fn() -> Instant,
+    probe: impl FnOnce() -> Option<bool>,
+) -> bool {
+    {
+        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        if *s == ProbeState::Probing {
+            // A probe is running (normally the startup warm-up): wait for its
+            // answer, bounded, so a pane spawned during startup still gets
+            // hook isolation. The lock is released while waiting.
+            s = done
+                .wait_timeout_while(s, wait, |st| *st == ProbeState::Probing)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        match *s {
+            ProbeState::Known(known) => return known,
+            ProbeState::Probing => return false,
+            ProbeState::TimedOut(at) if now().saturating_duration_since(at) < RETRY_AFTER => {
+                return false
+            }
+            ProbeState::Unknown | ProbeState::TimedOut(_) => *s = ProbeState::Probing,
+        }
+    }
+    // A panicking probe must not leave the state stuck at `Probing`.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(probe)).unwrap_or(None);
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+    *s = match result {
+        Some(known) => ProbeState::Known(known),
+        None => ProbeState::TimedOut(now()),
+    };
+    done.notify_all();
+    result.unwrap_or(false)
+}
+
+/// Run the first probe on a blocking worker so no IPC/async thread pays it.
+pub fn warm() {
+    tauri::async_runtime::spawn_blocking(|| {
+        supported();
+    });
+}
+
+/// `None` = undecided (timed out); retried after `RETRY_AFTER`.
+fn probe() -> Option<bool> {
     let Some(binary) = crate::agents::find_agent_binary("codex") else {
-        return false;
+        return Some(false);
     };
     let Ok(mut output) = tempfile::tempfile() else {
-        return false;
+        return Some(false);
     };
     let Ok(stdout) = output.try_clone() else {
-        return false;
+        return Some(false);
     };
     let mut command = Command::new(binary);
     command
@@ -41,30 +109,30 @@ fn probe() -> bool {
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
     let Ok(mut child) = command.spawn() else {
-        return false;
+        return Some(false);
     };
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return false,
+            Ok(Some(_)) | Err(_) => return Some(false),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return false;
+                return None;
             }
         }
     }
     use std::io::{Seek, SeekFrom};
     if output.seek(SeekFrom::Start(0)).is_err() {
-        return false;
+        return Some(false);
     }
     let mut help = String::new();
     if output.take(64 * 1024).read_to_string(&mut help).is_err() {
-        return false;
+        return Some(false);
     }
-    help.contains("--no-daemon") && help.contains("--dangerously-bypass-hook-trust")
+    Some(help.contains("--no-daemon") && help.contains("--dangerously-bypass-hook-trust"))
 }
 
 pub fn isolated_command(command: &str, agent: Option<&str>, supported: bool) -> String {
@@ -279,6 +347,104 @@ pub fn register(app: &AppHandle) {
 mod tests {
     use super::*;
     const OURS: &str = "\"C:/Swarmterm/swarmterm.exe\" --codex-session-hook";
+
+    #[test]
+    fn probe_timeout_is_not_cached_but_retry_is_throttled() {
+        let state = Mutex::new(ProbeState::Unknown);
+        let t0 = Instant::now();
+        let calls = std::cell::Cell::new(0);
+        let probe = |r: Option<bool>| {
+            let calls = &calls;
+            move || {
+                calls.set(calls.get() + 1);
+                r
+            }
+        };
+        assert!(!supported_with(
+            &state,
+            &Condvar::new(),
+            Duration::ZERO,
+            || t0,
+            probe(None)
+        ));
+        assert_eq!(*state.lock().unwrap(), ProbeState::TimedOut(t0));
+        // Within the retry interval: no new probe.
+        assert!(!supported_with(
+            &state,
+            &Condvar::new(),
+            Duration::ZERO,
+            || t0 + Duration::from_secs(30),
+            probe(Some(true))
+        ));
+        assert_eq!(calls.get(), 1);
+        // After it: probe again, and a definite answer is cached.
+        assert!(supported_with(
+            &state,
+            &Condvar::new(),
+            Duration::ZERO,
+            || t0 + RETRY_AFTER,
+            probe(Some(true))
+        ));
+        assert_eq!(calls.get(), 2);
+        assert!(supported_with(
+            &state,
+            &Condvar::new(),
+            Duration::ZERO,
+            || t0 + RETRY_AFTER * 10,
+            probe(Some(false))
+        ));
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn caller_waits_for_a_running_probe() {
+        let shared = std::sync::Arc::new((Mutex::new(ProbeState::Probing), Condvar::new()));
+        let prober = shared.clone();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            *prober.0.lock().unwrap() = ProbeState::Known(true);
+            prober.1.notify_all();
+        });
+        let got = supported_with(
+            &shared.0,
+            &shared.1,
+            Duration::from_secs(3),
+            Instant::now,
+            || panic!("must not probe while another probe runs"),
+        );
+        t.join().unwrap();
+        assert!(got);
+    }
+
+    #[test]
+    fn wait_for_a_running_probe_is_bounded() {
+        let state = Mutex::new(ProbeState::Probing);
+        let start = Instant::now();
+        let got = supported_with(
+            &state,
+            &Condvar::new(),
+            Duration::from_millis(30),
+            Instant::now,
+            || panic!("must not probe"),
+        );
+        assert!(!got);
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn panicking_probe_does_not_leave_state_probing() {
+        let state = Mutex::new(ProbeState::Unknown);
+        let got = supported_with(
+            &state,
+            &Condvar::new(),
+            Duration::from_millis(30),
+            Instant::now,
+            || panic!("probe blew up"),
+        );
+        assert!(!got);
+        assert!(matches!(*state.lock().unwrap(), ProbeState::TimedOut(_)));
+    }
+
     #[test]
     fn isolates_supported_codex_without_changing_other_commands() {
         assert_eq!(

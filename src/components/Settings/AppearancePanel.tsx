@@ -5,6 +5,10 @@ import { styleOptions, themeVariables, type StyleOption } from '@/lib/theme-adap
 import { cn } from '@/lib/utils'
 import { useSidebarLayoutStore } from '@/store/sidebar-layout-store'
 import type { SidebarLayout } from '@/lib/sidebar-layout'
+import { useSidebarPeekStore } from '@/store/sidebar-peek-store'
+import { ToggleRow } from '@/components/Settings/NotificationsPanel'
+import { usePaneStatusPrefStore } from '@/store/pane-status-pref-store'
+import { GRADIENT_MINUTES_OPTIONS, type GradientMinutes } from '@/lib/pane-status-pref'
 
 const SIDEBAR_LAYOUTS: { id: SidebarLayout; label: string; description: string }[] = [
   { id: 'auto', label: 'Auto', description: 'Lists take their height, Files fills the rest' },
@@ -16,6 +20,9 @@ export function AppearancePanel(): ReactElement {
   const style = useAppearanceStore((s) => s.style)
   const setStyle = useAppearanceStore((s) => s.setStyle)
   const sidebarLayout = useSidebarLayoutStore((s) => s.layout)
+  const sidebarPeek = useSidebarPeekStore((s) => s.enabled)
+  const rightPanelPeek = useSidebarPeekStore((s) => s.rightEnabled)
+  const paneStatus = usePaneStatusPrefStore((s) => s.prefs)
 
   return (
     <div className="space-y-8">
@@ -41,6 +48,48 @@ export function AppearancePanel(): ReactElement {
             </button>
           ))}
         </div>
+        <ToggleRow
+          label="Peek sidebar on left edge"
+          description="When the sidebar is hidden, move the pointer to the left edge to show it over the workspace."
+          checked={sidebarPeek}
+          onChange={(on) => useSidebarPeekStore.getState().setEnabled(on)}
+        />
+        <ToggleRow
+          label="Peek right panel on right edge"
+          description="When the right panel (Preview, Git, War Room) is closed, move the pointer to the right edge to show it over the workspace."
+          checked={rightPanelPeek}
+          onChange={(on) => useSidebarPeekStore.getState().setRightEnabled(on)}
+        />
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-foreground">Pane status highlight</h2>
+        <ToggleRow
+          label="Highlight panes by agent state"
+          description="Frame each agent pane in its state colour: yellow while working, red when it needs you, green when it finished in the background."
+          checked={paneStatus.enabled}
+          onChange={(on) => usePaneStatusPrefStore.getState().setEnabled(on)}
+        />
+        <label className="block py-2">
+          <span className="mb-1.5 block text-xs font-medium text-muted-foreground">
+            Working gradient — yellow turns orange over
+          </span>
+          <select
+            aria-label="Working gradient"
+            value={paneStatus.gradientMinutes}
+            disabled={!paneStatus.enabled}
+            onChange={(e) =>
+              usePaneStatusPrefStore.getState().setGradientMinutes(Number(e.target.value) as GradientMinutes)
+            }
+            className="w-full rounded-md border border-pane-border bg-card px-2.5 py-1.5 text-sm text-foreground disabled:opacity-50"
+          >
+            {GRADIENT_MINUTES_OPTIONS.map((m) => (
+              <option key={m} value={m}>
+                {m === 0 ? 'Off (stay yellow)' : `${m} minutes`}
+              </option>
+            ))}
+          </select>
+        </label>
       </section>
 
       <section>

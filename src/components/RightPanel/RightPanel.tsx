@@ -1,6 +1,8 @@
 // src/components/RightPanel/RightPanel.tsx
-import type { ReactElement } from 'react'
-import { Eye, GitBranch, RotateCw, Swords, X } from 'lucide-react'
+import { useRef, type ReactElement } from 'react'
+import { useSidebarPeekStore } from '@/store/sidebar-peek-store'
+import { useEdgePeek } from '@/components/use-edge-peek'
+import { Eye, GitBranch, Pin, RotateCw, Swords, X } from 'lucide-react'
 import { useGitStore } from '@/store/git-store'
 import { BrowserColumn } from '@/components/Browser/BrowserColumn'
 import { GitPanel } from '@/components/Git/GitPanel'
@@ -20,25 +22,38 @@ function RefreshButton(): ReactElement {
   )
 }
 
-export function RightPanel(): ReactElement {
+interface RightPanelProps {
+  /** Rendered as the edge-hover overlay instead of the docked split. */
+  peek?: boolean
+  /** Peek only: slide the overlay out. */
+  onClosePeek?: () => void
+}
+
+export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}): ReactElement {
   const mode = useGitStore((s) => s.mode)
-  const setMode = useGitStore((s) => s.setMode)
   const setPanelOpen = useGitStore((s) => s.setPanelOpen)
 
   function handleClose(): void {
-    setPanelOpen(false)
+    if (peek) onClosePeek?.()
+    else setPanelOpen(false)
+  }
+
+  // setMode also opens (docks) the panel — while peeking, switch tabs only.
+  function switchTo(next: 'browser' | 'git' | 'warroom'): void {
+    if (peek) useGitStore.setState({ mode: next })
+    else useGitStore.getState().setMode(next)
   }
 
   function handleBrowserTab(): void {
-    setMode('browser')
+    switchTo('browser')
   }
 
   function handleGitTab(): void {
-    setMode('git')
+    switchTo('git')
   }
 
   function handleWarRoomTab(): void {
-    setMode('warroom')
+    switchTo('warroom')
   }
 
   return (
@@ -82,6 +97,16 @@ export function RightPanel(): ReactElement {
           War Room
         </button>
         {mode === 'git' && <RefreshButton />}
+        {peek && (
+          <button
+            onClick={() => setPanelOpen(true)}
+            className={['flex items-center px-2 text-muted-foreground hover:text-foreground', mode === 'git' ? '' : 'ml-auto'].join(' ')}
+            aria-label="Pin panel"
+            title="Pin panel"
+          >
+            <Pin className="h-3.5 w-3.5" />
+          </button>
+        )}
         <button
           onClick={handleClose}
           className="flex items-center px-2 text-muted-foreground hover:text-foreground"
@@ -93,10 +118,57 @@ export function RightPanel(): ReactElement {
 
       {/* Mode content */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {mode === 'browser' && <BrowserColumn />}
+        {mode === 'browser' && !peek && <BrowserColumn />}
+        {mode === 'browser' && peek && (
+          // The native preview webview paints above all page content, so it
+          // cannot live inside a floating overlay — dock the panel to use it.
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
+            <p>Pin the panel to use Preview.</p>
+            <button
+              onClick={() => setPanelOpen(true)}
+              className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted"
+            >
+              Pin panel
+            </button>
+          </div>
+        )}
         {mode === 'git' && <GitPanel />}
         {mode === 'warroom' && <WarRoomPanel />}
       </div>
     </div>
+  )
+}
+
+/**
+ * Right-edge peek: with the right panel closed, resting the pointer on the
+ * right edge slides it in OVER the workspace (absolute, so no terminal
+ * re-lays out). Must render inside the app's DndContext so panes can still be
+ * dropped on the War Room.
+ */
+export function RightPanelPeek(): ReactElement | null {
+  const panelOpen = useGitStore((s) => s.panelOpen)
+  const peekEnabled = useSidebarPeekStore((s) => s.rightEnabled)
+  const ref = useRef<HTMLDivElement>(null)
+  const edgePeek = useEdgePeek(!panelOpen && peekEnabled, ref)
+
+  return (
+    <>
+      {edgePeek.showHotZone && (
+        <div aria-hidden data-focus-return className="absolute inset-y-0 right-0 z-40 w-3" {...edgePeek.hotZoneProps} />
+      )}
+      {edgePeek.overlay && (
+        <div
+          ref={ref}
+          {...edgePeek.panelProps}
+          className="absolute inset-y-0 right-0 z-40 shadow-2xl transition-[width] duration-200 ease-in-out motion-reduce:transition-none overflow-hidden"
+          style={{ width: edgePeek.peeking ? 'max(320px, 30vw)' : 0 }}
+        >
+          <span hidden data-covers-webview />
+          <div className="h-full" style={{ width: 'max(320px, 30vw)' }}>
+            <RightPanel peek onClosePeek={edgePeek.close} />
+          </div>
+        </div>
+      )}
+    </>
   )
 }

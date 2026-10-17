@@ -114,7 +114,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   changed: async (change) => {
     if (change.error) set({ notice: `Live refresh: ${change.error}` })
     const root = get().roots[change.contextId]; if (!root) return
-    const dirs = Object.keys(root.dirs).filter((p) => change.paths.some((changed) => changed === p || changed.startsWith(p + '/') || changed.startsWith(p + '\\')))
+    const dirs = Object.keys(root.dirs).filter((p) => change.rescan || change.paths.some((changed) => changed === p || changed.startsWith(p + '/') || changed.startsWith(p + '\\')))
     await Promise.all([...dirs.map((p) => get().load(change.contextId, p)), ...(change.gitChanged ? [git(change.contextId)] : [])])
   }
 }))

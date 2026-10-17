@@ -33,6 +33,7 @@ export function CornerHandles({ layout, groups, inset }: CornerHandlesProps): Re
   const [size, setSize] = useState<{ w: number; h: number } | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
   const resizeSplitNode = useAppStore((s) => s.resizeSplitNode)
+  const equalizeSplitNode = useAppStore((s) => s.equalizeSplitNode)
 
   useEffect(() => {
     const parent = rootRef.current?.parentElement
@@ -99,11 +100,15 @@ export function CornerHandles({ layout, groups, inset }: CornerHandlesProps): Re
           <div
             key={`${j.hSplitId}/${j.vSplitId}`}
             data-corner-handle
-            title="Drag to resize both directions"
+            title="Drag to resize both directions, double-click to even out"
             onPointerDown={(e) => onPointerDown(e, j)}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
+            onDoubleClick={() => {
+              equalizeSplitNode(j.hSplitId)
+              equalizeSplitNode(j.vSplitId)
+            }}
             className={
               'pointer-events-auto absolute h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-move rounded-sm transition-colors hover:bg-ring' +
               (active ? ' bg-ring' : '')

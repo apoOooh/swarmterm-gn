@@ -33,17 +33,41 @@ pub fn show_main(app: &tauri::AppHandle) {
 }
 
 /// Kill every pty, then exit the process for good.
+///
+/// Returns immediately: the graceful close waits up to `KILL_GRACE` for the
+/// pane trees, and doing that on the caller (the main thread, via the sync
+/// `confirm_quit` command) froze the UI for that long. A second request while
+/// one is in flight is a no-op.
 pub fn quit(app: &tauri::AppHandle) {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    // Set synchronously so a window close racing the quit is not turned into
+    // hide-to-tray.
+    app.state::<AppState>()
+        .quitting
+        .store(true, Ordering::SeqCst);
+    let app = app.clone();
+    std::thread::spawn(move || quit_blocking(&app));
+}
+
+fn quit_blocking(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    state.quitting.store(true, Ordering::SeqCst);
     // Remove the voice discovery file so buzzkey never dials a dead pipe.
     crate::voice::shutdown(app);
     // Use `if let Ok` rather than `unwrap` so the process still exits even if the
     // terminals lock was somehow poisoned.
-    if let Ok(mut map) = state.terminals.lock() {
-        for t in map.values_mut() {
-            let _ = t.killer.kill();
-        }
+    // Close every pane gracefully (see ManagedTerminal::shutdown) and wait for
+    // the bounded grace period, so agents exit cleanly instead of being torn
+    // down by kill-on-close when the job handles drop at process exit.
+    let terminals: Vec<_> = match state.terminals.lock() {
+        Ok(mut map) => map.drain().map(|(_, t)| t).collect(),
+        Err(_) => Vec::new(),
+    };
+    let waiters: Vec<_> = terminals.into_iter().filter_map(|t| t.shutdown()).collect();
+    for w in waiters {
+        let _ = w.join();
     }
     app.exit(0);
 }

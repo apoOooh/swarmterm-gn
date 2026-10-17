@@ -2,6 +2,158 @@
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-10-18
+
+- Voice: spoken replies for Claude Code (SWA-58). With Settings → Voice →
+  "Allow excerpts" on (off by default, needs "Speak announcements"), Claude
+  is asked to end each answer with a short `<voice>` line, and Swarmterm
+  says that line after the turn instead of "fertig" — also for the pane you
+  are looking at — else the first sentences of the answer, else the status.
+  Failed turns (StopFailure) and turns stopped with Esc are said in the same
+  conversational tone and shown in the bell. The text is read from the
+  agent's own session file, filtered, kept only in memory and never sent
+  anywhere; the voice pipe is unchanged. See
+  `docs/adr/0004-reading-agent-output.md`.
+- Voice: buzzkey update notice. With buzzkey installed and connected,
+  Swarmterm checks for a newer signed buzzkey release at start and every
+  24 h and offers "Update now" or "Later" (remembered until the next
+  version). Opt-in "Update buzzkey automatically" installs without asking,
+  never during a dictation and never across a major version without
+  asking once. Same signature-first install as before; buzzkey is quit
+  over the pipe, never killed.
+- Panes: optional agent-state highlight. Settings → Appearance → "Highlight
+  panes by agent state" frames each agent pane in its state colour — yellow
+  while working, drifting to orange over a chosen 5/10/30 minutes, red when
+  blocked, green when it finished in the background until focused. Off by
+  default.
+- Voice: better built-in speech models and a suggestion per PC. Settings →
+  Voice now offers quantised Small, Medium, Large v3 Turbo (q5/q8) and
+  Large v3 models and recommends the best fit for this computer (CPU
+  threads, RAM, AVX2) with a short reason, "Download and use" and "Measure
+  again". New installs default to Small q5 instead of Base; tiny/base/small
+  stay available as legacy. Transcription uses up to 16 CPU threads.
+- Fix: a late Stop of an earlier Claude prompt no longer ends the turn in
+  progress or announces it as finished.
+- Fix: Esc after opening a pane header's ⋯ row from the keyboard keeps the
+  focus on ⋯ instead of sometimes moving it into the terminal.
+
+## [1.16.0] - 2026-10-17
+
+- Routines: command routines (SWA-67). A routine can run one shell command
+  line on a schedule instead of an agent, in the background without a pane
+  or tokens, stopped at its time limit. Only failures go to the bell; every
+  run's exit code and duration show under Last run.
+- Terminal: Shift+Enter in an agent pane inserts a line break instead of
+  submitting the prompt (SWA-60). xterm sent the same carriage return as
+  Enter, so Claude Code sent each line of a multi-line prompt on its own.
+- Voice: spoken announcements (SWA-66). With Settings → Voice → "Speak
+  announcements" on, Swarmterm says "<pane>: fertig" / "<pane> wartet auf
+  Eingabe" itself, using an installed Windows voice (no download). Typing,
+  focusing that pane, dictating or Ctrl+Shift+M stops it; nothing is spoken
+  while a dictation records. `turn` pushes carry `ttsHandled` so buzzkey's
+  fallback voice never talks over it. See `docs/adr/0003-builtin-announcements.md`.
+
+## [1.15.0] - 2026-10-17
+
+- Voice: install and control buzzkey from Settings → Voice (SWA-42). The
+  newest signed buzzkey release is downloaded only on click, its signature
+  and checksums are verified before anything is installed, and Quit asks
+  buzzkey to exit instead of killing it.
+- Accounts: sessions can be shared across subscriptions (SWA-64), so a
+  conversation started under one account can be resumed under another.
+- Workspace: docked pane headers can be dragged again.
+- Voice: built-in speech recognition (SWA-38). Settings → Voice downloads
+  a Whisper model (checksum-verified) and enables local dictation without
+  buzzkey: Ctrl+Shift+Space or the pane-header microphone starts and stops,
+  the text arrives as a draft in the pane that had the keyboard. Only
+  downloaded models can be selected, and the shortcut reports a missing
+  model in the bell instead of doing nothing. Runs on the
+  CPU; see `docs/adr/0002-builtin-speech-source.md`.
+- Saved workspaces can open on startup (pin on the card, the navbar workspace menu or Settings →
+  Workspaces → Open on startup, with order); Welcome is skipped while any is set.
+  Startup workspaces are exempt from the 24-entry limit.
+- Voice: optional status announcements. With Settings → Voice → "Announce
+  finished agents" on, a dictation app can subscribe to "agent finished" and
+  "needs your input" for panes you are not watching. Only the status and the
+  pane title leave the app, never pane output. Off by default.
+- Docs: ADR 0001 (accepted) adopts a separate terminal host process so terminals
+  can outlive quit and app updates (`docs/adr/`).
+- Floating panes: no longer move or resize when the sidebar or the right panel
+  is toggled, can be dragged over both, and move freely by their header
+  (dock with the Dock button).
+
+## [1.14.2] - 2026-10-16
+
+- Files: live refresh holds one watch on the explorer root instead of one
+  per folder, so folders below it can be renamed and moved again while the
+  tree is open (Windows refused with "Access denied"). After heavy file
+  churn the tree re-reads its open folders.
+
+## [1.14.1] - 2026-10-16
+
+- Claude Code hooks and status line: a development build no longer takes
+  the `~/.claude/settings.json` entries over from a live installed
+  Swarmterm, so deleting a dev checkout can no longer leave every hook
+  pointing at a missing `target/debug/swarmterm.exe`.
+
+## [1.14.0] - 2026-10-16
+
+- Composer: new workspaces start from configurable defaults (folder,
+  terminal count, agents and accounts, worktree isolation, Split opens).
+  "Save as default" stores the current choices; Settings → Workspaces can
+  reset them to the built-in values. Agents that aren't installed are left
+  out when a default or template is applied.
+- Workspace templates: "Save as template…" in the composer and a Template
+  picker; Settings → Workspaces edits the defaults and adds, edits,
+  duplicates and deletes templates.
+- Right panel: while closed, rest the mouse on the right edge to slide it in
+  over the workspace; pin docks it (Settings → Appearance → Peek right panel
+  on right edge).
+- Composer: lists only installed agents; smaller layout preview; the agent
+  legend is removed.
+
+## [1.13.0] - 2026-10-16
+
+- Sidebar: while the sidebar is hidden, rest the mouse on the left edge to
+  slide it in over the workspace (Settings → Appearance → Peek sidebar on
+  left edge).
+- Notifications: the bell now reports when the MCP server stops, when voice
+  input fails (cleared again once it recovers) and when a pane stopped
+  reading input so a paste was dropped. These entries show their details and
+  are marked read on click.
+- Pasting a large block (over 8 MiB) into an idle pane is no longer rejected.
+- War Room: messages are limited to 64k characters, and an unread inbox keeps
+  at most 200 messages; older ones are dropped and the reader is told how
+  many were lost.
+- Git: the changed-files list shows renames correctly and handles paths with
+  spaces or non-ASCII characters.
+- Worktrees: clearing a worktree on a detached HEAD works, and clearing
+  refuses to delete a branch that does not match the worktree.
+- Codex: support detection runs at startup, so new Codex panes no longer wait
+  for it; a slow first check is retried later.
+- Performance: the sidebar and the file tree re-render less.
+- Fixes: event listeners are cleaned up when panes and dialogs close, dialogs
+  no longer show results of an earlier request, and closed panes no longer
+  leave titles, previews or War Room members behind.
+
+## [1.12.0] - 2026-10-15
+
+- Settings: new **Title bar** page. Reorder the pane-header controls by drag
+  or arrow buttons and set each to Core, Can hide, ⋯ only or Off; Reset to
+  defaults restores the original header. Layouts are remembered.
+- Pane header: on narrow panes the agent, title, folder, maximize and ✕ stay
+  visible and the other controls collapse behind `⋯`; hovering the header (or
+  clicking `⋯`) shows them in a second row.
+- Pane zoom: a maximized pane shows a violet border and a restore button with
+  the number of hidden panes; the sidebar marks the maximized pane and dims
+  the hidden ones.
+- Layout: double-click a separator or corner handle to even out the panes.
+- Closing a pane shuts agents down gracefully before stopping their processes,
+  so Claude Code no longer disables its fullscreen renderer machine-wide.
+- Performance: PTY output is coalesced, sidebar resize and terminal refits are
+  batched per frame, blocking work stays off the main thread, and session
+  titles are cached.
+
 ## [1.11.0] - 2026-10-15
 
 - Settings: switching Swarmterm's Claude status line no longer fails when

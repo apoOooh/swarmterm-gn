@@ -39,6 +39,22 @@ export function diffAgentStates(
   return out
 }
 
+/**
+ * SWA-58: completions the user watched happen (the store marks them seen at
+ * once, so diffAgentStates skips them). Only the voice reply listens here.
+ */
+export function diffWatchedCompletions(
+  prev: Record<string, AgentPaneState>,
+  next: Record<string, AgentPaneState>
+): string[] {
+  return Object.entries(next)
+    .filter(([id, cur]) => {
+      const old = prev[id]
+      return old !== cur && cur.state === 'idle' && cur.seen && (old?.state === 'working' || old?.state === 'blocked')
+    })
+    .map(([id]) => id)
+}
+
 export type CommandTransition =
   | { terminalId: string; kind: 'command'; last: FinishedCommand }
   | { terminalId: string; kind: 'removed' }
@@ -122,6 +138,16 @@ export function isStillCurrent(pending: PendingNotification, ctx: Pick<FireConte
   if (current === undefined) return false
   if (pending.kind === 'attention') return current.state === 'blocked'
   return current.state === 'idle' && !current.seen
+}
+
+/**
+ * SWA-58: like isStillCurrent but ignoring `seen` — the fact for a pane the
+ * user is looking at (it is seen at once). Only the voice reply uses it.
+ */
+export function isStillHeld(pending: PendingNotification, ctx: Pick<FireContext, 'current'>): boolean {
+  const { current } = ctx
+  if (pending.kind === 'command' || current === undefined) return false
+  return pending.kind === 'attention' ? current.state === 'blocked' : current.state === 'idle'
 }
 
 export function notificationCopy(

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { runRoutine, tickRoutines, type RoutineDeps, type StartResult } from './routine-scheduler'
+import { describeOutcome, runRoutine, tickRoutines, type CommandResult, type RoutineDeps, type StartResult } from './routine-scheduler'
 import type { Routine } from './routines'
 
 const MIN = 60_000
@@ -10,6 +10,7 @@ function routine(over: Partial<Routine> = {}): Routine {
     id: 'r1',
     name: 'Hourly',
     enabled: true,
+    kind: 'agent',
     agentId: 'claude-code',
     brief: 'Check CI',
     worktree: false,
@@ -24,6 +25,7 @@ function deps(over: Partial<RoutineDeps> = {}): RoutineDeps & { patch: ReturnTyp
   return {
     isBusy: () => false,
     start: vi.fn(async (): Promise<StartResult> => ({ terminalId: 't9' })),
+    runCommand: vi.fn(async (): Promise<CommandResult> => ({ exitCode: 0, timedOut: false, output: 'ok', durationMs: 1200 })),
     patch: vi.fn(),
     notify: vi.fn(),
     ...over
@@ -69,5 +71,46 @@ describe('runRoutine', () => {
     release({ terminalId: 't1', branch: 'swarm/claude-code-1' })
     await first
     expect(d.notify).toHaveBeenCalledWith('t1', 'Routine "Hourly" started in swarm/claude-code-1', 'Hourly')
+  })
+})
+
+describe('command routines', () => {
+  const cmd = (over: Partial<Routine> = {}): Routine =>
+    routine({ id: 'c1', name: 'Board', kind: 'command', agentId: '', brief: '', command: 'refresh', cwd: 'C:/work', timeoutMinutes: 5, ...over })
+
+  it('runs the line, records the result and keeps the bell quiet on success', async () => {
+    const d = deps()
+    await tickRoutines([cmd()], anchor + 61 * MIN, d)
+    expect(d.start).not.toHaveBeenCalled()
+    expect(d.runCommand).toHaveBeenCalledTimes(1)
+    expect(d.patch).toHaveBeenCalledWith('c1', expect.objectContaining({ lastResult: 'exit 0 · 1.2 s' }))
+    expect(d.notify).not.toHaveBeenCalled()
+  })
+  it('reports a failure with the last output line', async () => {
+    const d = deps({ runCommand: vi.fn(async () => ({ exitCode: 2, timedOut: false, output: 'a' + String.fromCharCode(10) + 'boom', durationMs: 50 })) })
+    await tickRoutines([cmd()], anchor + 61 * MIN, d)
+    expect(d.notify).toHaveBeenCalledWith('', 'Routine "Board" failed: exit 2 · 0.1 s — boom', 'Board')
+  })
+  it('reports a timeout and a start error', async () => {
+    const t = deps({ runCommand: vi.fn(async () => ({ exitCode: null, timedOut: true, output: '', durationMs: 300_000 })) })
+    await tickRoutines([cmd()], anchor + 61 * MIN, t)
+    expect(t.notify.mock.calls[0][1]).toBe('Routine "Board" failed: timed out after 300 s')
+    const e = deps({ runCommand: vi.fn(async () => Promise.reject('no folder')) })
+    await tickRoutines([cmd()], anchor + 61 * MIN, e)
+    expect(e.notify.mock.calls[0][1]).toBe('Routine "Board" not started: no folder')
+  })
+  it('drops a slot while the previous run is still going', async () => {
+    let finish!: (v: CommandResult) => void
+    const d = deps({ runCommand: vi.fn(() => new Promise<CommandResult>((r) => (finish = r))) })
+    const first = runRoutine(cmd(), d)
+    await tickRoutines([cmd()], anchor + 61 * MIN, d)
+    expect(d.runCommand).toHaveBeenCalledTimes(1)
+    expect(d.patch).toHaveBeenCalledWith('c1', { lastScheduledAt: anchor + 60 * MIN })
+    expect(d.notify.mock.calls[0][1]).toMatch(/previous run still busy/)
+    finish({ exitCode: 0, timedOut: false, output: '', durationMs: 1 })
+    await first
+  })
+  it('describes outcomes', () => {
+    expect(describeOutcome({ exitCode: 0, timedOut: false, output: '', durationMs: 42_400 })).toBe('exit 0 · 42 s')
   })
 })

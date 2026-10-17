@@ -539,6 +539,19 @@ describe('resizeSplitNode', () => {
   })
 })
 
+// --- equalizeSplitNode ---------------------------------------------------
+
+describe('equalizeSplitNode', () => {
+  it('evens out a resized split', () => {
+    const store = storeWithWorkspace()
+    store.getState().splitPane(activeWorkspace(store).focusedLeafId, 'horizontal')
+    const layout = activeWorkspace(store).layout as SplitNode
+    store.getState().resizeSplitNode(layout.id, [30, 70])
+    store.getState().equalizeSplitNode(layout.id)
+    expect((activeWorkspace(store).layout as SplitNode).sizes).toEqual([50, 50])
+  })
+})
+
 // --- tidyLayout -----------------------------------------------------------
 
 describe('tidyLayout', () => {
@@ -1282,6 +1295,17 @@ describe('account session coupling', () => {
     expect(switched.accountId).toBe('new-profile')
     expect(switched.sessionId).toBeUndefined()
     expect(switched.resumeSessionId).toBeUndefined()
+  })
+
+  it('keeps the conversation when the session was carried over to the new profile', () => {
+    const sessionId = '018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f'
+    const store = storeWithWorkspace({ cwd: 'C:/work', terminalCount: 0, agentIds: [], resumePanes: [{ agentId: 'claude-code', sessionId, cwd: 'C:/work', accountId: 'profile-a' }] })
+    const leaf = collectLeaves(activeWorkspace(store).layout)[0]
+    store.getState().setPaneAccount(leaf.id, 'profile-b', true)
+    const switched = collectLeaves(activeWorkspace(store).layout)[0]
+    expect(switched.accountId).toBe('profile-b')
+    expect(switched.resumeSessionId).toBe(sessionId)
+    expect(switched.continueSession).toBeUndefined()
   })
 })
 

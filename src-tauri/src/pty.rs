@@ -14,15 +14,16 @@ use tauri::{AppHandle, Manager};
 /// `KILL_ON_JOB_CLOSE` means terminating — or merely dropping — the job tears
 /// down every descendant, so closing a pane/workspace actually frees the CPU+RAM.
 #[cfg(windows)]
-mod job {
+pub(crate) mod job {
     use std::ffi::c_void;
     use std::mem;
     use std::ptr;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
+        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+        TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
@@ -79,6 +80,22 @@ mod job {
         pub fn terminate(&self) {
             unsafe {
                 TerminateJobObject(self.0, 1);
+            }
+        }
+
+        /// Number of processes still alive in the job, or `None` if the query
+        /// fails (callers then stop waiting and terminate).
+        pub fn active_processes(&self) -> Option<u32> {
+            unsafe {
+                let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = mem::zeroed();
+                let ok = QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicAccountingInformation,
+                    &mut info as *mut _ as *mut c_void,
+                    mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                    ptr::null_mut(),
+                );
+                (ok != 0).then_some(info.ActiveProcesses)
             }
         }
     }
@@ -142,7 +159,86 @@ impl CreateTerminalResult {
     }
 }
 
-/// A live pty the manager owns. `master` is kept for resize; `writer` for input;
+/// Input for one pty generation. The blocking `write_all` runs on that
+/// generation's own writer thread: a full ConPTY input pipe (big paste into a
+/// busy agent) used to stall the main thread AND every other `terminals` lock
+/// user. Commands only enqueue, under the lock, so ordering is the enqueue
+/// order and a respawn (new generation, new queue) can never receive bytes
+/// meant for the old one. A writer parked in `write_all` is not interruptible;
+/// it ends when the master closes the pipe (shutdown drops it), and queued
+/// bytes are then discarded with the dropped receiver.
+///
+/// Queued-but-unwritten bytes are capped (INPUT_QUEUE_MAX_BYTES): a hung agent
+/// whose input pipe is full would otherwise grow the queue without limit.
+pub struct PtyInput {
+    tx: std::sync::mpsc::Sender<Vec<u8>>,
+    queued: Arc<std::sync::atomic::AtomicUsize>,
+    cap: usize,
+}
+
+/// Upper bound on bytes waiting for one pty's writer thread.
+const INPUT_QUEUE_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Slice size for the writer thread's pty writes.
+const WRITE_CHUNK: usize = 64 * 1024;
+
+impl PtyInput {
+    pub fn spawn(writer: Box<dyn Write + Send>) -> Self {
+        Self::with_cap(writer, INPUT_QUEUE_MAX_BYTES)
+    }
+
+    fn with_cap(mut writer: Box<dyn Write + Send>, cap: usize) -> Self {
+        use std::sync::atomic::Ordering;
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let drained = queued.clone();
+        std::thread::spawn(move || {
+            while let Ok(mut bytes) = rx.recv() {
+                // Coalesce whatever queued behind a slow write into one write.
+                while let Ok(more) = rx.try_recv() {
+                    bytes.extend_from_slice(&more);
+                }
+                // Written in slices so a big paste frees its queue budget as
+                // it drains, not only after the very last byte. Budget is
+                // released only once written, so a stuck write still counts.
+                let mut written = Ok(());
+                for chunk in bytes.chunks(WRITE_CHUNK) {
+                    written = writer.write_all(chunk);
+                    if written.is_err() {
+                        break;
+                    }
+                    drained.fetch_sub(chunk.len(), Ordering::AcqRel);
+                }
+                if written.and_then(|_| writer.flush()).is_err() {
+                    // The pipe is gone: later sends fail with "target-gone".
+                    break;
+                }
+            }
+        });
+        PtyInput { tx, queued, cap }
+    }
+
+    /// Queue bytes for the pty. Err "target-gone" when the writer thread is
+    /// gone (pipe closed), "input-queue-full" when the pty is not draining.
+    /// An empty queue always accepts one write, however big: the cap guards
+    /// against a pty that stopped reading, not against one large paste into
+    /// an idle pane (the writer thread drains it in `WRITE_CHUNK` slices).
+    pub fn send(&self, data: &[u8]) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+        let len = data.len();
+        self.queued
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |q| {
+                (q == 0 || q + len <= self.cap).then_some(q + len)
+            })
+            .map_err(|_| "input-queue-full".to_string())?;
+        self.tx.send(data.to_vec()).map_err(|_| {
+            self.queued.fetch_sub(len, Ordering::AcqRel);
+            "target-gone".to_string()
+        })
+    }
+}
+
+/// A live pty the manager owns. `master` is kept for resize; `input` for input;
 /// `killer` to terminate the child from the command thread. On Windows `job`
 /// (when set) owns the shell's whole process tree so closing the terminal frees
 /// every descendant, not just the shell.
@@ -153,27 +249,84 @@ pub struct ManagedTerminal {
     pub agent_id: Option<String>,
     /// Configured spawn cwd; OSC 7 shell navigation must not change the explorer's root.
     pub cwd: std::path::PathBuf,
-    pub writer: Box<dyn Write + Send>,
+    pub input: PtyInput,
     pub master: Box<dyn MasterPty + Send>,
     pub killer: Box<dyn ChildKiller + Send + Sync>,
     #[cfg(windows)]
     pub job: Option<job::JobHandle>,
     pub worktree_mode: bool,
     pub repo_root: Option<String>,
+    /// A Claude account profile's own `CLAUDE_CONFIG_DIR` (SWA-58: where the
+    /// excerpt reader looks for this pane's transcripts). `None` = default.
+    pub claude_config_dir: Option<std::path::PathBuf>,
 }
 
 impl ManagedTerminal {
-    /// Terminate the terminal's whole process tree. On Windows this nukes the job
-    /// (shell + every descendant); the `killer` call is a fallback for when the
-    /// job could not be created and on non-Windows platforms.
-    pub fn kill(&mut self) {
+    /// Close the terminal the way a regular terminal window does, then make
+    /// sure nothing survives. Returns the thread enforcing the deadline, if any.
+    ///
+    /// Why not just `kill()`: `TerminateJobObject` is a hard kill, so programs
+    /// never run their exit handlers. Claude Code records every fullscreen
+    /// launch on disk and clears the record on a clean exit; a process that
+    /// vanishes before startup finished counts as a fullscreen crash, and after
+    /// two strikes it turns fullscreen off machine-wide. Windows Terminal
+    /// closes the pseudo console instead, which sends CTRL_CLOSE_EVENT to every
+    /// attached process and lets it shut down. We do the same, give the tree
+    /// `KILL_GRACE` to exit, and only then terminate the job — so the
+    /// "no orphans" guarantee still holds.
+    pub fn shutdown(self) -> Option<std::thread::JoinHandle<()>> {
         #[cfg(windows)]
-        if let Some(job) = &self.job {
-            job.terminate();
+        {
+            let ManagedTerminal {
+                input,
+                master,
+                killer,
+                job,
+                ..
+            } = self;
+            let Some(job) = job else {
+                let mut killer = killer;
+                let _ = killer.kill();
+                return None;
+            };
+            // The deadline starts now and is enforced by its own thread: on
+            // pre-24H2 conhost, ClosePseudoConsole can block until the clients
+            // detach, so the close runs off the caller's (command/quit) thread
+            // and can never delay the hard kill past KILL_GRACE.
+            let deadline = std::time::Instant::now() + KILL_GRACE;
+            std::thread::spawn(move || {
+                // Dropping the sender ends the writer thread once it is idle;
+                // one parked in write_all is released by the master close.
+                drop(input);
+                // ClosePseudoConsole: delivers CTRL_CLOSE_EVENT and closes the
+                // output pipe, so the reader sees EOF and emits Exit as before.
+                drop(master);
+            });
+            Some(std::thread::spawn(move || {
+                while std::time::Instant::now() < deadline
+                    && job.active_processes().is_some_and(|n| n > 0)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                job.terminate();
+                let mut killer = killer;
+                let _ = killer.kill();
+            }))
         }
-        let _ = self.killer.kill();
+        #[cfg(not(windows))]
+        {
+            let mut killer = self.killer;
+            let _ = killer.kill();
+            None
+        }
     }
 }
+
+/// How long a closed pane's process tree may take to exit on its own before
+/// it is terminated. Windows gives CTRL_CLOSE_EVENT handlers 5 s; most agents
+/// need well under one.
+#[cfg(windows)]
+const KILL_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Global backend state managed by Tauri.
 pub struct AppState {
@@ -350,6 +503,12 @@ pub fn take_valid_utf8(buf: &mut Vec<u8>) -> Option<String> {
     Some(s)
 }
 
+/// Output coalescing (see read_loop): a burst is batched for up to
+/// OUTPUT_COALESCE or OUTPUT_BATCH_BYTES; output after OUTPUT_IDLE of silence
+/// is sent immediately.
+const OUTPUT_COALESCE: std::time::Duration = std::time::Duration::from_millis(4);
+const OUTPUT_IDLE: std::time::Duration = std::time::Duration::from_millis(16);
+const OUTPUT_BATCH_BYTES: usize = 64 * 1024;
 const READ_BUF_BYTES: usize = 64 * 1024;
 
 /// Spawn a pty, register it in state, and start a reader thread that streams
@@ -408,6 +567,10 @@ pub fn spawn_terminal(
     if let Some(account) = &account {
         crate::accounts::apply_environment(&mut cmd, account);
     }
+    let claude_config_dir = account
+        .as_ref()
+        .filter(|a| a.agent_id == "claude-code")
+        .map(|a| std::path::PathBuf::from(&a.config_dir));
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM", "xterm-256color");
     // GUI launches arrive with no locale vars; fill in a UTF-8 LANG so CLIs
@@ -533,13 +696,14 @@ pub fn spawn_terminal(
     });
 
     let waiter_spawn_id = spawn_id.clone();
+    let reader_spawn_id = spawn_id.clone();
     state.terminals.lock().unwrap().insert(
         id.clone(),
         ManagedTerminal {
             spawn_id,
             pid,
             agent_id: options.agent_id,
-            writer,
+            input: PtyInput::spawn(writer),
             master: pair.master,
             killer,
             #[cfg(windows)]
@@ -547,6 +711,7 @@ pub fn spawn_terminal(
             worktree_mode,
             repo_root,
             cwd: std::path::PathBuf::from(cwd),
+            claude_config_dir,
         },
     );
 
@@ -554,8 +719,9 @@ pub fn spawn_terminal(
     // arrive immediately and must never race the terminal registration.
     if let Some(line) = initial_line {
         if let Some(terminal) = state.terminals.lock().unwrap().get_mut(&id) {
-            let _ = terminal.writer.write_all(line.as_bytes());
-            let _ = terminal.writer.flush();
+            if let Err(e) = terminal.input.send(line.as_bytes()) {
+                eprintln!("[pty] initial command for {id} dropped: {e}");
+            }
         }
     }
 
@@ -592,7 +758,7 @@ pub fn spawn_terminal(
 
     let app = app.clone();
     std::thread::spawn(move || {
-        read_loop(app, id, reader, exit_rx, on_data);
+        read_loop(app, id, reader_spawn_id, reader, exit_rx, on_data);
     });
 
     CreateTerminalResult {
@@ -603,48 +769,103 @@ pub fn spawn_terminal(
     }
 }
 
+/// Join `first` with whatever follows it on `rx`: only what is already queued
+/// after a quiet spell (`idle`), else up to OUTPUT_COALESCE / OUTPUT_BATCH_BYTES.
+/// Order is preserved; a closed channel just ends the batch.
+fn next_batch(rx: &std::sync::mpsc::Receiver<String>, mut text: String, idle: bool) -> String {
+    let deadline = std::time::Instant::now()
+        + if idle {
+            std::time::Duration::ZERO
+        } else {
+            OUTPUT_COALESCE
+        };
+    while text.len() < OUTPUT_BATCH_BYTES {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(more) => text.push_str(&more),
+            Err(_) => break,
+        }
+    }
+    text
+}
+
+/// Remove `id` only if it still belongs to this generation. Returns the removed
+/// entry and whether a different generation now holds the id (superseded).
+fn remove_generation<T>(
+    map: &mut HashMap<String, T>,
+    id: &str,
+    is_own: impl Fn(&T) -> bool,
+) -> (Option<T>, bool) {
+    match map.get(id) {
+        Some(t) if is_own(t) => (map.remove(id), false),
+        Some(_) => (None, true),
+        None => (None, false),
+    }
+}
+
 /// Blocking read loop: stream decoded output, then wait for exit and clean up.
 fn read_loop(
     app: AppHandle,
     id: String,
+    spawn_id: String,
     mut reader: Box<dyn Read + Send>,
     exit_rx: std::sync::mpsc::Receiver<i32>,
     on_data: Channel<PtyOut>,
 ) {
-    let mut pending: Vec<u8> = Vec::new();
-    let mut chunk = vec![0u8; READ_BUF_BYTES];
-    // Resolved once: `try_state` walks Tauri's type map, and this loop runs
-    // per pty chunk. `None` only during teardown, when there is nobody left
-    // to read the tail anyway.
-    let peer_state = app.try_state::<AppState>();
-    loop {
-        match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
-            Ok(n) => {
-                pending.extend_from_slice(&chunk[..n]);
-                if let Some(text) = take_valid_utf8(&mut pending) {
-                    // Tee the chunk into the Rust-side screen tail BEFORE the
-                    // renderer sees it, so a `read_peer` racing this chunk
-                    // never reads less than xterm shows. Lock scope is the
-                    // one statement — never held across the channel send.
-                    if let Some(state) = &peer_state {
-                        state.peer_states.lock().unwrap().push_output(
-                            &id,
-                            &text,
-                            crate::warroom::now_ms(),
-                        );
-                        state.peer_wake.notify_waiters();
+    // Reader → flusher split. ConPTY reads block, so coalescing needs its own
+    // thread: the reader decodes (UTF-8 boundary handling stays HERE, so the
+    // flusher only ever joins whole strings) and the flusher below batches a
+    // TUI redraw's many small reads into one tail push, one waiter wake and
+    // one IPC message. The first chunk after a quiet spell is sent at once
+    // (keystroke echo latency unchanged); only bursts wait up to
+    // OUTPUT_COALESCE. The channel closing means EOF with every byte —
+    // including the lossy trailing flush — already queued, so `Exit` below
+    // can never overtake output.
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let mut pending: Vec<u8> = Vec::new();
+        let mut chunk = vec![0u8; READ_BUF_BYTES];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+                Ok(n) => {
+                    pending.extend_from_slice(&chunk[..n]);
+                    if let Some(text) = take_valid_utf8(&mut pending) {
+                        if tx.send(text).is_err() {
+                            return;
+                        }
                     }
-                    let _ = on_data.send(PtyOut::Data(text));
                 }
             }
         }
-    }
-    // Flush any trailing bytes (lossily) so nothing is lost.
-    if !pending.is_empty() {
-        let _ = on_data.send(PtyOut::Data(String::from_utf8_lossy(&pending).into_owned()));
+        // Flush any trailing bytes (lossily) so nothing is lost.
+        if !pending.is_empty() {
+            let _ = tx.send(String::from_utf8_lossy(&pending).into_owned());
+        }
+    });
+
+    // Resolved once: `try_state` walks Tauri's type map, and this loop runs
+    // per flush. `None` only during teardown, when there is nobody left to
+    // read the tail anyway.
+    let peer_state = app.try_state::<AppState>();
+    let mut last_flush = std::time::Instant::now() - OUTPUT_IDLE;
+    while let Ok(first) = rx.recv() {
+        let text = next_batch(&rx, first, last_flush.elapsed() >= OUTPUT_IDLE);
+        // Tee into the Rust-side screen tail BEFORE the renderer sees it, so a
+        // `read_peer` racing this batch never reads less than xterm shows.
+        // Lock scope is the one statement — never held across the send.
+        if let Some(state) = &peer_state {
+            state
+                .peer_states
+                .lock()
+                .unwrap()
+                .push_output(&id, &text, crate::warroom::now_ms());
+            state.peer_wake.notify_waiters();
+        }
+        let _ = on_data.send(PtyOut::Data(text));
+        last_flush = std::time::Instant::now();
     }
     // The waiter thread owns the child; EOF means it is dead or about to be
     // (kill_terminal dropped the master after killing it).
@@ -652,8 +873,16 @@ fn read_loop(
 
     // Remove from the registry BEFORE notifying the renderer: a retry triggered by
     // the exit event must find the id free, since create rejects a duplicate live id.
-    if let Some(state) = app.try_state::<AppState>() {
-        state.terminals.lock().unwrap().remove(&id);
+    // A same-id respawn that did not wait for our Exit owns the slot now: leave
+    // its entry and its per-id state alone (mirrors the waiter's spawn_id check).
+    let superseded = app.try_state::<AppState>().is_some_and(|state| {
+        let mut map = state.terminals.lock().unwrap();
+        let (removed, superseded) = remove_generation(&mut map, &id, |t| t.spawn_id == spawn_id);
+        drop(map);
+        drop(removed);
+        superseded
+    });
+    if let Some(state) = app.try_state::<AppState>().filter(|_| !superseded) {
         state.mcp_clients.lock().unwrap().forget(&id);
         // Same-id respawn must start from "no data", not its predecessor's %.
         state.context_usage.lock().unwrap().forget(&id);
@@ -696,6 +925,156 @@ fn read_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remove_generation_spares_a_respawned_entry() {
+        let mut map = HashMap::from([("t".to_string(), "new".to_string())]);
+        // Old generation's reader finishing after a same-id respawn.
+        let (removed, superseded) = remove_generation(&mut map, "t", |g| g == "old");
+        assert!(removed.is_none() && superseded);
+        assert!(map.contains_key("t"));
+        let (removed, superseded) = remove_generation(&mut map, "t", |g| g == "new");
+        assert_eq!(removed.as_deref(), Some("new"));
+        assert!(!superseded && map.is_empty());
+        assert_eq!(remove_generation(&mut map, "t", |_| true), (None, false));
+    }
+
+    #[test]
+    fn next_batch_joins_queued_chunks_in_order() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send("b".to_string()).unwrap();
+        tx.send("c".to_string()).unwrap();
+        assert_eq!(next_batch(&rx, "a".into(), false), "abc");
+    }
+
+    #[test]
+    fn next_batch_idle_takes_only_what_is_queued() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send("b".to_string()).unwrap();
+        let start = std::time::Instant::now();
+        assert_eq!(next_batch(&rx, "a".into(), true), "ab");
+        assert!(start.elapsed() < OUTPUT_COALESCE * 10);
+        drop(tx);
+    }
+
+    #[test]
+    fn next_batch_stops_at_the_byte_cap() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send("y".to_string()).unwrap();
+        let big = "x".repeat(OUTPUT_BATCH_BYTES);
+        assert_eq!(next_batch(&rx, big.clone(), false), big);
+        assert_eq!(rx.try_recv().unwrap(), "y");
+    }
+
+    #[test]
+    fn next_batch_ends_on_closed_channel() {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        drop(tx);
+        assert_eq!(next_batch(&rx, "a".into(), false), "a");
+    }
+
+    struct SharedSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl Write for SharedSink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct BrokenSink;
+    impl Write for BrokenSink {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn pty_input_writes_in_enqueue_order() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let input = PtyInput::spawn(Box::new(SharedSink(buf.clone())));
+        for s in ["a", "b", "c", "d"] {
+            input.send(s.as_bytes()).unwrap();
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while buf.lock().unwrap().len() < 4 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(&*buf.lock().unwrap(), b"abcd");
+    }
+
+    /// Blocks every write until the test releases it: a pty that stopped reading.
+    struct StuckSink(std::sync::mpsc::Receiver<()>);
+    impl Write for StuckSink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            let _ = self.0.recv();
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn pty_input_rejects_input_past_the_queue_cap() {
+        let (release, gate) = std::sync::mpsc::channel();
+        let input = PtyInput::with_cap(Box::new(StuckSink(gate)), 4);
+        assert_eq!(input.send(b"abcd"), Ok(()));
+        assert_eq!(input.send(b"e"), Err("input-queue-full".to_string()));
+        drop(release); // writer drains, budget is freed
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut res = Err(String::new());
+        while std::time::Instant::now() < deadline {
+            res = input.send(b"e");
+            if res.is_ok() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(res, Ok(()));
+    }
+
+    #[test]
+    fn pty_input_accepts_one_oversized_write_on_an_idle_queue() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let input = PtyInput::with_cap(Box::new(SharedSink(buf.clone())), 4);
+        let big = vec![b'x'; WRITE_CHUNK * 3 + 7];
+        assert_eq!(input.send(&big), Ok(()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while buf.lock().unwrap().len() < big.len() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(buf.lock().unwrap().len(), big.len());
+    }
+
+    #[test]
+    fn pty_input_oversized_write_still_blocks_followups_while_stuck() {
+        let (_release, gate) = std::sync::mpsc::channel::<()>();
+        let input = PtyInput::with_cap(Box::new(StuckSink(gate)), 4);
+        assert_eq!(input.send(b"0123456789"), Ok(()));
+        assert_eq!(input.send(b"e"), Err("input-queue-full".to_string()));
+    }
+
+    #[test]
+    fn pty_input_reports_target_gone_after_writer_dies() {
+        let input = PtyInput::spawn(Box::new(BrokenSink));
+        let _ = input.send(b"x");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut res = Ok(());
+        while std::time::Instant::now() < deadline {
+            res = input.send(b"y");
+            if res.is_err() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(res, Err("target-gone".to_string()));
+    }
 
     #[test]
     fn default_shell_is_nonempty() {

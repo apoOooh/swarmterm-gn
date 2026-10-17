@@ -1,7 +1,7 @@
 {
   "name": "swarmterm-gn",
   "private": true,
-  "version": "1.11.0",
+  "version": "1.17.0",
   "description": "One window for a whole swarm of AI coding agents — split terminals, per-agent git worktrees, live web previews, and a War Room where agents collaborate",
   "license": "GPL-3.0-only",
   "homepage": "https://github.com/apoOooh/swarmterm-gn",
@@ -15,6 +15,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:dev:isolated": "tauri dev --config src-tauri/tauri.dev-instance.conf.json",
     "logo": "node scripts/gen-logo.mjs",
     "bump": "node scripts/bump-version.mjs",
     "release:mac": "bash scripts/release-macos.sh",

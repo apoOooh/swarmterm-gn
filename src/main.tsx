@@ -23,7 +23,7 @@ if (import.meta.env.DEV) {
   void Promise.all([import('./lib/dev-log'), import('./tauri/devlog')]).then(([{ installDevLog }, { writeDevLog }]) => installDevLog(writeDevLog))
   // Read-only probe for the external testlab (Playwright over CDP): state the
   // DOM cannot show, e.g. terminal text drawn by the WebGL renderer.
-  void Promise.all([import('./lib/terminal-registry'), import('./store/app-store'), import('./store/document-store'), import('./store/routine-store')]).then(([reg, app, docs, routines]) => {
+  void Promise.all([import('./lib/terminal-registry'), import('./store/app-store'), import('./store/document-store'), import('./store/routine-store'), import('./store/saved-workspaces-store'), import('./store/agent-state-store')]).then(([reg, app, docs, routines, saved, agentState]) => {
     Object.assign(window, { __swarmtermDev: {
       terminalText: (id: string, lines?: number) => reg.readTerminalText(id, lines),
       terminalGeometry: (id: string) => reg.terminalGeometry(id),
@@ -35,6 +35,19 @@ if (import.meta.env.DEV) {
       // Makes a routine due without waiting for its schedule (SWA-24 scenario).
       backdateRoutine: (id: string, ms: number) => routines.useRoutineStore.getState().patch(id, { lastScheduledAt: Date.now() - ms }),
       routines: () => routines.useRoutineStore.getState().routines,
+      // Saved workspaces through the app's own store instance: a dynamic
+      // import from the testlab gets a second copy after HMR.
+      savedWorkspaces: () => saved.useSavedWorkspacesStore.getState().entries,
+      savedAutostarting: () => saved.useSavedWorkspacesStore.getState().autostarting,
+      savedNotice: () => saved.useSavedWorkspacesStore.getState().notice,
+      setSavedAutoOpen: (id: string, on: boolean) => saved.setOpenWorkspaceAutoOpen(id, on),
+      openSavedAutostart: () => saved.useSavedWorkspacesStore.getState().openAutostart(),
+      forgetSavedWorkspace: (id: string) => saved.useSavedWorkspacesStore.getState().forget(id),
+      // Drives a plain shell pane's agent state (no detector publishes there),
+      // so the pane-highlight scenario needs no real agent or prompt.
+      publishAgentState: (id: string, state: 'working' | 'blocked' | 'idle' | 'unknown', paneWatched = true, sinceMs = Date.now()) =>
+        agentState.useAgentStateStore.getState().publish(id, state, { paneWatched, nowMs: sinceMs }),
+      markAgentSeen: (id: string) => agentState.useAgentStateStore.getState().markSeen(id),
       documents: () => Object.values(docs.useDocumentStore.getState().documents).map((d) => ({ path: d.path, mode: d.mode, dirty: d.dirty }))
     } })
   })

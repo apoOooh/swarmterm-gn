@@ -31,6 +31,10 @@ import {
 } from '@/components/ui/context-menu'
 import { ClearWorktreeDialog, type DialogTarget } from '@/components/Workspace/ClearWorktreeDialog'
 import { getChangedFiles, branchUnmergedCount } from '@/tauri/git'
+import { transferAgentSession } from '@/tauri/sessions'
+import { carryBlockedReason } from '@/lib/session-transfer'
+import { useAgentStateStore } from '@/store/agent-state-store'
+import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { classifyWorktree, clearWorktreeMenuLabel } from '@/lib/worktree-cleanup'
 import { agentCommand, DEFAULT_TEMPLATE_ID, templateById, withLaunchMode } from '@/lib/templates'
 import { buildAgentSpawnCommand, shellFlavor } from '@/lib/agent-spawn-command'
@@ -42,6 +46,9 @@ import { startPointerDrag, type DragHit } from '@/lib/pointer-drag-session'
 import { insertExplorerPaths } from '@/components/FileDropListener'
 import { devLog } from '@/lib/dev-log'
 import { handoffCwd } from '@/lib/handoff-brief'
+import { toggleDictation } from '@/lib/voice-wiring'
+import { PaneStatusFrame } from '@/components/TerminalPane/PaneStatusFrame'
+import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import {
   attachTerminal,
   detachTerminal,
@@ -69,6 +76,8 @@ interface TerminalPaneProps {
   worktreeMode: boolean
   /** Whether this pane is zoomed to fill its workspace. */
   isZoomed?: boolean
+  /** While zoomed: how many other panes are hidden behind this one. */
+  zoomHiddenCount?: number
   /** Whether this pane floats above the split view. */
   isFloating?: boolean
 }
@@ -88,6 +97,7 @@ export function TerminalPane({
   isBroadcastMember,
   worktreeMode,
   isZoomed = false,
+  zoomHiddenCount = 0,
   isFloating = false
 }: TerminalPaneProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -122,7 +132,46 @@ export function TerminalPane({
 
   const { id: leafId, terminalId } = leaf
 
+  // Switching subscription carries the conversation along (SWA-64): the
+  // session is copied into the target profile's store, then the pane resumes
+  // it there. If the copy fails the pane stays as it is — silently starting
+  // a fresh conversation would look like lost history. The copy is taken
+  // while the old agent still runs, so a mid-turn switch is refused.
+  const reportSwitch = (title: string): void =>
+    useNotificationCenterStore.getState().add({
+      kind: 'backend',
+      terminalId,
+      title,
+      detail: useTerminalTitleStore.getState().titles[terminalId] ?? '',
+      at: Date.now()
+    })
+  const switchAccount = async (accountId?: string): Promise<void> => {
+    const sessionId = leaf.sessionId ?? leaf.resumeSessionId
+    const agentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
+    if (!sessionId || (agentId !== 'claude-code' && agentId !== 'codex')) {
+      setPaneAccount(leafId, accountId)
+      return
+    }
+    const blocked = carryBlockedReason(useAgentStateStore.getState().byId[terminalId]?.state)
+    if (blocked) {
+      reportSwitch(`Subscription not switched. ${blocked}`)
+      return
+    }
+    try {
+      await transferAgentSession(agentId, sessionId, leaf.accountId, accountId)
+      setPaneAccount(leafId, accountId, true)
+    } catch (error) {
+      reportSwitch(`Could not move the session to the other subscription: ${String(error)}`)
+    }
+  }
+
   const agentTitle = useTerminalTitleStore((s) => s.titles[terminalId])
+  // Built-in speech (SWA-38): a phase only for the pane the dictation is
+  // pinned to; every other pane shows the idle button.
+  const dictationReady = useVoiceDictationStore((s) => s.ready)
+  const dictationPhase = useVoiceDictationStore((s) =>
+    s.dictation.terminalId === terminalId ? s.dictation.phase : 'idle'
+  )
   // Per-terminal selector: only this pane wakes when ITS number changes, and the
   // store returns the same state on a no-change sample, so streaming stays quiet.
   const ctxPct = useContextUsageStore((s) => s.byId[terminalId])
@@ -309,14 +358,19 @@ export function TerminalPane({
       }))
   }
 
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+
   async function openClearDialog(): Promise<void> {
     const clears = resolveWorktreeTargets()
     if (clears.length === 0) return
     const targets: DialogTarget[] = await Promise.all(
       clears.map(async (c) => {
         try {
-          const changed = await getChangedFiles(c.path)
-          const unmerged = await branchUnmergedCount(c.repoRoot, c.branch)
+          const [changed, unmerged] = await Promise.all([getChangedFiles(c.path), branchUnmergedCount(c.repoRoot, c.branch)])
           const { uncommittedCount, unmergedCount, dirty } = classifyWorktree(changed, unmerged)
           return { leafId: c.leafId, branch: c.branch, uncommittedCount, unmergedCount, dirty }
         } catch (e) {
@@ -327,7 +381,8 @@ export function TerminalPane({
         }
       })
     )
-    setDialog({ targets, clears })
+    // The pane may have closed while git was inspecting the worktrees.
+    if (mounted.current) setDialog({ targets, clears })
   }
 
   function confirmClear(approvedLeafIds: string[]): void {
@@ -379,7 +434,7 @@ export function TerminalPane({
       data-agent-id={resolvedAgentId}
       data-cwd={resolvedCwd}
       className={cn(
-        'flex h-full w-full flex-col overflow-hidden rounded-md border bg-background',
+        'relative flex h-full w-full flex-col overflow-hidden rounded-md border bg-background',
         isFocused
           ? 'border-ring'
           : isBroadcastMember
@@ -396,10 +451,11 @@ export function TerminalPane({
         isDragging && 'opacity-40'
       )}
     >
+      <PaneStatusFrame terminalId={terminalId} />
       <PaneHeader
         agentId={resolvedAgentId}
         accountId={leaf.accountId}
-        onAccountChange={accountId => setPaneAccount(leafId, accountId)}
+        onAccountChange={accountId => void switchAccount(accountId)}
         shellId={resolvedShellId}
         resolvedCwd={resolvedCwd}
         hasCwdOverride={leaf.cwd !== undefined}
@@ -420,7 +476,9 @@ export function TerminalPane({
         }}
         onThread={canShowThread(resolvedAgentId, leaf.sessionId) ? () => setThreadOpen(true) : undefined}
         onDrawer={() => useAppStore.getState().drawerPane(leafId)}
+        dictation={dictationReady || dictationPhase !== 'idle' ? { phase: dictationPhase, onToggle: toggleDictation } : undefined}
         isZoomed={isZoomed}
+        zoomHiddenCount={zoomHiddenCount}
         onToggleZoom={() => useAppStore.getState().toggleZoom(leafId)}
         isFloating={isFloating}
         onToggleFloat={() => {

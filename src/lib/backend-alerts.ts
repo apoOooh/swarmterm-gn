@@ -1,0 +1,53 @@
+import type { NewCenterEntry } from '@/lib/notification-center'
+
+/**
+ * Backend failures go to the notification center (the bell). They belong to
+ * no pane, so each service gets a pseudo terminal id: the bell shows the
+ * entry's detail as its subtitle and clicking it only marks it read (there is
+ * no pane to reveal, see lib/notification-entry-view.ts), and a repeat failure replaces the unread entry
+ * instead of stacking (addEntry dedupes by id + kind).
+ */
+export const MCP_ALERT_ID = 'backend:mcp'
+export const VOICE_ALERT_ID = 'backend:voice'
+
+export function mcpExitedEntry(reason: string, at: number): NewCenterEntry {
+  return { kind: 'backend', terminalId: MCP_ALERT_ID, title: 'MCP server stopped', detail: reason, at }
+}
+
+export function voicePipeErrorEntry(payload: { message?: string } | null | undefined, at: number): NewCenterEntry {
+  return { kind: 'backend', terminalId: VOICE_ALERT_ID, title: 'Voice input failed', detail: payload?.message ?? '', at }
+}
+
+export const INPUT_ALERT_ID = 'backend:input'
+
+/**
+ * A pane's pty input queue was full (the program stopped reading) and a write
+ * was dropped. Not filed under the pane's own id: an `attention` entry there
+ * would replace the agent's real "needs attention" entry.
+ */
+export function inputDroppedEntry(paneLabel: string, at: number): NewCenterEntry {
+  return {
+    kind: 'backend',
+    terminalId: INPUT_ALERT_ID,
+    title: 'Input dropped',
+    detail: `${paneLabel} is not reading input; the last paste or keystrokes were not sent`,
+    at
+  }
+}
+
+/** Minimum gap between two input-dropped alerts for the same pane. */
+export const INPUT_ALERT_INTERVAL_MS = 5_000
+
+/**
+ * Per-pane throttle: a stuck pane rejects every keystroke, and each rejection
+ * would otherwise re-add the bell entry. Returns whether to notify now.
+ */
+export function createInputDropThrottle(intervalMs = INPUT_ALERT_INTERVAL_MS): (terminalId: string, now: number) => boolean {
+  const last = new Map<string, number>()
+  return (terminalId, now) => {
+    const prev = last.get(terminalId)
+    if (prev !== undefined && now - prev < intervalMs) return false
+    last.set(terminalId, now)
+    return true
+  }
+}

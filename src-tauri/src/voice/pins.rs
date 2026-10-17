@@ -127,8 +127,20 @@ impl PinStore {
         self.take_where(|_| true, CancelReason::Disabled)
     }
 
+    /// The pane a live pin points at (the built-in source labels its state).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn terminal_of(&self, pin: &str) -> Option<String> {
+        self.pins.get(pin).map(|p| p.terminal_id.clone())
+    }
+
     /// Whether the connection still holds an open dictation (it then gets
     /// the pin's lifetime as idle timeout instead of the short default).
+    /// Some dictation is recording right now (half-duplex gate, SWA-66).
+    /// Expired pins are dead even before a sweep removes them.
+    pub fn any_live(&self, now: Instant) -> bool {
+        self.pins.values().any(|p| !p.expired(now))
+    }
+
     pub fn conn_has_pin(&self, conn: u64) -> bool {
         self.pins.values().any(|p| p.conn == Some(conn))
     }

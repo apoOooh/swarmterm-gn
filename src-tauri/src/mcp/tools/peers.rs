@@ -286,7 +286,10 @@ fn peer_target(
     caller: &str,
     peer: &str,
 ) -> Result<(String, bool), rmcp::ErrorData> {
-    let mut rooms = state.war_rooms.lock().unwrap();
+    let mut rooms = state
+        .war_rooms
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let entry = rooms
         .find_room_of(caller)
         .ok_or_else(|| rmcp::ErrorData::invalid_request(NOT_IN_ROOM, None))?;
@@ -340,7 +343,10 @@ impl SwarmtermMcpServer {
         // back — harmless, and the next call fails the gate.
         let (name, _is_agent) = peer_target(&state, &terminal.0, &args.peer)?;
         let (screen, snapshot) = {
-            let peers = state.peer_states.lock().unwrap();
+            let peers = state
+                .peer_states
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             (peers.screen(&args.peer), peers.snapshot(&args.peer))
         };
         let (text, truncated) = tail_lines(&screen.unwrap_or_default(), clamp_lines(args.lines));
@@ -398,7 +404,7 @@ impl SwarmtermMcpServer {
         let initial = state
             .peer_states
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .snapshot(&args.peer)
             .map(|s| s.state)
             .unwrap_or_else(|| "unknown".to_string());
@@ -410,12 +416,20 @@ impl SwarmtermMcpServer {
             notified.as_mut().enable();
             // Three sequential scoped locks; each guard is dropped at the end
             // of its statement so nothing is held across the `.await` below.
-            let pty_live = state.terminals.lock().unwrap().contains_key(&args.peer);
-            let snapshot = state.peer_states.lock().unwrap().snapshot(&args.peer);
+            let pty_live = state
+                .terminals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(&args.peer);
+            let snapshot = state
+                .peer_states
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .snapshot(&args.peer);
             let in_room = state
                 .war_rooms
                 .lock()
-                .unwrap()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .find_room_of(&terminal.0)
                 .is_some_and(|e| e.room.is_member(&args.peer));
             let now = now_ms();

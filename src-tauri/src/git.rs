@@ -137,8 +137,13 @@ pub fn list_worktrees(cwd: &Path, home: &Path) -> Result<Vec<WorktreeInfo>, Stri
     Ok(trees)
 }
 
-/// Parse `git status --porcelain=v1` + `git diff HEAD --numstat` output.
+/// Parse `git status --porcelain=v1 -z` + `git diff HEAD --numstat -z` output.
 /// Merges by file path: status letter from `status_out`, line counts from `numstat_out`.
+///
+/// `-z` is required: without it git prints renames as `old -> new` and
+/// C-quotes paths containing spaces/non-ASCII, which cannot be used as paths.
+/// With `-z`, status records are `XY <path>\0` and renames/copies carry an
+/// extra `<orig-path>\0` record; numstat renames are `a\tr\t\0<old>\0<new>\0`.
 ///
 /// Limitations:
 /// - Binary files produce `added = 0, removed = 0` (numstat emits `-\t-\tpath` for binaries).
@@ -146,22 +151,39 @@ pub fn list_worktrees(cwd: &Path, home: &Path) -> Result<Vec<WorktreeInfo>, Stri
 ///   yet in HEAD; only `git diff --cached` would capture their line counts.
 pub fn parse_changed_files(status_out: &str, numstat_out: &str) -> Vec<ChangedFile> {
     let mut counts: HashMap<String, (u32, u32)> = HashMap::new();
-    for line in numstat_out.lines() {
-        let parts: Vec<&str> = line.splitn(3, '\t').collect();
-        if parts.len() == 3 {
-            let added: u32 = parts[0].parse().unwrap_or(0);
-            let removed: u32 = parts[1].parse().unwrap_or(0);
-            counts.insert(parts[2].to_string(), (added, removed));
+    let mut fields = numstat_out.split('\0');
+    while let Some(rec) = fields.next() {
+        let parts: Vec<&str> = rec.splitn(3, '\t').collect();
+        if parts.len() != 3 {
+            continue;
         }
+        let added: u32 = parts[0].parse().unwrap_or(0);
+        let removed: u32 = parts[1].parse().unwrap_or(0);
+        let path = if parts[2].is_empty() {
+            // Rename/copy: the next two fields are <old> and <new>.
+            let _old = fields.next();
+            match fields.next() {
+                Some(new) => new,
+                None => continue,
+            }
+        } else {
+            parts[2]
+        };
+        counts.insert(path.to_string(), (added, removed));
     }
 
     let mut files = Vec::new();
-    for line in status_out.lines() {
-        if line.len() < 4 {
+    let mut records = status_out.split('\0');
+    while let Some(rec) = records.next() {
+        if rec.len() < 4 || !rec.is_char_boundary(3) {
             continue;
         }
-        let xy = &line[..2];
-        let path = line[3..].trim().to_string();
+        let xy = &rec[..2];
+        let path = rec[3..].to_string();
+        // Rename/copy records are followed by the original path; skip it.
+        if xy.contains('R') || xy.contains('C') {
+            records.next();
+        }
 
         let status = if xy == "??" {
             "?".to_string()
@@ -175,11 +197,9 @@ pub fn parse_changed_files(status_out: &str, numstat_out: &str) -> Vec<ChangedFi
             ch.to_string()
         };
 
-        // Renames are emitted as "new-path\told-path"; take the new path only.
-        let display_path = path.split('\t').next().unwrap_or(&path).to_string();
-        let (added, removed) = counts.get(&display_path).copied().unwrap_or((0, 0));
+        let (added, removed) = counts.get(&path).copied().unwrap_or((0, 0));
         files.push(ChangedFile {
-            path: display_path,
+            path,
             status,
             added,
             removed,
@@ -251,7 +271,7 @@ pub fn get_changed_files(worktree_path: &Path) -> Result<Vec<ChangedFile>, Strin
         .ok_or_else(|| format!("non-UTF-8 path: {}", worktree_path.display()))?;
 
     let status_out = git_command()
-        .args(["-C", p, "status", "--porcelain=v1"])
+        .args(["-C", p, "status", "--porcelain=v1", "-z"])
         .output()
         .map_err(|e| format!("git not found: {e}"))?;
     if !status_out.status.success() {
@@ -262,7 +282,7 @@ pub fn get_changed_files(worktree_path: &Path) -> Result<Vec<ChangedFile>, Strin
 
     // numstat may fail on a fresh repo with no commits — treat as empty
     let numstat_out = git_command()
-        .args(["-C", p, "diff", "HEAD", "--numstat"])
+        .args(["-C", p, "diff", "HEAD", "--numstat", "-z"])
         .output()
         .map_err(|e| format!("git not found: {e}"))?;
     let numstat_str = if numstat_out.status.success() {
@@ -680,6 +700,41 @@ pub fn merge_readiness(repo_cwd: &Path, branch: &str) -> Result<MergeReadiness, 
     })
 }
 
+/// Branch checked out in `worktree_path`, per the main repo's worktree list
+/// (works even if the directory is half-deleted by an earlier locked remove).
+/// `None` when the worktree is detached or not registered.
+fn worktree_branch(root: &str, worktree_path: &Path) -> Result<Option<String>, String> {
+    let out = git_command()
+        .args(["-C", root, "worktree", "list", "--porcelain"])
+        .output()
+        .map_err(|e| format!("git not found: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let want = normalize_path_for_compare(worktree_path);
+    Ok(parse_worktree_list(&String::from_utf8_lossy(&out.stdout))
+        .into_iter()
+        .find(|w| normalize_path_for_compare(Path::new(&w.path)) == want)
+        .map(|w| w.branch)
+        .filter(|b| !b.is_empty() && b != "(detached)"))
+}
+
+/// git prints `C:/x/y`, callers may pass `C:\x\y` or a `\\?\` canonical form.
+fn normalize_path_for_compare(p: &Path) -> String {
+    let p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let s = p.to_string_lossy().replace('\\', "/");
+    let s = s
+        .strip_prefix("//?/")
+        .unwrap_or(&s)
+        .trim_end_matches('/')
+        .to_string();
+    if cfg!(windows) {
+        s.to_lowercase()
+    } else {
+        s
+    }
+}
+
 /// UI-driven worktree removal: force-remove the directory and delete its branch.
 /// Distinct from `remove_worktree` (the agent-facing MCP path, kept strict and
 /// non-force): here the UI has already surfaced and gated any real unsaved work
@@ -695,8 +750,35 @@ pub fn clear_worktree(repo_cwd: &Path, worktree_path: &Path, branch: &str) -> Re
     if !is_inside_worktrees_dir(worktree_path, &main_root) {
         return Err("refusing: path is not a swarmterm-managed worktree".into());
     }
+    // The branch comes from the renderer: never trust it. It must be a sane
+    // name (no option smuggling) AND be the branch this very worktree has
+    // checked out — otherwise a stale value would force-delete an unrelated
+    // branch with its unmerged commits. Checked before anything is removed.
+    // Empty or the "(detached)" label `parse_worktree_list` gives the renderer
+    // both mean "no branch to delete".
+    let requested = Some(branch).filter(|b| !b.is_empty() && *b != "(detached)");
+    if let Some(b) = requested {
+        validate_branch_name(b)?;
+    }
     let root = main_root.to_str().ok_or("non-UTF-8 repo root")?;
     let target = worktree_path.to_str().ok_or("non-UTF-8 worktree path")?;
+    let actual = worktree_branch(root, worktree_path)?;
+    // Delete a branch only if it is exactly the one this worktree had checked
+    // out. A detached worktree is still removable, but a passed branch is then
+    // left alone — the renderer's value cannot be verified.
+    let delete = match (requested, actual.as_deref()) {
+        (None, _) => None,
+        (Some(b), Some(a)) if a == b => Some(b),
+        (Some(b), None) => {
+            eprintln!("clear_worktree: worktree is detached; keeping branch '{b}' (not deleted)");
+            None
+        }
+        (Some(b), Some(a)) => {
+            return Err(format!(
+                "refusing: '{b}' is not the branch checked out in this worktree ({a})"
+            ))
+        }
+    };
 
     let out = git_command()
         .args(["-C", root, "worktree", "remove", "--force", target])
@@ -713,8 +795,11 @@ pub fn clear_worktree(repo_cwd: &Path, worktree_path: &Path, branch: &str) -> Re
     // Delete the branch ref from the main repo. `-D` (force) because the UI has
     // already warned about unmerged commits; the branch is no longer checked out
     // anywhere now that its only worktree is gone.
+    let Some(branch) = delete else {
+        return Ok(());
+    };
     let out = git_command()
-        .args(["-C", root, "branch", "-D", branch])
+        .args(["-C", root, "branch", "-D", "--", branch])
         .output()
         .map_err(|e| format!("git not found: {e}"))?;
     if !out.status.success() {
@@ -925,6 +1010,85 @@ mod tests {
         );
     }
 
+    fn branch_exists(repo: &Path, branch: &str) -> bool {
+        let out = git_command()
+            .args(["-C", repo.to_str().unwrap(), "branch", "--list", branch])
+            .output()
+            .unwrap();
+        !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+    }
+
+    #[test]
+    fn clear_worktree_refuses_branch_not_checked_out_in_that_worktree() {
+        // A stale/buggy renderer value must not force-delete an unrelated
+        // branch (with its unmerged commits) — and nothing may be removed.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        run_git(&repo, &["branch", "precious"]);
+        let created = create_worktree(&repo, "swarm/a").unwrap();
+        let wt = std::path::PathBuf::from(&created.path);
+
+        let err = clear_worktree(&repo, &wt, "precious").unwrap_err();
+        assert!(err.contains("not the branch"), "got: {err}");
+        assert!(branch_exists(&repo, "precious"), "unrelated branch deleted");
+        assert!(wt.exists(), "worktree removed despite mismatch");
+        assert!(branch_exists(&repo, "swarm/a"));
+    }
+
+    #[test]
+    fn clear_worktree_rejects_option_like_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        let created = create_worktree(&repo, "swarm/b").unwrap();
+        let wt = std::path::PathBuf::from(&created.path);
+        assert!(clear_worktree(&repo, &wt, "--all").is_err());
+        assert!(wt.exists(), "worktree removed despite invalid branch");
+    }
+
+    /// Worktree on `swarm/d`, then detached in place (HEAD → commit).
+    fn detached_worktree(repo: &Path) -> std::path::PathBuf {
+        let created = create_worktree(repo, "swarm/d").unwrap();
+        let wt = std::path::PathBuf::from(&created.path);
+        run_git(&wt, &["checkout", "-q", "--detach"]);
+        wt
+    }
+
+    #[test]
+    fn clear_worktree_detached_without_branch_removes_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        let wt = detached_worktree(&repo);
+        clear_worktree(&repo, &wt, "").unwrap();
+        assert!(!wt.exists(), "detached worktree should be removed");
+        let wt2 = {
+            run_git(&repo, &["branch", "-D", "swarm/d"]);
+            detached_worktree(&repo)
+        };
+        clear_worktree(&repo, &wt2, "(detached)").unwrap();
+        assert!(!wt2.exists());
+    }
+
+    #[test]
+    fn clear_worktree_detached_with_branch_keeps_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        let wt = detached_worktree(&repo);
+        clear_worktree(&repo, &wt, "swarm/d").unwrap();
+        assert!(!wt.exists(), "detached worktree should be removed");
+        assert!(
+            branch_exists(&repo, "swarm/d"),
+            "passed branch must survive"
+        );
+    }
+
     #[test]
     fn clear_worktree_removes_directory_and_branch() {
         let tmp = tempfile::tempdir().unwrap();
@@ -994,8 +1158,8 @@ detached
 
     #[test]
     fn test_parse_changed_files_merges_counts() {
-        let status = " M src/auth.ts\nA  src/hooks/useAuth.ts\n?? .env.local\n";
-        let numstat = "4\t1\tsrc/auth.ts\n18\t0\tsrc/hooks/useAuth.ts\n";
+        let status = " M src/auth.ts\0A  src/hooks/useAuth.ts\0?? .env.local\0";
+        let numstat = concat!("4\t1\tsrc/auth.ts\0", "18\t0\tsrc/hooks/useAuth.ts\0");
         let result = parse_changed_files(status, numstat);
         assert_eq!(result.len(), 3);
 
@@ -1049,18 +1213,69 @@ detached
 
     #[test]
     fn test_parse_changed_files_renamed() {
-        // git status --porcelain=v1 emits renames as "R  new-path\told-path"
-        let status = "R  src/new-name.ts\tsrc/old-name.ts\n";
-        // numstat lists only the new path for renames (splitn(3) gives parts[2] = "src/new-name.ts")
-        let numstat = "2\t1\tsrc/new-name.ts\n";
+        // Real `git status --porcelain=v1 -z` output: rename record is
+        // "R  <new>\0<old>\0"; `git diff HEAD --numstat -z` emits
+        // "<a>\t<r>\t\0<old>\0<new>\0" for a rename.
+        let status = "R  src/new-name.ts\0src/old-name.ts\0";
+        let numstat = "2\t1\t\0src/old-name.ts\0src/new-name.ts\0";
         let result = parse_changed_files(status, numstat);
         assert_eq!(result.len(), 1);
-        // Only the new (destination) path should be stored
         assert_eq!(result[0].path, "src/new-name.ts");
         assert_eq!(result[0].status, "R");
-        // Line counts should be associated with the new path
         assert_eq!(result[0].added, 2);
         assert_eq!(result[0].removed, 1);
+    }
+
+    #[test]
+    fn test_parse_changed_files_real_z_fixture_spaces_and_non_ascii() {
+        // Captured from a real repo with a staged rename, a path with a space,
+        // a non-ASCII path and an untracked file.
+        let status =
+            "R  new.txt\0old.txt\0 M sp ace.txt\0 M z\u{f3}\u{142}.txt\0?? un tracked.txt\0";
+        let numstat = concat!(
+            "1\t0\t\0old.txt\0new.txt\0",
+            "1\t0\tsp ace.txt\0",
+            "1\t0\tz\u{f3}\u{142}.txt\0"
+        );
+        let r = parse_changed_files(status, numstat);
+        let got: Vec<(&str, &str, u32, u32)> = r
+            .iter()
+            .map(|f| (f.path.as_str(), f.status.as_str(), f.added, f.removed))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("new.txt", "R", 1, 0),
+                ("sp ace.txt", "M", 1, 0),
+                ("z\u{f3}\u{142}.txt", "M", 1, 0),
+                ("un tracked.txt", "?", 0, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn get_changed_files_real_repo_rename_and_quoted_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        std::fs::write(repo.join("old.txt"), "a\nb\nc\nd\n").unwrap();
+        std::fs::write(repo.join("z\u{f3}\u{142}.txt"), "x\n").unwrap();
+        run_git(&repo, &["add", "."]);
+        run_git(&repo, &["commit", "-q", "-m", "files"]);
+        run_git(&repo, &["mv", "old.txt", "new.txt"]);
+        std::fs::write(repo.join("z\u{f3}\u{142}.txt"), "x\ny\n").unwrap();
+        let r = get_changed_files(&repo).unwrap();
+        let mut got: Vec<(String, String, u32)> =
+            r.into_iter().map(|f| (f.path, f.status, f.added)).collect();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("new.txt".to_string(), "R".to_string(), 0),
+                ("z\u{f3}\u{142}.txt".to_string(), "M".to_string(), 1),
+            ]
+        );
     }
 
     #[test]

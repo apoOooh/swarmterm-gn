@@ -15,6 +15,7 @@ import {
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { cn } from '@/lib/utils'
 import { SessionRow } from './SessionRow'
+import type { SessionTargets } from '@/lib/session-transfer'
 
 interface SessionsDialogProps {
   open: boolean
@@ -22,6 +23,9 @@ interface SessionsDialogProps {
   sessions: AgentSessionEntry[]
   tickedKeys: ReadonlySet<string>
   onToggle: (key: string) => void
+  /** Chosen subscription per row (SWA-64), shared with the composer. */
+  targets: SessionTargets
+  onTargetChange: (key: string, accountId: string | null) => void
   canTickMore: boolean
   /** Remaining 12-pane budget — shown in the footer so a disabled row explains itself. */
   slotsLeft: number
@@ -42,6 +46,8 @@ export function SessionsDialog({
   sessions,
   tickedKeys,
   onToggle,
+  targets,
+  onTargetChange,
   canTickMore,
   slotsLeft
 }: SessionsDialogProps): ReactElement | null {
@@ -161,6 +167,8 @@ export function SessionsDialog({
                     ticked={ticked}
                     disabled={!ticked && !canTickMore}
                     onToggle={() => onToggle(key)}
+                    target={targets[key]}
+                    onTargetChange={(accountId) => onTargetChange(key, accountId)}
                   />
                 )
               })

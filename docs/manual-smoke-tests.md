@@ -4,7 +4,8 @@ Swarmterm GN supports Windows x64 only. Run the Windows checks here; retained
 macOS/Linux notes describe upstream behavior and are outside GN support.
 
 Run this by hand before a release, or after touching pty, focus, War Room or
-worktree code. Start with `npm run tauri dev`.
+worktree code. Start with `npm run tauri dev` (or `npm run tauri:dev:isolated`
+when an installed Swarmterm is running — otherwise it swallows the launch).
 
 A longer scripted War Room scenario lives in [`war-room-demo.md`](war-room-demo.md).
 
@@ -25,6 +26,11 @@ Do not mark them passed from the in-memory fixture alone.
       **Stacked**; drop on the bottom slot of **Stacked** → stacked, dragged pane
       at the bottom. With 3+ panes the bar also offers grid, main-left and
       main-top, and hovering a slot outlines the resulting layout.
+- [ ] Maximize a pane with 3+ panes: header has a violet bottom border, violet
+      restore button shows `+N` (floating panes counted, drawered ones not);
+      sidebar marks the maximized row, dims the others with a crossed-out eye
+      while their state dots stay bright, and the heading shows *Maximized*.
+      Clicking a dimmed row ends the zoom and clears all markers.
 - [ ] Snap/dock a zoomed pane (zoom ends), with a pane in the drawer (it stays
       parked and restores at the end), and drop a pane on a War Room tab while
       the bar is showing (still joins the room).
@@ -55,6 +61,29 @@ Do not mark them passed from the in-memory fixture alone.
       original slot.
 - [ ] Maximize another pane while one floats → the float hides; restore
       brings it back.
+
+## Pane header overflow
+
+- [ ] Split a Claude pane right three or four times until the panes are narrow:
+      agent icon + mode, title (truncated), folder name, maximize and ✕ stay
+      fully on screen in every header; a `⋯` button appears.
+- [ ] Hover a narrow header: after a short pause a second row drops over the
+      terminal with the hidden controls; moving the mouse into it keeps it open,
+      leaving closes it. Widen the pane: `⋯` and the row disappear.
+- [ ] From the dropped row open the shell menu and pick a shell, then split
+      right: both work, the row stays up while the menu is open.
+- [ ] Click `⋯`: the row stays open after the mouse leaves; clicking `⋯` again
+      or elsewhere closes it. Typing in the terminal afterwards still works, and
+      `Esc` in the terminal (e.g. vim) leaves the pinned row open.
+- [ ] Dragging a narrow pane by its header still swaps/docks it; double-clicking
+      bare header space still maximizes.
+- [ ] Settings → Title bar: mark Split right as Core — it stays in a narrow
+      header; drag Shell to the bottom — it moves to the end of every header and
+      is first to collapse. Restart the app: the layout is kept. Reset to
+      defaults restores the original header.
+- [ ] Settings → Title bar: set Float pane to "⋯ only" — even a wide header
+      shows `⋯` and Float sits only in the hover row; set Handoff brief to
+      "Off" — it is gone from the header and the hover row.
 
 ## Pane drawer
 
@@ -89,8 +118,11 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Workspace ⋮ → Split opens… → Claude Code: splits there open Claude while
       another workspace still opens Codex. "Settings default" reverts it.
 - [ ] Composer "Split opens" = Claude Code: the new workspace's ⋮ menu shows it ticked.
-- [ ] Pick an agent whose CLI is not installed (rename it off PATH, re-probe):
-      it is greyed out; a stale default falls back to a plain shell on split.
+- [ ] Uninstall an agent's CLI (rename it off PATH, re-probe): it disappears
+      from the composer's "Split opens" list unless it is the current choice,
+      shown as "(not installed)"; a stale default falls back to a plain shell
+      on split. A workspace default or template that assigns it creates plain
+      terminals for those slots.
 - [ ] Worktree isolation on: a default-agent split starts in the workspace
       folder, no new `swarm/*` branch appears.
 
@@ -208,6 +240,24 @@ Do not mark them passed from the in-memory fixture alone.
       updates the preview and every pane.
 - [ ] Settings → Keyboard Shortcuts lists the bindings for the current platform.
 - [ ] `⌘/Ctrl + B` toggles the sidebar; `Esc` closes Settings.
+- [ ] Sidebar hidden: resting the mouse on the left window edge slides it in over
+      the terminals (no terminal resizes); moving away slides it out. Items and
+      menus in it work, and it stays open while one of its menus is up. An open
+      preview column never paints over it. Dragging a workspace out of the rail
+      doesn't close it mid-drag.
+- [ ] Settings → Appearance → *Peek sidebar on left edge* off: the edge does
+      nothing; the choice survives a restart.
+- [ ] Right panel closed: resting the mouse on the right window edge slides it in
+      over the terminals (no terminal resizes); moving away slides it out. Git
+      and War Room work in it; a pane dragged onto it joins the War Room without
+      it closing mid-drag. Preview shows "Pin the panel"; the pin button docks
+      the panel. *Peek right panel on right edge* off: the edge does nothing.
+- [ ] Composer: *Save as default* → reopen the composer, the folder, counts,
+      agents, worktree toggle and *Split opens* come back. *Save as template…*
+      with a name → the *Template* picker lists it and applies it.
+- [ ] Settings → Workspaces: editing the defaults changes the next composer;
+      add / edit / duplicate / delete a template; *Reset to built-in* restores
+      2 terminals with 1 Claude Code. Everything survives a restart.
 - [ ] Restart the app → appearance and terminal preferences are remembered.
 
 ## Worktrees
@@ -391,7 +441,7 @@ Amp, Gemini CLI, Cursor Agent, Antigravity, OMP — on a machine that has it:
 
 - [ ] Composer shows the agent with its icon; stepper assigns panes; the
       agent list scrolls past ~9 rows without clipping the dialog.
-- [ ] Uninstalled CLI → the row is greyed out ("Not installed").
+- [ ] Uninstalled CLI → the composer does not list it at all.
 - [ ] Spawn a pane → the CLI starts; state dot turns yellow while it works,
       red on a permission prompt, green when finished in background (OMP:
       plain activity dot only — expected).
@@ -459,6 +509,7 @@ machine that never built Swarmterm. Details in
 - [ ] Plain terminal pane: yellow output dot behaves exactly as before.
 - [ ] Respawn an agent pane (switch agent) → no stale dot; detection resumes after ~3s.
 - [ ] Scroll an agent pane far up during a working task → dot still tracks the live bottom of the buffer.
+- [ ] Settings → Appearance → **Highlight panes by agent state** on: a working Claude pane wears a yellow inner frame that turns orange over the chosen gradient, red on a permission prompt, green after finishing in the background (cleared on focus); idle and plain Terminal panes stay unframed; switching it off removes every frame at once.
 
 ## Notifications
 
@@ -474,7 +525,18 @@ machine that never built Swarmterm. Details in
 - [ ] Bell: type `exit 3` in a background shell pane → pane shows "Process exited", bell lists "Shell exited (code 3)".
 - [ ] Bell: a drawered pane's entry restores the pane from the drawer; a closed pane's entry is shown disabled.
 - [ ] Bell: Sound and System off → entries are still recorded.
+- [ ] Bell: a backend alert ("MCP server stopped" / "Voice input failed") shows its reason under the title and is not disabled; clicking it only marks it read.
 
+
+## Voice companion (SWA-42)
+
+- [ ] Settings → Voice → buzzkey on a profile without buzzkey: "Not installed"; Install downloads, verifies and installs into `%LOCALAPPDATA%\Programs\buzzkey`; state becomes "Installed, not running".
+- [ ] Start → buzzkey's tray icon appears; after the first dictation the state reads "Connected — buzzkey <version>".
+- [ ] Quit (buzzkey with `quit` capability) closes it; an older buzzkey shows the tray hint instead.
+- [ ] Check for update on the newest version → "Up to date"; Update over a running buzzkey quits, swaps and restarts it.
+- [ ] Autostart switch on/off adds/removes `HKCU\…\Runuzzkey`; buzzkey's own tray toggle shows the same state.
+- [ ] With whisper-key running, the section offers no action.
+- [ ] Release build: no "testlab key" notice; a release signed with the buzzkey release key installs (SWA-63).
 
 ## Account profiles (SWA-9)
 
@@ -536,3 +598,12 @@ Automated native config/UI check against an already running Dev app: `node scrip
 Native check against a stable, running Dev app:
 `node scripts/check-custom-shortcuts-native.mjs <existing isolated test folder>`.
 It restores previous shortcut settings and removes only its own workspaces.
+
+## Built-in speech recognition (SWA-38)
+
+- [ ] Settings → Voice: download **Base**; the bar fills, the row then reads "downloaded".
+- [ ] Enable built-in speech; the pane header shows a microphone.
+- [ ] Click into a shell, Ctrl+Shift+Space, say a sentence, Ctrl+Shift+Space: "Listening…" then
+      "Transcribing…", the sentence arrives as a draft (no Enter).
+- [ ] Start again, click the pill's Stop: nothing is typed.
+- [ ] Windows microphone access off for desktop apps: the bell reports "no microphone available".

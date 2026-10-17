@@ -4,6 +4,7 @@ mod agent_process;
 mod agents;
 mod analytics;
 mod commands;
+mod dev_defer;
 mod devlog;
 mod files;
 mod folder_list;
@@ -14,6 +15,7 @@ mod mcp;
 mod paste_image;
 mod preview;
 mod pty;
+mod routine_cmd;
 mod sessions;
 mod shell;
 // Public so `main.rs` can reach `--statusline` without booting Tauri.
@@ -35,6 +37,9 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
         .manage(voice::VoiceHub::default())
+        .manage(voice::tts::TtsHub::default())
+        .manage(voice::companion::Companion::default())
+        .manage(voice_speech_hub())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.unminimize();
@@ -92,6 +97,12 @@ pub fn run() {
             // writer runs, or a switched-off profile is re-enrolled at boot.
             if let Ok(dir) = app.path().app_data_dir() {
                 crate::mcp::toggle::load(dir.join("swarmterm-mcp-disabled.json"));
+                // Before any pane starts: a profile added while the app was
+                // closed must be linked before its first `claude` writes.
+                crate::sessions::share::init(dir);
+                if let Ok(accounts) = crate::accounts::list(app.handle()) {
+                    crate::sessions::share::repair(&accounts);
+                }
             }
             crate::mcp::config::register_user_scope(app.handle());
             // Register `swarmterm --hook` under Claude Code's hook events in
@@ -102,6 +113,9 @@ pub fn run() {
             // `claude`: hooks are snapshotted at session start.
             crate::hook::install::register(app.handle());
             crate::hook::codex::register(app.handle());
+            // `codex --help` probe can take seconds on a cold start; pay it
+            // here, off-thread, instead of on the first Codex pane spawn.
+            crate::hook::codex::warm();
             // Voice dictation endpoint (SWA-12): named pipe + discovery file
             // for buzzkey; follows Settings → Voice. Failure is logged only.
             crate::voice::init(app.handle());
@@ -131,6 +145,7 @@ pub fn run() {
             devlog::dev_log,
             commands::files_open_context,
             commands::confirm_quit,
+            commands::run_routine_command,
             commands::save_clipboard_image,
             commands::files_request,
             commands::files_watch,
@@ -141,8 +156,25 @@ pub fn run() {
             voice::voice_focus_response,
             voice::voice_insert_result,
             voice::voice_indicator_stop,
+            voice::voice_turn_event,
+            voice::voice_tts_stop,
+            voice::voice_tts_test,
+            voice::voice_tts_status,
             voice::voice_get_settings,
             voice::voice_set_settings,
+            voice::companion::voice_companion_status,
+            voice::companion::voice_companion_check,
+            voice::companion::voice_companion_install,
+            voice::companion::voice_companion_start,
+            voice::companion::voice_companion_quit,
+            voice::companion::voice_companion_set_autostart,
+            voice::companion::voice_companion_probe,
+            voice::voice_dictation_toggle,
+            voice::voice_dictation_cancel,
+            voice::voice_speech_status,
+            voice::voice_model_download,
+            voice::voice_model_cancel,
+            voice::voice_model_delete,
             commands::resize_terminal,
             commands::kill_terminal,
             commands::war_room_join,
@@ -167,6 +199,9 @@ pub fn run() {
             commands::inspect_account_mcp,
             commands::list_agent_sessions,
             commands::read_agent_thread,
+            commands::transfer_agent_session,
+            commands::get_session_share,
+            commands::set_session_share,
             commands::inspect_saved_workspace,
             commands::set_claude_statusline,
             commands::resolve_path_link,
@@ -195,13 +230,25 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, _event| {
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                crate::mcp::shutdown();
+            }
             // macOS: clicking the Dock icon while the window is hidden
             // (close-to-tray) fires Reopen — re-show like the tray's "Show".
             // Other platforms get here via the single-instance plugin instead.
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = _event {
+            if let tauri::RunEvent::Reopen { .. } = event {
                 crate::tray::show_main(_app);
             }
         });
 }
+
+/// Built-in speech source state (SWA-38); Windows-only like the voice pipe.
+#[cfg(windows)]
+fn voice_speech_hub() -> voice::speech::SpeechHub {
+    voice::speech::SpeechHub::default()
+}
+
+#[cfg(not(windows))]
+fn voice_speech_hub() {}

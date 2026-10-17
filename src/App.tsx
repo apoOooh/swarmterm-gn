@@ -36,10 +36,11 @@ import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { inspectSavedWorkspace } from '@/tauri/sessions'
 import { jumpToAttention } from '@/lib/attention-jump'
 import { collectLeaves, findLeaf } from '@/lib/layout-tree'
+import { templateById } from '@/lib/templates'
 import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
 import { ClearGuard, clearInputSequence } from '@/lib/clear-input'
 import { shellFlavor } from '@/lib/agent-spawn-command'
-import { writeTerminal } from '@/tauri/terminal'
+import { setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
 
@@ -77,14 +78,15 @@ import { useDocumentStore } from '@/store/document-store'
 import { useExplorerStore } from '@/store/explorer-store'
 import { onFileChange } from '@/tauri/files'
 import { registerCloseGuard } from '@/lib/close-guard'
-import { confirmQuit, onQuitRequested } from '@/tauri/app'
-import { RightPanel } from '@/components/RightPanel/RightPanel'
+import { confirmQuit, onMcpServerExited, onQuitRequested, onVoicePipeError, onVoicePipeRecovered } from '@/tauri/app'
+import { RightPanel, RightPanelPeek } from '@/components/RightPanel/RightPanel'
 import { Navbar } from '@/components/Navbar/Navbar'
 import { SettingsView } from '@/components/Settings/SettingsView'
 import { FolderPicker } from '@/components/FolderPicker/FolderPicker'
 import { HandoffDialog } from '@/components/TerminalPane/HandoffDialog'
 import { TitleBar } from '@/components/TitleBar/TitleBar'
 import { Workspace, PaneDragGhost } from '@/components/Workspace/Workspace'
+import { FLOATING_LAYER_ID } from '@/lib/floating-panes'
 import { Welcome } from '@/components/Welcome/Welcome'
 import { WorkspaceTabs } from '@/components/WorkspaceTabs/WorkspaceTabs'
 import { useBrowserStore } from '@/store/browser-store'
@@ -99,6 +101,8 @@ import { useShellAvailabilityStore } from '@/store/shell-availability-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useNotificationPrefStore } from '@/store/notification-pref-store'
 import { startNotificationWatch } from '@/lib/notification-watch'
+import { turnEventFor, turnKindEntry } from '@/lib/voice-turns'
+import { onVoiceTurnKind, voiceTurnEvent } from '@/tauri/voice'
 import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { startAgentStateMirror } from '@/lib/agent-state-mirror'
@@ -121,21 +125,39 @@ import { closePreview, openPreview, wirePreviewEvents } from '@/lib/preview-regi
 import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
 import { onAgentSession } from '@/tauri/sessions'
-import { wireSavedWorkspaces, flushSavedWorkspaces } from '@/store/saved-workspaces-store'
-import { wireVoice } from '@/lib/voice-wiring'
+import { wireSavedWorkspaces, flushSavedWorkspaces, useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
+import { stopAnnouncements, toggleDictation, wireVoice } from '@/lib/voice-wiring'
+import { useVoiceDictationStore } from '@/store/voice-dictation-store'
+import { builtinSwitchedOn } from '@/lib/voice-dictation'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
+import { cleanupWhenResolved } from '@/lib/listener-cleanup'
+import { staleKeys } from '@/lib/stale-sweep'
+import { VOICE_ALERT_ID, createInputDropThrottle, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
+import { BuzzkeyUpdateToast } from '@/components/BuzzkeyUpdateToast'
+import { useBuzzkeyUpdateStore } from '@/store/buzzkey-update-store'
 
 // Platform never changes at runtime, so a module-level constant is fine.
 const isMac = isMacPlatform()
 
 /** Terminal ids referenced by any workspace's layout — the ones to keep alive. */
-function liveTerminalIds(workspaces: WorkspaceModel[]): Set<string> {
-  const ids = new Set<string>()
+/** Leaf ids and terminal ids across every layout, from a single tree walk. */
+function liveLayoutIds(workspaces: WorkspaceModel[]): { leaves: Set<string>; terminals: Set<string> } {
+  const leaves = new Set<string>()
+  const terminals = new Set<string>()
   for (const ws of workspaces) {
-    for (const leaf of collectLeaves(ws.layout)) ids.add(leaf.terminalId)
+    for (const leaf of collectLeaves(ws.layout)) {
+      leaves.add(leaf.id)
+      terminals.add(leaf.terminalId)
+    }
   }
-  return ids
+  return { leaves, terminals }
+}
+
+function sameIds(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const id of a) if (!b.has(id)) return false
+  return true
 }
 
 // Dock tiles and snap slots sit on top of panes; let them win the hit test
@@ -341,8 +363,10 @@ export default function App(): ReactElement {
   }
 
   const noWorkspaces = workspaces.length === 0
-  // Welcome shows when explicitly focused, or forced (uncloseable) when none exist.
-  const showWelcome = welcomeFocused || noWorkspaces
+  const autostarting = useSavedWorkspacesStore((s) => s.autostarting)
+  // Welcome shows when explicitly focused, or forced (uncloseable) when none exist —
+  // but not while the startup workspaces are still opening.
+  const showWelcome = welcomeFocused || (noWorkspaces && !autostarting)
   const welcomeClosable = !noWorkspaces
 
   useEffect(() => {
@@ -518,6 +542,29 @@ export default function App(): ReactElement {
         st.toggleZoom(ws.focusedLeafId)
         return
       }
+      if (action === 'dictate') {
+        // Built-in speech (SWA-38). Stopping always works — the user may have
+        // clicked elsewhere while speaking; starting needs the keyboard on a
+        // terminal (Rust pins whichever pane owns it). Switched off = not
+        // claimed, the key reaches the pane as before. Switched on without
+        // the selected model on disk IS claimed: Rust answers model-missing
+        // and the bell says so, instead of the key silently doing nothing.
+        const dictation = useVoiceDictationStore.getState()
+        const recording = dictation.dictation.phase === 'recording'
+        if (!recording && (!builtinSwitchedOn(dictation.settings) || state.welcomeFocused)) return
+        if (!recording && !requestedAction && !isAnyTerminalFocused() && !shouldReturnFocus(describeFocusedElement(document.activeElement))) return
+        e.preventDefault()
+        toggleDictation()
+        return
+      }
+      if (action === 'stop-announcement') {
+        // Only claimed while Swarmterm speaks announcements; off, Ctrl+Shift+M
+        // stays the pane's.
+        if (!useVoiceDictationStore.getState().settings?.speakTurns) return
+        e.preventDefault()
+        stopAnnouncements()
+        return
+      }
       if (action === 'drawer-pane') {
         // Same gate as toggle-zoom: only when the keyboard belongs to a
         // terminal (or bare chrome), never while typing in an input.
@@ -685,7 +732,10 @@ export default function App(): ReactElement {
       if (terminalId) useAgentStateStore.getState().markSeen(terminalId)
     }
     markFocusedSeen()
-    const unsubscribe = useAppStore.subscribe(markFocusedSeen)
+    // Store ticks only matter when they move focus to another terminal.
+    const unsubscribe = useAppStore.subscribe((state, prev) => {
+      if (selectFocusedTerminalId(state) !== selectFocusedTerminalId(prev)) markFocusedSeen()
+    })
     window.addEventListener('focus', markFocusedSeen)
     return () => {
       unsubscribe()
@@ -703,9 +753,7 @@ export default function App(): ReactElement {
 
   useEffect(() => {
     if (!isMac) return // no auto-hiding titlebar to dodge off macOS
-    let unlisten: (() => void) | undefined
-    onFullscreenChanged(setIsFullscreen).then((un) => (unlisten = un))
-    return () => unlisten?.()
+    return cleanupWhenResolved(onFullscreenChanged(setIsFullscreen), 'fullscreen')
   }, [])
 
   useEffect(() => {
@@ -723,38 +771,105 @@ export default function App(): ReactElement {
   const chromeOffset = systemChromeOffset(isMac, isFullscreen, systemChromeRevealed)
 
   // Kill orphaned PTYs and close previews when terminals leave all layouts.
-  useEffect(
-    () =>
-      useAppStore.subscribe((state) => {
-        const live = liveTerminalIds(state.workspaces)
-        useDocumentStore.getState().collect(new Set(state.workspaces.flatMap((w) => collectLeaves(w.layout).map((l) => l.id))))
-        collectEditorCache(new Set(Object.keys(useDocumentStore.getState().documents)))
-        disposeOrphanTerminals(live)
-        const { previews } = useBrowserStore.getState()
-        for (const terminalId of Object.keys(previews)) {
-          if (!live.has(terminalId)) closePreview(terminalId)
+  useEffect(() => {
+    // Ids already asked to leave the War Room, so a stale member isn't re-sent
+    // warRoomLeave on every layout tick until the room event removes it.
+    const leaving = new Set<string>()
+    let lastLeaves: Set<string> | undefined
+    let live: Set<string> | undefined
+
+    // Cheap sweeps (O(entries) over small terminalId-keyed maps): run on every
+    // layout change AND whenever those stores change, so an entry that arrives
+    // late for an already-closed pane is dropped even if the layout is stable.
+    const sweepPreviews = (): void => {
+      if (live) for (const id of staleKeys(Object.keys(useBrowserStore.getState().previews), live)) closePreview(id)
+    }
+    // Titles are keyed by terminalId outside the layout tree (see
+    // terminal-title-store) — sweep them the same way previews are, or a
+    // closed pane's title lingers in the store for the rest of the session.
+    const sweepTitles = (): void => {
+      if (!live) return
+      const { titles, clearTitle } = useTerminalTitleStore.getState()
+      for (const id of staleKeys(Object.keys(titles), live)) clearTitle(id)
+    }
+    // War Room members whose terminal left every layout: the Rust auto-leave
+    // on pty death normally beats us here — this sweep is the belt-and-braces
+    // for any path that drops a pane without killing it. Iterate every room's
+    // slice, not just the room shown in the panel.
+    const sweepWarRoom = (): void => {
+      if (!live) return
+      const rooms = Object.values(useWarRoomStore.getState().membersByRoom)
+      // Forget ids whose member is gone, so the set can't grow forever and a
+      // terminal id that rejoins later is swept again.
+      const present = new Set(rooms.flatMap((ms) => ms.map((m) => m.terminalId)))
+      for (const id of leaving) if (!present.has(id)) leaving.delete(id)
+      for (const ms of rooms) {
+        for (const m of ms) {
+          if (live.has(m.terminalId) || leaving.has(m.terminalId)) continue
+          const id = m.terminalId
+          leaving.add(id)
+          // Rejects when the backend already auto-left the member (the room
+          // event then removes it). Drop the id so a real failure is retried
+          // on the next sweep instead of being suppressed forever.
+          warRoomLeave(id).catch(() => { leaving.delete(id) })
         }
-        // Titles are keyed by terminalId outside the layout tree (see
-        // terminal-title-store) — sweep them the same way previews are, or a
-        // closed pane's title lingers in the store for the rest of the session.
-        const { titles, clearTitle } = useTerminalTitleStore.getState()
-        for (const terminalId of Object.keys(titles)) {
-          if (!live.has(terminalId)) clearTitle(terminalId)
+      }
+    }
+
+    const unsubs = [
+      useAppStore.subscribe((state, prev) => {
+        // Liveness only changes with the workspaces array; skip other ticks.
+        if (state.workspaces === prev.workspaces) return
+        const ids = liveLayoutIds(state.workspaces)
+        // Expensive part: skipped when a reorder/resize keeps the same panes.
+        if (!(lastLeaves && live && sameIds(ids.leaves, lastLeaves) && sameIds(ids.terminals, live))) {
+          useDocumentStore.getState().collect(ids.leaves)
+          collectEditorCache(new Set(Object.keys(useDocumentStore.getState().documents)))
+          disposeOrphanTerminals(ids.terminals)
         }
-        // War Room members whose terminal left every layout: the Rust
-        // auto-leave on pty death normally beats us here — this sweep is the
-        // belt-and-braces for any path that drops a pane without killing it.
-        // warRoomLeave is idempotent, so racing the backend is harmless.
-        // Iterate every room's slice — the sweep doesn't just target whatever
-        // room is currently shown in the panel.
-        for (const ms of Object.values(useWarRoomStore.getState().membersByRoom)) {
-          for (const m of ms) {
-            if (!live.has(m.terminalId)) void warRoomLeave(m.terminalId)
-          }
-        }
+        lastLeaves = ids.leaves
+        live = ids.terminals
+        sweepPreviews()
+        sweepTitles()
+        sweepWarRoom()
       }),
-    []
-  )
+      useBrowserStore.subscribe((s, p) => { if (s.previews !== p.previews) sweepPreviews() }),
+      useTerminalTitleStore.subscribe((s, p) => { if (s.titles !== p.titles) sweepTitles() }),
+      useWarRoomStore.subscribe((s, p) => { if (s.membersByRoom !== p.membersByRoom) sweepWarRoom() })
+    ]
+    return () => { for (const u of unsubs) u() }
+  }, [])
+
+  // Backend service failures surface in the notification center (bell).
+  useEffect(() => {
+    const center = useNotificationCenterStore.getState
+    const cleanups = [
+      cleanupWhenResolved(onMcpServerExited((reason) => center().add(mcpExitedEntry(reason, Date.now()))), 'mcp:server-exited'),
+      cleanupWhenResolved(onVoicePipeError((p) => center().add(voicePipeErrorEntry(p, Date.now()))), 'voice:pipe-error'),
+      cleanupWhenResolved(onVoicePipeRecovered(() => center().markTerminalRead(VOICE_ALERT_ID, ['backend'])), 'voice:pipe-recovered'),
+      // SWA-58: a Claude turn that failed or was stopped (Rust says it; the
+      // bell keeps it). The chime follows the user's sound pref like any other.
+      cleanupWhenResolved(onVoiceTurnKind((e) => {
+        center().add(turnKindEntry(e, useTerminalTitleStore.getState().titles[e.terminalId] ?? '', Date.now()))
+        if (e.kind === 'error' && useNotificationPrefStore.getState().prefs.sound) playChime('attention')
+      }), 'voice:turn-kind')
+    ]
+    // A pane whose program stopped reading input: its pty queue is full and
+    // the write was dropped (Rust write_terminal), so say so instead of
+    // losing the paste silently.
+    const allowInputAlert = createInputDropThrottle()
+    setInputDroppedHandler((terminalId) => {
+      if (!allowInputAlert(terminalId, Date.now())) return
+      const ws = selectWorkspaceByTerminalId(useAppStore.getState(), terminalId)
+      const leaf = ws && collectLeaves(ws.layout).find((l) => l.terminalId === terminalId)
+      const label = leaf ? `${templateById(leaf.agentId ?? 'terminal').name} (${ws.name})` : 'A pane'
+      center().add(inputDroppedEntry(label, Date.now()))
+    })
+    return () => {
+      setInputDroppedHandler(undefined)
+      for (const c of cleanups) c()
+    }
+  }, [])
 
   // Wire MCP preview:open events to the per-terminal preview. Background
   // terminals update silently — the panel is only revealed when the event
@@ -798,6 +913,10 @@ export default function App(): ReactElement {
       window.clearInterval(i)
     }
   }, [])
+
+  // buzzkey update toast: start + every 24 h, only for an installed and
+  // connected buzzkey (rules in lib/buzzkey-update.ts).
+  useEffect(() => useBuzzkeyUpdateStore.getState().startWatch(), [])
 
   // Tray "Check for Updates…" → manual check (talkative: reports up-to-date
   // and failures in a native dialog).
@@ -893,6 +1012,10 @@ export default function App(): ReactElement {
       playChime,
       sendSystemNotification: (opts) => void sendSystemNotification(opts),
       record: (entry) => useNotificationCenterStore.getState().add(entry),
+      announce: (entry) => {
+        const turn = turnEventFor(entry, useTerminalTitleStore.getState().titles[entry.terminalId] ?? '')
+        if (turn !== null) void voiceTurnEvent(turn).catch(() => {})
+      },
       now: Date.now,
       setTimer: (fn, ms) => window.setTimeout(fn, ms),
       clearTimer: (h) => window.clearTimeout(h as number)
@@ -1049,6 +1172,7 @@ export default function App(): ReactElement {
     >
       <FileDropListener />
       <FileDialog />
+      <BuzzkeyUpdateToast />
       <TitleBar fullscreen={isFullscreen} />
       <SavedWorkspaceNotice />
 
@@ -1114,6 +1238,7 @@ export default function App(): ReactElement {
                     </>
                   )}
                 </Group>
+                <RightPanelPeek />
                 <DragOverlay modifiers={draggingLeaf ? [ghostModifier] : undefined}>
                   {draggingLeaf ? <PaneDragGhost leaf={draggingLeaf} /> : null}
                 </DragOverlay>
@@ -1128,6 +1253,9 @@ export default function App(): ReactElement {
           </div>
 
         </main>
+
+        {/* Floating panes portal in here (Workspace.tsx), above both sidebars. */}
+        <div id={FLOATING_LAYER_ID} className="pointer-events-none absolute inset-2 z-30 [&>*]:pointer-events-auto" />
 
         {settingsOpen && (
           <SettingsView

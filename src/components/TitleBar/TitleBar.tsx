@@ -24,6 +24,7 @@ import { HeaderRecentSearch } from './HeaderRecentSearch'
 import { NotificationBell } from './NotificationBell'
 import { usePromptLibraryStore } from '@/store/prompt-library-store'
 import { useRoutineStore } from '@/store/routine-store'
+import { cleanupWhenResolved } from '@/lib/listener-cleanup'
 
 // On macOS the OS draws native traffic lights over this header (titleBarStyle
 // Overlay — see tauri.macos.conf.json): hide the custom window buttons and
@@ -67,9 +68,7 @@ export function TitleBar({ fullscreen }: TitleBarProps): ReactElement {
 
   useEffect(() => {
     if (isMac) return // maximize icon swap only exists on the custom buttons
-    let unlisten: (() => void) | undefined
-    onMaximizedChanged(setIsMaximized).then((un) => (unlisten = un))
-    return () => unlisten?.()
+    return cleanupWhenResolved(onMaximizedChanged(setIsMaximized), 'maximized')
   }, [])
 
   return (

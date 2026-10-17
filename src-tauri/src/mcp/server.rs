@@ -99,7 +99,10 @@ impl SwarmtermMcpServer {
             .unwrap_or("");
         let token = auth::bearer(header);
         let state = self.app.state::<AppState>();
-        let terminals = state.terminals.lock().unwrap();
+        let terminals = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         auth::resolve(token, |id| terminals.contains_key(id)).map_err(|e| match e {
             AuthError::Missing => rmcp::ErrorData::invalid_request("missing bearer token", None),
             AuthError::Unknown => rmcp::ErrorData::invalid_request("unknown session", None),
@@ -111,7 +114,10 @@ impl SwarmtermMcpServer {
     /// repo folder recorded at spawn time.
     pub(crate) fn worktree_ctx(&self, terminal: &TerminalId) -> Result<String, rmcp::ErrorData> {
         let state = self.app.state::<AppState>();
-        let terminals = state.terminals.lock().unwrap();
+        let terminals = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let t = terminals
             .get(&terminal.0)
             .ok_or_else(|| rmcp::ErrorData::invalid_request("unknown session", None))?;
@@ -234,12 +240,20 @@ async fn record_client(
         .and_then(|h| h.to_str().ok())
     {
         let token = auth::bearer(header).to_owned();
-        let first = app
-            .state::<AppState>()
-            .mcp_clients
+        let state = app.state::<AppState>();
+        // Only live pane ids are recorded: `seen` is pruned per PTY, so an
+        // arbitrary loopback token would otherwise stay in it forever.
+        let live = state
+            .terminals
             .lock()
-            .unwrap()
-            .touch(&token);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(token.trim());
+        let first = live
+            && state
+                .mcp_clients
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .touch(&token);
         // A client reaching us (usually `initialize`) is the handshake: a
         // member dragged in earlier flips to connected without first having
         // to call a war_room tool (SWA-30). The token is only trusted as a
@@ -258,7 +272,10 @@ async fn record_client(
 fn live_caller(app: &AppHandle, headers: &HeaderMap) -> Option<String> {
     let token = auth::bearer(bearer_header(headers));
     let state = app.state::<AppState>();
-    let terminals = state.terminals.lock().unwrap();
+    let terminals = state
+        .terminals
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     auth::resolve(token, |id| terminals.contains_key(id))
         .ok()
         .map(|TerminalId(id)| id)
@@ -280,7 +297,7 @@ fn publish_context(app: &AppHandle, terminal_id: &str, pct: Option<f64>) {
         .state::<AppState>()
         .context_usage
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .record(terminal_id, pct);
     if let Some(pct) = change {
         use tauri::Emitter;
@@ -302,7 +319,7 @@ fn publish_usage(app: &AppHandle, terminal_id: &str, limits: rate_limits::RateLi
         .state::<AppState>()
         .rate_limit_usage
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .record(terminal_id, limits);
     if let Some(limits) = change {
         use tauri::Emitter;
@@ -345,7 +362,7 @@ async fn status_handler(
         .state::<AppState>()
         .mcp_clients
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .has_seen(token);
     (
         StatusCode::OK,
@@ -360,8 +377,9 @@ async fn status_handler(
 /// event for its own pane. The body is a closed enum (`HookBody`), never the
 /// hook's stdin: prompt text, tool input and cwd stay inside the pane. The
 /// verdict is re-emitted to the renderer as `agent:hook` (payload in lockstep
-/// with `src/tauri/agent-state.ts::AgentHookEvent`); Rust keeps no hook state
-/// itself — precedence over screen-scrape is decided in the renderer.
+/// with `src/tauri/agent-state.ts::AgentHookEvent`); precedence over
+/// screen-scrape is decided in the renderer. The only hook state Rust keeps
+/// is the voice turn ledger (SWA-58), fed by the body's turn mark.
 async fn hook_handler(
     AxumState(app): AxumState<AppHandle>,
     headers: HeaderMap,
@@ -371,12 +389,34 @@ async fn hook_handler(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     use tauri::Emitter;
+    if body.turn.as_ref().is_some_and(|t| !t.is_valid()) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    // SWA-58: true asks the hook CLI to hand Claude the `<voice>` instruction.
+    let mut voice = false;
     if let Some(session) = &body.session {
-        let state = app.state::<crate::pty::AppState>();
-        let terminals = state.terminals.lock().unwrap();
-        if terminals
-            .get(&terminal_id)
-            .is_some_and(|t| session.matches(&t.spawn_id, t.agent_id.as_deref()))
+        // Generation and profile dir copied out under the lock; the voice
+        // side takes its own locks only after this one is released.
+        let matched = {
+            let state = app.state::<crate::pty::AppState>();
+            let terminals = state
+                .terminals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            terminals
+                .get(&terminal_id)
+                .filter(|t| session.matches(&t.spawn_id, t.agent_id.as_deref()))
+                .map(|t| (t.spawn_id.clone(), t.claude_config_dir.clone()))
+        };
+        let Some((spawn_id, config_dir)) = matched else {
+            return StatusCode::NO_CONTENT.into_response();
+        };
+        // A Stop names the session it belongs to but changes nothing about
+        // which one the pane runs; only start and prompt capture it.
+        if body
+            .turn
+            .as_ref()
+            .is_none_or(|t| t.edge == crate::hook::TurnEdge::Prompt)
         {
             let _ = app.emit(
                 "agent:session",
@@ -387,13 +427,31 @@ async fn hook_handler(
                     at_ms: crate::warroom::now_ms(),
                 },
             );
-        } else {
-            return StatusCode::NO_CONTENT.into_response();
+        }
+        if let Some(turn) = &body.turn {
+            // A Stop for a prompt that is already over must not end the turn
+            // in progress: no ledger change and no idle edge for the renderer.
+            if crate::voice::stale_stop(&app, &terminal_id, &spawn_id, &session.session_id, turn) {
+                return StatusCode::NO_CONTENT.into_response();
+            }
+            voice = crate::voice::hook_turn(
+                &app,
+                &terminal_id,
+                &spawn_id,
+                &session.session_id,
+                turn,
+                config_dir,
+            );
         }
     }
     // Codex capture carries no Claude lifecycle authority.
     if body.session.as_ref().is_some_and(|s| s.agent_id == "codex") {
         return StatusCode::NO_CONTENT.into_response();
+    }
+    // SessionStart/SessionEnd: whatever turn was open belongs to a
+    // conversation that is over.
+    if matches!(body.signal, crate::hook::Signal::Forget) {
+        crate::voice::forget_turns(&app, &terminal_id);
     }
     let _ = app.emit(
         "agent:hook",
@@ -410,6 +468,14 @@ async fn hook_handler(
         publish_context(&app, &terminal_id, None);
     }
     // The CLI reads to EOF with a 300 ms budget; `close` ends it promptly.
+    if voice {
+        return (
+            StatusCode::OK,
+            [(axum::http::header::CONNECTION, "close")],
+            Json(serde_json::json!({ "voice": true })),
+        )
+            .into_response();
+    }
     (
         StatusCode::NO_CONTENT,
         [(axum::http::header::CONNECTION, "close")],

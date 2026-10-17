@@ -27,12 +27,14 @@ use tauri::{AppHandle, Manager};
 /// `super::signal_for` — the lockstep test enforces both directions, because a
 /// registered event with no signal spawns a process for nothing and a signal
 /// with no registration is a state the renderer never hears about.
-pub const HOOK_EVENTS: [&str; 7] = [
+pub const HOOK_EVENTS: [&str; 8] = [
     "UserPromptSubmit",
     "PermissionRequest",
     "Notification",
     "PostToolUse",
     "Stop",
+    // SWA-58: a turn that ended in an API error is announced as such.
+    "StopFailure",
     "SessionStart",
     "SessionEnd",
 ];
@@ -101,7 +103,7 @@ pub enum HooksWrite {
 /// Compute the new `settings.json` contents. `command: Some(_)` installs,
 /// `None` removes (reachable from tests only today — there is no UI toggle).
 ///
-/// Only the seven `HOOK_EVENTS` keys are ever rewritten; every other key under
+/// Only the eight `HOOK_EVENTS` keys are ever rewritten; every other key under
 /// `hooks` (and every other top-level key) passes through untouched. An event
 /// array or the `hooks` object that ends up empty is dropped, so removal
 /// restores the file to "we were never here". A pre-existing empty
@@ -180,6 +182,11 @@ pub fn write_hooks_to_file(path: &Path, command: Option<&str>) -> Result<(), Str
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("read: {e}")),
     };
+    // A dev build next to the installed app leaves its live entries alone
+    // (in both directions), or a deleted worktree breaks every Claude session.
+    if crate::dev_defer::defers(existing.as_deref(), is_ours_hook) {
+        return Ok(());
+    }
     let merged = match merge_hooks(existing.as_deref(), command)? {
         HooksWrite::Unchanged => return Ok(()),
         HooksWrite::Write(s) => s,
@@ -320,7 +327,7 @@ mod tests {
         // spawned for nothing), and every signal-bearing event must be
         // registered (else the renderer never hears it). PreToolUse is the
         // canary: it fires on every tool call and must stay out.
-        assert_eq!(HOOK_EVENTS.len(), 7);
+        assert_eq!(HOOK_EVENTS.len(), 8);
         for event in HOOK_EVENTS {
             let nt = (event == "Notification").then_some("permission_prompt");
             assert!(signal_for(event, nt).is_some(), "{event} has no signal");
@@ -331,6 +338,7 @@ mod tests {
             "Notification",
             "PostToolUse",
             "Stop",
+            "StopFailure",
             "SessionStart",
             "SessionEnd",
         ] {
@@ -355,7 +363,7 @@ mod tests {
                     "{event}: matcher must be omitted"
                 );
             }
-            assert_eq!(v["hooks"].as_object().unwrap().len(), 7);
+            assert_eq!(v["hooks"].as_object().unwrap().len(), 8);
         }
     }
 

@@ -8,6 +8,7 @@ import {
   closeLeaf,
   findLeaf,
   resizeSplit,
+  equalizeSplit,
   splitLeaf,
   reorderLeaves,
   moveLeafBeside,
@@ -198,10 +199,14 @@ export interface AppActions {
   /** Snap layout: rebuild the active workspace as `presetId` with `leafId` in `slot`. */
   applySnapLayout: (leafId: string, presetId: string, slot: number) => void
   resizeSplitNode: (splitId: string, sizes: [number, number]) => void
+  /** Even out one split (double-clicked separator); see `equalizeSplit` in lib/layout-tree. */
+  equalizeSplitNode: (splitId: string) => void
   /** Even out a workspace's panes by geometry (see `tidyLayout` in lib/layout-tree). */
   tidyLayout: (workspaceId: string) => void
   setPaneAgent: (leafId: string, agentId: string) => void
-  setPaneAccount: (leafId: string, accountId?: string) => void
+  /** Respawn the pane under another profile. `keepSession`: the session was
+   *  copied into that profile's store first, so resume it there. */
+  setPaneAccount: (leafId: string, accountId?: string, keepSession?: boolean) => void
   setPaneCwd: (leafId: string, cwd: string | undefined) => void
   setPaneLaunchMode: (leafId: string, modeId: string) => void
   /** Pin the mode a pane spawned under without respawning it (no-op when set). */
@@ -663,6 +668,16 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   resizeSplitNode: (splitId, sizes) =>
     set((s) => mapActive(s, (w) => ({ ...w, layout: resizeSplit(w.layout, splitId, sizes) }))),
 
+  // Drawered and floating panes take no room on screen, so they stay out of
+  // the count, as in tidyLayout.
+  equalizeSplitNode: (splitId) =>
+    set((s) =>
+      mapActive(s, (w) => {
+        const layout = equalizeSplit(w.layout, splitId, hiddenLeafIds(w.drawerLeafIds ?? [], w.floating ?? []))
+        return layout === w.layout ? w : { ...w, layout }
+      })
+    ),
+
   // Takes the workspace id rather than acting on the active one, so the sidebar
   // menu can tidy any workspace without switching to it. Drawered and floating
   // panes take no room in the split view, so they stay out of the maths. A zoom
@@ -679,10 +694,13 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   // An agent switch respawns the pty; replaying a brief written for another
   // agent would be wrong, so a pending prompt is dropped along with it. A
   // resume session id is meaningless under another agent too — clear it.
-  setPaneAccount: (leafId, accountId) => set(s => mapActive(s, w => {
+  // Without `keepSession` the other profile's store has no copy of the
+  // conversation, so the pane starts fresh there.
+  setPaneAccount: (leafId, accountId, keepSession) => set(s => mapActive(s, w => {
     const leaf = findLeaf(w.layout, leafId)
     if (!leaf || leaf.accountId === accountId) return w
-    return { ...w, layout: updateLeaf(w.layout, leafId, { accountId, resumeSessionId: undefined, sessionId: undefined, continueSession: undefined, initialPrompt: undefined, startupCommand: undefined }) }
+    const resumeSessionId = keepSession ? leaf.sessionId ?? leaf.resumeSessionId : undefined
+    return { ...w, layout: updateLeaf(w.layout, leafId, { accountId, resumeSessionId, sessionId: undefined, continueSession: undefined, initialPrompt: undefined, startupCommand: undefined }) }
   })),
 
   // Agent changes also clear profile-specific login commands and conversations.

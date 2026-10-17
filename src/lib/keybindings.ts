@@ -83,6 +83,8 @@ export function getShortcutGroups(isMac: boolean): KeybindingGroup[] {
         { description: 'Cycle Markdown view', keys: [mod, 'Shift', 'V'] },
         { description: 'Find in terminal', keys: [mod, 'F'] },
         { description: 'Clear the pending input line', keys: [mod, 'Shift', 'Backspace'] },
+        { description: 'Start / stop dictation (built-in speech)', keys: [mod, 'Shift', 'Space'] },
+        { description: 'Stop the spoken announcement', keys: [mod, 'Shift', 'M'] },
         { description: 'Maximize / restore the focused pane', keys: [mod, 'Shift', 'Enter'] },
         { description: 'Move the focused pane to the drawer', keys: [mod, 'Shift', 'D'] },
         { description: 'Jump to next pane needing attention', keys: [mod, 'Shift', 'J'] },
