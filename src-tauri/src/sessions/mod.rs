@@ -8,6 +8,7 @@ pub mod claude;
 pub mod codex;
 pub mod opencode;
 pub mod qwen;
+pub mod share;
 pub mod thread;
 
 use serde::Serialize;
@@ -326,10 +327,36 @@ pub async fn list_all(
         out
     });
     let mut entries = files.await.unwrap_or_default();
+    entries = dedup_newest(entries);
     if include_opencode {
         entries.extend(opencode::scan(&folder).await);
     }
     entries
+}
+
+/// Share mode and transfers put one session in several stores; list it once,
+/// under the store whose copy was written last. After a move to another
+/// subscription that is the copy the user carried on with, not the stale
+/// source.
+fn dedup_newest(entries: Vec<SessionEntry>) -> Vec<SessionEntry> {
+    let mut index: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+    let mut out: Vec<SessionEntry> = Vec::new();
+    for entry in entries {
+        let key = (entry.agent_id.clone(), entry.session_id.clone());
+        match index.get(&key) {
+            Some(&i) => {
+                if entry.updated_at_ms > out[i].updated_at_ms {
+                    out[i] = entry;
+                }
+            }
+            None => {
+                index.insert(key, out.len());
+                out.push(entry);
+            }
+        }
+    }
+    out
 }
 
 /// One session's conversation for the read-only thread view. The store root
@@ -373,6 +400,27 @@ pub async fn read_thread(
 #[cfg(test)]
 mod account_tests {
     use super::*;
+
+    #[test]
+    fn duplicate_sessions_list_once_under_the_newest_copy() {
+        let entry = |account: Option<&str>, id: &str, at: u64| SessionEntry {
+            account_id: account.map(Into::into),
+            agent_id: "claude-code".into(),
+            session_id: id.into(),
+            title: "t".into(),
+            cwd: "C:/w".into(),
+            updated_at_ms: at,
+        };
+        let out = dedup_newest(vec![
+            entry(None, "a", 1),
+            entry(None, "b", 5),
+            entry(Some("p2"), "a", 9),
+            entry(Some("p2"), "b", 2),
+        ]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].account_id.as_deref(), Some("p2"));
+        assert_eq!(out[1].account_id, None);
+    }
 
     #[test]
     fn exact_session_inspection_is_bound_to_its_account_profile() {

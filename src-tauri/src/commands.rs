@@ -316,6 +316,54 @@ pub async fn list_agent_sessions(
     .await
 }
 
+/// Copy one session into another subscription's store so it can be resumed
+/// there (a fork; the source stays). `None` is the default profile.
+#[tauri::command]
+pub async fn transfer_agent_session(
+    app: AppHandle,
+    agent_id: String,
+    session_id: String,
+    from_account_id: Option<String>,
+    to_account_id: Option<String>,
+) -> Result<(), String> {
+    let accounts = accounts_blocking(app).await?;
+    let base = |id: &Option<String>| -> Result<std::path::PathBuf, String> {
+        match id {
+            Some(id) => accounts
+                .iter()
+                .find(|a| &a.id == id && a.agent_id == agent_id)
+                .map(|a| std::path::PathBuf::from(&a.config_dir))
+                .ok_or_else(|| "Account profile no longer exists".into()),
+            None => crate::sessions::share::default_base(&agent_id)
+                .ok_or_else(|| "No default profile folder".into()),
+        }
+    };
+    let (from, to) = (base(&from_account_id)?, base(&to_account_id)?);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::sessions::share::transfer(&agent_id, &session_id, &from, &to)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn get_session_share() -> crate::sessions::share::ShareSettings {
+    crate::sessions::share::load()
+}
+
+/// Switch "share sessions between all subscriptions". Moves folders, so it
+/// runs off the UI thread; errors name each profile that could not follow.
+#[tauri::command]
+pub async fn set_session_share(
+    app: AppHandle,
+    settings: crate::sessions::share::ShareSettings,
+) -> Result<crate::sessions::share::ShareSettings, String> {
+    let accounts = accounts_blocking(app).await?;
+    tauri::async_runtime::spawn_blocking(move || crate::sessions::share::apply(&accounts, settings))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Read-only conversation of one agent session (SWA-25). Fail-open: a missing
 /// or unreadable file is `found: false`, never an error.
 #[tauri::command]

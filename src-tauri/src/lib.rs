@@ -95,6 +95,12 @@ pub fn run() {
             // writer runs, or a switched-off profile is re-enrolled at boot.
             if let Ok(dir) = app.path().app_data_dir() {
                 crate::mcp::toggle::load(dir.join("swarmterm-mcp-disabled.json"));
+                // Before any pane starts: a profile added while the app was
+                // closed must be linked before its first `claude` writes.
+                crate::sessions::share::init(dir);
+                if let Ok(accounts) = crate::accounts::list(app.handle()) {
+                    crate::sessions::share::repair(&accounts);
+                }
             }
             crate::mcp::config::register_user_scope(app.handle());
             // Register `swarmterm --hook` under Claude Code's hook events in
@@ -187,6 +193,9 @@ pub fn run() {
             commands::inspect_account_mcp,
             commands::list_agent_sessions,
             commands::read_agent_thread,
+            commands::transfer_agent_session,
+            commands::get_session_share,
+            commands::set_session_share,
             commands::inspect_saved_workspace,
             commands::set_claude_statusline,
             commands::resolve_path_link,
