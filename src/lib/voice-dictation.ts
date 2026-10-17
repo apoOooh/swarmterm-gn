@@ -28,6 +28,15 @@ export interface ModelStatus {
   downloading: boolean
 }
 
+/** Which catalog model fits this PC, measured by Rust (speech/recommend.rs). */
+export interface ModelRecommendation {
+  model: string
+  reason: string
+  summary: string
+  /** Unix milliseconds. */
+  measuredAt: number
+}
+
 /** Notification key for a dictation that never reached a pane (no-focus …). */
 export const DICTATION_ALERT_ID = '__dictation__'
 

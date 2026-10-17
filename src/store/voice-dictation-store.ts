@@ -5,6 +5,7 @@ import {
   IDLE,
   type DictationEvent,
   type DictationState,
+  type ModelRecommendation,
   type ModelStatus
 } from '@/lib/voice-dictation'
 import { getSpeechStatus, getVoiceSettings, type ModelProgress, type VoiceSettings } from '@/tauri/voice'
@@ -13,6 +14,7 @@ interface VoiceDictationStore {
   dictation: DictationState
   settings: VoiceSettings | null
   models: ModelStatus[]
+  recommendation: ModelRecommendation | null
   /** Bytes received per model id while a download runs. */
   progress: Record<string, number>
   /** Pane button + shortcut available (Voice on, built-in on, model on disk). */
@@ -33,12 +35,13 @@ export const useVoiceDictationStore = create<VoiceDictationStore>((set, get) => 
   dictation: IDLE,
   settings: null,
   models: [],
+  recommendation: null,
   progress: {},
   ready: false,
   refresh: async () => {
     try {
       const [settings, status] = await Promise.all([getVoiceSettings(), getSpeechStatus()])
-      set({ settings, models: status.models, ready: builtinReady(settings, status.models) })
+      set({ settings, models: status.models, recommendation: status.recommendation, ready: builtinReady(settings, status.models) })
     } catch {
       // Off Windows the speech commands answer `unsupported`: no button.
       set({ ready: false })

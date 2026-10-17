@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Voice: better built-in speech models and a suggestion per PC. Settings →
+  Voice now offers quantised Small, Medium, Large v3 Turbo (q5/q8) and
+  Large v3 models and recommends the best fit for this computer (CPU
+  threads, RAM, AVX2) with a short reason, "Download and use" and "Measure
+  again". New installs default to Small q5 instead of Base; tiny/base/small
+  stay available as legacy. Transcription uses up to 16 CPU threads.
+
 ## [1.16.0] - 2026-10-17
 
 - Routines: command routines (SWA-67). A routine can run one shell command

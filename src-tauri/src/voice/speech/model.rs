@@ -24,34 +24,65 @@ pub struct ModelInfo {
 const BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
 
 /// Multilingual models only: the GN user dictates German and English.
+/// Ordered from light to heavy; `recommend` picks one by hardware. The
+/// unquantised tiny/base/small stay at the end so existing downloads and
+/// settings keep working.
 pub const CATALOG: &[ModelInfo] = &[
     ModelInfo {
+        id: "small-q5",
+        label: "Small q5 (190 MB, light CPUs)",
+        file: "ggml-small-q5_1.bin",
+        bytes: 190_085_487,
+        sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+    },
+    ModelInfo {
+        id: "medium-q5",
+        label: "Medium q5 (539 MB, 4-7 CPU threads)",
+        file: "ggml-medium-q5_0.bin",
+        bytes: 539_212_467,
+        sha256: "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f",
+    },
+    ModelInfo {
+        id: "large-v3-turbo-q5",
+        label: "Large v3 Turbo q5 (547 MB, mid-range CPUs)",
+        file: "ggml-large-v3-turbo-q5_0.bin",
+        bytes: 574_041_195,
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+    },
+    ModelInfo {
+        id: "large-v3-turbo-q8",
+        label: "Large v3 Turbo q8 (874 MB, fast CPUs)",
+        file: "ggml-large-v3-turbo-q8_0.bin",
+        bytes: 874_188_075,
+        sha256: "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1",
+    },
+    ModelInfo {
+        id: "large-v3-q5",
+        label: "Large v3 q5 (1.1 GB, most accurate, workstations)",
+        file: "ggml-large-v3-q5_0.bin",
+        bytes: 1_081_140_203,
+        sha256: "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
+    },
+    ModelInfo {
         id: "tiny",
-        label: "Tiny (75 MB, fastest)",
+        label: "Tiny (75 MB, legacy)",
         file: "ggml-tiny.bin",
         bytes: 77_691_713,
         sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
     },
     ModelInfo {
         id: "base",
-        label: "Base (142 MB, recommended)",
+        label: "Base (142 MB, legacy)",
         file: "ggml-base.bin",
         bytes: 147_951_465,
         sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
     },
     ModelInfo {
         id: "small",
-        label: "Small (466 MB, more accurate)",
+        label: "Small (466 MB, legacy)",
         file: "ggml-small.bin",
         bytes: 487_601_967,
         sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
-    },
-    ModelInfo {
-        id: "large-v3-turbo-q5",
-        label: "Large v3 Turbo q5 (547 MB, best, slow on CPU)",
-        file: "ggml-large-v3-turbo-q5_0.bin",
-        bytes: 574_041_195,
-        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
     },
 ];
 
@@ -169,8 +200,8 @@ mod tests {
     }
 
     #[test]
-    fn catalog_ids_are_unique_and_base_is_in_it() {
-        assert!(find("base").is_some());
+    fn catalog_ids_are_unique_and_the_default_is_in_it() {
+        assert!(find(crate::voice::settings::DEFAULT_MODEL).is_some());
         assert!(find("nope").is_none());
         for (i, m) in CATALOG.iter().enumerate() {
             assert_eq!(m.sha256.len(), 64);
