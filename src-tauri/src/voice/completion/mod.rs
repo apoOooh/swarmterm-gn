@@ -171,6 +171,23 @@ impl Ledger {
         pane.closed = None;
     }
 
+    /// A Stop for another prompt than the one open in this generation and
+    /// session: it belongs to a turn that is already over. Its idle edge
+    /// must not end the turn in progress in the renderer either.
+    pub fn is_stale(
+        &self,
+        terminal_id: &str,
+        spawn_id: &str,
+        session_id: &str,
+        prompt_id: &str,
+    ) -> bool {
+        self.panes.get(terminal_id).is_some_and(|p| {
+            p.spawn_id == spawn_id
+                && p.session_id == session_id
+                && p.open.as_deref().is_some_and(|open| open != prompt_id)
+        })
+    }
+
     /// Stop / StopFailure. Closes the turn only if it is the OPEN one of the
     /// same generation and session — a late or foreign Stop changes nothing.
     /// `continued` (stop_hook_active) means a Stop hook sent Claude back to
@@ -398,6 +415,24 @@ mod tests {
         }
         .is_valid());
         assert!(!Fingerprint { len: u64::MAX, ..f }.is_valid());
+    }
+
+    #[test]
+    fn a_stop_for_an_older_prompt_is_stale_only_while_another_is_open() {
+        let mut l = Ledger::default();
+        assert!(
+            !l.is_stale(T, G, S, "p1"),
+            "unknown pane: not ours to judge"
+        );
+        l.prompt(T, G, S, "p1");
+        assert!(!l.is_stale(T, G, S, "p1"));
+        stop(&mut l, "p1");
+        l.prompt(T, G, S, "p2");
+        assert!(l.is_stale(T, G, S, "p1"));
+        assert!(!l.is_stale(T, "gen2", S, "p1"), "other generation");
+        assert!(!l.is_stale(T, G, "other-session", "p1"), "other session");
+        stop(&mut l, "p2");
+        assert!(!l.is_stale(T, G, S, "p1"), "nothing open: plain idle");
     }
 
     #[test]

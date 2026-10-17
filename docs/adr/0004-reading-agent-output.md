@@ -73,7 +73,10 @@ What Claude Code 2.1.302 provides (checked in the binary):
    - `UserPromptSubmit` opens the turn `prompt_id` for {terminal,
      generation, session}.
    - `Stop` closes it only if exactly this turn is open. A late or foreign
-     Stop changes nothing. `stop_hook_active` reopens the turn.
+     Stop changes nothing. A Stop for an older prompt while a newer one is
+     open is dropped entirely, including its idle edge to the renderer, so
+     it cannot end or announce the turn in progress. `stop_hook_active`
+     reopens the turn.
    - `StopFailure` marks the turn failed. If its status already went out, it
      triggers exactly one correction.
    - A prompt, SessionStart/SessionEnd, respawn or kill voids the old turn.

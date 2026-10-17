@@ -429,6 +429,11 @@ async fn hook_handler(
             );
         }
         if let Some(turn) = &body.turn {
+            // A Stop for a prompt that is already over must not end the turn
+            // in progress: no ledger change and no idle edge for the renderer.
+            if crate::voice::stale_stop(&app, &terminal_id, &spawn_id, &session.session_id, turn) {
+                return StatusCode::NO_CONTENT.into_response();
+            }
             voice = crate::voice::hook_turn(
                 &app,
                 &terminal_id,

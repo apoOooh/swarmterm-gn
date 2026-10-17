@@ -461,6 +461,27 @@ pub fn hook_turn(
     false
 }
 
+/// A Stop/StopFailure for a prompt that is no longer the open one: the
+/// caller drops the whole edge (no `agent:hook` either), so a late Stop of
+/// the previous turn cannot end the turn in progress or announce it.
+pub fn stale_stop(
+    app: &AppHandle,
+    terminal_id: &str,
+    spawn_id: &str,
+    session_id: &str,
+    turn: &crate::hook::TurnMark,
+) -> bool {
+    if turn.edge == crate::hook::TurnEdge::Prompt {
+        return false;
+    }
+    app.try_state::<VoiceHub>().is_some_and(|hub| {
+        hub.ledger
+            .lock()
+            .unwrap()
+            .is_stale(terminal_id, spawn_id, session_id, &turn.prompt_id)
+    })
+}
+
 /// SessionStart/SessionEnd: the conversation in this pane is over.
 pub fn forget_turns(app: &AppHandle, terminal_id: &str) {
     if let Some(hub) = app.try_state::<VoiceHub>() {
