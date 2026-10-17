@@ -204,7 +204,8 @@ Open a card to restore its split sizes and panes; opening an already running
 workspace brings it into focus. Rename changes its saved name. Forget removes
 the card and stops saving that open instance; its terminals keep running.
 
-**Open on startup:** pin a card (pin icon) or tick it under **Settings →
+**Open on startup:** pin a card (pin icon), choose **Open on startup** in an
+open workspace's **⋯** menu in the navbar, or tick it under **Settings →
 Workspaces → Open on startup** to open it automatically every time Swarmterm
 starts — in the navbar, in the order set there, with agents resuming their
 sessions. While at least one workspace opens on startup, Welcome is skipped;
