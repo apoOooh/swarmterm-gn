@@ -100,6 +100,8 @@ import { useShellAvailabilityStore } from '@/store/shell-availability-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useNotificationPrefStore } from '@/store/notification-pref-store'
 import { startNotificationWatch } from '@/lib/notification-watch'
+import { turnEventFor } from '@/lib/voice-turns'
+import { voiceTurnEvent } from '@/tauri/voice'
 import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { startAgentStateMirror } from '@/lib/agent-state-mirror'
@@ -972,6 +974,10 @@ export default function App(): ReactElement {
       playChime,
       sendSystemNotification: (opts) => void sendSystemNotification(opts),
       record: (entry) => useNotificationCenterStore.getState().add(entry),
+      announce: (entry) => {
+        const turn = turnEventFor(entry, useTerminalTitleStore.getState().titles[entry.terminalId] ?? '')
+        if (turn !== null) void voiceTurnEvent(turn).catch(() => {})
+      },
       now: Date.now,
       setTimer: (fn, ms) => window.setTimeout(fn, ms),
       clearTimer: (h) => window.clearTimeout(h as number)
