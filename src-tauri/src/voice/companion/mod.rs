@@ -166,9 +166,7 @@ async fn latest_release() -> Result<Option<Release>, String> {
 fn status(app: &AppHandle) -> CompanionStatus {
     let hub = app.state::<VoiceHub>();
     let dir = system::install_dir();
-    let installed = dir
-        .as_ref()
-        .is_some_and(|d| d.join(release::EXE).is_file());
+    let installed = dir.as_ref().is_some_and(|d| d.join(release::EXE).is_file());
     let peer = hub.buzzkey_peer();
     let autostart = match (&dir, system::read_run_value()) {
         (Some(d), Some(v)) => system::run_value_is_ours(&v, d),
@@ -233,7 +231,13 @@ pub async fn voice_companion_install(app: AppHandle) -> Result<CompanionStatus, 
     }
     let _guard = BusyGuard(&companion.busy);
     let result = install_inner(&app).await;
-    emit_progress(&app, if result.is_ok() { "done" } else { "failed" }, None, 0, 0);
+    emit_progress(
+        &app,
+        if result.is_ok() { "done" } else { "failed" },
+        None,
+        0,
+        0,
+    );
     result.map(|()| status(&app))
 }
 
@@ -252,8 +256,22 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
 
     // Trust first: nothing is downloaded into the folder before the sums
     // are proven to come from the signing key.
-    let sums = fetch(&http, &rel.sums.url, loopback, release::MAX_SUMS_BYTES, |_| {}).await?;
-    let sig = fetch(&http, &rel.sig.url, loopback, release::MAX_SIG_BYTES, |_| {}).await?;
+    let sums = fetch(
+        &http,
+        &rel.sums.url,
+        loopback,
+        release::MAX_SUMS_BYTES,
+        |_| {},
+    )
+    .await?;
+    let sig = fetch(
+        &http,
+        &rel.sig.url,
+        loopback,
+        release::MAX_SIG_BYTES,
+        |_| {},
+    )
+    .await?;
     emit_progress(app, "verify", Some(release::SUMS), 0, 0);
     let sig = String::from_utf8(sig).map_err(|_| "signature-invalid".to_string())?;
     release::verify_trusted(&sums, &sig)?;

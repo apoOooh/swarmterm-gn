@@ -135,7 +135,6 @@ impl PinStore {
 
     /// Whether the connection still holds an open dictation (it then gets
     /// the pin's lifetime as idle timeout instead of the short default).
-
     pub fn conn_has_pin(&self, conn: u64) -> bool {
         self.pins.values().any(|p| p.conn == Some(conn))
     }

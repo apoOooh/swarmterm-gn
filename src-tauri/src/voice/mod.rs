@@ -53,8 +53,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::pty::AppState;
 use pins::{Pin, PinStore, PIN_TTL};
 use protocol::{
-    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_QUIT,
-    CAP_TURNS,
+    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_QUIT, CAP_TURNS,
 };
 pub use settings::VoiceSettings;
 
