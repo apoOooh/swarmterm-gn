@@ -7,7 +7,6 @@ import {
   voiceDictationToggle,
   voiceFocusResponse,
   voiceInsertResult,
-  voiceReadExcerpt,
   voiceTtsStop
 } from '@/tauri/voice'
 import { createTtsStopper, newlyFocusedTerminal } from '@/lib/voice-tts'
@@ -147,17 +146,6 @@ function reportDictation(reason: string | undefined, terminalId: string | undefi
 /** Shortcut: silence every announcement now (SWA-66). */
 export function stopAnnouncements(): void {
   void voiceTtsStop().catch(() => {})
-}
-
-/**
- * Shortcut (SWA-58): read the last announced agent's excerpt. Rust picks the
- * turn and speaks "no excerpt available" itself; nothing to report here.
- */
-export function readExcerpt(): void {
-  const focused = selectFocusedTerminalId(useAppStore.getState()) ?? null
-  void voiceReadExcerpt(focused).catch((e) => {
-    devLog('voice.excerpt.refused', { reason: String(e) })
-  })
 }
 
 /** Shortcut and pane button: start, or stop and transcribe. */

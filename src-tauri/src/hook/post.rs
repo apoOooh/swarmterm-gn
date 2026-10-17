@@ -50,30 +50,40 @@ pub fn post_signal(mcp_url: &str, token: &str, signal: Signal, timeout: Duration
 }
 
 pub fn post_body(mcp_url: &str, token: &str, body: &HookBody, timeout: Duration) -> bool {
+    post_body_answer(mcp_url, token, body, timeout).is_some()
+}
+
+/// Like `post_body`, but hands back the 2xx answer's body (SWA-58: the app
+/// says whether the `<voice>` instruction is wanted for this prompt).
+pub fn post_body_answer(
+    mcp_url: &str,
+    token: &str,
+    body: &HookBody,
+    timeout: Duration,
+) -> Option<Vec<u8>> {
     // A garbage SWARMTERM_MCP_URL is an env problem: bail before any socket work.
-    let Some((_host, authority)) = status_addr(mcp_url) else {
-        return false;
-    };
-    let Some(addr) = authority.to_socket_addrs().ok().and_then(|mut a| a.next()) else {
-        return false;
-    };
+    let (_host, authority) = status_addr(mcp_url)?;
+    let addr = authority
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut a| a.next())?;
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout) else {
-        return false;
+        return None;
     };
     if stream.set_read_timeout(Some(timeout)).is_err()
         || stream.set_write_timeout(Some(timeout)).is_err()
     {
-        return false;
+        return None;
     }
 
     // Serialising an enum cannot fail, but the contract is "never panic": a
     // panic is a non-zero exit, which Claude Code surfaces as a hook failure.
     let Ok(body) = serde_json::to_string(body) else {
-        return false;
+        return None;
     };
     let req = build_request(&authority, token, &body);
     if stream.write_all(req.as_bytes()).is_err() || stream.flush().is_err() {
-        return false;
+        return None;
     }
 
     // Same accumulate loop as the probe: stop as soon as `parse_http_response`
@@ -94,7 +104,10 @@ pub fn post_body(mcp_url: &str, token: &str, body: &HookBody, timeout: Duration)
         }
     }
 
-    matches!(parse_http_response(&buf), Some((code, _)) if (200..300).contains(&code))
+    match parse_http_response(&buf) {
+        Some((code, answer)) if (200..300).contains(&code) => Some(answer.to_vec()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

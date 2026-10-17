@@ -24,12 +24,11 @@ pub struct Item {
     pub spawn_id: String,
     pub text: String,
     pub at: Instant,
-    /// SWA-58: the closed turn this item speaks about (`completionId`). A
-    /// status with a token marks "last announced" when it starts playing.
+    /// SWA-58: the closed turn a reply speaks about.
     pub token: Option<String>,
-    /// An excerpt, not a status: re-checked against the ledger and the
-    /// opt-in right before it is spoken.
-    pub excerpt: bool,
+    /// A reply, not a status: re-checked against the ledger and the opt-in
+    /// right before it is spoken.
+    pub reply: bool,
 }
 
 #[derive(Debug, Default)]
@@ -107,7 +106,7 @@ mod tests {
             text: format!("{t} done"),
             at,
             token: None,
-            excerpt: false,
+            reply: false,
         }
     }
 

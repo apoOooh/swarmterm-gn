@@ -101,8 +101,8 @@ import { useShellAvailabilityStore } from '@/store/shell-availability-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useNotificationPrefStore } from '@/store/notification-pref-store'
 import { startNotificationWatch } from '@/lib/notification-watch'
-import { turnEventFor } from '@/lib/voice-turns'
-import { voiceTurnEvent } from '@/tauri/voice'
+import { turnEventFor, turnKindEntry } from '@/lib/voice-turns'
+import { onVoiceTurnKind, voiceTurnEvent } from '@/tauri/voice'
 import { useNotificationCenterStore } from '@/store/notification-center-store'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { startAgentStateMirror } from '@/lib/agent-state-mirror'
@@ -126,8 +126,7 @@ import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
 import { onAgentSession } from '@/tauri/sessions'
 import { wireSavedWorkspaces, flushSavedWorkspaces, useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
-import { readExcerpt, stopAnnouncements, toggleDictation, wireVoice } from '@/lib/voice-wiring'
-import { claimsReadExcerpt, claimsStopAnnouncement } from '@/lib/voice-tts'
+import { stopAnnouncements, toggleDictation, wireVoice } from '@/lib/voice-wiring'
 import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import { builtinSwitchedOn } from '@/lib/voice-dictation'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
@@ -557,17 +556,11 @@ export default function App(): ReactElement {
         return
       }
       if (action === 'stop-announcement') {
-        // Only claimed while Swarmterm can speak (status voice or excerpts);
-        // off, Ctrl+Shift+M stays the pane's.
-        if (!claimsStopAnnouncement(useVoiceDictationStore.getState().settings)) return
+        // Only claimed while Swarmterm speaks announcements; off, Ctrl+Shift+M
+        // stays the pane's.
+        if (!useVoiceDictationStore.getState().settings?.speakTurns) return
         e.preventDefault()
         stopAnnouncements()
-        return
-      }
-      if (action === 'read-excerpt') {
-        if (!claimsReadExcerpt(useVoiceDictationStore.getState().settings)) return
-        e.preventDefault()
-        readExcerpt()
         return
       }
       if (action === 'drawer-pane') {
@@ -851,7 +844,13 @@ export default function App(): ReactElement {
     const cleanups = [
       cleanupWhenResolved(onMcpServerExited((reason) => center().add(mcpExitedEntry(reason, Date.now()))), 'mcp:server-exited'),
       cleanupWhenResolved(onVoicePipeError((p) => center().add(voicePipeErrorEntry(p, Date.now()))), 'voice:pipe-error'),
-      cleanupWhenResolved(onVoicePipeRecovered(() => center().markTerminalRead(VOICE_ALERT_ID, ['backend'])), 'voice:pipe-recovered')
+      cleanupWhenResolved(onVoicePipeRecovered(() => center().markTerminalRead(VOICE_ALERT_ID, ['backend'])), 'voice:pipe-recovered'),
+      // SWA-58: a Claude turn that failed or was stopped (Rust says it; the
+      // bell keeps it). The chime follows the user's sound pref like any other.
+      cleanupWhenResolved(onVoiceTurnKind((e) => {
+        center().add(turnKindEntry(e, useTerminalTitleStore.getState().titles[e.terminalId] ?? '', Date.now()))
+        if (e.kind === 'error' && useNotificationPrefStore.getState().prefs.sound) playChime('attention')
+      }), 'voice:turn-kind')
     ]
     // A pane whose program stopped reading input: its pty queue is full and
     // the write was dropped (Rust write_terminal), so say so instead of

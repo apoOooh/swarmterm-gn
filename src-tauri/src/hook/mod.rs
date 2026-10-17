@@ -16,9 +16,13 @@
 //! - **Always exit 0.** Exit 2 on `Stop` blocks Claude from stopping; any
 //!   non-zero exit is a visible warning in the Claude Code UI. A failed POST is
 //!   *our* problem, never Claude's.
-//! - **Never print to stdout.** On `PermissionRequest` stdout is parsed as a
-//!   permission *decision*; on other events it is shown to the user or fed
-//!   back as context. Silence is the only safe output.
+//! - **Never print to stdout** — with one exception. On `PermissionRequest`
+//!   stdout is parsed as a permission *decision*; on other events it is shown
+//!   to the user or fed back as context. The exception (SWA-58) is
+//!   `UserPromptSubmit` while the app answers `{"voice":true}` (Settings →
+//!   Voice "Allow excerpts"): then exactly one JSON object with
+//!   `additionalContext` = `speech_text::VOICE_INSTRUCTION` is printed, a
+//!   fixed string, never anything from the payload or the network.
 //!
 //! Only lifecycle names and identifiers cross the loopback port: the session
 //! id, and (SWA-58) Claude's `prompt_id`. `last_assistant_message` is read
@@ -278,7 +282,8 @@ pub fn run_agent_cli(agent_id: &str) {
         };
         signal
     };
-    let _ = post::post_body(
+    let is_prompt = turn.as_ref().is_some_and(|t| t.edge == TurnEdge::Prompt);
+    let answer = post::post_body_answer(
         url.trim(),
         token.trim(),
         &HookBody {
@@ -288,6 +293,32 @@ pub fn run_agent_cli(agent_id: &str) {
         },
         POST_TIMEOUT,
     );
+    if is_prompt && answer.as_deref().is_some_and(wants_voice) {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(voice_context().as_bytes());
+        let _ = out.flush();
+    }
+}
+
+/// The app's answer to a prompt edge: `{"voice":true}` and nothing else
+/// asks for the instruction. Any other body (204, older app) is silence.
+pub fn wants_voice(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("voice").and_then(serde_json::Value::as_bool))
+        == Some(true)
+}
+
+/// The one stdout line this CLI may print (UserPromptSubmit only).
+pub fn voice_context() -> String {
+    serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": crate::voice::completion::speech_text::VOICE_INSTRUCTION,
+        }
+    })
+    .to_string()
 }
 
 #[cfg(test)]
@@ -454,6 +485,20 @@ mod tests {
             "{\"signal\":\"idle\",\"turn\":{\"edge\":\"stop\",\"promptId\":\"p\",\"text\":\"x\"}}"
         )
         .is_err());
+    }
+
+    #[test]
+    fn only_an_explicit_voice_answer_prints_the_fixed_instruction() {
+        assert!(wants_voice(b"{\"voice\":true}"));
+        assert!(!wants_voice(b""));
+        assert!(!wants_voice(b"{\"voice\":false}"));
+        assert!(!wants_voice(b"{\"voice\":\"yes\"}"));
+        let v: serde_json::Value = serde_json::from_str(&voice_context()).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
+        assert_eq!(
+            v["hookSpecificOutput"]["additionalContext"],
+            crate::voice::completion::speech_text::VOICE_INSTRUCTION
+        );
     }
 
     const PROMPT: &str = "f62f9126-5c26-43d5-8bc8-3943559598b7";

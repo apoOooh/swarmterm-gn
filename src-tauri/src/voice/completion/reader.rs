@@ -195,6 +195,15 @@ pub fn final_answer_within(
     }
 }
 
+/// Whether the open turn `prompt_id` ended with Esc. One read: the screen
+/// went idle about a second ago, so the marker row is long flushed; any
+/// doubt is "no" and the plain status goes out.
+pub fn interrupted_once(read: impl FnOnce() -> Result<String, ReadError>, prompt_id: &str) -> bool {
+    read()
+        .ok()
+        .is_some_and(|tail| claude::interrupted(&tail, prompt_id) == Ok(true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

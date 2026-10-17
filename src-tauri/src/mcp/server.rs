@@ -392,6 +392,8 @@ async fn hook_handler(
     if body.turn.as_ref().is_some_and(|t| !t.is_valid()) {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    // SWA-58: true asks the hook CLI to hand Claude the `<voice>` instruction.
+    let mut voice = false;
     if let Some(session) = &body.session {
         // Generation and profile dir copied out under the lock; the voice
         // side takes its own locks only after this one is released.
@@ -427,7 +429,7 @@ async fn hook_handler(
             );
         }
         if let Some(turn) = &body.turn {
-            crate::voice::hook_turn(
+            voice = crate::voice::hook_turn(
                 &app,
                 &terminal_id,
                 &spawn_id,
@@ -461,6 +463,14 @@ async fn hook_handler(
         publish_context(&app, &terminal_id, None);
     }
     // The CLI reads to EOF with a 300 ms budget; `close` ends it promptly.
+    if voice {
+        return (
+            StatusCode::OK,
+            [(axum::http::header::CONNECTION, "close")],
+            Json(serde_json::json!({ "voice": true })),
+        )
+            .into_response();
+    }
     (
         StatusCode::NO_CONTENT,
         [(axum::http::header::CONNECTION, "close")],

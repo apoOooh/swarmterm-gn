@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { IndicatorEvent } from '@/lib/voice-indicator'
 import type { DictationEvent, DictationPhase, ModelRecommendation, ModelStatus } from '@/lib/voice-dictation'
-import type { TurnEvent } from '@/lib/voice-turns'
+import type { TurnEvent, TurnKindEvent } from '@/lib/voice-turns'
 
 /**
  * Voice dictation bridge (SWA-12). Rust owns the buzzkey pipe and the pins;
@@ -27,8 +27,8 @@ export interface VoiceSettings {
   /** 0-100. */
   ttsVolume: number
   /**
-   * SWA-58: read the agent's final answer from its transcript to offer a
-   * spoken excerpt on Ctrl+Shift+R. Off = no transcript is ever opened.
+   * SWA-58: read Claude's final answer from its transcript and speak its
+   * reply after each turn. Off = no transcript is ever opened.
    */
   allowExcerpts: boolean
 }
@@ -87,6 +87,10 @@ export const onVoiceInsert = (cb: (e: VoiceInsertEvent) => void): Promise<Unlist
   listen<VoiceInsertEvent>('voice:insert', (e) => cb(e.payload))
 
 /** "Listening" pill on/off for a pinned pane (SWA-40). */
+/** SWA-58: a Claude turn failed or was interrupted (ids and kind only). */
+export const onVoiceTurnKind = (cb: (e: TurnKindEvent) => void): Promise<UnlistenFn> =>
+  listen<TurnKindEvent>('voice:turn-kind', (e) => cb(e.payload))
+
 export const onVoiceIndicator = (cb: (e: IndicatorEvent) => void): Promise<UnlistenFn> =>
   listen<IndicatorEvent>('voice:indicator', (e) => cb(e.payload))
 

@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react'
-import { AlertCircle, ArrowRightLeft, Bell, CalendarClock, CheckCircle2, Hourglass, Mic, MessageSquareText, Power, TerminalSquare } from 'lucide-react'
+import { AlertCircle, ArrowRightLeft, Bell, CalendarClock, CheckCircle2, CircleSlash, Hourglass, Mic, MessageSquareText, Power, TerminalSquare, XCircle } from 'lucide-react'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { unreadCount, type CenterEntry, type CenterKind } from '@/lib/notification-center'
 import { formatStateAge } from '@/lib/state-age'
@@ -19,7 +19,9 @@ const KIND_ICON: Record<CenterKind, { icon: typeof Bell; className: string }> = 
   prompt: { icon: MessageSquareText, className: 'text-[#3794FF]' },
   routine: { icon: CalendarClock, className: 'text-[#3794FF]' },
   dictation: { icon: Mic, className: 'text-[#E5C07B]' },
-  backend: { icon: AlertCircle, className: 'text-[#F14C4C]' }
+  backend: { icon: AlertCircle, className: 'text-[#F14C4C]' },
+  error: { icon: XCircle, className: 'text-[#F14C4C]' },
+  interrupted: { icon: CircleSlash, className: 'text-muted-foreground' }
 }
 
 /**

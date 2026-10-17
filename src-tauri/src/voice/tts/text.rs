@@ -3,6 +3,7 @@
 //! "D colon backslash GN underscore AI" is noise, so path- and URL-like words
 //! are dropped and an empty result falls back to a neutral name.
 
+use crate::voice::completion::speech_text::Reply;
 use crate::voice::protocol::{clean_label, TurnKind};
 
 /// Pane names longer than this are cut at a word boundary: an announcement
@@ -55,39 +56,35 @@ fn name_for(pane_name: &str, agent: &str, english: bool) -> String {
 }
 
 /// The announcement in the voice's language: German unless the voice is
-/// English. Status only — never output text (that is `excerpt_line`).
+/// English. Status only — never output text (that is `reply_line`). Error
+/// and interrupted (SWA-58) are phrased like a person would say them, not
+/// like a log level.
 pub fn announcement(pane_name: &str, agent: &str, kind: TurnKind, lang: &str) -> String {
     let english = lang.starts_with("en");
     let name = name_for(pane_name, agent, english);
     match (kind, english) {
         (TurnKind::Done, false) => format!("{name}: fertig."),
         (TurnKind::NeedsInput, false) => format!("{name} wartet auf Eingabe."),
-        (TurnKind::Error, false) => format!("{name}: Fehler."),
+        (TurnKind::Error, false) => {
+            format!("{name}: Da ist leider etwas schiefgegangen, ich bin nicht fertig geworden.")
+        }
+        (TurnKind::Interrupted, false) => format!("{name}: Alles klar, ich habe aufgehört."),
         (TurnKind::Done, true) => format!("{name} is done."),
         (TurnKind::NeedsInput, true) => format!("{name} needs input."),
-        (TurnKind::Error, true) => format!("{name} failed."),
+        (TurnKind::Error, true) => format!("{name}: Sorry, something went wrong, I didn't finish."),
+        (TurnKind::Interrupted, true) => format!("{name}: Okay, I stopped."),
     }
 }
 
-/// SWA-58: an excerpt, honestly labelled as one — it is the first sentences,
-/// not a summary. The excerpt itself was already reduced to speakable prose.
-pub fn excerpt_line(pane_name: &str, agent: &str, excerpt: &str, lang: &str) -> String {
+/// SWA-58: the agent's spoken reply. Its own `<voice>` line is said as its
+/// words; a rule-based excerpt is honestly marked as quoted text.
+pub fn reply_line(pane_name: &str, agent: &str, reply: &Reply, lang: &str) -> String {
     let english = lang.starts_with("en");
     let name = name_for(pane_name, agent, english);
-    if english {
-        format!("{name}, excerpt: {excerpt}")
-    } else {
-        format!("{name}, Auszug: {excerpt}")
-    }
-}
-
-/// What Ctrl+Shift+R says when there is nothing to read — never silence,
-/// or the user cannot tell a missing excerpt from a dead hotkey.
-pub fn no_excerpt(lang: &str) -> &'static str {
-    if lang.starts_with("en") {
-        "No excerpt available."
-    } else {
-        "Kein Auszug verfügbar."
+    match (reply, english) {
+        (Reply::Voice(t), _) => format!("{name}: {t}"),
+        (Reply::Quoted(t), false) => format!("{name} schreibt: {t}"),
+        (Reply::Quoted(t), true) => format!("{name} writes: {t}"),
     }
 }
 
@@ -112,20 +109,41 @@ mod tests {
     }
 
     #[test]
-    fn says_errors_and_labels_excerpts() {
+    fn says_errors_and_replies_like_a_person() {
         assert_eq!(
-            announcement("Backend", "claude-code", TurnKind::Error, "de"),
-            "Backend: Fehler."
+            announcement("Backend", "claude-code", TurnKind::Interrupted, "de"),
+            "Backend: Alles klar, ich habe aufgehört."
+        );
+        assert!(
+            announcement("Backend", "claude-code", TurnKind::Error, "de")
+                .starts_with("Backend: Da ist leider etwas schiefgegangen")
         );
         assert_eq!(
             announcement("Backend", "claude-code", TurnKind::Error, "en"),
-            "Backend failed."
+            "Backend: Sorry, something went wrong, I didn't finish."
         );
         assert_eq!(
-            excerpt_line("✳ Backend", "claude-code", "Alles grün.", "de"),
-            "Backend, Auszug: Alles grün."
+            reply_line(
+                "✳ Backend",
+                "claude-code",
+                &Reply::Voice("Alles grün. Soll ich committen?".into()),
+                "de"
+            ),
+            "Backend: Alles grün. Soll ich committen?"
         );
-        assert_eq!(no_excerpt("en-US"), "No excerpt available.");
+        assert_eq!(
+            reply_line(
+                "Backend",
+                "claude-code",
+                &Reply::Quoted("Alles grün.".into()),
+                "de"
+            ),
+            "Backend schreibt: Alles grün."
+        );
+        assert_eq!(
+            reply_line("", "", &Reply::Quoted("Done.".into()), "en"),
+            "An agent writes: Done."
+        );
     }
 
     #[test]

@@ -33,7 +33,7 @@ pub struct VoiceSettings {
     /// 0-100, the app's own volume (no ducking of other apps).
     pub tts_volume: u8,
     /// SWA-58: read the agent's final answer from its transcript to offer a
-    /// spoken excerpt (Ctrl+Shift+R, `read_excerpt`). Off = no file opened.
+    /// spoken reply (`<voice>` line or quoted prose). Off = no file opened.
     pub allow_excerpts: bool,
 }
 

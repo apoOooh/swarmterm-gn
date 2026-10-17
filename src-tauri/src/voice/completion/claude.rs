@@ -116,6 +116,63 @@ pub fn final_answer(tail: &str, prompt: &str, expected: &Fingerprint) -> Result<
     Ok(text)
 }
 
+/// What Claude Code writes as a user row when Esc stops a turn ("[Request
+/// interrupted by user]", "… for tool use]"). Esc fires no hook, so this
+/// row is the only proof of an interruption.
+const INTERRUPT_MARKER: &str = "[Request interrupted by user";
+
+fn is_interrupt_marker(row: &Value) -> bool {
+    let starts = |t: &str| t.trim_start().starts_with(INTERRUPT_MARKER);
+    match row.pointer("/message/content") {
+        Some(Value::String(t)) => starts(t),
+        Some(Value::Array(blocks)) => blocks.iter().any(|b| {
+            b.get("type").and_then(Value::as_str) == Some("text")
+                && b.get("text").and_then(Value::as_str).is_some_and(starts)
+        }),
+        _ => false,
+    }
+}
+
+/// Whether the turn `prompt` ended with the interrupt marker: it is the last
+/// main-chain user/assistant row after this prompt's first row, and no newer
+/// human prompt follows. Same fail-closed parsing as `final_answer`.
+pub fn interrupted(tail: &str, prompt: &str) -> Result<bool, Reject> {
+    let mut rows = Vec::new();
+    for line in tail.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.trim().is_empty() {
+            continue;
+        }
+        let row: Value = serde_json::from_str(line).map_err(|_| Reject::Schema)?;
+        if !row.is_object() {
+            return Err(Reject::Schema);
+        }
+        rows.push(row);
+    }
+    let kind = |r: &Value| r.get("type").and_then(Value::as_str).map(str::to_owned);
+    let main: Vec<&Value> = rows
+        .iter()
+        .filter(|r| is_main(r))
+        .filter(|r| matches!(kind(r).as_deref(), Some("user" | "assistant")))
+        .collect();
+    let anchor = main
+        .iter()
+        .position(|r| prompt_id(r) == Some(prompt))
+        .ok_or(Reject::NoAnchor)?;
+    let after = &main[anchor + 1..];
+    if after.iter().any(|r| {
+        kind(r).as_deref() == Some("user")
+            && is_human_prompt(r)
+            && !is_interrupt_marker(r)
+            && prompt_id(r).is_some_and(|p| p != prompt)
+    }) {
+        return Err(Reject::Superseded);
+    }
+    Ok(after
+        .last()
+        .is_some_and(|r| kind(r).as_deref() == Some("user") && is_interrupt_marker(r)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,6 +307,36 @@ mod tests {
             assistant("m1", json!({"type":"thinking","thinking":"..."})),
         ]);
         assert_eq!(final_answer(&t, P1, &fp("")), Err(Reject::NoAnswer));
+    }
+
+    fn marker(id: &str) -> String {
+        json!({"type":"user","promptId":id,"isSidechain":false,
+               "message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}})
+        .to_string()
+    }
+
+    #[test]
+    fn an_esc_marker_after_the_prompt_is_an_interruption() {
+        let t = tail(&[prompt(P1, "x"), text("m1", "Ich fange an."), marker(P1)]);
+        assert_eq!(interrupted(&t, P1), Ok(true));
+        // Tool-use variant, with no promptId on the marker row.
+        let tool = json!({"type":"user","message":{"content":[
+            {"type":"text","text":"[Request interrupted by user for tool use]"}]}})
+        .to_string();
+        let t = tail(&[prompt(P1, "x"), tool_result(P1), tool]);
+        assert_eq!(interrupted(&t, P1), Ok(true));
+    }
+
+    #[test]
+    fn an_answer_after_the_marker_or_no_marker_is_no_interruption() {
+        let t = tail(&[prompt(P1, "x"), text("m1", "Fertig.")]);
+        assert_eq!(interrupted(&t, P1), Ok(false));
+        let t = tail(&[prompt(P1, "x"), marker(P1), text("m1", "Weiter.")]);
+        assert_eq!(interrupted(&t, P1), Ok(false));
+        let t = tail(&[prompt(P1, "x"), marker(P1), prompt(P2, "neu")]);
+        assert_eq!(interrupted(&t, P1), Err(Reject::Superseded));
+        assert_eq!(interrupted(&tail(&[marker(P2)]), P1), Err(Reject::NoAnchor));
+        assert_eq!(interrupted("nope\n", P1), Err(Reject::Schema));
     }
 
     #[test]
