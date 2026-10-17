@@ -185,7 +185,8 @@ fn status(app: &AppHandle) -> CompanionStatus {
         autostart,
         whisper_key_running: system::whisper_key_running(),
         busy: app.state::<Companion>().busy.load(Ordering::Relaxed),
-        signing_key_is_test: release::SIGNING_KEY_IS_TEST,
+        // Debug builds also trust the testlab key; the panel says so.
+        signing_key_is_test: cfg!(debug_assertions),
     }
 }
 
@@ -255,7 +256,7 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
     let sig = fetch(&http, &rel.sig.url, loopback, release::MAX_SIG_BYTES, |_| {}).await?;
     emit_progress(app, "verify", Some(release::SUMS), 0, 0);
     let sig = String::from_utf8(sig).map_err(|_| "signature-invalid".to_string())?;
-    release::verify_signature(&sums, &sig, release::SIGNING_KEY)?;
+    release::verify_trusted(&sums, &sig)?;
     let sums = String::from_utf8(sums).map_err(|_| "sums-invalid".to_string())?;
 
     let mut files = Vec::new();

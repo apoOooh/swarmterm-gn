@@ -535,7 +535,7 @@ machine that never built Swarmterm. Details in
 - [ ] Check for update on the newest version → "Up to date"; Update over a running buzzkey quits, swaps and restarts it.
 - [ ] Autostart switch on/off adds/removes `HKCU\…\Runuzzkey`; buzzkey's own tray toggle shows the same state.
 - [ ] With whisper-key running, the section offers no action.
-- [ ] Release build: no "test signing key" notice (SWA-63).
+- [ ] Release build: no "testlab key" notice; a release signed with the buzzkey release key installs (SWA-63).
 
 ## Account profiles (SWA-9)
 

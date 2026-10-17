@@ -153,7 +153,7 @@ export function BuzzkeySection(): ReactElement | null {
       )}
       {status.signingKeyIsTest && (
         <p className="mt-2 text-xs text-amber-500">
-          Development build: releases are checked against a test signing key.
+          Development build: releases signed with the testlab key are accepted too.
         </p>
       )}
       <p className="mt-2 text-xs text-muted-foreground">

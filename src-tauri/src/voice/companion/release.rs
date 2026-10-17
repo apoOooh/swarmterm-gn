@@ -17,12 +17,35 @@ use sha2::{Digest, Sha256};
 /// this URL serves".
 pub const RELEASES_URL: &str = "https://api.github.com/repos/apoOooh/buzzkey/releases?per_page=20";
 
-/// TEST KEY (swarmterm-testlab, key id E7591202FF617829). Its secret half is
-/// unencrypted in the testlab, so this key proves nothing about real
-/// releases — SWA-63 replaces it with the key the buzzkey release workflow
-/// signs with, before the companion ships.
-pub const SIGNING_KEY: &str = "RWQpeGH/AhJZ57Bh0TYOSNHLEvKEhXH7kpqUYU+lu6FCIfkpkIaN6h91";
-pub const SIGNING_KEY_IS_TEST: bool = true;
+/// The buzzkey release key (minisign, key id EFAC892903260581). The release
+/// workflow signs `SHA256SUMS.txt` with its secret half (GitHub secret
+/// `MINISIGN_SECRET_KEY` in the buzzkey repo).
+pub const SIGNING_KEY: &str = "RWSBBSYDKYms79DKyRXf9Qb9z0KmDIM5ZCcdrwmXBF2MCuNC61n+nGkM";
+/// swarmterm-testlab key (id E7591202FF617829). Its secret half lies
+/// unencrypted in the testlab, so only debug builds trust it — scenario 34
+/// installs from a local fake release signed with it.
+pub const TEST_SIGNING_KEY: &str = "RWQpeGH/AhJZ57Bh0TYOSNHLEvKEhXH7kpqUYU+lu6FCIfkpkIaN6h91";
+
+/// Keys a release may be signed with in this build.
+pub fn trusted_keys() -> &'static [&'static str] {
+    if cfg!(debug_assertions) {
+        &[SIGNING_KEY, TEST_SIGNING_KEY]
+    } else {
+        &[SIGNING_KEY]
+    }
+}
+
+/// Any trusted key verifies.
+pub fn verify_trusted(sums: &[u8], sig: &str) -> Result<(), String> {
+    let mut last = Err("signature-invalid".to_string());
+    for key in trusted_keys() {
+        last = verify_signature(sums, sig, key);
+        if last.is_ok() {
+            break;
+        }
+    }
+    last
+}
 
 pub const TAG_PREFIX: &str = "buzzkey-";
 pub const EXE: &str = "buzzkey.exe";
@@ -328,13 +351,17 @@ mod tests {
 
     #[test]
     fn signature_must_match_the_compiled_key_and_the_bytes() {
-        assert_eq!(verify_signature(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE, SIGNING_KEY), Ok(()));
+        assert_eq!(verify_signature(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE, TEST_SIGNING_KEY), Ok(()));
         let tampered = SUMS_FIXTURE.replace("e3b0", "e3b1");
-        assert!(verify_signature(tampered.as_bytes(), SIG_FIXTURE, SIGNING_KEY).is_err());
+        assert!(verify_signature(tampered.as_bytes(), SIG_FIXTURE, TEST_SIGNING_KEY).is_err());
+        // The release key did not sign the testlab fixture.
+        assert!(verify_signature(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE, SIGNING_KEY).is_err());
+        // Test builds (debug) also trust the testlab key; release builds do not.
+        assert_eq!(verify_trusted(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE).is_ok(), cfg!(debug_assertions));
         // Another key (same format) must not verify.
         let other = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
         assert!(verify_signature(SUMS_FIXTURE.as_bytes(), SIG_FIXTURE, other).is_err());
-        assert!(verify_signature(SUMS_FIXTURE.as_bytes(), "garbage", SIGNING_KEY).is_err());
+        assert!(verify_signature(SUMS_FIXTURE.as_bytes(), "garbage", TEST_SIGNING_KEY).is_err());
     }
 
     #[test]
