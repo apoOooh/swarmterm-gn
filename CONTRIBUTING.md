@@ -47,6 +47,9 @@ lives at boundaries (pty, window manager, tray) that unit tests can't reach.
 - **Windows support:** native CI and releases target Windows x64 only. Keep
   existing platform guards in inherited code; macOS/Linux code is retained
   without a support commitment.
+- **Branches:** target `dev` with every change. `main` only receives `dev`
+  when a release is cut, and releases are tagged on `main` (see
+  `docs/release-process.md`).
 - **Commit messages** follow Conventional Commits (`feat(scope): …`,
   `fix: …`, `docs: …`) — mirror the existing history.
 

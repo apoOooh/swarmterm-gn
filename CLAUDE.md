@@ -23,6 +23,12 @@ guide (and README only if they change one of its three core ideas).
 bundles target Windows; retained upstream macOS/Linux code is not a support
 commitment. Preserve platform guards when editing inherited Rust code.
 
+**Branches and releases:** work branches merge into `dev` (the integration
+branch). `main` only receives `dev` for a release (`Release GN <version>`
+merge commit), and the release tag goes on that commit on `main`, never on
+`dev`. The release workflow rejects tags outside `main` history. Never
+commit to `main` directly. Steps: `docs/release-process.md`.
+
 ## Commands
 
 Run from the repo root unless noted.

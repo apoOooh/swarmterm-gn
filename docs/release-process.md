@@ -7,22 +7,45 @@ tag is pushed. macOS and Linux packages are not published or supported.
 
 ## Create a release
 
-Start from the tested `dev` integration branch. Keep release preparation on a
-topic branch, merge it into `dev`, and push before creating the tag.
+Releases are cut from **`main`**. Branches:
+
+- `dev` is the integration branch. Feature and fix branches merge into it.
+- `main` holds only released states. It changes only by merging `dev` for a
+  release, and each release tag sits on that merge commit.
+
+Steps, starting from a tested `dev`:
+
+1. Prepare the release on a topic branch (`chore/release-<version>`): bump the
+   version, write the notes, update the changelog. Merge it into `dev` and
+   push `dev`.
+2. Merge `dev` into `main` with a merge commit titled `Release GN <version>`,
+   and push `main`.
+3. Tag that merge commit on `main` and push the tag. The tag starts the
+   workflow.
 
 ```powershell
-npm run bump -- 1.1.0
-# Write docs/releases/1.1.0.md and update CHANGELOG.md.
-# Commit the version files, notes and workflow changes; merge into dev.
+npm run bump -- 1.20.0
+# Write docs/releases/1.20.0.md and update CHANGELOG.md.
+# Commit on chore/release-1.20.0, merge into dev, then:
 git push origin dev
-git tag -a v1.1.0 -m "Swarmterm GN 1.1.0: first Windows release"
-git push origin v1.1.0
+git switch main
+git pull --ff-only origin main
+git merge --no-ff dev -m "Release GN 1.20.0"
+git push origin main
+git tag -a v1.20.0 -m "Swarmterm GN 1.20.0: <summary>"
+git push origin v1.20.0
+git switch dev
 ```
+
+Never tag on `dev`, and never commit to `main` directly. Fixes go to `dev`
+first and reach `main` with the next release.
 
 Use a new version for each release. `npm run bump` updates the npm manifest,
 npm lockfile, Tauri configuration, Rust manifest and Rust lockfile together.
 The workflow rejects a tag whose version disagrees with any of them, a tag
-outside `dev` history, or a version without `docs/releases/<version>.md`.
+outside `main` history, or a version without `docs/releases/<version>.md`.
+Until 1.19.0, tags were on `dev` and `main` was merged afterwards; older tags
+keep that history.
 Existing upstream tags are retained; the first GN release is `v1.1.0`.
 
 ## What the workflow does
