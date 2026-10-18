@@ -9,6 +9,11 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
+  // Scan every entry up front, including the e2e fixture page and lazy
+  // imports. A dependency first met mid-session makes Vite re-optimize and
+  // reload the page, which aborted in-flight chunk loads (ERR_NETWORK_CHANGED)
+  // and left e2e tests with an empty app.
+  optimizeDeps: { entries: ["index.html", "tests/fixtures/*.html", "src/**/*.{ts,tsx}", "!src/**/*.test.{ts,tsx}"] },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
