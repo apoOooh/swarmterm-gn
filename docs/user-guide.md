@@ -420,7 +420,7 @@ Hosted panes outlive Swarmterm itself: if the app crashes or is ended from Task 
 ## Updates
 
 Swarmterm GN disables the upstream updater, including its tray entry, endpoint
-and update artifacts. Update this fork from its `dev` branch and rebuild it.
+and update artifacts. Install new versions from this fork's GitHub Releases, or rebuild from its `main` branch (the latest release).
 Upstream Swarmterm releases do not contain the GN additions.
 
 ## Telemetry

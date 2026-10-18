@@ -26,7 +26,9 @@ Steps, starting from a tested `dev`:
 ```powershell
 npm run bump -- 1.20.0
 # Write docs/releases/1.20.0.md and update CHANGELOG.md.
-# Commit on chore/release-1.20.0, merge into dev, then:
+# Commit them on chore/release-1.20.0, then:
+git switch dev
+git merge --no-ff chore/release-1.20.0
 git push origin dev
 git switch main
 git pull --ff-only origin main
@@ -44,8 +46,9 @@ Use a new version for each release. `npm run bump` updates the npm manifest,
 npm lockfile, Tauri configuration, Rust manifest and Rust lockfile together.
 The workflow rejects a tag whose version disagrees with any of them, a tag
 outside `main` history, or a version without `docs/releases/<version>.md`.
-Until 1.19.0, tags were on `dev` and `main` was merged afterwards; older tags
-keep that history.
+Through 1.19.0, tags were on `dev` and `main` was merged afterwards. Those
+tags are on `main`'s history once that merge is pushed, so re-running the
+workflow for them still passes; before it, a retry fails the `main` check.
 Existing upstream tags are retained; the first GN release is `v1.1.0`.
 
 ## What the workflow does

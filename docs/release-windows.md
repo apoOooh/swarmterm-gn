@@ -16,7 +16,8 @@ The overall flow (bump → tag → build → publish) lives in
 2. **Visual Studio Build Tools** with the *Desktop development with C++*
    workload (the linker and Windows SDK Tauri needs).
 3. **Node 24** and `npm`.
-4. Clone the `dev` branch of `apoOooh/swarmterm-gn` and run `npm ci`.
+4. Clone `apoOooh/swarmterm-gn` and run `npm ci`. Check out `main` or a release
+   tag to build released code; `dev` has unreleased changes.
 
 ## Releasing
 
