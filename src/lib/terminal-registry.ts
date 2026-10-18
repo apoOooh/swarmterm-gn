@@ -69,6 +69,7 @@ import {
 } from '@/lib/terminal-input-client'
 import { AgentStateDetector, type DetectorDeps } from '@/lib/agent-state/detector'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
+import { acceptsAgentHooks } from '@/lib/agent-state/hook-signal'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import type { BufferView } from '@/lib/agent-state/snapshot'
 import type { AgentHookSignal } from '@/tauri/agent-state'
@@ -1498,17 +1499,17 @@ export function getTerminalAgentId(id: string): string | undefined {
 
 /**
  * Route one `agent:hook` event (App.tsx subscription) into the pane's detector.
- * Gated on the Claude Code manifest, NOT on "has a detector": a `claude`
- * launched by hand inside a Codex/Gemini/other agent pane inherits that pane's
- * `SWARMTERM_SESSION` and would otherwise drive the wrong detector with edges
- * the Codex screen never shows. Only the Claude Code manifest was tuned
- * against these hooks (its visibleIdle/visibleBlocker flags are what
- * `resolveHookState` arbitrates on), so every other pane keeps following its
- * screen alone. Plain Terminal panes have no detector and fall through too.
+ * Gated on the manifests tuned against hooks (`acceptsAgentHooks`: Claude
+ * Code, and Codex since SWA-71), NOT on "has a detector": a `claude` launched
+ * by hand inside a Gemini/other agent pane inherits that pane's
+ * `SWARMTERM_SESSION` and would otherwise drive the wrong detector. Inside a
+ * Codex pane Rust drops such edges (they name no Codex session). Every other
+ * pane keeps following its screen alone; plain Terminal panes have no
+ * detector and fall through too.
  */
 export function noteAgentHook(id: string, signal: AgentHookSignal): void {
   const e = entries.get(id)
-  if (e?.detectorManifestId !== 'claude-code') return
+  if (!e || !acceptsAgentHooks(e.detectorManifestId)) return
   e.detector?.noteHook(signal)
 }
 

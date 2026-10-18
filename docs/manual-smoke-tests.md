@@ -410,6 +410,13 @@ server. The full Quit/restart and conversation checks below require real CLIs.
       perform no steady-state config writes, and never change hook trust.
 - [ ] Check saved storage: no terminal text, prompt, startup command, runtime
       terminal id, file tab, unsaved buffer or broadcast group is persisted.
+- [ ] Codex turn edges (SWA-71, Codex 0.163+): after the update Codex asks
+      to review Swarmterm's new Stop/Interrupt hooks in `/hooks`; trust them.
+      With Speak announcements and Allow excerpts on, a Codex turn in a
+      background pane is announced once with the agent's `<voice>` line,
+      Esc in a running turn is said as interrupted and lands in the bell, and
+      no "fertig" is said while the turn is still running. With the new hooks
+      untrusted, the pane's status and announcements behave as before.
 
 ## Session resume (composer)
 

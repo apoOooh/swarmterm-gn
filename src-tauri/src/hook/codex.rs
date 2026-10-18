@@ -1,6 +1,6 @@
 //! Codex session capture. User hooks remain additive and require Codex's
 //! normal `/hooks` trust flow; never write trust records or bypass trust.
-use super::install::{merge_events, HooksWrite};
+use super::install::{merge_events, merge_events_timed, HooksWrite};
 use std::{
     fs,
     io::Read,
@@ -12,7 +12,20 @@ use std::{
 use tauri::{AppHandle, Manager};
 use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
 
-const EVENTS: [&str; 2] = ["SessionStart", "UserPromptSubmit"];
+/// Session capture plus (SWA-71) the turn edges. Codex ignores event names it
+/// does not know, so an older CLI simply never fires `Interrupt`. New events
+/// need one `/hooks` review by the user; existing trust is untouched.
+pub const EVENTS: [&str; 4] = ["SessionStart", "UserPromptSubmit", "Stop", "Interrupt"];
+
+/// Codex clamps the `Interrupt` hook to 3 s and warns on every start when
+/// asked for more.
+fn timeout_for(event: &str) -> u64 {
+    if event == "Interrupt" {
+        3
+    } else {
+        5
+    }
+}
 
 /// Probe cache. A definite answer is kept for the process; a timed-out probe
 /// (cold disk, AV scan) is retried, but no more often than `RETRY_AFTER`.
@@ -191,7 +204,7 @@ pub fn format_command(exe: &str, windows: bool) -> String {
 }
 
 pub fn merge_json(existing: Option<&str>, command: &str) -> Result<HooksWrite, String> {
-    merge_events(existing, Some(command), &EVENTS, is_ours)
+    merge_events_timed(existing, Some(command), &EVENTS, is_ours, timeout_for)
 }
 
 /// Edit the existing representation in place, preserving comments and foreign
@@ -226,7 +239,8 @@ pub fn merge_toml(existing: &str, command: &str) -> Result<Option<String>, Strin
                 let hs = g["hooks"].as_array_of_tables().unwrap();
                 hs.len() == 1
                     && hs.get(0).unwrap().get("command").and_then(Item::as_str) == Some(command)
-                    && hs.get(0).unwrap().get("timeout").and_then(Item::as_integer) == Some(5)
+                    && hs.get(0).unwrap().get("timeout").and_then(Item::as_integer)
+                        == Some(timeout_for(event) as i64)
             })
         {
             continue;
@@ -235,7 +249,7 @@ pub fn merge_toml(existing: &str, command: &str) -> Result<Option<String>, Strin
         let mut handler = Table::new();
         handler["type"] = value("command");
         handler["command"] = value(command);
-        handler["timeout"] = value(5);
+        handler["timeout"] = value(timeout_for(event) as i64);
         let mut handlers = ArrayOfTables::new();
         handlers.push(handler);
         let mut group = Table::new();
@@ -559,6 +573,42 @@ mod tests {
         assert!(!repaired.contains(OURS));
         assert!(repaired.contains("D:/Swarmterm"));
     }
+    /// SWA-71: an install from before the turn edges gains Stop/Interrupt,
+    /// leaves the trusted SessionStart/UserPromptSubmit groups as they are,
+    /// and asks for 3 s on Interrupt (Codex's clamp).
+    #[test]
+    fn an_older_install_gains_the_turn_edges_additively() {
+        let ours =
+            |t: u64| serde_json::json!({"hooks":[{"type":"command","command":OURS,"timeout":t}]});
+        let old = serde_json::json!({"hooks":{
+            "SessionStart":[{"hooks":[{"type":"command","command":"notify"}]}, ours(5)],
+            "UserPromptSubmit":[ours(5)]
+        }})
+        .to_string();
+        let HooksWrite::Write(next) = merge_json(Some(&old), OURS).unwrap() else {
+            panic!()
+        };
+        let v: serde_json::Value = serde_json::from_str(&next).unwrap();
+        assert_eq!(
+            v["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+            "notify"
+        );
+        assert_eq!(v["hooks"]["SessionStart"][1], ours(5));
+        assert_eq!(v["hooks"]["UserPromptSubmit"], serde_json::json!([ours(5)]));
+        assert_eq!(v["hooks"]["Stop"], serde_json::json!([ours(5)]));
+        assert_eq!(v["hooks"]["Interrupt"], serde_json::json!([ours(3)]));
+        assert!(matches!(
+            merge_json(Some(&next), OURS).unwrap(),
+            HooksWrite::Unchanged
+        ));
+
+        let toml = merge_toml("[hooks]\n", OURS).unwrap().unwrap();
+        let doc = toml.parse::<DocumentMut>().unwrap();
+        let timeout = |e: &str| doc["hooks"][e][0]["hooks"][0]["timeout"].as_integer();
+        assert_eq!(EVENTS.map(timeout), [Some(5), Some(5), Some(5), Some(3)]);
+        assert!(merge_toml(&toml, OURS).unwrap().is_none());
+    }
+
     #[test]
     fn malformed_config_is_never_overwritten() {
         let dir = tempfile::tempdir().unwrap();

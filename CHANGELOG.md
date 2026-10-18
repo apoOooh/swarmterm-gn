@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Voice: Codex turns end exactly (SWA-71). Swarmterm registers Codex's
+  `Stop` and `Interrupt` hooks next to the session capture (one more
+  `/hooks` review in Codex). A Codex pane's status follows these edges, a
+  pause in the middle of a turn is no longer announced as done, Esc is said
+  as interrupted, and with **Allow excerpts** the agent's reply is spoken
+  for Codex too.
+
 ## [1.18.0] - 2026-10-18
 
 - Panes: every open pane shows a number in its header and the navbar list,

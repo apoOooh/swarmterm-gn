@@ -239,7 +239,7 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `target/debug/swarmterm.exe`, and cleaning up the worktree breaks each hook
   event. Entries pointing only at a dead binary are still overwritten (the
   repair). Release builds
-  always reclaim their entries; Codex has a similar rule (`hook/codex.rs`, which skips whenever any entry of ours exists).
+  always reclaim their entries; Codex has a similar rule (`hook/codex.rs`, which skips whenever any entry of ours exists — so a debug build never adds the SWA-71 Stop/Interrupt entries to an existing install; test with a fresh `CODEX_HOME`/account profile).
 - **Native preview webviews.** The preview column is a per-terminal native
   child webview (`preview.rs`, label `preview-<terminalId>`, Tauri `unstable`
   feature for `add_child`). Invariant: a preview webview is visible iff
@@ -400,7 +400,19 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   reach the pipe: feeds see done/needs_input of unwatched panes only,
   `excerpt` null, no new op or capability. Error/interrupted go to the bell
   via `voice:turn-kind`. Never hold the ledger lock together with
-  `terminals`, pins or the TTS hub lock. Codex/OpenCode: status only.
+  `terminals`, pins or the TTS hub lock. OpenCode: status only.
+  Codex (SWA-71, ADR 0004 addendum): `hook/codex.rs` also registers
+  `Stop`/`Interrupt` (Interrupt with 3 s, Codex's clamp); `turn_id` is the
+  prompt anchor (`TurnMark::from_codex_input`), `Interrupt` closes the turn
+  as interrupted. `/hook` emits `agent:hook` for Codex only for edges that
+  name its session (a session-less body in a Codex pane is a nested agent
+  → 204). `Ledger::hold` keeps a renderer "done" during an open Codex turn
+  once the pane has proved closing edges (`ends_seen`); the closing edge
+  says it (`take_replay`), a later status is `View::Silent`. Rollouts:
+  `reader::locate_rollout` (name match, newest day first) under
+  `<CODEX_HOME>/sessions`, `completion/codex.rs` anchors on `task_started`.
+  `ManagedTerminal.profile_dir` is the account dir of either agent (host
+  meta key stays `claudeConfigDir`).
 - **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:
   `run_routine_command` (main webview only) runs ONE line via
   `cmd.exe /d /s /c` (`raw_arg`, CREATE_NO_WINDOW) in a kill-on-close job

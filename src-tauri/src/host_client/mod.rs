@@ -326,7 +326,7 @@ pub struct PendingTerminal {
     pub cwd: std::path::PathBuf,
     pub worktree_mode: bool,
     pub repo_root: Option<String>,
-    pub claude_config_dir: Option<std::path::PathBuf>,
+    pub profile_dir: Option<std::path::PathBuf>,
 }
 
 /// Host traffic → app state. One per connection, so a reconnect starts with

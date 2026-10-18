@@ -3,10 +3,33 @@ import {
   TTL_WORKING_MS,
   TTL_BLOCKED_MS,
   TTL_IDLE_MS,
+  acceptsAgentHooks,
   isHookLive,
   resolveHookState,
   type HookMark,
 } from '@/lib/agent-state/hook-signal'
+
+describe('acceptsAgentHooks', () => {
+  it('routes hooks only into the detectors tuned against them', () => {
+    expect(acceptsAgentHooks('claude-code')).toBe(true)
+    // SWA-71: Codex's own turn edges.
+    expect(acceptsAgentHooks('codex')).toBe(true)
+    expect(acceptsAgentHooks('gemini')).toBe(false)
+    expect(acceptsAgentHooks(undefined)).toBe(false)
+    expect(acceptsAgentHooks(null)).toBe(false)
+  })
+})
+
+describe('codex manifest under hooks (SWA-71)', () => {
+  it('a hook working mark overrules the title going idle mid-turn', () => {
+    const r = resolveHookState({
+      hook: { signal: 'working', atMs: 0 },
+      scrape: verdict('idle', { visibleIdle: true }),
+      now: 1_000,
+    })
+    expect(r.state).toBe('working')
+  })
+})
 import type { AgentEngineState, Verdict } from '@/lib/agent-state/types'
 
 /** Build a scrape verdict; only the flags the precedence rules look at are settable. */
