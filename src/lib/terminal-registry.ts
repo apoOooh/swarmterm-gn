@@ -522,7 +522,13 @@ function getOrCreate(id: string): Entry {
   // (term.paste) flows through onData too, so it fans out — and gets recorded
   // — for free. Each target pty echoes independently: this is real broadcast,
   // not a text mirror.
+  // >0 while a reattached pane's history is being parsed (SWA-56): xterm
+  // answers queries in it (DA, DSR, colour reports) through onData, and
+  // those answers belong to a moment long gone — sent now they would land
+  // in the running program as typed input.
+  let replaying = 0
   const sendInput = (data: string): void => {
+    if (replaying > 0) return
     // A focus report belongs to the pane that changed focus only: fanned out
     // it would type `ESC[I` into every broadcast member, and recorded as
     // typing it would hold that pane's War Room deliveries for a line the
@@ -1028,6 +1034,27 @@ function getOrCreate(id: string): Entry {
         activityTracker.notify(id)
         entries.get(id)?.detector?.noteOutput()
         term.write(data)
+      },
+      replay: ({ data, cols, rows, truncated }) => {
+        // The history was rendered at the host pane's size: parse it at that
+        // size, so wrapped lines and cursor positions land where the program
+        // put them, then fit to this pane. The pty goes one column narrower
+        // and back, which makes a full-screen program repaint (as tmux does
+        // on attach) and leaves the pty at the pane's real size. No activity
+        // tick: none of this is new output.
+        replaying += 1
+        try { term.resize(Math.max(2, cols), Math.max(1, rows)) } catch { /* disposed */ }
+        const note = truncated ? '\x1b[2m[older output is not available]\x1b[0m\r\n' : ''
+        term.write(note + data, () => {
+          replaying -= 1
+          const entry = entries.get(id)
+          if (!entry) return
+          safeFit(entry)
+          const c = entry.term.cols, r = entry.term.rows
+          void resizeTerminal(id, Math.max(2, c - 1), r)
+            .then(() => resizeTerminal(id, c, r))
+            .catch(() => undefined)
+        })
       }
     },
     { createTerminal, killTerminal }

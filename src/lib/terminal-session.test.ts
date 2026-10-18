@@ -28,6 +28,29 @@ function makeDeps(): SessionDeps & {
 const OPTS = { cols: 80, rows: 24, cwd: '/tmp' }
 
 describe('TerminalSession', () => {
+  it('hands a reattached pane its history through replay, not write', () => {
+    const deps = makeDeps()
+    const write = vi.fn()
+    const replay = vi.fn()
+    const session = new TerminalSession('t1', { write, replay }, deps)
+    session.start(OPTS)
+    const payload = { data: 'history', cols: 100, rows: 30, truncated: true }
+    deps.emit({ type: 'replay', payload })
+    deps.emit({ type: 'data', payload: 'live' })
+    expect(replay).toHaveBeenCalledWith(payload)
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith('live')
+  })
+
+  it('writes a replay as plain output when the sink has no replay handler', () => {
+    const deps = makeDeps()
+    const write = vi.fn()
+    const session = new TerminalSession('t1', { write }, deps)
+    session.start(OPTS)
+    deps.emit({ type: 'replay', payload: { data: 'history', cols: 80, rows: 24, truncated: false } })
+    expect(write).toHaveBeenCalledWith('history')
+  })
+
   it('cleans up a successful creation that completes after disposal', async () => {
     const deps = makeDeps()
     let complete!: (result: CreateTerminalResult) => void

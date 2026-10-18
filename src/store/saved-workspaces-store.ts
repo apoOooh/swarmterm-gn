@@ -3,6 +3,9 @@ import { autoOpenList, moveAutoOpen, readSaved, setAutoOpen, storeSaved, upsertS
 import { startSavedWorkspaceSync } from '@/lib/saved-workspace-sync'
 import { prepareSavedWorkspace, savedLeaves } from '@/lib/saved-workspace-restore'
 import { inspectSavedWorkspace } from '@/tauri/sessions'
+import { getDetachedPanes, keepDetachedPanes, releaseDetachedPanes, type DetachedPane } from '@/tauri/terminal-host'
+import { reattachResolver, savedPaneIds } from '@/lib/host-reattach'
+import { collectLeaves } from '@/lib/layout-tree'
 import { useAppStore } from './app-store'
 import { useTerminalPrefStore } from './terminal-pref-store'
 import { useAgentAvailabilityStore } from './agent-availability-store'
@@ -30,6 +33,19 @@ interface SavedState {
 function persist(entries: SavedWorkspace[]): void {
   try { storeSaved(window.localStorage, entries); useSavedWorkspacesStore.setState({ error: null }) }
   catch { useSavedWorkspacesStore.setState({ error: 'Saved workspaces could not be written. Check available storage.' }) }
+}
+// Panes that survived the last app instance in the terminal host (SWA-56),
+// asked once per process; every open takes from it. Fail-open: no host, no
+// reattach, workspaces open as before.
+let detached: Promise<DetachedPane[]> | undefined
+function detachedPanes(): Promise<DetachedPane[]> {
+  detached ??= getDetachedPanes().catch(() => [])
+  return detached
+}
+function takeDetached(ids: string[]): void {
+  if (!detached || !ids.length) return
+  const gone = new Set(ids)
+  detached = detached.then(list => list.filter(p => !gone.has(p.terminalId)))
 }
 // Read synchronously so the very first frame already knows Welcome stays hidden.
 function startupPending(): boolean {
@@ -59,7 +75,15 @@ export const useSavedWorkspacesStore = create<SavedState>((set, get) => ({
       const latest = get().entries.find(w => w.id === id)
       if (!latest) return
       const result = prepareSavedWorkspace(latest, inspection, useAgentAvailabilityStore.getState().availability, useShellAvailabilityStore.getState().availability)
-      useAppStore.getState().restoreWorkspace(result.saved)
+      const taken = useAppStore.getState().workspaces.flatMap(w => collectLeaves(w.layout).map(l => l.terminalId))
+      const reattach = reattachResolver(await detachedPanes(), taken)
+      const claimed: string[] = []
+      useAppStore.getState().restoreWorkspace(result.saved, leaf => {
+        const live = reattach(leaf)
+        if (live) claimed.push(live.terminalId)
+        return live
+      })
+      takeDetached(claimed)
       get().save([{ ...result.saved, updatedAt: Date.now() }])
       if (result.warnings.length) set({ notice: result.warnings.join(' ') })
     } catch (e) { set({ notice: e instanceof Error ? e.message : 'Could not open this workspace. Please try again.' }) }
@@ -73,6 +97,10 @@ export const useSavedWorkspacesStore = create<SavedState>((set, get) => ({
     if (open) useAppStore.getState().renameWorkspace(open.id, trimmed)
   },
   forget: (id) => {
+    // Its panes still running in the host can never be shown again.
+    const forgotten = get().entries.find(w => w.id === id)
+    const open = useAppStore.getState().workspaces.some(w => w.savedId === id)
+    if (forgotten && !open) void releaseDetachedPanes(savedPaneIds([forgotten])).catch(() => undefined)
     useAppStore.getState().forgetWorkspace(id)
     const entries = get().entries.filter(w => w.id !== id)
     set({ entries }); if (get().writable) persist(entries)
@@ -122,7 +150,14 @@ export function setOpenWorkspaceAutoOpen(savedId: string, on: boolean): void {
 export function wireSavedWorkspaces(): () => void {
   sync?.dispose()
   useSavedWorkspacesStore.getState().hydrate()
-  if (!autostartDone) { autostartDone = true; void useSavedWorkspacesStore.getState().openAutostart() }
+  if (!autostartDone) {
+    autostartDone = true
+    // Tell the host which surviving panes can still be opened; it closes the
+    // rest (or all of them after its deadline if this never arrives).
+    const ids = savedPaneIds(useSavedWorkspacesStore.getState().entries)
+    void detachedPanes().then(list => { if (list.length) return keepDetachedPanes(ids) }).catch(() => undefined)
+    void useSavedWorkspacesStore.getState().openAutostart()
+  }
   const current = startSavedWorkspaceSync({ app: useAppStore, shell: () => useTerminalPrefStore.getState().shellId, save: entries => useSavedWorkspacesStore.getState().save(entries) })
   sync = current
   const unpref = useTerminalPrefStore.subscribe((next, prev) => { if (next.shellId !== prev.shellId) current.refresh() })

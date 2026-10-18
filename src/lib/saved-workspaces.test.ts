@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { collectLeaves, updateLeaf } from './layout-tree'
-import { autoOpenList, fromSaved, moveAutoOpen, readSaved, setAutoOpen, toSaved, upsertSaved, SAVED_WORKSPACES_KEY, type SavedWorkspace } from './saved-workspaces'
+import { autoOpenList, fromSaved, moveAutoOpen, readSaved, setAutoOpen, toSaved, upsertSaved, SAVED_WORKSPACES_KEY, type SavedLeaf, type SavedNode, type SavedWorkspace } from './saved-workspaces'
 import type { Workspace } from '@/store/app-store'
 
 const session = '018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f'
@@ -13,6 +13,10 @@ const workspace: Workspace = {
   ] }
 }
 function saved(): SavedWorkspace { return toSaved(workspace, 'powershell', 10)! }
+function savedLeavesOf(w: SavedWorkspace): SavedLeaf[] {
+  const walk = (n: SavedNode): SavedLeaf[] => n.type === 'leaf' ? [n] : n.children.flatMap(walk)
+  return walk(w.layout)
+}
 function storage(raw: string | null) { return { getItem: (key: string) => key === SAVED_WORKSPACES_KEY ? raw : null } }
 
 describe('saved workspace snapshots', () => {
@@ -29,10 +33,36 @@ describe('saved workspace snapshots', () => {
     expect(restored.broadcastActive).toBe(false)
     expect(restored.zoomedLeafId).toBeUndefined()
   })
-  it('never persists runtime ids, brief text, startup commands or broadcast', () => {
+  it('never persists layout ids, brief text, startup commands or broadcast', () => {
     const value = JSON.stringify(saved())
-    for (const field of ['terminalId', 'initialPrompt', 'startupCommand', 'broadcast', 'zoomedLeafId', 'private']) expect(value).not.toContain(field)
+    for (const field of ['"id":"split"', '"id":"a"', '"id":"live"', 'initialPrompt', 'startupCommand', 'broadcast', 'zoomedLeafId', 'private']) expect(value).not.toContain(field)
     expect(toSaved({ ...workspace, savedId: undefined }, 'default', 1)).toBeUndefined()
+  })
+  it('keeps each pane id as the reattach key, but restores fresh ids by default', () => {
+    const leaves = savedLeavesOf(saved())
+    expect(leaves.map(l => l.terminalId)).toEqual(['ta', 'tb'])
+    const raw = JSON.stringify({ version: 1, workspaces: [saved()] })
+    expect(savedLeavesOf(readSaved(storage(raw))[0]).map(l => l.terminalId)).toEqual(['ta', 'tb'])
+    const bad = raw.replace('"ta"', '"t a;x"')
+    expect(savedLeavesOf(readSaved(storage(bad))[0])[0].terminalId).toBeUndefined()
+    let n = 0
+    expect(collectLeaves(fromSaved(saved(), () => `new-${++n}`).layout).map(l => l.terminalId)).not.toContain('ta')
+  })
+  it('reattaches a pane under its old id with the host-known agent and folder', () => {
+    let n = 0
+    const restored = fromSaved(saved(), () => `new-${++n}`, leaf =>
+      leaf.terminalId === 'ta' ? { terminalId: 'ta', agentId: 'claude-code', cwd: 'C:/moved' } : undefined)
+    const [a, b] = collectLeaves(restored.layout)
+    expect(a).toMatchObject({ terminalId: 'ta', agentId: 'claude-code', cwd: 'C:/moved' })
+    // The saved session belonged to another agent: it must not follow.
+    expect(a.sessionId).toBeUndefined()
+    expect(a.resumeSessionId).toBeUndefined()
+    expect(b.terminalId).toMatch(/^new-/)
+  })
+  it('keeps the session of a reattached pane whose agent did not change', () => {
+    const restored = fromSaved(saved(), () => crypto.randomUUID(), leaf =>
+      leaf.terminalId === 'ta' ? { terminalId: 'ta', agentId: 'codex', cwd: 'C:/project' } : undefined)
+    expect(collectLeaves(restored.layout)[0]).toMatchObject({ terminalId: 'ta', sessionId: session, resumeSessionId: session })
   })
   it('keeps an explicitly selected resume session, but rejects shell injection', () => {
     const single = { ...workspace, layout: { type: 'leaf' as const, id: 'a', terminalId: 'ta', agentId: 'claude-code', resumeSessionId: session } }
