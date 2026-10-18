@@ -31,6 +31,10 @@ use tauri::{AppHandle, Manager};
 
 use settings::HostSettings;
 
+/// Lock order: `client` → `terminals` (`reap` checks the map while
+/// `for_spawn` or `reconnect_for_cleanup` hold the slot). Nothing takes
+/// `client` while holding `terminals`: `tray::quit_blocking` drains the map
+/// first, `kill_terminal` never touches the hub.
 #[derive(Default)]
 pub struct HostHub {
     settings: Mutex<HostSettings>,
@@ -104,14 +108,34 @@ impl HostHub {
             .filter(|c| c.conn.is_alive())
     }
 
+    /// Clear the slot if it still holds `conn`. `false` = an older,
+    /// already replaced connection: the slot's owner took over its cleanup.
     #[cfg(windows)]
-    fn forget(&self, conn: &std::sync::Arc<conn::Conn>) {
+    fn forget(&self, conn: &std::sync::Arc<conn::Conn>) -> bool {
         let mut slot = self.client.lock().unwrap();
-        if slot
+        let current = slot
             .as_ref()
-            .is_some_and(|c| std::sync::Arc::ptr_eq(&c.conn, conn))
-        {
+            .is_some_and(|c| std::sync::Arc::ptr_eq(&c.conn, conn));
+        if current {
             *slot = None;
+        }
+        current
+    }
+
+    /// Cleanup-only reconnect after `lost`. Runs under the slot lock like
+    /// `for_spawn`, and gives up if the slot already holds a live
+    /// connection: a hello replaces the host's client, so connecting next to
+    /// a live one would kick it, its `lost` would kick us back, and so on.
+    /// Serialised, the two paths never race, and `reap` cannot see a pane
+    /// whose `create` is still pending.
+    #[cfg(windows)]
+    fn reconnect_for_cleanup(&self, app: &AppHandle) {
+        let mut slot = self.client.lock().unwrap();
+        if slot.as_ref().is_some_and(|c| c.conn.is_alive()) {
+            return;
+        }
+        if let Ok(c) = connect(app, false) {
+            *slot = Some(c);
         }
     }
 
@@ -286,9 +310,10 @@ impl conn::Sink for AppSink {
     }
 
     fn lost(&self) {
-        if let (Some(hub), Some(conn)) = (self.app.try_state::<HostHub>(), self.conn.get()) {
-            hub.forget(conn);
-        }
+        let current = match (self.app.try_state::<HostHub>(), self.conn.get()) {
+            (Some(hub), Some(conn)) => hub.forget(conn),
+            _ => false,
+        };
         let ended = self.routes.lock().unwrap().drain();
         for (terminal_id, spawn_id, channel) in ended {
             crate::pty::finish_generation(&self.app, &terminal_id, &spawn_id, -1, &channel);
@@ -296,16 +321,15 @@ impl conn::Sink for AppSink {
         // The host may live on (a write deadline, a kick): its PTYs for the
         // panes just ended would keep running and keep it from idling out.
         // Reconnect to clean up, without starting a host; off the reader
-        // task, because connecting blocks.
+        // task, because connecting blocks. Only for the slot's connection: a
+        // replaced one was kicked by its successor, which reaped on connect.
+        if !current {
+            return;
+        }
         let app = self.app.clone();
         std::thread::spawn(move || {
-            if let Ok(c) = connect(&app, false) {
-                if let Some(hub) = app.try_state::<HostHub>() {
-                    let mut slot = hub.client.lock().unwrap();
-                    if slot.as_ref().is_none_or(|s| !s.conn.is_alive()) {
-                        *slot = Some(c);
-                    }
-                }
+            if let Some(hub) = app.try_state::<HostHub>() {
+                hub.reconnect_for_cleanup(&app);
             }
         });
     }
