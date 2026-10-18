@@ -3,7 +3,7 @@ import { getFileGitStatus, listFiles, openFileContext, type FileContext, type Fi
 import { FileWatchLease } from '@/lib/files/watch-lease'
 import type { Directory } from '@/lib/files/tree'
 import { appendUndo, type FileUndo } from '@/lib/files/undo'
-import { ancestorDirs } from '@/lib/files/paths'
+import { ancestorDirs, parentDir } from '@/lib/files/paths'
 export interface ExplorerRoot {
   context: FileContext; dirs: Record<string, Directory>; expanded: string[]; selection: string[]
   active: string | null; anchor: string | null; statuses: Record<string, string>
@@ -30,6 +30,14 @@ let lease: FileWatchLease | undefined
 const listingGeneration = new Map<string, number>()
 const gitGeneration = new Map<string, number>()
 let counter = 0
+/** Drops folders (and everything below them) that no longer exist from the expansion state and the
+ *  listing cache. A removed worktree or a folder deleted outside the app would otherwise stay
+ *  expanded forever and fail every refresh with a "Retry" row. */
+function forget(root: ExplorerRoot, gone: string[]): ExplorerRoot {
+  if (gone.length === 0) return root
+  const under = (p: string) => gone.some((g) => p === g || p.startsWith(g + '/') || p.startsWith(g + '\\'))
+  return { ...root, expanded: root.expanded.filter((p) => !under(p)), dirs: Object.fromEntries(Object.entries(root.dirs).filter(([p]) => !under(p))) }
+}
 const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 async function git(id: string): Promise<void> {
   const token = ++counter; gitGeneration.set(id, token)
@@ -84,9 +92,22 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       const entries = await listFiles(id, path)
       if (listingGeneration.get(key) !== token) return
       entries.sort((a, b) => Number(b.isDir) - Number(a.isDir) || natural.compare(a.name, b.name))
-      set((s) => ({ roots: { ...s.roots, [id]: { ...s.roots[id], dirs: { ...s.roots[id].dirs, [path]: { entries } } } } }))
+      // Child folders the user had open but that this listing no longer contains are gone from disk.
+      const present = new Set(entries.filter((e) => e.isDir).map((e) => e.path))
+      set((s) => {
+        const r = s.roots[id]; if (!r) return s
+        const gone = [...new Set([...r.expanded, ...Object.keys(r.dirs)])].filter((p) => p !== path && parentDir(p) === path && !present.has(p))
+        return { roots: { ...s.roots, [id]: forget({ ...r, dirs: { ...r.dirs, [path]: { entries } } }, gone) } }
+      })
     } catch (e) {
-      if (listingGeneration.get(key) === token) set((s) => ({ roots: { ...s.roots, [id]: { ...s.roots[id], dirs: { ...s.roots[id].dirs, [path]: { error: String(e) } } } } }))
+      if (listingGeneration.get(key) !== token) return
+      set((s) => {
+        const r = s.roots[id]; if (!r) return s
+        // Not error-worthy if the parent already proves the folder is gone (or a parent pruned it meanwhile).
+        const parent = r.dirs[parentDir(path)]?.entries
+        if (path !== r.context.root && (!r.expanded.includes(path) && !(path in r.dirs) || (parent && !parent.some((f) => f.path === path)))) return { roots: { ...s.roots, [id]: forget(r, [path]) } }
+        return { roots: { ...s.roots, [id]: { ...r, dirs: { ...r.dirs, [path]: { error: String(e) } } } } }
+      })
     }
   },
   refresh: async (id) => {
