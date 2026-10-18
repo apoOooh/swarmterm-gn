@@ -35,6 +35,8 @@ Existing upstream tags are retained; the first GN release is `v1.1.0`.
    `SHA256SUMS.txt`.
 5. Create a draft, upload both files, then publish the release only after all
    checks and the installer build succeed.
+6. Optional: submit the new version to winget (see below). This step is
+   skipped without the opt-in secret and variable.
 
 The installer remains available as a workflow artifact for 14 days even if
 publication fails. A failed upload leaves a draft rather than a public,
@@ -45,6 +47,38 @@ assets of an already published release. Tags must not be moved or overwritten.
 Only the final publishing job receives repository write permission. No
 additional repository secrets are required. The workflow is restricted to
 `apoOooh/swarmterm-gn`; other forks can explicitly adapt that condition.
+
+## winget (optional)
+
+Swarmterm GN is not in winget yet. The first submission is a manual,
+public step taken by the maintainer, who also chooses the package identifier
+and the publisher name. Nothing in this repository submits on its own.
+
+1. Generate the manifests for a published release:
+
+   ```bash
+   gh release download v<version> --pattern SHA256SUMS.txt --dir winget-tmp
+   node scripts/release/winget.mjs --id <Publisher.SwarmtermGN> \
+     --publisher "<Publisher name>" --version <version> \
+     --sums winget-tmp/SHA256SUMS.txt --out winget-tmp/manifests
+   ```
+
+   They describe the per-user NSIS installer (`InstallerType: nullsoft`,
+   `Scope: user`). Validate with `winget validate winget-tmp/manifests`,
+   test with `winget install --manifest winget-tmp/manifests`, then submit
+   (for example with `komac new` or `wingetcreate submit`).
+2. Once the package is accepted, enable automatic updates: fork
+   `microsoft/winget-pkgs` into the account that owns the token, add a
+   classic personal access token with `public_repo` as the repository
+   secret `WINGET_TOKEN`, and add the identifier as the repository variable
+   `WINGET_PACKAGE_ID`.
+
+The `winget` job in the release workflow then runs `komac update --submit`
+after each published release. komac is pinned by version and archive hash.
+Without the secret or the variable, the job logs that it skipped and the
+release stays green. Each release opens a pull request in
+`microsoft/winget-pkgs` that Microsoft reviews; unsigned installers may be
+held for manual validation.
 
 ## Signing and updates
 
