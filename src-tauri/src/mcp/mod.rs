@@ -48,6 +48,18 @@ pub async fn start(app: AppHandle) -> Result<Arc<str>, String> {
             .await
             .map_err(|e| format!("mcp: bind failed: {e}"))?,
     };
+    // Any child that inherits the listener (a long-lived process started from
+    // a command routine, say) keeps the port bound after the app is gone, and
+    // a restarted app then cannot take it back for its surviving panes.
+    // Sockets are created non-inheritable, except under layered service
+    // providers, which some security software installs; mark it explicitly.
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+        // SAFETY: a live socket handle owned by `listener`.
+        unsafe { SetHandleInformation(listener.as_raw_socket() as _, HANDLE_FLAG_INHERIT, 0) };
+    }
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
     crate::host_client::publish_mcp_port(&app, addr.port());
     let url: Arc<str> = Arc::from(format!("http://{addr}/mcp"));
