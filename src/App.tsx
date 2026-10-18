@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import {
   DndContext,
@@ -74,7 +74,7 @@ import { resolvePaneTitle } from '@/lib/pane-title'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { FileDropListener } from '@/components/FileDropListener'
 import { FileDialog } from '@/components/Files/FileDialog'
-import { PaneIdentityDialog } from '@/components/TerminalPane/PaneIdentityDialog'
+import { usePaneIdentityDialogStore } from '@/store/pane-identity-dialog-store'
 import { collectEditorCache } from '@/lib/files/editor-cache'
 import { useDocumentStore } from '@/store/document-store'
 import { useExplorerStore } from '@/store/explorer-store'
@@ -179,6 +179,12 @@ const ghostModifier: Modifier = ({ transform, activatorEvent, draggingNodeRect }
     draggingNodeRect
   )
 
+// Lazy: the dialog's icon picker carries the list of every lucide icon,
+// which only needs to load once someone opens it.
+const PaneIdentityDialog = lazy(() =>
+  import('@/components/TerminalPane/PaneIdentityDialog').then((m) => ({ default: m.PaneIdentityDialog }))
+)
+
 export default function App(): ReactElement {
   const macroRunning = useRef(false)
   useEffect(() => wireSavedWorkspaces(), [])
@@ -214,6 +220,7 @@ export default function App(): ReactElement {
   const openWelcome = useAppStore((s) => s.openWelcome)
   const closeWelcome = useAppStore((s) => s.closeWelcome)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const identityDialogOpen = usePaneIdentityDialogStore((s) => s.leafId !== null)
   const [settingsTab, setSettingsTab] = useState<CategoryId>('appearance')
   // Native full-screen state, owned here because both the header's traffic-light
   // inset and the system-chrome dodge below are driven by it.
@@ -1178,7 +1185,7 @@ export default function App(): ReactElement {
     >
       <FileDropListener />
       <FileDialog />
-      <PaneIdentityDialog />
+      {identityDialogOpen && <Suspense fallback={null}><PaneIdentityDialog /></Suspense>}
       <BuzzkeyUpdateToast />
       <TitleBar fullscreen={isFullscreen} />
       <SavedWorkspaceNotice />

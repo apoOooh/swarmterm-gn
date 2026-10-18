@@ -168,12 +168,13 @@ describe('pane names (BUZ-5)', () => {
 
   it('round-trips a pane identity icon + color and drops invalid ones on read', () => {
     const leaves = collectLeaves(workspace.layout)
-    const layout = updateLeaf(workspace.layout, leaves[0].id, { name: 'Reviewer', icon: 'bug', color: '#5865f2' })
+    const layout = updateLeaf(workspace.layout, leaves[0].id, { name: 'Reviewer', icon: 'bug', color: '#5865f2', headerTint: true })
     const raw = JSON.stringify({ version: 1, workspaces: [toSaved({ ...workspace, layout }, 'powershell', 1)] })
     const leaf = collectLeaves(fromSaved(readSaved({ getItem: () => raw })[0], () => crypto.randomUUID()).layout)[0]
-    expect([leaf.name, leaf.icon, leaf.color]).toEqual(['Reviewer', 'bug', '#5865f2'])
+    expect([leaf.name, leaf.icon, leaf.color, leaf.headerTint]).toEqual(['Reviewer', 'bug', '#5865f2', true])
     const bad = JSON.stringify({ version: 1, workspaces: [toSaved({ ...workspace, layout: updateLeaf(layout, leaves[0].id, { icon: 'evil text', color: 'red' }) }, 'powershell', 1)] })
     const dropped = collectLeaves(fromSaved(readSaved({ getItem: () => bad })[0], () => 'x').layout)[0]
-    expect([dropped.icon, dropped.color]).toEqual([undefined, undefined])
+    // A tint whose color was dropped has nothing to paint with.
+    expect([dropped.icon, dropped.color, dropped.headerTint]).toEqual([undefined, undefined, undefined])
   })
 })

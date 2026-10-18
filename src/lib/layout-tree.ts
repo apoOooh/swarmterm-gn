@@ -56,6 +56,8 @@ export interface LeafNode {
   icon?: string
   /** Identity color from PANE_COLORS, tints the icon. */
   color?: string
+  /** Also tint the pane's top bar with `color` (lib/pane-identity). */
+  headerTint?: boolean
 }
 
 export interface SplitNode {
@@ -101,6 +103,7 @@ export function updateLeaf(
       | 'name'
       | 'icon'
       | 'color'
+      | 'headerTint'
     >
   >
 ): LayoutNode {

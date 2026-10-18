@@ -65,7 +65,7 @@ export function PaneTitle({ leafId, title, name, number, tooltip, className, sub
             !icon && 'text-muted-foreground opacity-0 group-hover/pane-title:opacity-60 focus-visible:opacity-100'
           )}
         >
-          {icon ? <PaneIdentityIcon icon={icon} color={color} /> : <SmilePlus aria-hidden className="h-3 w-3" />}
+          {icon ? <PaneIdentityIcon icon={icon} color={color} fallback={<SmilePlus aria-hidden className="h-3 w-3" />} /> : <SmilePlus aria-hidden className="h-3 w-3" />}
         </button>
       ) : icon ? (
         <PaneIdentityIcon icon={icon} color={color} />
@@ -104,7 +104,22 @@ export function PaneTitle({ leafId, title, name, number, tooltip, className, sub
         >
           {subtitle ? (
             <>
-              <span className="font-semibold">{title}</span>
+              {onEditIdentity ? (
+                // The identity name opens the identity dialog, like the icon.
+                <button
+                  type="button"
+                  data-no-dnd
+                  title="Change icon, name and color"
+                  onClick={(e) => { e.stopPropagation(); onEditIdentity() }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  className="rounded font-semibold hover:underline"
+                >
+                  {title}
+                </button>
+              ) : (
+                <span className="font-semibold">{title}</span>
+              )}
               <span className="text-muted-foreground"> · {subtitle}</span>
             </>
           ) : title}

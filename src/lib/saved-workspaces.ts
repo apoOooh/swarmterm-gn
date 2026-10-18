@@ -23,6 +23,7 @@ export interface SavedLeaf {
   /** Pane identity icon + color (lib/pane-identity); re-sanitised on load. */
   icon?: string
   color?: string
+  headerTint?: boolean
   /**
    * The pane's last runtime id: the key a pane that survived in the
    * terminal host (SWA-56) is reattached by. It doubles as the pane's MCP
@@ -62,6 +63,7 @@ export function toSaved(ws: Workspace, shell: ShellId, now: number, paneIds = fa
       ...(node.name ? { name: node.name } : {}),
       ...(node.icon ? { icon: node.icon } : {}),
       ...(node.color ? { color: node.color } : {}),
+      ...(node.headerTint && node.color ? { headerTint: true } : {}),
       ...(paneIds && validTerminalId(node.terminalId) ? { terminalId: node.terminalId } : {}),
       ...(validSession(agentId, node.sessionId ?? node.resumeSessionId) ? { sessionId: validSession(agentId, node.sessionId ?? node.resumeSessionId) } : {})
     }
@@ -82,7 +84,7 @@ export function fromSaved(saved: SavedWorkspace, uid: () => string, reattach?: (
     const agentId = live?.agentId ? templateById(live.agentId).id : savedAgent
     // A session belongs to the agent it was recorded for.
     const sessionId = agentId === savedAgent ? validSession(agentId, node.sessionId) : undefined
-    return { type: 'leaf', id: uid(), terminalId: live?.terminalId ?? uid(), agentId, accountId: node.accountId, shellId: node.shellId, cwd: live?.cwd || node.cwd, launchMode: agentId === savedAgent ? node.launchMode : undefined, worktreeBranch: node.worktreeBranch, ...(node.name ? { name: node.name } : {}), ...(node.icon ? { icon: node.icon } : {}), ...(node.color ? { color: node.color } : {}), ...(sessionId ? { resumeSessionId: sessionId, sessionId } : {}) }
+    return { type: 'leaf', id: uid(), terminalId: live?.terminalId ?? uid(), agentId, accountId: node.accountId, shellId: node.shellId, cwd: live?.cwd || node.cwd, launchMode: agentId === savedAgent ? node.launchMode : undefined, worktreeBranch: node.worktreeBranch, ...(node.name ? { name: node.name } : {}), ...(node.icon ? { icon: node.icon } : {}), ...(node.color ? { color: node.color } : {}), ...(node.headerTint && node.color ? { headerTint: true } : {}), ...(sessionId ? { resumeSessionId: sessionId, sessionId } : {}) }
   }
   const layout = convert(saved.layout)
   return { id: uid(), savedId: saved.id, name: saved.name, cwd: saved.cwd, layout, focusedLeafId: collectLeaves(layout)[0].id, broadcastActive: false, broadcastLeafIds: [], worktreeMode: saved.worktreeMode, ...(saved.accountSelections ? { accountSelections: saved.accountSelections } : {}) }
@@ -113,6 +115,7 @@ function parseNode(value: unknown, depth = 0): SavedNode | undefined {
       ...(typeof value.name === 'string' && sanitizePaneName(value.name) ? { name: sanitizePaneName(value.name) } : {}),
       ...(typeof value.icon === 'string' && sanitizePaneIcon(value.icon) ? { icon: sanitizePaneIcon(value.icon) } : {}),
       ...(typeof value.color === 'string' && sanitizePaneColor(value.color) ? { color: sanitizePaneColor(value.color) } : {}),
+      ...(value.headerTint === true && typeof value.color === 'string' && sanitizePaneColor(value.color) ? { headerTint: true } : {}),
       ...(validTerminalId(value.terminalId) ? { terminalId: value.terminalId } : {}),
       ...(text(value.sessionId) && isValidSessionId(value.agentId, value.sessionId) ? { sessionId: value.sessionId } : {}) }
   }

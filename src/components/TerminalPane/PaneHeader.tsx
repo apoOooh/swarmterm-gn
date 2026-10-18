@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { DEFAULT_TEMPLATE_ID, TEMPLATES, templateById, isTemplateAvailable, launchMode } from '@/lib/templates'
 import { resolvePaneTitle } from '@/lib/pane-title'
+import { paneHeaderTintStyle } from '@/lib/pane-identity'
 import { usePaneIdentityDialogStore } from '@/store/pane-identity-dialog-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { KNOWN_SHELLS, visibleShells, type ShellId } from '@/lib/terminal-pref'
@@ -46,6 +47,8 @@ interface PaneHeaderProps {
   /** Identity icon + color (lib/pane-identity), shown before the name. */
   paneIcon?: string
   paneColor?: string
+  /** Tint the whole top bar with `paneColor`. */
+  paneHeaderTint?: boolean
   /** 1-based pane number for voice addressing; 0 = not numbered. */
   paneNumber: number
   onAgentChange: (id: string) => void
@@ -661,6 +664,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
       // tab order: it has no keyboard action, and a Tab meant for the shell must
       // never park the focus ring on app chrome (see lib/terminal-focus.ts).
       tabIndex={-1}
+      style={paneHeaderTintStyle(props.paneColor, props.paneHeaderTint, props.isZoomed)}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
       // Double-click on bare header space zooms; controls keep their own clicks.

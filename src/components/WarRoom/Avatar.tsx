@@ -61,7 +61,8 @@ export function Avatar({
       {isModerator ? (
         <Crown className={size === 'md' ? 'h-3.5 w-3.5' : 'h-2.5 w-2.5'} style={{ color }} />
       ) : identityIcon ? (
-        <PaneIdentityIcon icon={identityIcon} color={color} className={size === 'md' ? 'h-3.5 w-3.5' : 'h-2.5 w-2.5 text-[8px]'} />
+        <PaneIdentityIcon icon={identityIcon} color={color} className={size === 'md' ? 'h-3.5 w-3.5' : 'h-2.5 w-2.5 text-[8px]'}
+          fallback={<AgentIcon template={template} className={size === 'md' ? 'h-3.5 w-3.5' : 'h-2.5 w-2.5'} />} />
       ) : (
         <AgentIcon template={template} className={size === 'md' ? 'h-3.5 w-3.5' : 'h-2.5 w-2.5'} />
       )}
