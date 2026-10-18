@@ -42,7 +42,9 @@ jobs:
           node scripts/release/check-version.mjs "$RELEASE_TAG"
           tag_commit=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
           test "$tag_commit" = "$(git rev-parse HEAD)"
-          git merge-base --is-ancestor HEAD origin/dev
+          # Releases are cut from main (docs/release-process.md): the tag must
+          # be on main's history, i.e. dev was merged into main first.
+          git merge-base --is-ancestor HEAD origin/main
       - name: Require release notes
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}

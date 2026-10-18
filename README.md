@@ -25,7 +25,7 @@ Real split terminals, one git worktree per agent — and an app your agents can 
 
 Swarmterm GN is a **Windows x64** fork of [Duong Duc Nguyen's Swarmterm](https://github.com/duongducnguyen/swarmterm). It adds all seven [Astera](https://github.com/parsingk/Astera) themes and a terminal-linked file explorer, editor, Markdown/media previews and deletion history. Click a terminal in the left sidebar: **Files** follows its project or worktree. Running shells remain alive while you edit files or switch themes.
 
-See [the migration notes](docs/astera-port.md) for the source mapping, supported operations and verification. `dev` is the fork's integration branch; `main` retains the upstream baseline. Screenshots below show the original Swarmterm interface.
+See [the migration notes](docs/astera-port.md) for the source mapping, supported operations and verification. `dev` is the fork's integration branch; `main` holds the released state, and every release is tagged on `main` (see [the release process](docs/release-process.md)). Screenshots below show the original Swarmterm interface.
 
 Running **one** coding agent in a terminal works anywhere. Running **five** is where ordinary terminals fall apart: tabs hide who is doing what, agents trample each other's edits, and you become the relay pasting prompts and URLs between windows.
 

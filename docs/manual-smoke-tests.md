@@ -77,6 +77,18 @@ Do not mark them passed from the in-memory fixture alone.
       `Esc` in the terminal (e.g. vim) leaves the pinned row open.
 - [ ] Dragging a narrow pane by its header still swaps/docks it; double-clicking
       bare header space still maximizes.
+- [ ] Pane identity: hover a header, click the smiley left of the title, set
+      name "Reviewer", the bug icon and a color, Enter. Header shows icon +
+      **Reviewer** · agent title; the sidebar row shows the icon; the pane is
+      not restarted. Right-click → Set identity… opens the same dialog; an emoji
+      works, text in the emoji field is refused; Clear identity restores the
+      plain title. Restart the app: the identity is kept.
+- [ ] Composer: type a Name, create — the tab uses it (with its case); leave it
+      blank — the tab is named after the folder.
+- [ ] Open a file in the focused pane's editor, then rename a workspace (tab
+      double-click and sidebar ⋯ → Rename): click into the field, Home/End,
+      type "Alpha" and "alphA" — capitals at both ends stick, focus stays in the
+      field until Enter.
 - [ ] Settings → Title bar: mark Split right as Core — it stays in a narrow
       header; drag Shell to the bottom — it moves to the end of every header and
       is first to collapse. Restart the app: the layout is kept. Reset to

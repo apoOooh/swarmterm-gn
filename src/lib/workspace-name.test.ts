@@ -40,4 +40,13 @@ describe('workspaceNameFor', () => {
   it('names a drive root after the drive', () => {
     expect(workspaceNameFor('C:/', [], 1)).toBe('C:')
   })
+
+  it('prefers a typed name over the folder, keeping its case', () => {
+    expect(workspaceNameFor('C:/code/myapp', [], 1, '  Backend API  ')).toBe('Backend API')
+  })
+
+  it('de-dupes a typed name and ignores a blank one', () => {
+    expect(workspaceNameFor('C:/code/myapp', ['Api'], 1, 'Api')).toBe('Api (1)')
+    expect(workspaceNameFor('C:/code/myapp', [], 1, '   ')).toBe('myapp')
+  })
 })

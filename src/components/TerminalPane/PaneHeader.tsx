@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { DEFAULT_TEMPLATE_ID, TEMPLATES, templateById, isTemplateAvailable, launchMode } from '@/lib/templates'
 import { resolvePaneTitle } from '@/lib/pane-title'
+import { usePaneIdentityDialogStore } from '@/store/pane-identity-dialog-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { KNOWN_SHELLS, visibleShells, type ShellId } from '@/lib/terminal-pref'
 import { useShellAvailabilityStore } from '@/store/shell-availability-store'
@@ -42,6 +43,9 @@ interface PaneHeaderProps {
   leafId: string
   /** User-given pane name; wins over the agent title. */
   paneName?: string
+  /** Identity icon + color (lib/pane-identity), shown before the name. */
+  paneIcon?: string
+  paneColor?: string
   /** 1-based pane number for voice addressing; 0 = not numbered. */
   paneNumber: number
   onAgentChange: (id: string) => void
@@ -153,6 +157,10 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   // Title: agent-supplied wins; otherwise the agent name so the slot is never
   // blank. Tooltip carries the full title + full branch (both may be truncated).
   const displayTitle = resolvePaneTitle(agentId, props.agentTitle, props.paneName)
+  // With a user name the automatic title stays visible beside it, muted:
+  // the name says who the pane is, the title what it is doing right now.
+  const autoTitle = resolvePaneTitle(agentId, props.agentTitle)
+  const subtitle = props.paneName?.trim() ? autoTitle : undefined
   const titleTooltip = worktreeBranch ? `${displayTitle} — ${worktreeBranch}` : displayTitle
 
   // Measure the header row. Start wide so the first paint isn't over-collapsed
@@ -341,6 +349,10 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
         leafId={props.leafId}
         title={displayTitle}
         name={props.paneName}
+        subtitle={subtitle}
+        icon={props.paneIcon}
+        color={props.paneColor}
+        onEditIdentity={() => usePaneIdentityDialogStore.getState().open(props.leafId)}
         number={props.paneNumber}
         tooltip={`${titleTooltip} — double-click to rename`}
         className="min-w-6 flex-1 px-1 text-xs text-foreground"

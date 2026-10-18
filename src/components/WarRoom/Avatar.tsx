@@ -3,11 +3,14 @@
 // re-joins; everything else stays in the app's VS Code palette.
 import { type ReactElement } from 'react'
 import { Crown } from 'lucide-react'
+import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '@/store/app-store'
 import { focusTerminal } from '@/lib/terminal-registry'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { memberColor } from '@/lib/war-room-identity'
 import { AgentIcon } from '@/components/AgentIcon'
+import { PaneIdentityIcon } from '@/components/TerminalPane/PaneIdentityIcon'
+import { collectLeaves } from '@/lib/layout-tree'
 import { MODERATOR_ID } from '@/tauri/warroom'
 import { cn } from '@/lib/utils'
 
@@ -32,7 +35,16 @@ export function Avatar({
 }): ReactElement {
   const isModerator = terminalId === MODERATOR_ID
   const template = templateById(agentId ?? DEFAULT_TEMPLATE_ID)
-  const color = memberColor(terminalId)
+  // A pane identity (icon + color) the user set wins, read live from the
+  // layout so a later change shows here without re-joining the room.
+  const { identityIcon, identityColor } = useAppStore(useShallow((s) => {
+    for (const w of s.workspaces) {
+      const leaf = collectLeaves(w.layout).find((l) => l.terminalId === terminalId)
+      if (leaf) return { identityIcon: leaf.icon, identityColor: leaf.icon ? leaf.color : undefined }
+    }
+    return { identityIcon: undefined, identityColor: undefined }
+  }))
+  const color = identityColor || memberColor(terminalId)
   return (
     <button
       data-no-dnd
@@ -48,6 +60,8 @@ export function Avatar({
     >
       {isModerator ? (
         <Crown className={size === 'md' ? 'h-3.5 w-3.5' : 'h-2.5 w-2.5'} style={{ color }} />
+      ) : identityIcon ? (
+        <PaneIdentityIcon icon={identityIcon} color={color} className={size === 'md' ? 'h-3.5 w-3.5' : 'h-2.5 w-2.5 text-[8px]'} />
       ) : (
         <AgentIcon template={template} className={size === 'md' ? 'h-3.5 w-3.5' : 'h-2.5 w-2.5'} />
       )}
