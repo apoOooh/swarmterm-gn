@@ -104,7 +104,22 @@ export function PaneTitle({ leafId, title, name, number, tooltip, className, sub
         >
           {subtitle ? (
             <>
-              <span className="font-semibold">{title}</span>
+              {onEditIdentity ? (
+                // The identity name opens the identity dialog, like the icon.
+                <button
+                  type="button"
+                  data-no-dnd
+                  title="Change icon, name and color"
+                  onClick={(e) => { e.stopPropagation(); onEditIdentity() }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  className="rounded font-semibold hover:underline"
+                >
+                  {title}
+                </button>
+              ) : (
+                <span className="font-semibold">{title}</span>
+              )}
               <span className="text-muted-foreground"> · {subtitle}</span>
             </>
           ) : title}
