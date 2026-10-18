@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dictationTarget, type DictationFocusInput } from './voice-focus'
+import { addressedTarget, dictationTarget, type DictationFocusInput } from './voice-focus'
 
 const base: DictationFocusInput = {
   windowFocused: true,
@@ -36,5 +36,26 @@ describe('dictationTarget', () => {
   it('refuses when the window is not focused or no pane is selected', () => {
     expect(dictationTarget({ ...base, windowFocused: false })).toBeNull()
     expect(dictationTarget({ ...base, terminalId: null })).toBeNull()
+  })
+})
+
+describe('addressedTarget', () => {
+  const panes = [
+    { terminalId: 't1', number: 1, title: 'Claude Code' },
+    { terminalId: 't2', number: 2, title: 'Claude Code', name: 'Backend' }
+  ]
+  const ok = { windowFocused: true, settingsOpen: false, welcomeFocused: false, focused: null }
+
+  it('resolves without keyboard focus on the pane', () => {
+    expect(addressedTarget(ok, 'zwei', panes)).toEqual({ terminalId: 't2' })
+    expect(addressedTarget(ok, 'backend', panes)).toEqual({ terminalId: 't2' })
+    expect(addressedTarget(ok, 'Claude Code', panes)).toEqual({ error: 'ambiguous' })
+  })
+
+  it('refuses while the window is in the background or something modal is open', () => {
+    expect(addressedTarget({ ...ok, windowFocused: false }, '1', panes)).toEqual({ error: 'no-target' })
+    expect(addressedTarget({ ...ok, settingsOpen: true }, '1', panes)).toEqual({ error: 'no-target' })
+    expect(addressedTarget({ ...ok, welcomeFocused: true }, '1', panes)).toEqual({ error: 'no-target' })
+    expect(addressedTarget({ ...ok, focused: { modalOpen: true } as never }, '1', panes)).toEqual({ error: 'no-target' })
   })
 })

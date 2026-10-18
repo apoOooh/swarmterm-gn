@@ -23,6 +23,7 @@ import { accountLabel } from '@/lib/agent-accounts'
 import { cn } from '@/lib/utils'
 import type { ConnectionStatus } from '@/lib/war-room-connection'
 import { useFloatMove } from '@/components/Workspace/FloatingPane'
+import { PaneTitle } from '@/components/TerminalPane/PaneTitle'
 
 interface PaneHeaderProps {
   /** Resolved agent id (leaf override already applied). */
@@ -37,6 +38,12 @@ interface PaneHeaderProps {
   hasCwdOverride: boolean
   /** Agent-set title (via the terminal.set_title MCP tool); falls back to the agent name. */
   agentTitle?: string
+  /** Layout leaf id, for renaming (BUZ-5). */
+  leafId: string
+  /** User-given pane name; wins over the agent title. */
+  paneName?: string
+  /** 1-based pane number for voice addressing; 0 = not numbered. */
+  paneNumber: number
   onAgentChange: (id: string) => void
   /** Launch mode id of this pane; absent ⇒ the agent's default mode. */
   launchModeId?: string
@@ -145,7 +152,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
 
   // Title: agent-supplied wins; otherwise the agent name so the slot is never
   // blank. Tooltip carries the full title + full branch (both may be truncated).
-  const displayTitle = resolvePaneTitle(agentId, props.agentTitle)
+  const displayTitle = resolvePaneTitle(agentId, props.agentTitle, props.paneName)
   const titleTooltip = worktreeBranch ? `${displayTitle} — ${worktreeBranch}` : displayTitle
 
   // Measure the header row. Start wide so the first paint isn't over-collapsed
@@ -329,9 +336,15 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
     pinned: true,
     width: TITLE_MIN_PX,
     render: () => (
-      <span key="title" className="min-w-6 flex-1 truncate px-1 text-xs text-foreground" title={titleTooltip}>
-        {displayTitle}
-      </span>
+      <PaneTitle
+        key="title"
+        leafId={props.leafId}
+        title={displayTitle}
+        name={props.paneName}
+        number={props.paneNumber}
+        tooltip={`${titleTooltip} — double-click to rename`}
+        className="min-w-6 flex-1 px-1 text-xs text-foreground"
+      />
     )
   })
 

@@ -69,8 +69,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::pty::AppState;
 use pins::{Pin, PinStore, PIN_TTL};
 use protocol::{
-    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_INDICATOR, CAP_QUIT, CAP_TTS,
-    CAP_TURNS,
+    CancelReason, Event, Request, Response, TurnEvent, TurnKind, CAP_ADDRESS, CAP_INDICATOR,
+    CAP_QUIT, CAP_TTS, CAP_TURNS,
 };
 pub use settings::VoiceSettings;
 
@@ -102,6 +102,9 @@ pub struct FocusReply {
     pub terminal_id: Option<String>,
     pub name: Option<String>,
     pub agent_id: Option<String>,
+    /// BUZ-5: why an addressed begin found no pane (`no-target`/`ambiguous`).
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -116,6 +119,8 @@ pub struct InsertReply {
 #[serde(rename_all = "camelCase")]
 struct FocusRequestEvent {
     request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -176,6 +181,9 @@ impl Conn {
     }
     fn tts(&self) -> bool {
         self.capabilities.iter().any(|c| c == CAP_TTS)
+    }
+    fn address(&self) -> bool {
+        self.capabilities.iter().any(|c| c == CAP_ADDRESS)
     }
 }
 
@@ -669,7 +677,12 @@ pub async fn handle(app: &AppHandle, req: Request, conn: &mut Conn) -> Response 
             });
             Response::hello(request_id, conn.capabilities.clone())
         }
-        Request::Begin { request_id } => begin(app, &hub, request_id, conn).await,
+        Request::Begin { request_id, target } => {
+            if target.is_some() && !conn.address() {
+                return Response::err(Some(request_id), "bad-request");
+            }
+            begin(app, &hub, request_id, target, conn).await
+        }
         Request::Insert {
             request_id,
             pin,
@@ -743,7 +756,13 @@ fn subscribe(app: &AppHandle, hub: &VoiceHub, request_id: String, conn: &mut Con
 /// once; this only trips on a wedged engine, and then the mic stays closed.
 const QUIESCE_TIMEOUT: Duration = Duration::from_millis(300);
 
-async fn begin(app: &AppHandle, hub: &VoiceHub, request_id: String, conn: &Conn) -> Response {
+async fn begin(
+    app: &AppHandle,
+    hub: &VoiceHub,
+    request_id: String,
+    target: Option<String>,
+    conn: &Conn,
+) -> Response {
     let rid = Some(request_id.clone());
     // Before the first await: from here on no announcement may start, and
     // the client opens its mic only after our answer — so it never records
@@ -761,6 +780,7 @@ async fn begin(app: &AppHandle, hub: &VoiceHub, request_id: String, conn: &Conn)
         "voice:focus-request",
         FocusRequestEvent {
             request_id: ask.clone(),
+            target,
         },
     );
     let reply = match sent {
@@ -775,7 +795,14 @@ async fn begin(app: &AppHandle, hub: &VoiceHub, request_id: String, conn: &Conn)
         return Response::err(rid, "no-focus");
     };
     let Some(terminal_id) = reply.terminal_id else {
-        return Response::err(rid, "no-focus");
+        // Only the two address verdicts pass through; anything else the
+        // renderer says is still "no pane for you".
+        let reason = match reply.error.as_deref() {
+            Some("no-target") => "no-target",
+            Some("ambiguous") => "ambiguous",
+            _ => "no-focus",
+        };
+        return Response::err(rid, reason);
     };
     let Some(spawn_id) = spawn_id_of(app, &terminal_id) else {
         return Response::err(rid, "no-focus");

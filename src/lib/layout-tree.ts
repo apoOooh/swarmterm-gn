@@ -47,6 +47,10 @@ export interface LeafNode {
    *  without a known session id), 'pick' = the CLI's own session picker.
    *  Cleared on agent/folder switch. */
   continueSession?: ContinueHow
+  /** User-given pane name (BUZ-5): shown instead of the automatic title and
+   *  addressable by voice. Never a pure number (that would shadow the pane
+   *  number). Changing it must never respawn the PTY. */
+  name?: string
 }
 
 export interface SplitNode {
@@ -89,6 +93,7 @@ export function updateLeaf(
       | 'sessionId'
       | 'launchMode'
       | 'continueSession'
+      | 'name'
     >
   >
 ): LayoutNode {

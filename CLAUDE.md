@@ -317,6 +317,12 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
   the pins lock): never call `voice::drop_terminal` while holding
   `terminals`.
+  BUZ-5 addressing: capability `address`, then `begin` may carry `target`
+  (≤ 64 chars). The renderer resolves it with `lib/pane-address.ts`
+  (pane number = `visibleLeaves` order, then user `leaf.name`, then title;
+  duplicates → `ambiguous`, none → `no-target`, never the focused pane) and
+  skips only the keyboard-focus check of `dictationTarget`. A `target`
+  without the capability is `bad-request`. Pane names never respawn.
 - **Voice companion (SWA-42).** `voice/companion/` installs buzzkey only on
   click: newest signed `buzzkey-*` release (`release::select`), minisign
   signature over `SHA256SUMS.txt` against the compiled-in key FIRST, then

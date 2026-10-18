@@ -13,7 +13,9 @@ import { createTtsStopper, newlyFocusedTerminal } from '@/lib/voice-tts'
 import { DICTATION_ALERT_ID, dictationFailure } from '@/lib/voice-dictation'
 import { writeTerminalChecked } from '@/tauri/terminal'
 import { devLog } from '@/lib/dev-log'
-import { dictationTarget } from '@/lib/voice-focus'
+import { addressedTarget, dictationTarget } from '@/lib/voice-focus'
+import { resolvePaneTitle } from '@/lib/pane-title'
+import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { deliverDictation } from '@/lib/voice-delivery'
 import { describeFocusedElement } from '@/lib/terminal-focus'
 import {
@@ -24,7 +26,7 @@ import {
   setUserInputHandler
 } from '@/lib/terminal-registry'
 import { SUBMIT_DELAY_MS } from '@/lib/war-room-delivery'
-import { useAppStore, selectFocusedTerminalId } from '@/store/app-store'
+import { useAppStore, selectFocusedTerminalId, visibleLeaves } from '@/store/app-store'
 import { useDocumentStore } from '@/store/document-store'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
@@ -47,10 +49,36 @@ const REASON_COPY: Record<string, string> = {
  * times out to "no-focus". Returns the unsubscribe for `useEffect`.
  */
 export function wireVoice(isSettingsOpen: () => boolean): () => void {
-  const focus = onVoiceFocusRequest((requestId) => {
+  const focus = onVoiceFocusRequest((requestId, target) => {
     if (!document.hasFocus()) return
     const app = useAppStore.getState()
     const workspace = app.workspaces.find((w) => w.id === app.activeWorkspaceId)
+    if (target !== undefined) {
+      const titles = useTerminalTitleStore.getState().titles
+      const panes = workspace
+        ? visibleLeaves(workspace).map((l, i) => ({
+            terminalId: l.terminalId,
+            number: i + 1,
+            title: resolvePaneTitle(l.agentId ?? DEFAULT_TEMPLATE_ID, titles[l.terminalId]),
+            name: l.name
+          }))
+        : []
+      const found = addressedTarget({
+        windowFocused: true,
+        settingsOpen: isSettingsOpen(),
+        welcomeFocused: app.welcomeFocused,
+        focused: describeFocusedElement(document.activeElement)
+      }, target, panes)
+      const id = 'terminalId' in found ? found.terminalId : null
+      const leaf = id ? panes.find((p) => p.terminalId === id) : undefined
+      void voiceFocusResponse(requestId, {
+        terminalId: id,
+        name: leaf ? (leaf.name ?? leaf.title) : null,
+        agentId: id ? (getTerminalAgentId(id) ?? null) : null,
+        ...('error' in found ? { error: found.error } : {})
+      })
+      return
+    }
     const pane = workspace ? useDocumentStore.getState().panes[workspace.focusedLeafId] : undefined
     const candidate = selectFocusedTerminalId(app) ?? null
     const terminalId = dictationTarget({

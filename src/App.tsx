@@ -272,7 +272,7 @@ export default function App(): ReactElement {
     // "Claude Code → Claude Code" transcript rows with no way to tell them
     // apart. Computed AFTER cwd is resolved above.
     const displayName = memberDisplayName(
-      resolvePaneTitle(resolvedAgent, useTerminalTitleStore.getState().titles[leaf.terminalId]),
+      resolvePaneTitle(resolvedAgent, useTerminalTitleStore.getState().titles[leaf.terminalId], leaf.name),
       cwd
     )
     const st2 = useWarRoomStore.getState()
