@@ -83,3 +83,9 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_Threading",
   "Win32_Storage_FileSystem",
 ] }
+
+# Terminal host sidecar (ADR 0001). A workspace member so `cargo test` /
+# `clippy` / `fmt` in src-tauri cover it, and it shares Cargo.lock and target/.
+[workspace]
+members = ["host"]
+default-members = [".", "host"]
