@@ -5,7 +5,7 @@ import { useDraggable, useDroppable } from '@dnd-kit/core'
 import { DockPicker } from '@/components/TerminalPane/DockPicker'
 import type { LeafNode } from '@/lib/layout-tree'
 import { collectLeaves } from '@/lib/layout-tree'
-import { useAppStore, type ClearTarget } from '@/store/app-store'
+import { useAppStore, visibleLeaves, type ClearTarget } from '@/store/app-store'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
@@ -166,6 +166,11 @@ export function TerminalPane({
   }
 
   const agentTitle = useTerminalTitleStore((s) => s.titles[terminalId])
+  // Same numbering as the navbar list: open panes of this pane's workspace.
+  const paneNumber = useAppStore((s) => {
+    const ws = s.workspaces.find((w) => visibleLeaves(w).some((l) => l.id === leafId))
+    return ws ? visibleLeaves(ws).findIndex((l) => l.id === leafId) + 1 : 0
+  })
   // Built-in speech (SWA-38): a phase only for the pane the dictation is
   // pinned to; every other pane shows the idle button.
   const dictationReady = useVoiceDictationStore((s) => s.ready)
@@ -494,6 +499,9 @@ export function TerminalPane({
         dragAttributes={dragAttributes}
         worktreeBranch={leaf.worktreeBranch}
         agentTitle={agentTitle}
+        leafId={leafId}
+        paneName={leaf.name}
+        paneNumber={paneNumber}
         ctxPct={ctxPct}
         warRoom={warRoomStatus}
       />

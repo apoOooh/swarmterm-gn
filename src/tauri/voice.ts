@@ -64,6 +64,8 @@ export interface FocusReply {
   terminalId: string | null
   name: string | null
   agentId: string | null
+  /** BUZ-5: why an addressed begin found no pane. */
+  error?: 'no-target' | 'ambiguous' | 'no-focus'
 }
 
 export interface VoiceInsertEvent {
@@ -80,8 +82,9 @@ export interface InsertReply {
   submitScheduled?: boolean
 }
 
-export const onVoiceFocusRequest = (cb: (requestId: string) => void): Promise<UnlistenFn> =>
-  listen<{ requestId: string }>('voice:focus-request', (e) => cb(e.payload.requestId))
+/** `target` (BUZ-5) is a spoken pane number or name; absent = keyboard focus. */
+export const onVoiceFocusRequest = (cb: (requestId: string, target?: string) => void): Promise<UnlistenFn> =>
+  listen<{ requestId: string; target?: string }>('voice:focus-request', (e) => cb(e.payload.requestId, e.payload.target))
 
 export const onVoiceInsert = (cb: (e: VoiceInsertEvent) => void): Promise<UnlistenFn> =>
   listen<VoiceInsertEvent>('voice:insert', (e) => cb(e.payload))

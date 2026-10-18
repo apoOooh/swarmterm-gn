@@ -29,6 +29,7 @@ import { workspaceNameFor } from '@/lib/workspace-name'
 import { applyPreset } from '@/lib/layout-presets'
 import { fromSaved, type SavedWorkspace } from '@/lib/saved-workspaces'
 import { isValidSessionId } from '@/lib/resume-command'
+import { sanitizePaneName } from '@/lib/pane-address'
 
 /** A workspace: a named binary split-tree of terminal panes. */
 export interface Workspace {
@@ -213,6 +214,8 @@ export interface AppActions {
   seedPaneLaunchMode: (leafId: string, modeId: string) => void
   pickPaneSession: (leafId: string) => void
   setPaneShell: (leafId: string, shellId: ShellId) => void
+  /** Name a pane of the active workspace (BUZ-5); blank clears it. Never respawns. */
+  renamePane: (leafId: string, name: string) => void
   spawnWorktreePane: (p: {
     requesterTerminalId: string
     path: string
@@ -790,6 +793,9 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
 
   setPaneShell: (leafId, shellId) =>
     set((s) => mapActive(s, (w) => ({ ...w, layout: updateLeaf(w.layout, leafId, { shellId }) }))),
+
+  renamePane: (leafId, name) =>
+    set((s) => mapActive(s, (w) => ({ ...w, layout: updateLeaf(w.layout, leafId, { name: sanitizePaneName(name) }) }))),
 
   // Worker panes are spawned by the backend's worktree.spawn MCP tool: split
   // the *requester's* leaf (which may live in a non-active workspace, so this

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { collectLeaves } from './layout-tree'
+import { collectLeaves, updateLeaf } from './layout-tree'
 import { autoOpenList, fromSaved, moveAutoOpen, readSaved, setAutoOpen, toSaved, upsertSaved, SAVED_WORKSPACES_KEY, type SavedWorkspace } from './saved-workspaces'
 import type { Workspace } from '@/store/app-store'
 
@@ -111,4 +111,17 @@ it('never evicts a workspace that opens on startup, however many newer ones are 
   expect(list.find(w => w.id === 'pinned')?.autoOpen).toBe(0)
   const raw = JSON.stringify({ version: 1, workspaces: list.concat([{ ...saved(), id: 'extra', updatedAt: 99 }]) })
   expect(readSaved(storage(raw)).some(w => w.id === 'pinned')).toBe(true)
+})
+
+describe('pane names (BUZ-5)', () => {
+  it('round-trips a user-given name and drops invalid ones on read', () => {
+    const named = workspace
+    const leaves = collectLeaves(named.layout)
+    const layout = updateLeaf(named.layout, leaves[0].id, { name: 'Backend' })
+    const restored = fromSaved(toSaved({ ...named, layout }, 'powershell', 1)!, () => crypto.randomUUID())
+    expect(collectLeaves(restored.layout)[0].name).toBe('Backend')
+    const raw = JSON.stringify({ version: 1, workspaces: [toSaved({ ...named, layout: updateLeaf(layout, leaves[0].id, { name: '3' }) }, 'powershell', 1)] })
+    const storage = { getItem: () => raw }
+    expect(collectLeaves(fromSaved(readSaved(storage)[0], () => 'x').layout)[0].name).toBeUndefined()
+  })
 })

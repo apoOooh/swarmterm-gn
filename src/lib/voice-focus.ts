@@ -1,4 +1,5 @@
 import { shouldReturnFocus, type FocusedElementInfo } from '@/lib/terminal-focus'
+import { resolvePaneAddress, type AddressablePane, type PaneAddressResult } from '@/lib/pane-address'
 
 /**
  * Which pane owns the keyboard right now, for pinning a dictation (SWA-12).
@@ -29,4 +30,20 @@ export function dictationTarget(i: DictationFocusInput): string | null {
   // back to the terminal anyway (a tab title after a click). Inputs, menus,
   // dialogs and editor controls keep it.
   return i.inTerminal || shouldReturnFocus(i.focused) ? i.terminalId : null
+}
+
+/**
+ * BUZ-5: a dictation addressed by voice ("Pane 2: …") skips the keyboard-focus
+ * check — the user named the pane — but not the rest: the window must be in
+ * front and nothing modal open, so a dialog the user is reading never gets a
+ * pane typed into behind it. Resolution itself never falls back to the
+ * focused pane.
+ */
+export function addressedTarget(
+  i: Pick<DictationFocusInput, 'windowFocused' | 'settingsOpen' | 'welcomeFocused' | 'focused'>,
+  target: string,
+  panes: AddressablePane[]
+): PaneAddressResult {
+  if (!i.windowFocused || i.settingsOpen || i.welcomeFocused || i.focused?.modalOpen) return { error: 'no-focus' }
+  return resolvePaneAddress(target, panes)
 }
