@@ -5,6 +5,7 @@ import { isValidSessionId } from '@/lib/resume-command'
 import { templateById } from '@/lib/templates'
 import { sanitizePaneName } from '@/lib/pane-address'
 import type { Workspace } from '@/store/app-store'
+import type { AccountSelection } from '@/lib/agent-accounts'
 
 export const SAVED_WORKSPACES_KEY = 'swarmterm-saved-workspaces'
 export const MAX_SAVED_WORKSPACES = 24
@@ -31,7 +32,8 @@ export interface SavedLeaf {
  *  (possibly stale) snapshot, knows its current agent and folder. */
 export interface ReattachLeaf { terminalId: string; agentId?: string; cwd?: string }
 export type SavedNode = SavedLeaf | { type: 'split'; direction: 'horizontal' | 'vertical'; sizes: [number, number]; children: [SavedNode, SavedNode] }
-export interface SavedWorkspace { id: string; name: string; cwd: string; layout: SavedNode; worktreeMode: boolean; updatedAt: number; autoOpen?: number }
+/** `accountSelections`: the workspace's account choice for split panes. */
+export interface SavedWorkspace { id: string; name: string; cwd: string; layout: SavedNode; worktreeMode: boolean; updatedAt: number; autoOpen?: number; accountSelections?: Record<string, AccountSelection> }
 export interface SavedStorage { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void }
 
 function validSession(agent: string, id: string | undefined): string | undefined {
@@ -58,7 +60,7 @@ export function toSaved(ws: Workspace, shell: ShellId, now: number, paneIds = fa
       ...(validSession(agentId, node.sessionId ?? node.resumeSessionId) ? { sessionId: validSession(agentId, node.sessionId ?? node.resumeSessionId) } : {})
     }
   }
-  return { id: ws.savedId, name: ws.name, cwd: ws.cwd, layout: convert(ws.layout), worktreeMode: ws.worktreeMode, updatedAt: now }
+  return { id: ws.savedId, name: ws.name, cwd: ws.cwd, layout: convert(ws.layout), worktreeMode: ws.worktreeMode, updatedAt: now, ...(ws.accountSelections ? { accountSelections: ws.accountSelections } : {}) }
 }
 
 function validTerminalId(id: unknown): id is string {
@@ -77,11 +79,23 @@ export function fromSaved(saved: SavedWorkspace, uid: () => string, reattach?: (
     return { type: 'leaf', id: uid(), terminalId: live?.terminalId ?? uid(), agentId, accountId: node.accountId, shellId: node.shellId, cwd: live?.cwd || node.cwd, launchMode: agentId === savedAgent ? node.launchMode : undefined, worktreeBranch: node.worktreeBranch, ...(node.name ? { name: node.name } : {}), ...(sessionId ? { resumeSessionId: sessionId, sessionId } : {}) }
   }
   const layout = convert(saved.layout)
-  return { id: uid(), savedId: saved.id, name: saved.name, cwd: saved.cwd, layout, focusedLeafId: collectLeaves(layout)[0].id, broadcastActive: false, broadcastLeafIds: [], worktreeMode: saved.worktreeMode }
+  return { id: uid(), savedId: saved.id, name: saved.name, cwd: saved.cwd, layout, focusedLeafId: collectLeaves(layout)[0].id, broadcastActive: false, broadcastLeafIds: [], worktreeMode: saved.worktreeMode, ...(saved.accountSelections ? { accountSelections: saved.accountSelections } : {}) }
 }
 
 function object(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0 && value.length <= 32768 }
+/** Keeps only well-formed selections; a since-deleted account id is harmless
+ *  (splitAccountFor ignores ids that match no profile). */
+function parseSelections(value: unknown): Record<string, AccountSelection> | undefined {
+  if (!object(value)) return undefined
+  const kept: Record<string, AccountSelection> = {}
+  for (const [agentId, selection] of Object.entries(value)) {
+    if (agentId !== 'claude-code' && agentId !== 'codex' || !object(selection)) continue
+    if (selection.mode === 'round-robin') kept[agentId] = { mode: 'round-robin' }
+    else if (selection.mode === 'fixed' && text(selection.accountId)) kept[agentId] = { mode: 'fixed', accountId: selection.accountId }
+  }
+  return Object.keys(kept).length > 0 ? kept : undefined
+}
 function parseNode(value: unknown, depth = 0): SavedNode | undefined {
   if (!object(value) || depth > 64) return undefined
   if (value.type === 'leaf') {
@@ -114,7 +128,8 @@ export function readSaved(storage: Pick<SavedStorage, 'getItem'>): SavedWorkspac
     if (!layout) continue
     seen.add(item.id)
     const autoOpen = typeof item.autoOpen === 'number' && Number.isInteger(item.autoOpen) && item.autoOpen >= 0 ? { autoOpen: item.autoOpen } : {}
-    list.push({ id: item.id, name: item.name, cwd: item.cwd, worktreeMode: item.worktreeMode, updatedAt: item.updatedAt, layout, ...autoOpen })
+    const accountSelections = parseSelections(item.accountSelections)
+    list.push({ id: item.id, name: item.name, cwd: item.cwd, worktreeMode: item.worktreeMode, updatedAt: item.updatedAt, layout, ...autoOpen, ...(accountSelections ? { accountSelections } : {}) })
   }
   return capSaved(list)
 }
