@@ -4557,6 +4557,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "swarmterm-host",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",

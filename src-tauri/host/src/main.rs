@@ -36,10 +36,26 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let host = swarmterm_host::engine::Host::new(ring);
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let stop_tx = std::sync::Arc::new(stop_tx);
     let result = rt.block_on(async {
+        let ctrl_c = stop_tx.clone();
         tokio::spawn(async move {
             let _ = tokio::signal::ctrl_c().await;
-            let _ = stop_tx.send(true);
+            let _ = ctrl_c.send(true);
+        });
+        let idle_host = host.clone();
+        let idle_stop = stop_tx.clone();
+        tokio::spawn(async move {
+            use swarmterm_host::idle::{IdleTracker, IDLE_EXIT, IDLE_POLL};
+            let mut tracker = IdleTracker::default();
+            loop {
+                tokio::time::sleep(IDLE_POLL).await;
+                let idle = !idle_host.has_client() && idle_host.terminal_count() == 0;
+                if tracker.observe(std::time::Instant::now(), idle, IDLE_EXIT) {
+                    let _ = idle_stop.send(true);
+                    break;
+                }
+            }
         });
         swarmterm_host::server::run(host.clone(), &data_dir, pipe, None, stop_rx).await
     });

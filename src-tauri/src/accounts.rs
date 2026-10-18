@@ -26,18 +26,18 @@ pub fn credential_overrides(agent_id: &str) -> &'static [&'static str] {
     }
 }
 
-pub fn apply_environment(cmd: &mut portable_pty::CommandBuilder, account: &AgentAccount) {
+pub fn apply_environment(env: &mut crate::terminal_env::EnvPlan, account: &AgentAccount) {
     // The default account never calls this helper, preserving its inherited env.
     for key in credential_overrides(&account.agent_id) {
-        cmd.env_remove(key);
+        env.remove(key);
     }
-    cmd.env(
+    env.set(
         if account.agent_id == "claude-code" {
             "CLAUDE_CONFIG_DIR"
         } else {
             "CODEX_HOME"
         },
-        &account.config_dir,
+        account.config_dir.clone(),
     );
 }
 
@@ -401,24 +401,14 @@ mod tests {
             name: "Test".into(),
             config_dir: "profile-dir".into(),
         };
-        let mut cmd = portable_pty::CommandBuilder::new("test");
-        cmd.env_clear();
-        cmd.env("OPENAI_API_KEY", "parent-private");
-        cmd.env("ANTHROPIC_API_KEY", "other-agent");
-        assert_eq!(
-            cmd.get_env("OPENAI_API_KEY"),
-            Some(std::ffi::OsStr::new("parent-private"))
-        );
-        apply_environment(&mut cmd, &profile);
-        assert!(cmd.get_env("OPENAI_API_KEY").is_none());
-        assert_eq!(
-            cmd.get_env("ANTHROPIC_API_KEY"),
-            Some(std::ffi::OsStr::new("other-agent"))
-        );
-        assert_eq!(
-            cmd.get_env("CODEX_HOME"),
-            Some(std::ffi::OsStr::new("profile-dir"))
-        );
+        let mut env = crate::terminal_env::EnvPlan::from_vars([
+            ("OPENAI_API_KEY".to_string(), "parent-private".to_string()),
+            ("ANTHROPIC_API_KEY".to_string(), "other-agent".to_string()),
+        ]);
+        apply_environment(&mut env, &profile);
+        assert!(env.get("OPENAI_API_KEY").is_none());
+        assert_eq!(env.get("ANTHROPIC_API_KEY"), Some("other-agent"));
+        assert_eq!(env.get("CODEX_HOME"), Some("profile-dir"));
     }
 
     #[test]

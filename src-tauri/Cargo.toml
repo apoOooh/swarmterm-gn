@@ -47,7 +47,7 @@ axum = "0.8"
 # `sync` is already pulled in transitively (axum/rmcp), but `peer_wake` (a
 # `tokio::sync::Notify` on AppState) is ours, so name the feature here rather
 # than ride feature unification that a dependency bump could silently drop.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "sync", "time", "io-util"] }
 toml_edit = "0.22"
 notify = "8.2"
 clipboard-rs = { version = "0.3.5", default-features = false, features = ["image"] }
@@ -60,6 +60,9 @@ tempfile = "3"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
+# Terminal host (SWA-55, ADR 0001): frame codec and the in-process host the
+# client tests run against.
+swarmterm-host = { path = "host" }
 # Built-in speech source (SWA-38, docs/adr/0002): whisper.cpp on the CPU and
 # WASAPI capture. Windows-only like the voice pipe; no GPU backend so the CI
 # needs no Vulkan SDK.

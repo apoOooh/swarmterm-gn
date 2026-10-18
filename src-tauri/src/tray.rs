@@ -66,6 +66,17 @@ fn quit_blocking(app: &tauri::AppHandle) {
         Err(_) => Vec::new(),
     };
     let waiters: Vec<_> = terminals.into_iter().filter_map(|t| t.shutdown()).collect();
+    // Hosted panes were only asked to close (`kill` is enqueued); wait until
+    // the host has read those requests, or they die with our pipe at exit
+    // and the panes keep running without a client. The host does the
+    // graceful close and KILL_GRACE itself, then idles out (ADR 0001).
+    #[cfg(windows)]
+    if let Some(client) = app
+        .try_state::<crate::host_client::HostHub>()
+        .and_then(|hub| hub.current())
+    {
+        let _ = client.conn.flush(std::time::Duration::from_secs(2));
+    }
     for w in waiters {
         let _ = w.join();
     }

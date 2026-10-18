@@ -238,10 +238,9 @@ impl PtyInput {
     }
 }
 
-/// A live pty the manager owns. `master` is kept for resize; `input` for input;
-/// `killer` to terminate the child from the command thread. On Windows `job`
-/// (when set) owns the shell's whole process tree so closing the terminal frees
-/// every descendant, not just the shell.
+/// A live pty the manager owns. The map entry is the one registry every
+/// liveness check reads (MCP auth, War Room, voice pins, `/hook`), whichever
+/// backend runs the shell: `io` says where its bytes go.
 pub struct ManagedTerminal {
     pub spawn_id: String,
     /// Shell process id; root of the tree `terminal_agent_alive` searches.
@@ -249,11 +248,7 @@ pub struct ManagedTerminal {
     pub agent_id: Option<String>,
     /// Configured spawn cwd; OSC 7 shell navigation must not change the explorer's root.
     pub cwd: std::path::PathBuf,
-    pub input: PtyInput,
-    pub master: Box<dyn MasterPty + Send>,
-    pub killer: Box<dyn ChildKiller + Send + Sync>,
-    #[cfg(windows)]
-    pub job: Option<job::JobHandle>,
+    pub io: TerminalIo,
     pub worktree_mode: bool,
     pub repo_root: Option<String>,
     /// A Claude account profile's own `CLAUDE_CONFIG_DIR` (SWA-58: where the
@@ -261,7 +256,75 @@ pub struct ManagedTerminal {
     pub claude_config_dir: Option<std::path::PathBuf>,
 }
 
+/// Where a pane's PTY lives (SWA-55, ADR 0001).
+pub enum TerminalIo {
+    /// In this process. `master` is kept for resize; `input` for input;
+    /// `killer` to terminate the child from the command thread. On Windows
+    /// `job` (when set) owns the shell's whole process tree so closing the
+    /// terminal frees every descendant, not just the shell.
+    Local {
+        input: PtyInput,
+        master: Box<dyn MasterPty + Send>,
+        killer: Box<dyn ChildKiller + Send + Sync>,
+        #[cfg(windows)]
+        job: Option<job::JobHandle>,
+    },
+    /// In `swarmterm-host.exe`. Every call only enqueues a frame for the
+    /// connection's writer, so it is as cheap under the `terminals` lock as
+    /// `PtyInput::send`, and the order of enqueues is the order the host
+    /// applies them in.
+    #[cfg(windows)]
+    Host {
+        conn: std::sync::Arc<crate::host_client::conn::Conn>,
+        /// The map key, repeated: requests name the pane by id.
+        terminal_id: String,
+    },
+}
+
 impl ManagedTerminal {
+    /// Queue input. Same contract for both backends: Err "target-gone" when
+    /// the pane cannot take input any more, "input-queue-full" when an
+    /// in-process pty stopped draining. A hosted pane reports a full queue
+    /// asynchronously (`pty:input-dropped`), because waiting for the host's
+    /// answer here would hold the `terminals` lock across a pipe round trip.
+    pub fn send(&self, data: &[u8]) -> Result<(), String> {
+        match &self.io {
+            TerminalIo::Local { input, .. } => input.send(data),
+            #[cfg(windows)]
+            TerminalIo::Host { conn, terminal_id } => conn.write(terminal_id, data),
+        }
+    }
+
+    /// Input for the generation `expected` only (voice). The caller checked
+    /// the generation under the `terminals` lock; a hosted pane is checked a
+    /// second time by the host, so a respawn the mirror has not seen yet
+    /// still cannot receive the bytes.
+    pub fn send_checked(&self, expected: &str, data: &[u8]) -> Result<(), String> {
+        crate::voice::check_generation(&self.spawn_id, expected)?;
+        match &self.io {
+            TerminalIo::Local { input, .. } => input.send(data),
+            #[cfg(windows)]
+            TerminalIo::Host { conn, terminal_id } => {
+                conn.write_checked(terminal_id, expected, data)
+            }
+        }
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) {
+        match &self.io {
+            TerminalIo::Local { master, .. } => {
+                let _ = master.resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
+            #[cfg(windows)]
+            TerminalIo::Host { conn, terminal_id } => conn.resize(terminal_id, cols, rows),
+        }
+    }
+
     /// Close the terminal the way a regular terminal window does, then make
     /// sure nothing survives. Returns the thread enforcing the deadline, if any.
     ///
@@ -275,15 +338,30 @@ impl ManagedTerminal {
     /// `KILL_GRACE` to exit, and only then terminate the job — so the
     /// "no orphans" guarantee still holds.
     pub fn shutdown(self) -> Option<std::thread::JoinHandle<()>> {
-        #[cfg(windows)]
-        {
-            let ManagedTerminal {
+        let (input, master, killer, job) = match self.io {
+            TerminalIo::Local {
                 input,
                 master,
                 killer,
+                #[cfg(windows)]
                 job,
-                ..
-            } = self;
+            } => {
+                #[cfg(windows)]
+                let job = job;
+                #[cfg(not(windows))]
+                let job = ();
+                (input, master, killer, job)
+            }
+            // The host closes gracefully and enforces KILL_GRACE itself; the
+            // id is free here as soon as the entry left the map.
+            #[cfg(windows)]
+            TerminalIo::Host { conn, terminal_id } => {
+                conn.kill(&terminal_id);
+                return None;
+            }
+        };
+        #[cfg(windows)]
+        {
             let Some(job) = job else {
                 let mut killer = killer;
                 let _ = killer.kill();
@@ -315,7 +393,8 @@ impl ManagedTerminal {
         }
         #[cfg(not(windows))]
         {
-            let mut killer = self.killer;
+            let _ = (input, master, job);
+            let mut killer = killer;
             let _ = killer.kill();
             None
         }
@@ -511,8 +590,6 @@ const OUTPUT_IDLE: std::time::Duration = std::time::Duration::from_millis(16);
 const OUTPUT_BATCH_BYTES: usize = 64 * 1024;
 const READ_BUF_BYTES: usize = 64 * 1024;
 
-/// Spawn a pty, register it in state, and start a reader thread that streams
-/// decoded output (and finally the exit code) over `on_data`.
 pub fn spawn_terminal(
     app: &AppHandle,
     state: &AppState,
@@ -523,19 +600,47 @@ pub fn spawn_terminal(
     if state.terminals.lock().unwrap().contains_key(&id) {
         return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
     }
+    let plan = match plan_spawn(app, state, &id, options) {
+        Ok(plan) => plan,
+        Err(e) => return CreateTerminalResult::err(e),
+    };
+    #[cfg(windows)]
+    if let Some(client) = app
+        .try_state::<crate::host_client::HostHub>()
+        .and_then(|hub| hub.for_spawn(app))
+    {
+        return spawn_hosted(state, id, plan, on_data, client);
+    }
+    spawn_local(app, state, id, plan, on_data)
+}
 
+/// Everything a pane is started with, resolved once for either backend.
+struct SpawnPlan {
+    shell: String,
+    args: Vec<String>,
+    env: crate::terminal_env::EnvPlan,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+    initial_line: Option<String>,
+    agent_id: Option<String>,
+    worktree_mode: bool,
+    repo_root: Option<String>,
+    claude_config_dir: Option<std::path::PathBuf>,
+}
+
+fn plan_spawn(
+    app: &AppHandle,
+    state: &AppState,
+    id: &str,
+    options: CreateTerminalOptions,
+) -> Result<SpawnPlan, String> {
     let account = match options.account_id.as_deref() {
-        Some(id) => match crate::accounts::resolve(app, id, options.agent_id.as_deref()) {
-            Ok(account) => {
-                if let Err(e) =
-                    crate::accounts::enroll(&account, state.mcp_url.get().map(|url| url.as_ref()))
-                {
-                    return CreateTerminalResult::err(e);
-                }
-                Some(account)
-            }
-            Err(e) => return CreateTerminalResult::err(e),
-        },
+        Some(id) => {
+            let account = crate::accounts::resolve(app, id, options.agent_id.as_deref())?;
+            crate::accounts::enroll(&account, state.mcp_url.get().map(|url| url.as_ref()))?;
+            Some(account)
+        }
         None => None,
     };
     let resolved = options
@@ -544,35 +649,20 @@ pub fn spawn_terminal(
         .and_then(crate::shell::resolve_shell);
     let (shell, args) = resolved.clone().unwrap_or_else(default_shell);
 
-    let pty_system = native_pty_system();
-    let pair = match pty_system.openpty(PtySize {
-        rows: options.rows,
-        cols: options.cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    }) {
-        Ok(p) => p,
-        Err(e) => return CreateTerminalResult::err(e.to_string()),
-    };
-
-    let mut cmd = CommandBuilder::new(&shell);
-    for a in &args {
-        cmd.arg(a);
-    }
     // Inherit the parent environment, then advertise truecolor so CLIs emit
     // 24-bit color sequences that ConPTY forwards and xterm renders verbatim.
-    for (k, v) in std::env::vars() {
-        cmd.env(k, v);
-    }
+    // The plan is complete on purpose: the host clears its own environment
+    // and spawns exactly this (SWA-54 `CreateSpec.env`).
+    let mut env = crate::terminal_env::EnvPlan::inherited();
     if let Some(account) = &account {
-        crate::accounts::apply_environment(&mut cmd, account);
+        crate::accounts::apply_environment(&mut env, account);
     }
     let claude_config_dir = account
         .as_ref()
         .filter(|a| a.agent_id == "claude-code")
         .map(|a| std::path::PathBuf::from(&a.config_dir));
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env("TERM", "xterm-256color");
+    env.set("COLORTERM", "truecolor");
+    env.set("TERM", "xterm-256color");
     // GUI launches arrive with no locale vars; fill in a UTF-8 LANG so CLIs
     // don't degrade to ASCII-only output (see utf8_lang_fallback for the why).
     #[cfg(not(windows))]
@@ -581,7 +671,7 @@ pub fn spawn_terminal(
         std::env::var("LC_ALL").ok().as_deref(),
         std::env::var("LC_CTYPE").ok().as_deref(),
     ) {
-        cmd.env("LANG", lang);
+        env.set("LANG", lang);
     }
     // Ask the shell to report its working directory on every prompt (OSC 7), so
     // relative path links stay resolvable after a `cd`. bash is the only shell we
@@ -598,7 +688,7 @@ pub fn spawn_terminal(
         } else {
             format!("{osc7}; {existing}")
         };
-        cmd.env("PROMPT_COMMAND", combined);
+        env.set("PROMPT_COMMAND", combined);
     }
     // Identify this session to in-terminal processes so an in-terminal agent
     // can call Swarmterm's MCP server. `id` is the terminalId — a random UUID
@@ -607,11 +697,11 @@ pub fn spawn_terminal(
     // Streamable-HTTP endpoint bound at app boot; if the server failed to
     // bind, we skip the URL var (agents just won't have the swarmterm server
     // available) but still set the session so future subsystems can use it.
-    cmd.env("SWARMTERM_SESSION", &id);
-    let spawn_id = uuid::Uuid::new_v4().to_string();
-    cmd.env("SWARMTERM_PTY_GENERATION", &spawn_id);
+    // `SWARMTERM_PTY_GENERATION` is stamped by whichever backend creates the
+    // generation (`spawn_local` here, the host for hosted panes).
+    env.set("SWARMTERM_SESSION", id);
     if let Some(url) = state.mcp_url.get() {
-        cmd.env("SWARMTERM_MCP_URL", url.as_ref());
+        env.set("SWARMTERM_MCP_URL", url.as_ref());
         // OpenCode gets the server per process via OPENCODE_CONFIG_CONTENT
         // (merged over its own config files), so the user's opencode.json is
         // never written. A value the user already exported wins.
@@ -619,9 +709,9 @@ pub fn spawn_terminal(
             && crate::mcp::toggle::is_enabled("opencode", None)
             && std::env::var_os("OPENCODE_CONFIG_CONTENT").is_none()
         {
-            cmd.env(
+            env.set(
                 "OPENCODE_CONFIG_CONTENT",
-                crate::mcp::config::opencode_config_content(url.as_ref(), &id),
+                crate::mcp::config::opencode_config_content(url.as_ref(), id),
             );
         }
     }
@@ -631,11 +721,99 @@ pub fn spawn_terminal(
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| ".".to_string())
     });
-    cmd.cwd(&cwd);
 
-    // Clone worktree options to locals so they're available at the insert point.
-    let worktree_mode = options.worktree_mode.unwrap_or(false);
-    let repo_root = options.repo_root.clone();
+    // Run the template's first command (clearing the screen first for the
+    // platform default shell so the prompt/echo don't linger above the program).
+    let initial_line = options.initial_command.as_ref().map(|ic| {
+        let ic = crate::hook::codex::isolated_command(
+            ic,
+            options.agent_id.as_deref(),
+            options.agent_id.as_deref() == Some("codex") && crate::hook::codex::supported(),
+        );
+        // A switched-off profile gets no per-process pin either.
+        let mcp_on = options.agent_id.as_deref().is_none_or(|agent| {
+            crate::mcp::toggle::is_enabled(agent, options.account_id.as_deref())
+        });
+        let ic = crate::hook::codex::with_mcp_url(
+            &ic,
+            options.agent_id.as_deref(),
+            state
+                .mcp_url
+                .get()
+                .map(|url| url.as_ref())
+                .filter(|_| mcp_on),
+        );
+        if resolved.is_some() {
+            format!("{ic}\r")
+        } else {
+            let clear = if cfg!(windows) { "Clear-Host" } else { "clear" };
+            format!("{clear}; {ic}\r")
+        }
+    });
+
+    Ok(SpawnPlan {
+        shell,
+        args,
+        env,
+        cwd,
+        cols: options.cols,
+        rows: options.rows,
+        initial_line,
+        agent_id: options.agent_id,
+        worktree_mode: options.worktree_mode.unwrap_or(false),
+        repo_root: options.repo_root,
+        claude_config_dir,
+    })
+}
+
+/// Publish the live generation before starting the agent: SessionStart may
+/// arrive immediately and must never race the terminal registration. Both
+/// backends therefore write the template line only after the map entry
+/// exists (a hosted pane gets no `initialInput` for the same reason).
+fn send_initial_line(state: &AppState, id: &str, spawn_id: &str, line: Option<String>) {
+    let Some(line) = line else { return };
+    if let Some(terminal) = state
+        .terminals
+        .lock()
+        .unwrap()
+        .get(id)
+        .filter(|t| t.spawn_id == spawn_id)
+    {
+        if let Err(e) = terminal.send(line.as_bytes()) {
+            eprintln!("[pty] initial command for {id} dropped: {e}");
+        }
+    }
+}
+
+fn spawn_local(
+    app: &AppHandle,
+    state: &AppState,
+    id: String,
+    plan: SpawnPlan,
+    on_data: Channel<PtyOut>,
+) -> CreateTerminalResult {
+    let pty_system = native_pty_system();
+    let pair = match pty_system.openpty(PtySize {
+        rows: plan.rows,
+        cols: plan.cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        Ok(p) => p,
+        Err(e) => return CreateTerminalResult::err(e.to_string()),
+    };
+
+    let mut cmd = CommandBuilder::new(&plan.shell);
+    for a in &plan.args {
+        cmd.arg(a);
+    }
+    cmd.env_clear();
+    for (k, v) in plan.env.iter() {
+        cmd.env(k, v);
+    }
+    let spawn_id = uuid::Uuid::new_v4().to_string();
+    cmd.env("SWARMTERM_PTY_GENERATION", &spawn_id);
+    cmd.cwd(&plan.cwd);
 
     let child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,
@@ -665,65 +843,28 @@ pub fn spawn_terminal(
     #[cfg(windows)]
     let job = pid.and_then(job::JobHandle::capturing);
 
-    // Run the template's first command (clearing the screen first for the
-    // platform default shell so the prompt/echo don't linger above the program).
-    let initial_line = options.initial_command.as_ref().map(|ic| {
-        let ic = crate::hook::codex::isolated_command(
-            ic,
-            options.agent_id.as_deref(),
-            options.agent_id.as_deref() == Some("codex") && crate::hook::codex::supported(),
-        );
-        // A switched-off profile gets no per-process pin either.
-        let mcp_on = options.agent_id.as_deref().is_none_or(|agent| {
-            crate::mcp::toggle::is_enabled(agent, options.account_id.as_deref())
-        });
-        let ic = crate::hook::codex::with_mcp_url(
-            &ic,
-            options.agent_id.as_deref(),
-            state
-                .mcp_url
-                .get()
-                .map(|url| url.as_ref())
-                .filter(|_| mcp_on),
-        );
-        let line = if resolved.is_some() {
-            format!("{ic}\r")
-        } else {
-            let clear = if cfg!(windows) { "Clear-Host" } else { "clear" };
-            format!("{clear}; {ic}\r")
-        };
-        line
-    });
-
     let waiter_spawn_id = spawn_id.clone();
     let reader_spawn_id = spawn_id.clone();
     state.terminals.lock().unwrap().insert(
         id.clone(),
         ManagedTerminal {
-            spawn_id,
+            spawn_id: spawn_id.clone(),
             pid,
-            agent_id: options.agent_id,
-            input: PtyInput::spawn(writer),
-            master: pair.master,
-            killer,
-            #[cfg(windows)]
-            job,
-            worktree_mode,
-            repo_root,
-            cwd: std::path::PathBuf::from(cwd),
-            claude_config_dir,
+            agent_id: plan.agent_id,
+            io: TerminalIo::Local {
+                input: PtyInput::spawn(writer),
+                master: pair.master,
+                killer,
+                #[cfg(windows)]
+                job,
+            },
+            worktree_mode: plan.worktree_mode,
+            repo_root: plan.repo_root,
+            cwd: std::path::PathBuf::from(&plan.cwd),
+            claude_config_dir: plan.claude_config_dir,
         },
     );
-
-    // Publish the live generation before starting the agent: SessionStart may
-    // arrive immediately and must never race the terminal registration.
-    if let Some(line) = initial_line {
-        if let Some(terminal) = state.terminals.lock().unwrap().get_mut(&id) {
-            if let Err(e) = terminal.input.send(line.as_bytes()) {
-                eprintln!("[pty] initial command for {id} dropped: {e}");
-            }
-        }
-    }
+    send_initial_line(state, &id, &spawn_id, plan.initial_line);
 
     // A shell that exits on its own (typed `exit`, crash) never closes the
     // ConPTY output pipe while the master lives, so the reader alone would
@@ -738,21 +879,7 @@ pub fn spawn_terminal(
     std::thread::spawn(move || {
         let mut child = child;
         let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
-        if let Some(state) = waiter_app.try_state::<AppState>() {
-            // Bound before the drop so the master is released outside the lock.
-            let removed = {
-                let mut map = state.terminals.lock().unwrap();
-                if map
-                    .get(&waiter_id)
-                    .is_some_and(|t| t.spawn_id == waiter_spawn_id)
-                {
-                    map.remove(&waiter_id)
-                } else {
-                    None
-                }
-            };
-            drop(removed);
-        }
+        drop_generation(&waiter_app, &waiter_id, &waiter_spawn_id);
         let _ = exit_tx.send(exit_code);
     });
 
@@ -764,8 +891,139 @@ pub fn spawn_terminal(
     CreateTerminalResult {
         ok: true,
         pid,
-        shell: Some(shell),
+        shell: Some(plan.shell),
         error: None,
+    }
+}
+
+/// Spawn in the terminal host (SWA-55). The mirror entry is inserted by the
+/// `spawned` event (`register_hosted`), which the host sends before the
+/// pane's first byte and before this call's answer, so output and an
+/// immediate exit can never outrun the registration.
+#[cfg(windows)]
+fn spawn_hosted(
+    state: &AppState,
+    id: String,
+    plan: SpawnPlan,
+    on_data: Channel<PtyOut>,
+    client: crate::host_client::Client,
+) -> CreateTerminalResult {
+    // Kept by the host and returned by `list`, so phase 3 can rebuild the
+    // mirror after an app restart without asking anyone.
+    let meta = serde_json::json!({
+        "agentId": plan.agent_id,
+        "worktreeMode": plan.worktree_mode,
+        "repoRoot": plan.repo_root,
+        "claudeConfigDir": plan.claude_config_dir,
+    });
+    let op = serde_json::json!({
+        "op": "create",
+        "terminalId": id,
+        "shell": plan.shell,
+        "args": plan.args,
+        "env": plan.env.into_map(),
+        "cwd": plan.cwd,
+        "cols": plan.cols,
+        "rows": plan.rows,
+        "meta": meta,
+    });
+    client.sink.routes.lock().unwrap().add_pending(
+        &id,
+        crate::host_client::PendingTerminal {
+            agent_id: plan.agent_id,
+            cwd: std::path::PathBuf::from(&plan.cwd),
+            worktree_mode: plan.worktree_mode,
+            repo_root: plan.repo_root,
+            claude_config_dir: plan.claude_config_dir,
+        },
+        on_data,
+    );
+    let answer = match client
+        .conn
+        .request(op, crate::host_client::conn::REQUEST_TIMEOUT)
+    {
+        Ok(v) => v,
+        Err(e) => {
+            client.sink.routes.lock().unwrap().cancel_pending(&id);
+            return CreateTerminalResult::err(format!("terminal host: {e}"));
+        }
+    };
+    let Some(spawn_id) = answer["spawnId"].as_str() else {
+        client.conn.kill(&id);
+        return CreateTerminalResult::err("terminal host: answer without a generation");
+    };
+    // `spawned` precedes the answer on the same pipe, so the entry exists
+    // by now — unless `register_hosted` refused it (a live generation held
+    // the id). Then this pane is already being closed: say so, don't report
+    // a pane that dies on its first frame.
+    let registered = state
+        .terminals
+        .lock()
+        .unwrap()
+        .get(&id)
+        .is_some_and(|t| t.spawn_id == spawn_id);
+    if !registered {
+        return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
+    }
+    send_initial_line(state, &id, spawn_id, plan.initial_line);
+    CreateTerminalResult {
+        ok: true,
+        pid: answer["pid"].as_u64().map(|p| p as u32),
+        shell: Some(plan.shell),
+        error: None,
+    }
+}
+
+/// `spawned` from the host: the generation exists, publish it in the map.
+#[cfg(windows)]
+pub fn register_hosted(
+    app: &AppHandle,
+    id: &str,
+    spawn_id: &str,
+    pid: Option<u32>,
+    pending: crate::host_client::PendingTerminal,
+    conn: std::sync::Arc<crate::host_client::conn::Conn>,
+) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let mut map = state.terminals.lock().unwrap();
+    // `spawn_terminal` refused a live duplicate under SPAWN_LOCK already;
+    // never replace a live generation from an event.
+    if map.contains_key(id) {
+        eprintln!("[host] spawned {id} while a generation is live; closing it");
+        drop(map);
+        conn.kill(id);
+        return;
+    }
+    map.insert(
+        id.to_string(),
+        ManagedTerminal {
+            spawn_id: spawn_id.to_string(),
+            pid,
+            agent_id: pending.agent_id,
+            cwd: pending.cwd,
+            io: TerminalIo::Host {
+                conn,
+                terminal_id: id.to_string(),
+            },
+            worktree_mode: pending.worktree_mode,
+            repo_root: pending.repo_root,
+            claude_config_dir: pending.claude_config_dir,
+        },
+    );
+}
+
+/// Drop `id`'s map entry if it still belongs to `spawn_id` (the waiter's job
+/// in-process, `removed` from the host). Bound before the drop so the master
+/// is released outside the lock.
+pub fn drop_generation(app: &AppHandle, id: &str, spawn_id: &str) {
+    if let Some(state) = app.try_state::<AppState>() {
+        let removed = {
+            let mut map = state.terminals.lock().unwrap();
+            remove_generation(&mut map, id, |t| t.spawn_id == spawn_id).0
+        };
+        drop(removed);
     }
 }
 
@@ -846,75 +1104,89 @@ fn read_loop(
         }
     });
 
-    // Resolved once: `try_state` walks Tauri's type map, and this loop runs
-    // per flush. `None` only during teardown, when there is nobody left to
-    // read the tail anyway.
-    let peer_state = app.try_state::<AppState>();
     let mut last_flush = std::time::Instant::now() - OUTPUT_IDLE;
     while let Ok(first) = rx.recv() {
         let text = next_batch(&rx, first, last_flush.elapsed() >= OUTPUT_IDLE);
-        // Tee into the Rust-side screen tail BEFORE the renderer sees it, so a
-        // `read_peer` racing this batch never reads less than xterm shows.
-        // Lock scope is the one statement — never held across the send.
-        if let Some(state) = &peer_state {
-            state
-                .peer_states
-                .lock()
-                .unwrap()
-                .push_output(&id, &text, crate::warroom::now_ms());
-            state.peer_wake.notify_waiters();
-        }
-        let _ = on_data.send(PtyOut::Data(text));
+        deliver_output(&app, &id, text, &on_data);
         last_flush = std::time::Instant::now();
     }
     // The waiter thread owns the child; EOF means it is dead or about to be
     // (kill_terminal dropped the master after killing it).
     let exit_code = exit_rx.recv().unwrap_or(-1);
+    finish_generation(&app, &id, &spawn_id, exit_code, &on_data);
+}
 
+/// One output batch to the renderer, for either backend.
+pub fn deliver_output(app: &AppHandle, id: &str, text: String, on_data: &Channel<PtyOut>) {
+    // Tee into the Rust-side screen tail BEFORE the renderer sees it, so a
+    // `read_peer` racing this batch never reads less than xterm shows.
+    // Lock scope is the one statement — never held across the send. `None`
+    // only during teardown, when there is nobody left to read the tail.
+    if let Some(state) = app.try_state::<AppState>() {
+        state
+            .peer_states
+            .lock()
+            .unwrap()
+            .push_output(id, &text, crate::warroom::now_ms());
+        state.peer_wake.notify_waiters();
+    }
+    let _ = on_data.send(PtyOut::Data(text));
+}
+
+/// A generation ended (EOF in-process, `exit` or a lost connection for a
+/// hosted pane): free the id, clean up per-pane state, then tell the
+/// renderer. Every byte of the generation was delivered before this runs.
+pub fn finish_generation(
+    app: &AppHandle,
+    id: &str,
+    spawn_id: &str,
+    exit_code: i32,
+    on_data: &Channel<PtyOut>,
+) {
     // Remove from the registry BEFORE notifying the renderer: a retry triggered by
     // the exit event must find the id free, since create rejects a duplicate live id.
     // A same-id respawn that did not wait for our Exit owns the slot now: leave
     // its entry and its per-id state alone (mirrors the waiter's spawn_id check).
     let superseded = app.try_state::<AppState>().is_some_and(|state| {
         let mut map = state.terminals.lock().unwrap();
-        let (removed, superseded) = remove_generation(&mut map, &id, |t| t.spawn_id == spawn_id);
+        let (removed, superseded) = remove_generation(&mut map, id, |t| t.spawn_id == spawn_id);
         drop(map);
         drop(removed);
         superseded
     });
     if let Some(state) = app.try_state::<AppState>().filter(|_| !superseded) {
-        state.mcp_clients.lock().unwrap().forget(&id);
+        state.mcp_clients.lock().unwrap().forget(id);
         // Same-id respawn must start from "no data", not its predecessor's %.
-        state.context_usage.lock().unwrap().forget(&id);
-        state.rate_limit_usage.lock().unwrap().forget(&id);
+        state.context_usage.lock().unwrap().forget(id);
+        state.rate_limit_usage.lock().unwrap().forget(id);
         // Drop the state mirror + screen tail and wake any `wait_peer` sleeper
         // so it can report "peer left" instead of sitting out its timeout.
-        state.peer_states.lock().unwrap().forget(&id);
+        state.peer_states.lock().unwrap().forget(id);
         state.peer_wake.notify_waiters();
         let left = state
             .war_rooms
             .lock()
             .unwrap()
-            .leave_everywhere(&id, crate::warroom::now_ms());
+            .leave_everywhere(id, crate::warroom::now_ms());
         if let Some((room_id, event)) = left {
             use tauri::Emitter;
             let _ = app.emit("warroom:event", &crate::warroom::scoped(&room_id, event));
         }
-        crate::voice::drop_terminal(&app, &id);
-        // Same preview cleanup as kill_terminal: read_loop is the path a shell
+        crate::voice::drop_terminal(app, id);
+        // Same preview cleanup as kill_terminal: this is the path a shell
         // takes when it exits on its own (typed `exit`, crashed), where no one
         // called kill_terminal. preview:closed tells the renderer too — the
         // store's visibility effects assume webview lifetime is bounded by
         // their own setup/cleanup, and a Rust-side close they never observe
         // would leave a stale preview + a permanently hidden webview on the
         // next preview_open.
-        if let Some(webview) = app.get_webview(&crate::preview::preview_label(&id)) {
+        if let Some(webview) = app.get_webview(&crate::preview::preview_label(id)) {
             let _ = webview.close();
             use tauri::Emitter;
             let _ = app.emit(
                 "preview:closed",
                 &crate::preview::PreviewClosedEvent {
-                    terminal_id: id.clone(),
+                    terminal_id: id.to_string(),
                 },
             );
         }

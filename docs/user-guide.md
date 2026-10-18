@@ -413,6 +413,8 @@ The marks are `A` (prompt drawn), `C` (command started) and `D;<exit>` (command 
 
 **Closing the window hides Swarmterm to the tray** and everything keeps running; tray → **Quit** is what actually exits. Launching a second copy just focuses the window you already have. On Windows, closing a pane kills the entire process tree it started — no orphaned build servers.
 
+**Terminal host (preview).** Settings → Terminal → **Run new panes in the terminal host** starts new panes in a separate background process, `swarmterm-host.exe`, instead of inside Swarmterm. It is off by default and today behaves exactly like the built-in terminals: it is the groundwork for keeping terminals alive across a restart or an update, which later versions add. Panes that are already open keep running where they started, so you can switch at any time. If the host cannot be started, new panes open inside Swarmterm as before and the setting shows why. Quitting closes hosted panes the same way; the idle host then exits on its own after ten minutes.
+
 ## Updates
 
 Swarmterm GN disables the upstream updater, including its tray entry, endpoint
@@ -531,6 +533,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **Shell integration is opt-in** — a hand-typed command in a plain Terminal pane is only noticed if that shell emits OSC 133 marks (§Shell integration). Nothing is injected, `cmd.exe` cannot do it, and an interrupted command that redraws the prompt without a `D` mark is simply forgotten.
 - **The explorer's root folder can't be renamed while its tree is open** — live refresh holds one handle on the root (and the repo's `.git` metadata), and Windows refuses to rename a folder with an open handle. Everything below the root renames and moves freely. Close the explorer for that root (or quit from the tray) to rename the root itself. During very heavy churn (a large `npm install`) the tree re-reads its open folders once things go quiet, because Windows may drop individual change events.
 - **Built-in speech recognition runs on the CPU only** — no GPU acceleration yet; larger models (Small, Large v3 Turbo) take several seconds per sentence. One dictation runs at a time, and a recording stops after two minutes.
+- **Hosted panes do not survive a restart yet** — with the terminal host switched on, quitting still closes every pane, and if the host process ends unexpectedly its panes end like an exited shell. Reattaching after a restart comes in a later version.
 - **Claude Code's cursor can lag after a resize** — Claude draws its own cursor block and only redraws it on the next keystroke, so right after dragging a window or pane edge the old block may stay visible. Output and prompt are correct; press any key to refresh.
 
 ## Astera themes

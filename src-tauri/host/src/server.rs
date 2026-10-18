@@ -185,6 +185,8 @@ async fn serve(
     let hello_deadline = tokio::time::Instant::now() + HELLO_TIMEOUT;
     let mut chunk = vec![0u8; 64 * 1024];
     let mut client: Option<u64> = None;
+    // Resolves when a newer client replaced this one (see `Client::_kick`).
+    let mut kicked: Option<tokio::sync::oneshot::Receiver<()>> = None;
     'conn: loop {
         loop {
             let frame = match dec.next_frame() {
@@ -215,8 +217,9 @@ async fn serve(
             };
             match client {
                 None => match hello(&host, &token, &tx, req) {
-                    Some(id) => {
+                    Some((id, kick)) => {
                         client = Some(id);
+                        kicked = Some(kick);
                         dec.set_limit(frame::MAX_FRAME);
                     }
                     None => break 'conn,
@@ -233,9 +236,18 @@ async fn serve(
                     .unwrap_or(Ok(0))
             }
         };
+        let replaced = async {
+            match kicked.as_mut() {
+                Some(k) => {
+                    let _ = k.await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
         let n = tokio::select! {
             _ = stop.changed() => break,
             _ = closed.changed() => break,
+            _ = replaced => break,
             r = read => match r {
                 Ok(n) if n > 0 => n,
                 _ => break,
@@ -248,13 +260,14 @@ async fn serve(
     }
 }
 
-/// First request of a connection. Returns the client id on success.
+/// First request of a connection. Returns the client id and its kick
+/// receiver on success.
 fn hello(
     host: &Host,
     token: &str,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     req: Request,
-) -> Option<u64> {
+) -> Option<(u64, tokio::sync::oneshot::Receiver<()>)> {
     let reply = |b: Vec<u8>| {
         let _ = tx.send(frame::encode_json(&b));
     };
@@ -285,7 +298,7 @@ fn hello(
             "pid": std::process::id(),
         }),
     ));
-    Some(host.connect_client(tx.clone()))
+    Some(host.connect_client_kickable(tx.clone()))
 }
 
 /// Requests of one connection run strictly in order (the keystroke FIFO), so

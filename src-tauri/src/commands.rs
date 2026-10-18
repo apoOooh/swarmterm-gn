@@ -1,4 +1,3 @@
-use portable_pty::PtySize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -112,7 +111,7 @@ pub fn write_terminal(state: State<'_, AppState>, id: String, data: String) -> R
     // unknown id stays a silent no-op (a pane racing its own close); a full
     // queue is returned so the renderer can tell the user input was dropped.
     match state.terminals.lock().unwrap().get(&id) {
-        Some(t) => t.input.send(data.as_bytes()).inspect_err(|e| {
+        Some(t) => t.send(data.as_bytes()).inspect_err(|e| {
             eprintln!("[pty] write to {id} dropped: {e}");
         }),
         None => Ok(()),
@@ -137,19 +136,13 @@ pub fn write_terminal_checked(
 ) -> Result<(), String> {
     let terminals = state.terminals.lock().map_err(|e| e.to_string())?;
     let t = terminals.get(&id).ok_or("target-gone")?;
-    crate::voice::check_generation(&t.spawn_id, &expected_spawn_id)?;
-    t.input.send(data.as_bytes())
+    t.send_checked(&expected_spawn_id, data.as_bytes())
 }
 
 #[tauri::command]
 pub fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) {
     if let Some(t) = state.terminals.lock().unwrap().get(&id) {
-        let _ = t.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        t.resize(cols, rows);
     }
 }
 

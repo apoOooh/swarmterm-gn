@@ -3,10 +3,12 @@
 //! A sidecar process that owns every PTY so panes survive an app quit, crash
 //! or update. The app talks to it over a current-user named pipe; see
 //! `protocol` for the envelope and `frame` for the wire format. Phase 1
-//! (SWA-54) ships the crate and protocol only — the app does not use it yet.
+//! (SWA-54) shipped the crate and protocol; since phase 2 (SWA-55) the app
+//! spawns panes here behind Settings → Terminal (`src/host_client/`).
 
 pub mod engine;
 pub mod frame;
+pub mod idle;
 pub mod input;
 #[cfg(windows)]
 pub mod job;
