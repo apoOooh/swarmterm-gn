@@ -62,6 +62,31 @@ struct Output {
     attached: Option<u64>,
 }
 
+impl Output {
+    fn new(cap: usize, attached: Option<u64>) -> Self {
+        Output {
+            ring: Ring::new(cap),
+            modes: ModeTracker::default(),
+            attached,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        let at = self.ring.total();
+        self.ring.push(bytes);
+        self.modes.feed(at, bytes);
+        self.modes.prune(self.ring.start());
+    }
+
+    /// What `attach` sends, and whether older output is missing from it.
+    fn replay(&self) -> (Vec<u8>, bool) {
+        let plan = self.modes.plan(self.ring.start());
+        let mut replay = plan.prefix;
+        replay.extend(self.ring.snapshot_from(plan.start));
+        (replay, plan.start > 0)
+    }
+}
+
 struct Entry {
     spawn_id: String,
     pid: Option<u32>,
@@ -290,11 +315,7 @@ impl Host {
         #[cfg(windows)]
         let job = pid.and_then(crate::job::JobHandle::capturing);
 
-        let output = Arc::new(Mutex::new(Output {
-            ring: Ring::new(self.ring_cap),
-            modes: ModeTracker::default(),
-            attached: Some(client),
-        }));
+        let output = Arc::new(Mutex::new(Output::new(self.ring_cap, Some(client))));
         let id = spec.terminal_id.clone();
         {
             let mut map = self.terminals.lock().unwrap();
@@ -421,11 +442,7 @@ impl Host {
             // same lock, so a batch lands either in the replay or in the live
             // stream, never in both and never in neither.
             let mut out = output.lock().unwrap();
-            let at = out.ring.total();
-            out.ring.push(text.as_bytes());
-            let start = out.ring.start();
-            out.modes.feed(at, text.as_bytes());
-            out.modes.prune(start);
+            out.push(text.as_bytes());
             if let Some(client) = out.attached {
                 self.send(
                     frame::encode_data(&id, &spawn_id, text.as_bytes()),
@@ -521,9 +538,7 @@ impl Host {
             (t.output.clone(), t.spawn_id.clone(), t.pid, t.cols, t.rows)
         };
         let mut out = output.lock().unwrap();
-        let plan = out.modes.plan(out.ring.start());
-        let mut replay = plan.prefix;
-        replay.extend(out.ring.snapshot_from(plan.start));
+        let (replay, truncated) = out.replay();
         out.attached = Some(client);
         let facts = Attached {
             spawn_id: spawn_id.clone(),
@@ -532,7 +547,7 @@ impl Host {
             rows,
             replay_bytes: replay.len(),
             output_total: out.ring.total(),
-            truncated: plan.start > 0,
+            truncated,
         };
         self.send(answer(&facts), Some(client));
         if !replay.is_empty() {
@@ -563,6 +578,58 @@ pub fn check_generation(actual: &str, expected: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Push `chunks` through a ring of `cap` bytes, as the flusher does.
+    fn replay(cap: usize, chunks: &[&[u8]]) -> (String, bool) {
+        let mut out = Output::new(cap, None);
+        for c in chunks {
+            out.push(c);
+        }
+        let (bytes, truncated) = out.replay();
+        (String::from_utf8(bytes).unwrap(), truncated)
+    }
+
+    #[test]
+    fn replay_from_offset_zero_is_the_whole_ring() {
+        // (a) a complete alternate segment, nothing cut.
+        let (r, cut) = replay(
+            64,
+            &[b"$ a
+\x1b[?1049hUI\x1b[?1049l$ "],
+        );
+        assert_eq!(
+            r,
+            "$ a
+\x1b[?1049hUI\x1b[?1049l$ "
+        );
+        assert!(!cut);
+    }
+
+    #[test]
+    fn a_wrapped_ring_skips_an_ended_alternate_segment() {
+        // (b) the switch on is pushed out, its end is retained.
+        let (r, cut) = replay(24, &[b"\x1b[?1049h", b"frame-1 frame-2 ", b"\x1b[?1049l$ ok"]);
+        assert_eq!(r, "$ ok");
+        assert!(cut);
+    }
+
+    #[test]
+    fn a_wrapped_ring_inside_an_active_alternate_segment_switches_first() {
+        // (c) and (d): the switch was split across two batches and then cut.
+        let (r, cut) = replay(
+            16,
+            &[b"$ \x1b[?10", b"49h\x1b[?2004h", b"frame-1 frame-2 frame-3"],
+        );
+        assert_eq!(r, "\x1b[?1049h\x1b[?2004h frame-2 frame-3");
+        assert!(cut);
+    }
+
+    #[test]
+    fn a_wrapped_ring_keeps_modes_of_the_older_variants() {
+        // (e) 47 behaves like 1049.
+        let (r, _) = replay(8, &[b"\x1b[?47h", b"0123456789"]);
+        assert_eq!(r, "\x1b[?1049h23456789");
+    }
 
     #[test]
     fn generation_check_rejects_a_respawn() {
