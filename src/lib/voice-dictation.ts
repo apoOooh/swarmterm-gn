@@ -65,7 +65,8 @@ const COPY: Record<string, string> = {
   composing: 'input method still composing',
   'pin-invalid': 'dictation was cancelled',
   'model-load-failed': 'the speech model could not be loaded — delete and download it again',
-  'transcribe-failed': 'speech recognition failed'
+  'transcribe-failed': 'speech recognition failed',
+  'speech-engine-unavailable': 'this build has no built-in speech engine (built without the local-speech feature)'
 }
 
 /** Notification copy for a dictation that did not land, or null. */

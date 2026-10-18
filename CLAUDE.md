@@ -40,6 +40,7 @@ Run from the repo root unless noted.
 | `npm run tauri build` | Production bundle (installer). |
 | `npm run tauri build -- --no-bundle` | Release binary, skip installer. |
 | `cargo test` *(from `src-tauri/`)* | Rust unit tests (pty/shell helpers). |
+| `npm run tauri:dev:no-speech` / `npm run test:rust:no-speech` | Isolated dev instance / Rust tests **without LLVM and CMake**: `--no-default-features` drops the `local-speech` feature (whisper.cpp). Only built-in dictation is missing; it fails with `speech-engine-unavailable`. |
 
 **Running the app from inside Swarmterm.** Swarmterm is single-instance, keyed
 on its identifier: a second launch with the same identifier is handed to the
@@ -351,7 +352,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   buzzkey's. It never takes pins/`terminals` locks itself. One dictation at
   a time (`active` spans begin → insert answer). Models: fixed catalog in
   `speech/model.rs` (URL + SHA-256), `.part` file renamed only on a hash
-  match. Build: bindgen needs libclang (`LIBCLANG_PATH`; CI uses the
+  match. The engine sits behind the default `local-speech` Cargo feature
+  (`engine.rs` has a stub without it). Build: bindgen needs libclang (`LIBCLANG_PATH`; CI uses the
   runner's LLVM — whisper-rs-sys's bundled bindings are Linux-only), and
   `src-tauri/.cargo/config.toml` forces `-O2` (the cmake crate drops it for
   MSVC → 7x slower) plus an AVX2 baseline. After changing those flags run
