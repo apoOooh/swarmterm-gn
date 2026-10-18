@@ -65,7 +65,7 @@ export interface FocusReply {
   name: string | null
   agentId: string | null
   /** BUZ-5: why an addressed begin found no pane. */
-  error?: 'no-target' | 'ambiguous'
+  error?: 'no-target' | 'ambiguous' | 'no-focus'
 }
 
 export interface VoiceInsertEvent {

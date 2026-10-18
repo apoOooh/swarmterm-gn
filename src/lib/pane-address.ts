@@ -16,7 +16,7 @@ export interface AddressablePane {
   name?: string
 }
 
-export type PaneAddressResult = { terminalId: string } | { error: 'no-target' | 'ambiguous' }
+export type PaneAddressResult = { terminalId: string } | { error: 'no-target' | 'ambiguous' | 'no-focus' }
 
 export const MAX_PANE_NAME = 40
 
@@ -62,10 +62,13 @@ export function resolvePaneAddress(target: string, panes: AddressablePane[]): Pa
   }
   const key = normalizePaneName(target)
   if (!key) return { error: 'no-target' }
-  // User names first: they exist precisely to tell look-alike panes apart.
-  return unique(panes.filter((p) => p.name && normalizePaneName(p.name) === key))
-    ?? unique(panes.filter((p) => normalizePaneName(p.title) === key))
-    ?? { error: 'no-target' }
+  const byName = panes.filter((p) => p.name && normalizePaneName(p.name) === key)
+  const byTitle = panes.filter((p) => normalizePaneName(p.title) === key)
+  // A user name wins over titles — but if another pane carries that word as
+  // its title (a program can set its own title), the user cannot tell which
+  // one they will hit, so it is refused like any other duplicate.
+  if (byName.length === 1 && byTitle.some((p) => p.terminalId !== byName[0].terminalId)) return { error: 'ambiguous' }
+  return unique(byName) ?? unique(byTitle) ?? { error: 'no-target' }
 }
 
 /** Cleans a typed pane name; undefined clears it (back to the automatic title). */

@@ -38,6 +38,13 @@ describe('resolvePaneAddress', () => {
     expect(resolvePaneAddress('drei', panes)).toEqual({ terminalId: 't3' })
     expect(resolvePaneAddress('9', panes)).toEqual({ error: 'no-target' })
   })
+  it('refuses a user name that another pane carries as its title', () => {
+    const clash: AddressablePane[] = [
+      { terminalId: 'a', number: 1, title: 'Codex', name: 'Backend' },
+      { terminalId: 'b', number: 2, title: 'Backend' }
+    ]
+    expect(resolvePaneAddress('Backend', clash)).toEqual({ error: 'ambiguous' })
+  })
   it('prefers a user-given name over titles', () => {
     expect(resolvePaneAddress('backend', panes)).toEqual({ terminalId: 't2' })
     expect(resolvePaneAddress('muller tests', panes)).toEqual({ terminalId: 't3' })

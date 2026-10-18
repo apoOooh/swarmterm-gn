@@ -320,7 +320,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   BUZ-5 addressing: capability `address`, then `begin` may carry `target`
   (≤ 64 chars). The renderer resolves it with `lib/pane-address.ts`
   (pane number = `visibleLeaves` order, then user `leaf.name`, then title;
-  duplicates → `ambiguous`, none → `no-target`, never the focused pane) and
+  duplicates or a user name another pane has as title → `ambiguous`, none →
+  `no-target`, never the focused pane; only the zoomed pane while one is
+  maximized) and
   skips only the keyboard-focus check of `dictationTarget`. A `target`
   without the capability is `bad-request`. Pane names never respawn.
 - **Voice companion (SWA-42).** `voice/companion/` installs buzzkey only on

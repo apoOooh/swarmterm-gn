@@ -53,9 +53,9 @@ describe('addressedTarget', () => {
   })
 
   it('refuses while the window is in the background or something modal is open', () => {
-    expect(addressedTarget({ ...ok, windowFocused: false }, '1', panes)).toEqual({ error: 'no-target' })
-    expect(addressedTarget({ ...ok, settingsOpen: true }, '1', panes)).toEqual({ error: 'no-target' })
-    expect(addressedTarget({ ...ok, welcomeFocused: true }, '1', panes)).toEqual({ error: 'no-target' })
-    expect(addressedTarget({ ...ok, focused: { modalOpen: true } as never }, '1', panes)).toEqual({ error: 'no-target' })
+    expect(addressedTarget({ ...ok, windowFocused: false }, '1', panes)).toEqual({ error: 'no-focus' })
+    expect(addressedTarget({ ...ok, settingsOpen: true }, '1', panes)).toEqual({ error: 'no-focus' })
+    expect(addressedTarget({ ...ok, welcomeFocused: true }, '1', panes)).toEqual({ error: 'no-focus' })
+    expect(addressedTarget({ ...ok, focused: { modalOpen: true } as never }, '1', panes)).toEqual({ error: 'no-focus' })
   })
 })

@@ -55,13 +55,18 @@ export function wireVoice(isSettingsOpen: () => boolean): () => void {
     const workspace = app.workspaces.find((w) => w.id === app.activeWorkspaceId)
     if (target !== undefined) {
       const titles = useTerminalTitleStore.getState().titles
+      // Behind a maximized pane the others keep their numbers but cannot be
+      // addressed: a dictation must not land in a pane the user cannot see.
+      const zoomed = workspace?.zoomedLeafId
+      const zoomActive = !!zoomed && !(workspace?.floating ?? []).some((r) => r.leafId === zoomed)
       const panes = workspace
         ? visibleLeaves(workspace).map((l, i) => ({
+            leafId: l.id,
             terminalId: l.terminalId,
             number: i + 1,
             title: resolvePaneTitle(l.agentId ?? DEFAULT_TEMPLATE_ID, titles[l.terminalId]),
             name: l.name
-          }))
+          })).filter((p) => !zoomActive || p.leafId === zoomed)
         : []
       const found = addressedTarget({
         windowFocused: true,

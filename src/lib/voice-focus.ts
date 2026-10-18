@@ -44,6 +44,6 @@ export function addressedTarget(
   target: string,
   panes: AddressablePane[]
 ): PaneAddressResult {
-  if (!i.windowFocused || i.settingsOpen || i.welcomeFocused || i.focused?.modalOpen) return { error: 'no-target' }
+  if (!i.windowFocused || i.settingsOpen || i.welcomeFocused || i.focused?.modalOpen) return { error: 'no-focus' }
   return resolvePaneAddress(target, panes)
 }

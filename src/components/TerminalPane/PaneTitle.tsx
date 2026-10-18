@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useRef, useState, type ReactElement } from 'react'
 import { MAX_PANE_NAME } from '@/lib/pane-address'
 import { useAppStore } from '@/store/app-store'
 import { cn } from '@/lib/utils'
@@ -23,8 +23,11 @@ interface PaneTitleProps {
 export function PaneTitle({ leafId, title, name, number, tooltip, className }: PaneTitleProps): ReactElement {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  // Escape unmounts the input, which fires onBlur: without this flag the
+  // discarded draft would be saved on the way out.
+  const discarded = useRef(false)
   const commit = (): void => {
-    useAppStore.getState().renamePane(leafId, draft)
+    if (!discarded.current) useAppStore.getState().renamePane(leafId, draft)
     setEditing(false)
   }
   return (
@@ -51,7 +54,10 @@ export function PaneTitle({ leafId, title, name, number, tooltip, className }: P
           onKeyDown={(e) => {
             e.stopPropagation()
             if (e.key === 'Enter') commit()
-            else if (e.key === 'Escape') setEditing(false)
+            else if (e.key === 'Escape') {
+              discarded.current = true
+              setEditing(false)
+            }
           }}
           onBlur={commit}
           className="min-w-0 flex-1 rounded border border-border bg-background px-1 text-xs text-foreground outline-none"
@@ -63,6 +69,7 @@ export function PaneTitle({ leafId, title, name, number, tooltip, className }: P
           onDoubleClick={(e) => {
             e.stopPropagation()
             setDraft(name ?? '')
+            discarded.current = false
             setEditing(true)
           }}
         >
