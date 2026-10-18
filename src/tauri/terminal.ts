@@ -5,7 +5,19 @@ import type { ShellId } from '@/lib/terminal-pref'
 /** Output streamed from a pty: decoded text, then a final exit. */
 export type PtyOut =
   | { type: 'data'; payload: string }
+  | { type: 'replay'; payload: PtyReplay }
   | { type: 'exit'; payload: { exitCode: number } }
+
+/**
+ * A pane taken over from the terminal host (SWA-56): its history, rendered
+ * at `cols`×`rows`. `truncated` = the host's ring dropped older output.
+ */
+export interface PtyReplay {
+  data: string
+  cols: number
+  rows: number
+  truncated: boolean
+}
 
 export interface CreateTerminalOptions {
   agentId?: string

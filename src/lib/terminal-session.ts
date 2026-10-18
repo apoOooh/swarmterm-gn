@@ -1,7 +1,8 @@
 import type {
   CreateTerminalOptions,
   CreateTerminalResult,
-  PtyOut
+  PtyOut,
+  PtyReplay
 } from '@/tauri/terminal'
 
 export type TerminalStatus =
@@ -13,6 +14,12 @@ export type TerminalStatus =
 /** Where decoded pty output is pumped (the xterm instance, in production). */
 export interface SessionSink {
   write: (data: string) => void
+  /**
+   * History of a pane taken over from the terminal host (SWA-56), first
+   * message of that generation. Not new output: no activity tick, and
+   * terminal queries inside it must not be answered toward the pty.
+   */
+  replay?: (replay: PtyReplay) => void
 }
 
 /** Tauri bridge functions, injected so the session is testable without Tauri. */
@@ -124,6 +131,9 @@ export class TerminalSession {
         if (!fresh()) return
         if (msg.type === 'data') {
           this.sink.write(msg.payload)
+        } else if (msg.type === 'replay') {
+          if (this.sink.replay) this.sink.replay(msg.payload)
+          else this.sink.write(msg.payload.data)
         } else {
           if (this.pendingRespawn) {
             const next = this.pendingRespawn

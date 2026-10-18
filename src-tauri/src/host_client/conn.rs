@@ -37,6 +37,10 @@ const PROTO: &[u32] = &[1];
 /// at a time; implementations must not block for long.
 pub trait Sink: Send + Sync {
     fn spawned(&self, terminal_id: &str, spawn_id: &str, pid: Option<u32>);
+    /// An `attach` was answered (`facts` = the answer: spawnId, pid, cols,
+    /// rows, replayBytes, outputTotal, truncated). Called on the reader task
+    /// before the replay frame is handled, so routing can be bound for it.
+    fn attached(&self, terminal_id: &str, facts: &Value);
     fn data(&self, terminal_id: &str, spawn_id: &str, bytes: &[u8]);
     fn removed(&self, terminal_id: &str, spawn_id: &str);
     fn exit(&self, terminal_id: &str, spawn_id: &str, exit_code: i32);
@@ -49,6 +53,8 @@ enum Waiter {
     Reply(std::sync::mpsc::Sender<Result<Value, String>>),
     /// A keystroke write: only `input-queue-full` is worth reporting.
     Write(String),
+    /// `attach`: the sink hears of the answer on the reader task first.
+    Attach(String, std::sync::mpsc::Sender<Result<Value, String>>),
     Ignore,
 }
 
@@ -58,6 +64,11 @@ pub struct Conn {
     waiters: Arc<Mutex<HashMap<u64, Waiter>>>,
     alive: Arc<AtomicBool>,
     pub host_version: String,
+    /// What an earlier app instance stored with `set_app_state`, as of hello.
+    pub app_state: Value,
+    /// Ends the reader task (`close`): the sink holds the connection, so
+    /// dropping every outside handle never closes the pipe by itself.
+    closing: Arc<tokio::sync::Notify>,
 }
 
 impl Conn {
@@ -116,13 +127,17 @@ impl Conn {
             .and_then(Value::as_str)
             .unwrap_or("?")
             .to_string();
+        let app_state = v.get("appState").cloned().unwrap_or(Value::Null);
 
+        let closing = Arc::new(tokio::sync::Notify::new());
         let conn = Arc::new(Conn {
             tx,
             next_id: AtomicU64::new(1),
             waiters: waiters.clone(),
             alive: alive.clone(),
             host_version,
+            app_state,
+            closing: closing.clone(),
         });
         tokio::spawn(async move {
             'read: loop {
@@ -133,22 +148,32 @@ impl Conn {
                         Err(_) => break 'read,
                     }
                 }
-                match rd.read(&mut chunk).await {
-                    Ok(n) if n > 0 => dec.feed(&chunk[..n]),
-                    _ => break,
+                tokio::select! {
+                    r = rd.read(&mut chunk) => match r {
+                        Ok(n) if n > 0 => dec.feed(&chunk[..n]),
+                        _ => break,
+                    },
+                    _ = closing.notified() => break,
                 }
             }
             alive.store(false, Ordering::Release);
             // Fail every caller still waiting, then let the app end the panes.
             let pending: Vec<Waiter> = waiters.lock().unwrap().drain().map(|(_, w)| w).collect();
             for w in pending {
-                if let Waiter::Reply(tx) = w {
+                if let Waiter::Reply(tx) | Waiter::Attach(_, tx) = w {
                     let _ = tx.send(Err("host-lost".into()));
                 }
             }
             sink.lost();
         });
         Ok(conn)
+    }
+
+    /// Hang up. The reader ends as if the host had gone (waiters fail,
+    /// `Sink::lost`) and drops the sink; once the caller drops its handle
+    /// too, the writer ends, the pipe closes and the host may idle out.
+    pub fn close(&self) {
+        self.closing.notify_one();
     }
 
     pub fn is_alive(&self) -> bool {
@@ -180,6 +205,35 @@ impl Conn {
                 Err("host-timeout".into())
             }
         }
+    }
+
+    /// Take over a pane an earlier connection created. Blocking like
+    /// `request`; on success the sink's `attached` already ran.
+    pub fn attach(&self, terminal_id: &str, timeout: Duration) -> Result<Value, String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let op = json!({"op": "attach", "terminalId": terminal_id});
+        let id = self.enqueue(op, Waiter::Attach(terminal_id.to_string(), tx))?;
+        match rx.recv_timeout(timeout) {
+            Ok(r) => r,
+            Err(_) => {
+                self.waiters.lock().unwrap().remove(&id);
+                Err("host-timeout".into())
+            }
+        }
+    }
+
+    /// The host's panes (`TerminalInfo` objects).
+    pub fn list(&self, timeout: Duration) -> Result<Vec<Value>, String> {
+        let listed = self.request(json!({"op": "list"}), timeout)?;
+        Ok(listed["terminals"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Fire and forget: a host without `app-state` answers `unknown-op`.
+    pub fn set_app_state(&self, state: Value) {
+        let _ = self.enqueue(
+            json!({"op": "set_app_state", "state": state}),
+            Waiter::Ignore,
+        );
     }
 
     pub fn write(&self, terminal_id: &str, data: &[u8]) -> Result<(), String> {
@@ -327,6 +381,12 @@ fn handle(waiters: &Mutex<HashMap<u64, Waiter>>, sink: &dyn Sink, f: Frame) {
         Waiter::Reply(tx) => {
             let _ = tx.send(if ok { Ok(v) } else { Err(reason(&v)) });
         }
+        Waiter::Attach(terminal_id, tx) => {
+            if ok {
+                sink.attached(&terminal_id, &v);
+            }
+            let _ = tx.send(if ok { Ok(v) } else { Err(reason(&v)) });
+        }
         Waiter::Write(terminal_id) if !ok && reason(&v) == "input-queue-full" => {
             sink.input_dropped(&terminal_id)
         }
@@ -350,6 +410,12 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("spawned {id} {spawn}"));
+        }
+        fn attached(&self, id: &str, facts: &Value) {
+            self.events.lock().unwrap().push(format!(
+                "attached {id} {}",
+                facts["spawnId"].as_str().unwrap_or("")
+            ));
         }
         fn data(&self, id: &str, spawn: &str, bytes: &[u8]) {
             self.events.lock().unwrap().push(format!(
@@ -529,6 +595,71 @@ mod tests {
         assert_eq!(listed(&second), 1);
         assert_eq!(second.reap_orphans(|_| false, REQUEST_TIMEOUT), Ok(1));
         assert_eq!(listed(&second), 0);
+        let _ = h.stop.send(true);
+    }
+
+    #[test]
+    fn attach_binds_routing_before_the_replay_arrives() {
+        let h = start_host();
+        let first = connect(&h, Arc::new(Recorder::default()));
+        let mut spec = cmd_spec("re");
+        spec["initialInput"] = json!("echo before-56\r");
+        let spawn = first.request(spec, REQUEST_TIMEOUT).unwrap()["spawnId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        first.set_app_state(json!({"mcpPort": 4711}));
+        // Give the shell time to print, so the replay has the marker.
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while first.list(REQUEST_TIMEOUT).unwrap()[0]["outputTotal"].as_u64() < Some(40)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let rec = Arc::new(Recorder::default());
+        let second = connect(&h, rec.clone());
+        assert_eq!(second.app_state, json!({"mcpPort": 4711}));
+        let listed = second.list(REQUEST_TIMEOUT).unwrap();
+        assert_eq!(listed[0]["terminalId"], "re");
+        assert_eq!(
+            (listed[0]["cols"].as_u64(), listed[0]["rows"].as_u64()),
+            (Some(80), Some(24))
+        );
+        let facts = second.attach("re", REQUEST_TIMEOUT).unwrap();
+        assert_eq!(facts["spawnId"], spawn.as_str());
+        wait_for(&rec, |ev| ev.iter().any(|e| e.contains("before-56")));
+        let ev = rec.events.lock().unwrap().clone();
+        assert_eq!(ev[0], format!("attached re {spawn}"), "{ev:?}");
+        assert!(ev[1].starts_with(&format!("data re {spawn}")), "{ev:?}");
+        assert_eq!(
+            second.attach("none", REQUEST_TIMEOUT).err().as_deref(),
+            Some("target-gone")
+        );
+        second.kill("re");
+        second.flush(REQUEST_TIMEOUT).unwrap();
+        let _ = h.stop.send(true);
+    }
+
+    #[test]
+    fn a_sweep_closes_every_pane_and_hangs_up() {
+        // Boot with the switch off: kill what survived, then close.
+        let h = start_host();
+        let first = connect(&h, Arc::new(Recorder::default()));
+        first.request(cmd_spec("left"), REQUEST_TIMEOUT).unwrap();
+        let rec = Arc::new(Recorder::default());
+        let sweep = connect(&h, rec.clone());
+        assert_eq!(sweep.reap_orphans(|_| false, REQUEST_TIMEOUT), Ok(1));
+        sweep.flush(REQUEST_TIMEOUT).unwrap();
+        sweep.close();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !rec.lost.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(rec.lost.load(Ordering::Acquire));
+        assert!(!sweep.is_alive());
+        let after = connect(&h, Arc::new(Recorder::default()));
+        assert_eq!(after.list(REQUEST_TIMEOUT).unwrap().len(), 0);
         let _ = h.stop.send(true);
     }
 

@@ -4,10 +4,14 @@ import type { ShellId } from '@/lib/terminal-pref'
 import { toSaved, type SavedWorkspace } from './saved-workspaces'
 import { savedLeaves } from './saved-workspace-restore'
 
-interface SyncDependencies { app: StoreApi<AppStore>; shell: () => ShellId; save: (entries: SavedWorkspace[]) => void }
+interface SyncDependencies {
+  app: StoreApi<AppStore>; shell: () => ShellId; save: (entries: SavedWorkspace[]) => void
+  /** Whether snapshots keep pane ids (`toSaved`); a change needs `refresh`. */
+  paneIds?: () => boolean
+}
 
 /** Keep snapshots pending by saved id, so closing one workspace cannot drop another's save. */
-export function startSavedWorkspaceSync({ app, shell, save }: SyncDependencies) {
+export function startSavedWorkspaceSync({ app, shell, save, paneIds = () => false }: SyncDependencies) {
   const pending = new Map<string, SavedWorkspace>()
   let timer: ReturnType<typeof setTimeout> | undefined
   const flush = () => {
@@ -20,15 +24,15 @@ export function startSavedWorkspaceSync({ app, shell, save }: SyncDependencies) 
   // Workspaces are immutable store objects: an unchanged object with the same
   // shell yields the same snapshot, so its toSaved + JSON are reused instead of
   // re-walking and re-serializing every layout on every store tick.
-  const cache = new WeakMap<object, { shell: ShellId; saved: SavedWorkspace | undefined; json: string }>()
+  const cache = new WeakMap<object, { shell: ShellId; ids: boolean; saved: SavedWorkspace | undefined; json: string }>()
   const json = new WeakMap<SavedWorkspace, string>()
   const snapshot = () => {
-    const sh = shell()
+    const sh = shell(), ids = paneIds()
     return new Map(app.getState().workspaces.flatMap(ws => {
       let hit = cache.get(ws)
-      if (!hit || hit.shell !== sh) {
-        const saved = toSaved(ws, sh, 0)
-        hit = { shell: sh, saved, json: saved ? JSON.stringify(saved) : '' }
+      if (!hit || hit.shell !== sh || hit.ids !== ids) {
+        const saved = toSaved(ws, sh, 0, ids)
+        hit = { shell: sh, ids, saved, json: saved ? JSON.stringify(saved) : '' }
         cache.set(ws, hit)
         if (saved) json.set(saved, hit.json)
       }

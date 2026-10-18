@@ -18,7 +18,18 @@ export interface SavedLeaf {
   worktreeBranch?: string
   sessionId?: string
   name?: string
+  /**
+   * The pane's last runtime id: the key a pane that survived in the
+   * terminal host (SWA-56) is reattached by. It doubles as the pane's MCP
+   * bearer (`SWARMTERM_SESSION`), which authorises only while that pane
+   * lives and is already in its own environment — the same user boundary
+   * as this storage.
+   */
+  terminalId?: string
 }
+/** Overrides for a saved pane that is reattached: the host, not the
+ *  (possibly stale) snapshot, knows its current agent and folder. */
+export interface ReattachLeaf { terminalId: string; agentId?: string; cwd?: string }
 export type SavedNode = SavedLeaf | { type: 'split'; direction: 'horizontal' | 'vertical'; sizes: [number, number]; children: [SavedNode, SavedNode] }
 export interface SavedWorkspace { id: string; name: string; cwd: string; layout: SavedNode; worktreeMode: boolean; updatedAt: number; autoOpen?: number }
 export interface SavedStorage { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void }
@@ -27,7 +38,12 @@ function validSession(agent: string, id: string | undefined): string | undefined
   return id && isValidSessionId(agent, id) ? id : undefined
 }
 
-export function toSaved(ws: Workspace, shell: ShellId, now: number): SavedWorkspace | undefined {
+/**
+ * `paneIds`: keep each pane's `terminalId` as the reattach key (SWA-56). Only
+ * while the terminal host is on: without it nothing can reattach, and the id
+ * doubles as the pane's MCP bearer, so it is not stored for nothing.
+ */
+export function toSaved(ws: Workspace, shell: ShellId, now: number, paneIds = false): SavedWorkspace | undefined {
   if (!ws.savedId) return undefined
   const convert = (node: LayoutNode): SavedNode => {
     if (node.type === 'split') return { type: 'split', direction: node.direction, sizes: [...node.sizes], children: [convert(node.children[0]), convert(node.children[1])] }
@@ -38,18 +54,27 @@ export function toSaved(ws: Workspace, shell: ShellId, now: number): SavedWorksp
       ...(node.launchMode ? { launchMode: node.launchMode } : {}),
       ...(node.worktreeBranch ? { worktreeBranch: node.worktreeBranch } : {}),
       ...(node.name ? { name: node.name } : {}),
+      ...(paneIds && validTerminalId(node.terminalId) ? { terminalId: node.terminalId } : {}),
       ...(validSession(agentId, node.sessionId ?? node.resumeSessionId) ? { sessionId: validSession(agentId, node.sessionId ?? node.resumeSessionId) } : {})
     }
   }
   return { id: ws.savedId, name: ws.name, cwd: ws.cwd, layout: convert(ws.layout), worktreeMode: ws.worktreeMode, updatedAt: now }
 }
 
-export function fromSaved(saved: SavedWorkspace, uid: () => string): Workspace {
+function validTerminalId(id: unknown): id is string {
+  return typeof id === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(id)
+}
+
+/** `reattach` names the saved panes still running in the terminal host. */
+export function fromSaved(saved: SavedWorkspace, uid: () => string, reattach?: (leaf: SavedLeaf) => ReattachLeaf | undefined): Workspace {
   const convert = (node: SavedNode): LayoutNode => {
     if (node.type === 'split') return { type: 'split', id: uid(), direction: node.direction, sizes: [...node.sizes], children: [convert(node.children[0]), convert(node.children[1])] }
-    const agentId = templateById(node.agentId).id
-    const sessionId = validSession(agentId, node.sessionId)
-    return { type: 'leaf', id: uid(), terminalId: uid(), agentId, accountId: node.accountId, shellId: node.shellId, cwd: node.cwd, launchMode: node.launchMode, worktreeBranch: node.worktreeBranch, ...(node.name ? { name: node.name } : {}), ...(sessionId ? { resumeSessionId: sessionId, sessionId } : {}) }
+    const live = reattach?.(node)
+    const savedAgent = templateById(node.agentId).id
+    const agentId = live?.agentId ? templateById(live.agentId).id : savedAgent
+    // A session belongs to the agent it was recorded for.
+    const sessionId = agentId === savedAgent ? validSession(agentId, node.sessionId) : undefined
+    return { type: 'leaf', id: uid(), terminalId: live?.terminalId ?? uid(), agentId, accountId: node.accountId, shellId: node.shellId, cwd: live?.cwd || node.cwd, launchMode: agentId === savedAgent ? node.launchMode : undefined, worktreeBranch: node.worktreeBranch, ...(node.name ? { name: node.name } : {}), ...(sessionId ? { resumeSessionId: sessionId, sessionId } : {}) }
   }
   const layout = convert(saved.layout)
   return { id: uid(), savedId: saved.id, name: saved.name, cwd: saved.cwd, layout, focusedLeafId: collectLeaves(layout)[0].id, broadcastActive: false, broadcastLeafIds: [], worktreeMode: saved.worktreeMode }
@@ -66,6 +91,7 @@ function parseNode(value: unknown, depth = 0): SavedNode | undefined {
       ...(text(value.launchMode) ? { launchMode: value.launchMode } : {}),
       ...(text(value.worktreeBranch) ? { worktreeBranch: value.worktreeBranch } : {}),
       ...(typeof value.name === 'string' && sanitizePaneName(value.name) ? { name: sanitizePaneName(value.name) } : {}),
+      ...(validTerminalId(value.terminalId) ? { terminalId: value.terminalId } : {}),
       ...(text(value.sessionId) && isValidSessionId(value.agentId, value.sessionId) ? { sessionId: value.sessionId } : {}) }
   }
   if (value.type !== 'split' || !['horizontal', 'vertical'].includes(String(value.direction)) || !Array.isArray(value.sizes) || value.sizes.length !== 2 || !value.sizes.every(n => typeof n === 'number' && Number.isFinite(n) && n > 0) || !Array.isArray(value.children) || value.children.length !== 2) return undefined

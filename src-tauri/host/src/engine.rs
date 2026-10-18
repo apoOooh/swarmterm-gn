@@ -29,8 +29,9 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::frame;
 use crate::input::PtyInput;
+use crate::modes::ModeTracker;
 use crate::output::{next_batch, take_valid_utf8, OUTPUT_IDLE, READ_BUF_BYTES};
-use crate::protocol::{CreateSpec, Event, TerminalInfo};
+use crate::protocol::{Attached, CreateSpec, Event, TerminalInfo};
 use crate::ring::Ring;
 
 /// How long a closed pane's process tree may take to exit on its own before
@@ -55,8 +56,41 @@ struct Client {
 /// Output side of one generation, shared by the flusher, `attach` and exit.
 struct Output {
     ring: Ring,
+    /// Fed with the ring, so `attach` can restore what the cut dropped.
+    modes: ModeTracker,
     /// Client that receives live `data` for this pane.
     attached: Option<u64>,
+}
+
+impl Output {
+    fn new(cap: usize, attached: Option<u64>) -> Self {
+        Output {
+            ring: Ring::new(cap),
+            modes: ModeTracker::default(),
+            attached,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        let at = self.ring.total();
+        self.ring.push(bytes);
+        self.modes.feed(at, bytes);
+        self.modes.prune(self.ring.start());
+    }
+
+    /// What `attach` sends, and whether older output is missing from it.
+    fn replay(&self) -> (Vec<u8>, bool) {
+        let ring_start = self.ring.start();
+        let plan = self.modes.plan(ring_start);
+        let mut tail = self.ring.snapshot_from(plan.start);
+        // A plan that moved the start already points after a sequence.
+        if plan.start == ring_start && ring_start > 0 {
+            tail.drain(..crate::modes::resync(&tail));
+        }
+        let mut replay = plan.prefix;
+        replay.extend(tail);
+        (replay, plan.start > 0)
+    }
 }
 
 struct Entry {
@@ -64,6 +98,10 @@ struct Entry {
     pid: Option<u32>,
     cwd: String,
     meta: Value,
+    /// Last size from create/resize: the replay was rendered at it, so a
+    /// reattaching client sizes its terminal to it before writing.
+    cols: u16,
+    rows: u16,
     input: PtyInput,
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
@@ -128,6 +166,8 @@ impl Entry {
 
 pub struct Host {
     terminals: Mutex<HashMap<String, Entry>>,
+    /// Opaque facts the app wants back after a restart (`set_app_state`).
+    app_state: Mutex<serde_json::Map<String, Value>>,
     client: Mutex<Option<Client>>,
     next_client: std::sync::atomic::AtomicU64,
     ring_cap: usize,
@@ -144,6 +184,7 @@ impl Host {
     pub fn new(ring_cap: usize) -> Arc<Self> {
         Arc::new(Host {
             terminals: Mutex::new(HashMap::new()),
+            app_state: Mutex::default(),
             client: Mutex::new(None),
             next_client: std::sync::atomic::AtomicU64::new(1),
             ring_cap,
@@ -188,6 +229,22 @@ impl Host {
 
     pub fn has_client(&self) -> bool {
         self.client.lock().unwrap().is_some()
+    }
+
+    /// Merge `state` into the app state (keys set to `null` are removed).
+    pub fn set_app_state(&self, state: serde_json::Map<String, Value>) {
+        let mut s = self.app_state.lock().unwrap();
+        for (k, v) in state {
+            if v.is_null() {
+                s.remove(&k);
+            } else {
+                s.insert(k, v);
+            }
+        }
+    }
+
+    pub fn app_state(&self) -> Value {
+        Value::Object(self.app_state.lock().unwrap().clone())
     }
 
     pub fn terminal_count(&self) -> usize {
@@ -264,10 +321,7 @@ impl Host {
         #[cfg(windows)]
         let job = pid.and_then(crate::job::JobHandle::capturing);
 
-        let output = Arc::new(Mutex::new(Output {
-            ring: Ring::new(self.ring_cap),
-            attached: Some(client),
-        }));
+        let output = Arc::new(Mutex::new(Output::new(self.ring_cap, Some(client))));
         let id = spec.terminal_id.clone();
         {
             let mut map = self.terminals.lock().unwrap();
@@ -287,6 +341,8 @@ impl Host {
                     pid,
                     cwd: spec.cwd.clone(),
                     meta: spec.meta.clone(),
+                    cols: spec.cols,
+                    rows: spec.rows,
                     input: PtyInput::spawn(writer),
                     master: pair.master,
                     killer,
@@ -392,7 +448,7 @@ impl Host {
             // same lock, so a batch lands either in the replay or in the live
             // stream, never in both and never in neither.
             let mut out = output.lock().unwrap();
-            out.ring.push(text.as_bytes());
+            out.push(text.as_bytes());
             if let Some(client) = out.attached {
                 self.send(
                     frame::encode_data(&id, &spawn_id, text.as_bytes()),
@@ -430,17 +486,19 @@ impl Host {
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let map = self.terminals.lock().unwrap();
-        map.get(id)
-            .ok_or("target-gone")?
-            .master
+        let mut map = self.terminals.lock().unwrap();
+        let t = map.get_mut(id).ok_or("target-gone")?;
+        t.master
             .resize(PtySize {
                 rows,
                 cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        t.cols = cols;
+        t.rows = rows;
+        Ok(())
     }
 
     /// Take the pane out of the registry (id free at once), then close it
@@ -460,6 +518,8 @@ impl Host {
                 pid: t.pid,
                 cwd: t.cwd.clone(),
                 meta: t.meta.clone(),
+                cols: t.cols,
+                rows: t.rows,
                 output_total: t.output.lock().unwrap().ring.total(),
             })
             .collect();
@@ -468,26 +528,34 @@ impl Host {
     }
 
     /// Route `id`'s output to `client`: `answer` (built from the replay
-    /// facts), then the ring as one data frame, then live output. All under
-    /// the pane's output lock, so nothing is lost or doubled at the seam.
+    /// facts), then the replay as one data frame, then live output. All under
+    /// the pane's output lock, so nothing is lost or doubled at the seam. The
+    /// replay is the ring as `ModeTracker::plan` says: modes the cut dropped
+    /// in front, an alternate screen whose switch was cut off skipped.
     pub fn attach(
         &self,
         client: u64,
         id: &str,
-        answer: impl FnOnce(&str, usize, u64) -> Vec<u8>,
+        answer: impl FnOnce(&Attached) -> Vec<u8>,
     ) -> Result<(), String> {
-        let (output, spawn_id) = {
+        let (output, spawn_id, pid, cols, rows) = {
             let map = self.terminals.lock().unwrap();
             let t = map.get(id).ok_or("target-gone")?;
-            (t.output.clone(), t.spawn_id.clone())
+            (t.output.clone(), t.spawn_id.clone(), t.pid, t.cols, t.rows)
         };
         let mut out = output.lock().unwrap();
-        let replay = out.ring.snapshot();
+        let (replay, truncated) = out.replay();
         out.attached = Some(client);
-        self.send(
-            answer(&spawn_id, replay.len(), out.ring.total()),
-            Some(client),
-        );
+        let facts = Attached {
+            spawn_id: spawn_id.clone(),
+            pid,
+            cols,
+            rows,
+            replay_bytes: replay.len(),
+            output_total: out.ring.total(),
+            truncated,
+        };
+        self.send(answer(&facts), Some(client));
         if !replay.is_empty() {
             self.send(frame::encode_data(id, &spawn_id, &replay), Some(client));
         }
@@ -516,6 +584,61 @@ pub fn check_generation(actual: &str, expected: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Push `chunks` through a ring of `cap` bytes, as the flusher does.
+    fn replay(cap: usize, chunks: &[&[u8]]) -> (String, bool) {
+        let mut out = Output::new(cap, None);
+        for c in chunks {
+            out.push(c);
+        }
+        let (bytes, truncated) = out.replay();
+        (String::from_utf8(bytes).unwrap(), truncated)
+    }
+
+    #[test]
+    fn replay_from_offset_zero_is_the_whole_ring() {
+        // (a) a complete alternate segment, nothing cut.
+        let (r, cut) = replay(64, &[b"$ a\r\n\x1b[?1049hUI\x1b[?1049l$ "]);
+        assert_eq!(r, "$ a\r\n\x1b[?1049hUI\x1b[?1049l$ ");
+        assert!(!cut);
+    }
+
+    #[test]
+    fn a_wrapped_ring_skips_an_ended_alternate_segment() {
+        // (b) the switch on is pushed out, its end is retained.
+        let (r, cut) = replay(
+            24,
+            &[b"\x1b[?1049h", b"frame-1 frame-2 ", b"\x1b[?1049l$ ok"],
+        );
+        assert_eq!(r, "$ ok");
+        assert!(cut);
+    }
+
+    #[test]
+    fn a_wrapped_ring_inside_an_active_alternate_segment_switches_first() {
+        // (c) and (d): the switch was split across two batches and then cut.
+        let (r, cut) = replay(
+            16,
+            &[b"$ \x1b[?10", b"49h\x1b[?2004h", b"frame-1 frame-2 frame-3"],
+        );
+        assert_eq!(r, "\x1b[?1049h\x1b[?2004h frame-2 frame-3");
+        assert!(cut);
+    }
+
+    #[test]
+    fn a_wrapped_ring_drops_the_remains_of_a_cut_sequence() {
+        // (d2) the cut lands inside `ESC[1;31m`: start at the next ESC.
+        let (r, cut) = replay(12, &[b"\x1b[1;31m", b"red\x1b[0m ok"]);
+        assert_eq!(r, "\x1b[0m ok");
+        assert!(cut);
+    }
+
+    #[test]
+    fn a_wrapped_ring_keeps_modes_of_the_older_variants() {
+        // (e) 47 behaves like 1049.
+        let (r, _) = replay(8, &[b"\x1b[?47h", b"0123456789"]);
+        assert_eq!(r, "\x1b[?1049h23456789");
+    }
 
     #[test]
     fn generation_check_rejects_a_respawn() {
@@ -563,7 +686,7 @@ mod tests {
         assert_eq!(host.resize("nope", 80, 24), Err("target-gone".into()));
         assert!(host.kill("nope").is_none());
         assert_eq!(
-            host.attach(1, "nope", |_, _, _| Vec::new()),
+            host.attach(1, "nope", |_| Vec::new()),
             Err("target-gone".into())
         );
     }

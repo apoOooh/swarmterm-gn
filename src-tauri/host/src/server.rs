@@ -296,6 +296,7 @@ fn hello(
             "capabilities": protocol::CAPABILITIES,
             "hostVersion": env!("CARGO_PKG_VERSION"),
             "pid": std::process::id(),
+            "appState": host.app_state(),
         }),
     ));
     Some(host.connect_client_kickable(tx.clone()))
@@ -352,14 +353,23 @@ async fn dispatch(
         }
         Op::List => answer(Ok(json!({ "terminals": host.list() }))),
         Op::Attach { terminal_id } => {
-            let r = host.attach(client, &terminal_id, |spawn_id, replay, total| {
+            let r = host.attach(client, &terminal_id, |facts| {
                 frame::encode_json(&protocol::ok(
                     id,
-                    json!({ "spawnId": spawn_id, "replayBytes": replay, "outputTotal": total }),
+                    serde_json::to_value(facts).expect("serialises"),
                 ))
             });
             if let Err(reason) = r {
                 answer(Err(reason));
+            }
+        }
+        Op::SetAppState { state } => {
+            let size = serde_json::to_vec(&state).map_or(usize::MAX, |b| b.len());
+            if size > protocol::MAX_APP_STATE {
+                answer(Err("too-large".into()));
+            } else {
+                host.set_app_state(state);
+                answer(Ok(json!({})));
             }
         }
     }

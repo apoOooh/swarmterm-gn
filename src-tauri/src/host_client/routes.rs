@@ -37,9 +37,10 @@ impl<P, C> Routes<P, C> {
             .insert(terminal_id.to_string(), (payload, sink));
     }
 
-    /// The create failed: forget the pending route.
-    pub fn cancel_pending(&mut self, terminal_id: &str) -> bool {
-        self.pending.remove(terminal_id).is_some()
+    /// The create failed: forget the pending route, handing its sink back
+    /// (an attach that found the pane gone falls back to a create with it).
+    pub fn cancel_pending(&mut self, terminal_id: &str) -> Option<(P, C)> {
+        self.pending.remove(terminal_id)
     }
 
     /// Bind a pending route to the generation the host just started. `None`
@@ -124,8 +125,8 @@ mod tests {
     fn cancel_and_drain() {
         let mut r = R::default();
         r.add_pending("p", "m", 9);
-        assert!(r.cancel_pending("p"));
-        assert!(!r.cancel_pending("p"));
+        assert!(r.cancel_pending("p").is_some());
+        assert!(r.cancel_pending("p").is_none());
         r.add_pending("a", "m", 1);
         r.on_spawned("a", "g");
         r.add_pending("b", "m", 2);
