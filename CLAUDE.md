@@ -463,8 +463,13 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   over the snapshot for agent and cwd. The renderer reports `keep` (all
   saved ids) once; no report in 120 s = everything detached is closed.
   The host's replay comes from `modes.rs` (DECSET state + alternate-screen
-  positions across ring cuts). MCP rebinds the port kept in the host's app
-  state (`set_app_state`, returned by hello).
+  positions across ring cuts; a cut front resyncs at the first ESC/LF; 2026
+  is never prefixed). Switch off at boot = `sweep`: kill every host pane,
+  then `Conn::close` (the sink holds the conn, so dropping never hangs up).
+  An attach whose `create_terminal` timed out is killed like an unrequested
+  `spawned`. Pane ids are saved only while the switch is on (`paneIds`).
+  MCP rebinds the port kept in the host's app state (`set_app_state`,
+  returned by hello).
   `input.rs`, `job.rs` and `output.rs` are copies of `pty.rs` parts until
   the in-process backend goes away: change both or neither.
 - **App shortcut gate contract.** Window-level app shortcuts matched by

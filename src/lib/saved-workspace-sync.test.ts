@@ -14,6 +14,22 @@ function setup() {
   return { app, sync, list: () => list, writes: () => writes }
 }
 describe('workspace auto-save lifecycle', () => {
+  it('stores pane ids only while asked, and drops them again on refresh', () => {
+    vi.useFakeTimers()
+    const app = createStore<AppStore>()(appStoreCreator)
+    let ids = true
+    let list: SavedWorkspace[] = []
+    const sync = startSavedWorkspaceSync({ app, shell: () => 'powershell', paneIds: () => ids, save: entries => { list = entries } })
+    app.getState().createWorkspace({ cwd: 'C:/project', terminalCount: 1, agentIds: ['terminal'] })
+    vi.advanceTimersByTime(500)
+    const id = collectLeaves(app.getState().workspaces[0].layout)[0].terminalId
+    expect(list[0].layout.type === 'leaf' && list[0].layout.terminalId).toBe(id)
+    ids = false
+    sync.refresh()
+    vi.advanceTimersByTime(500)
+    expect(list[0].layout.type === 'leaf' && list[0].layout.terminalId).toBeUndefined()
+    sync.dispose()
+  })
   it('a shell preference change is saved on the next store tick, even without a layout change', () => {
     vi.useFakeTimers()
     const app = createStore<AppStore>()(appStoreCreator)

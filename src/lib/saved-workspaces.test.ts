@@ -12,7 +12,7 @@ const workspace: Workspace = {
     { type: 'leaf', id: 'b', terminalId: 'tb', cwd: 'C:/project.worktrees/test', worktreeBranch: 'test', startupCommand: 'private command' }
   ] }
 }
-function saved(): SavedWorkspace { return toSaved(workspace, 'powershell', 10)! }
+function saved(): SavedWorkspace { return toSaved(workspace, 'powershell', 10, true)! }
 function savedLeavesOf(w: SavedWorkspace): SavedLeaf[] {
   const walk = (n: SavedNode): SavedLeaf[] => n.type === 'leaf' ? [n] : n.children.flatMap(walk)
   return walk(w.layout)
@@ -37,6 +37,9 @@ describe('saved workspace snapshots', () => {
     const value = JSON.stringify(saved())
     for (const field of ['"id":"split"', '"id":"a"', '"id":"live"', 'initialPrompt', 'startupCommand', 'broadcast', 'zoomedLeafId', 'private']) expect(value).not.toContain(field)
     expect(toSaved({ ...workspace, savedId: undefined }, 'default', 1)).toBeUndefined()
+  })
+  it('stores pane ids only when asked (terminal host on)', () => {
+    expect(savedLeavesOf(toSaved(workspace, 'powershell', 10)!).map(l => l.terminalId)).toEqual([undefined, undefined])
   })
   it('keeps each pane id as the reattach key, but restores fresh ids by default', () => {
     const leaves = savedLeavesOf(saved())

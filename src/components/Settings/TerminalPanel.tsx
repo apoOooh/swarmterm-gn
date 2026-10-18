@@ -16,6 +16,7 @@ import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useStatuslineStore } from '@/store/statusline-store'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
+import { setSavedPaneIds } from '@/store/saved-workspaces-store'
 import { TEMPLATES, isTemplateAvailable, launchMode } from '@/lib/templates'
 import { AgentIcon } from '@/components/AgentIcon'
 import { listAvailableShells, type AvailableShell } from '@/tauri/shell'
@@ -319,7 +320,8 @@ function TerminalHostSettings(): ReactElement | null {
   const toggle = async (): Promise<void> => {
     try {
       const current = await getTerminalHostSettings()
-      await setTerminalHostSettings({ ...current, enabled: !enabled })
+      const next = await setTerminalHostSettings({ ...current, enabled: !enabled })
+      setSavedPaneIds(next.enabled)
       setStatus(await getTerminalHostStatus())
     } catch (err) {
       console.error('[TerminalPanel] terminal host switch failed', err)

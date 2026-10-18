@@ -3,7 +3,7 @@ import { autoOpenList, moveAutoOpen, readSaved, setAutoOpen, storeSaved, upsertS
 import { startSavedWorkspaceSync } from '@/lib/saved-workspace-sync'
 import { prepareSavedWorkspace, savedLeaves } from '@/lib/saved-workspace-restore'
 import { inspectSavedWorkspace } from '@/tauri/sessions'
-import { getDetachedPanes, keepDetachedPanes, releaseDetachedPanes, type DetachedPane } from '@/tauri/terminal-host'
+import { getDetachedPanes, getTerminalHostSettings, keepDetachedPanes, releaseDetachedPanes, type DetachedPane } from '@/tauri/terminal-host'
 import { reattachResolver, savedPaneIds } from '@/lib/host-reattach'
 import { collectLeaves } from '@/lib/layout-tree'
 import { useAppStore } from './app-store'
@@ -141,7 +141,15 @@ export const useSavedWorkspacesStore = create<SavedState>((set, get) => ({
 // Once per process: HMR or a re-wire must not reopen workspaces the user closed.
 let autostartDone = false
 let sync: ReturnType<typeof startSavedWorkspaceSync> | undefined
+// Snapshots keep pane ids (the reattach key) only while the terminal host is on.
+let hostPaneIds = false
 export function flushSavedWorkspaces(): void { sync?.flush() }
+/** Settings → Terminal switched the host: re-save with or without pane ids. */
+export function setSavedPaneIds(on: boolean): void {
+  if (hostPaneIds === on) return
+  hostPaneIds = on
+  sync?.refresh()
+}
 /** Pin an open workspace; flush first, since a fresh one may not be saved yet (debounced sync). */
 export function setOpenWorkspaceAutoOpen(savedId: string, on: boolean): void {
   sync?.flush()
@@ -158,8 +166,9 @@ export function wireSavedWorkspaces(): () => void {
     void detachedPanes().then(list => { if (list.length) return keepDetachedPanes(ids) }).catch(() => undefined)
     void useSavedWorkspacesStore.getState().openAutostart()
   }
-  const current = startSavedWorkspaceSync({ app: useAppStore, shell: () => useTerminalPrefStore.getState().shellId, save: entries => useSavedWorkspacesStore.getState().save(entries) })
+  const current = startSavedWorkspaceSync({ app: useAppStore, shell: () => useTerminalPrefStore.getState().shellId, paneIds: () => hostPaneIds, save: entries => useSavedWorkspacesStore.getState().save(entries) })
   sync = current
+  void getTerminalHostSettings().then(s => setSavedPaneIds(s.enabled)).catch(() => undefined)
   const unpref = useTerminalPrefStore.subscribe((next, prev) => { if (next.shellId !== prev.shellId) current.refresh() })
   window.addEventListener('pagehide', current.flush)
   return () => { unpref(); window.removeEventListener('pagehide', current.flush); current.dispose(); if (sync === current) sync = undefined }

@@ -66,6 +66,9 @@ pub struct Conn {
     pub host_version: String,
     /// What an earlier app instance stored with `set_app_state`, as of hello.
     pub app_state: Value,
+    /// Ends the reader task (`close`): the sink holds the connection, so
+    /// dropping every outside handle never closes the pipe by itself.
+    closing: Arc<tokio::sync::Notify>,
 }
 
 impl Conn {
@@ -126,6 +129,7 @@ impl Conn {
             .to_string();
         let app_state = v.get("appState").cloned().unwrap_or(Value::Null);
 
+        let closing = Arc::new(tokio::sync::Notify::new());
         let conn = Arc::new(Conn {
             tx,
             next_id: AtomicU64::new(1),
@@ -133,6 +137,7 @@ impl Conn {
             alive: alive.clone(),
             host_version,
             app_state,
+            closing: closing.clone(),
         });
         tokio::spawn(async move {
             'read: loop {
@@ -143,9 +148,12 @@ impl Conn {
                         Err(_) => break 'read,
                     }
                 }
-                match rd.read(&mut chunk).await {
-                    Ok(n) if n > 0 => dec.feed(&chunk[..n]),
-                    _ => break,
+                tokio::select! {
+                    r = rd.read(&mut chunk) => match r {
+                        Ok(n) if n > 0 => dec.feed(&chunk[..n]),
+                        _ => break,
+                    },
+                    _ = closing.notified() => break,
                 }
             }
             alive.store(false, Ordering::Release);
@@ -159,6 +167,13 @@ impl Conn {
             sink.lost();
         });
         Ok(conn)
+    }
+
+    /// Hang up. The reader ends as if the host had gone (waiters fail,
+    /// `Sink::lost`) and drops the sink; once the caller drops its handle
+    /// too, the writer ends, the pipe closes and the host may idle out.
+    pub fn close(&self) {
+        self.closing.notify_one();
     }
 
     pub fn is_alive(&self) -> bool {
@@ -623,6 +638,28 @@ mod tests {
         );
         second.kill("re");
         second.flush(REQUEST_TIMEOUT).unwrap();
+        let _ = h.stop.send(true);
+    }
+
+    #[test]
+    fn a_sweep_closes_every_pane_and_hangs_up() {
+        // Boot with the switch off: kill what survived, then close.
+        let h = start_host();
+        let first = connect(&h, Arc::new(Recorder::default()));
+        first.request(cmd_spec("left"), REQUEST_TIMEOUT).unwrap();
+        let rec = Arc::new(Recorder::default());
+        let sweep = connect(&h, rec.clone());
+        assert_eq!(sweep.reap_orphans(|_| false, REQUEST_TIMEOUT), Ok(1));
+        sweep.flush(REQUEST_TIMEOUT).unwrap();
+        sweep.close();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !rec.lost.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(rec.lost.load(Ordering::Acquire));
+        assert!(!sweep.is_alive());
+        let after = connect(&h, Arc::new(Recorder::default()));
+        assert_eq!(after.list(REQUEST_TIMEOUT).unwrap().len(), 0);
         let _ = h.stop.send(true);
     }
 

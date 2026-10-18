@@ -392,9 +392,16 @@ impl conn::Sink for AppSink {
             .lock()
             .unwrap()
             .on_spawned(terminal_id, spawn_id);
-        let (Some(p), Some(conn)) = (pending, self.conn.get()) else {
-            // Its `create_terminal` gave up (timeout): the pane stays in the
-            // host, unrouted, until a reconnect reaps it.
+        let Some(conn) = self.conn.get() else {
+            return;
+        };
+        let Some(p) = pending else {
+            // Its `create_terminal` gave up (timeout). The pane already left
+            // the detached set (`take`), so nothing could attach it again,
+            // and a live connection never reaps: it would run unseen and
+            // keep the host from idling out. Same rule as `spawned`.
+            eprintln!("[host] closing unclaimed attach {terminal_id}");
+            conn.kill(terminal_id);
             return;
         };
         let pid = facts["pid"].as_u64().map(|p| p as u32);
@@ -499,17 +506,40 @@ fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 /// Boot: load the switch. A host that is already running (it outlived the
 /// previous app instance) is connected right away, in the background, so
 /// its panes can be reattached; otherwise the host starts lazily with the
-/// first pane.
+/// first pane. With the switch off, a surviving host is swept instead.
 pub fn init(app: &AppHandle) {
     let hub = app.state::<HostHub>();
     if let Ok(path) = settings_path(app) {
         *hub.settings.lock().unwrap() = settings::load(&path);
     }
     #[cfg(windows)]
-    if hub.enabled() {
+    {
         let app = app.clone();
-        std::thread::spawn(move || boot(&app));
-        return;
+        if hub.enabled() {
+            std::thread::spawn(move || boot(&app));
+        } else {
+            std::thread::spawn(move || sweep(&app));
+        }
+    }
+    #[cfg(not(windows))]
+    hub.mark_booted();
+}
+
+/// The switch is off, but the previous instance may have crashed with it
+/// on: its host then still runs those panes, and with nothing to attach
+/// them it would never idle out, so the shells would live until logout.
+/// Close them all and hang up (never start a host for this). Under the
+/// slot lock like `reconnect_for_cleanup`, so a pane created right after
+/// the user turns the switch on cannot be reaped.
+#[cfg(windows)]
+fn sweep(app: &AppHandle) {
+    let hub = app.state::<HostHub>();
+    {
+        let _slot = hub.client.lock().unwrap();
+        if let Ok(c) = connect(app, false, false) {
+            let _ = c.conn.flush(conn::REQUEST_TIMEOUT);
+            c.conn.close();
+        }
     }
     hub.mark_booted();
 }

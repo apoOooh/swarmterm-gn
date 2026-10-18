@@ -80,9 +80,15 @@ impl Output {
 
     /// What `attach` sends, and whether older output is missing from it.
     fn replay(&self) -> (Vec<u8>, bool) {
-        let plan = self.modes.plan(self.ring.start());
+        let ring_start = self.ring.start();
+        let plan = self.modes.plan(ring_start);
+        let mut tail = self.ring.snapshot_from(plan.start);
+        // A plan that moved the start already points after a sequence.
+        if plan.start == ring_start && ring_start > 0 {
+            tail.drain(..crate::modes::resync(&tail));
+        }
         let mut replay = plan.prefix;
-        replay.extend(self.ring.snapshot_from(plan.start));
+        replay.extend(tail);
         (replay, plan.start > 0)
     }
 }
@@ -592,16 +598,8 @@ mod tests {
     #[test]
     fn replay_from_offset_zero_is_the_whole_ring() {
         // (a) a complete alternate segment, nothing cut.
-        let (r, cut) = replay(
-            64,
-            &[b"$ a
-\x1b[?1049hUI\x1b[?1049l$ "],
-        );
-        assert_eq!(
-            r,
-            "$ a
-\x1b[?1049hUI\x1b[?1049l$ "
-        );
+        let (r, cut) = replay(64, &[b"$ a\r\n\x1b[?1049hUI\x1b[?1049l$ "]);
+        assert_eq!(r, "$ a\r\n\x1b[?1049hUI\x1b[?1049l$ ");
         assert!(!cut);
     }
 
@@ -624,6 +622,14 @@ mod tests {
             &[b"$ \x1b[?10", b"49h\x1b[?2004h", b"frame-1 frame-2 frame-3"],
         );
         assert_eq!(r, "\x1b[?1049h\x1b[?2004h frame-2 frame-3");
+        assert!(cut);
+    }
+
+    #[test]
+    fn a_wrapped_ring_drops_the_remains_of_a_cut_sequence() {
+        // (d2) the cut lands inside `ESC[1;31m`: start at the next ESC.
+        let (r, cut) = replay(12, &[b"\x1b[1;31m", b"red\x1b[0m ok"]);
+        assert_eq!(r, "\x1b[0m ok");
         assert!(cut);
     }
 

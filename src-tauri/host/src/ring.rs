@@ -57,8 +57,9 @@ impl Ring {
     }
 
     /// The retained history from output-total offset `from` on (clamped to
-    /// what is retained). `from` must not split a UTF-8 character; the
-    /// replay plan only ever points after an escape sequence.
+    /// what is retained). `from` must not split a UTF-8 character: the
+    /// replay plan points at the ring's start (trimmed to whole characters)
+    /// or just after an alternate-screen switch.
     pub fn snapshot_from(&self, from: u64) -> Vec<u8> {
         let skip = from.saturating_sub(self.start()).min(self.buf.len() as u64) as usize;
         self.buf.range(skip..).copied().collect()

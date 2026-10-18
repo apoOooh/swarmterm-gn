@@ -38,7 +38,12 @@ function validSession(agent: string, id: string | undefined): string | undefined
   return id && isValidSessionId(agent, id) ? id : undefined
 }
 
-export function toSaved(ws: Workspace, shell: ShellId, now: number): SavedWorkspace | undefined {
+/**
+ * `paneIds`: keep each pane's `terminalId` as the reattach key (SWA-56). Only
+ * while the terminal host is on: without it nothing can reattach, and the id
+ * doubles as the pane's MCP bearer, so it is not stored for nothing.
+ */
+export function toSaved(ws: Workspace, shell: ShellId, now: number, paneIds = false): SavedWorkspace | undefined {
   if (!ws.savedId) return undefined
   const convert = (node: LayoutNode): SavedNode => {
     if (node.type === 'split') return { type: 'split', direction: node.direction, sizes: [...node.sizes], children: [convert(node.children[0]), convert(node.children[1])] }
@@ -49,7 +54,7 @@ export function toSaved(ws: Workspace, shell: ShellId, now: number): SavedWorksp
       ...(node.launchMode ? { launchMode: node.launchMode } : {}),
       ...(node.worktreeBranch ? { worktreeBranch: node.worktreeBranch } : {}),
       ...(node.name ? { name: node.name } : {}),
-      ...(validTerminalId(node.terminalId) ? { terminalId: node.terminalId } : {}),
+      ...(paneIds && validTerminalId(node.terminalId) ? { terminalId: node.terminalId } : {}),
       ...(validSession(agentId, node.sessionId ?? node.resumeSessionId) ? { sessionId: validSession(agentId, node.sessionId ?? node.resumeSessionId) } : {})
     }
   }

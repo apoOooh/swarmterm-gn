@@ -525,7 +525,8 @@ function getOrCreate(id: string): Entry {
   // >0 while a reattached pane's history is being parsed (SWA-56): xterm
   // answers queries in it (DA, DSR, colour reports) through onData, and
   // those answers belong to a moment long gone — sent now they would land
-  // in the running program as typed input.
+  // in the running program as typed input. Keys typed in that window are
+  // dropped too; accepted, since parsing the replay takes a frame or two.
   let replaying = 0
   const sendInput = (data: string): void => {
     if (replaying > 0) return

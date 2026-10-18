@@ -23,15 +23,24 @@
 
 use std::collections::VecDeque;
 
-/// Private modes that change how input is encoded or the cursor is shown.
-/// Value = whether the mode is on by default.
+/// Private modes that change how input is encoded, what the terminal
+/// reports or how output wraps. Value = whether the mode is on by default.
+///
+/// Deliberately absent: 2026 (synchronized output). A TUI wraps each frame
+/// in `?2026h … ?2026l`; prefixing an `h` whose `l` was not replayed would
+/// freeze rendering until the next frame, and the replay re-applies every
+/// later pair anyway.
 const TRACKED: &[(u16, bool)] = &[
     (1, false),    // DECCKM: application cursor keys
+    (7, true),     // DECAWM: autowrap
     (25, true),    // DECTCEM: cursor visible
     (1000, false), // mouse: button events
     (1002, false), // mouse: button + drag
     (1003, false), // mouse: any motion
+    (1004, false), // focus in/out reports
+    (1005, false), // mouse: UTF-8 encoding
     (1006, false), // mouse: SGR encoding
+    (1015, false), // mouse: urxvt encoding
     (2004, false), // bracketed paste
 ];
 
@@ -221,6 +230,18 @@ impl ModeTracker {
     }
 }
 
+/// Where a ring that lost its front should start: the cut may have split
+/// an escape sequence, and its remains (`1;31m`) would print as text. Start
+/// at the first `ESC` or after the first LF, whichever comes first; neither
+/// = the whole tail. Never skips an `ESC`, so no tracked switch is lost.
+pub fn resync(bytes: &[u8]) -> usize {
+    match bytes.iter().position(|&b| b == 0x1b || b == b'\n') {
+        Some(i) if bytes[i] == b'\n' => i + 1,
+        Some(i) => i,
+        None => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,6 +330,28 @@ mod tests {
             0,
         );
         assert_eq!(p.prefix, b"\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?2004h");
+    }
+
+    #[test]
+    fn focus_autowrap_and_the_other_mouse_encodings_are_restored() {
+        let p = plan(&[b"\x1b[?1004h\x1b[?7l\x1b[?1005h\x1b[?1015h"], 0);
+        assert_eq!(p.prefix, b"\x1b[?7l\x1b[?1004h\x1b[?1005h\x1b[?1015h");
+    }
+
+    #[test]
+    fn synchronized_output_is_never_prefixed() {
+        // A frame cut between its `h` and `l`.
+        let p = plan(&[b"\x1b[?2026hframe"], 0);
+        assert!(p.prefix.is_empty());
+    }
+
+    #[test]
+    fn resync_skips_the_remains_of_a_cut_sequence() {
+        // (d2) the ring starts inside `ESC[1;31m`.
+        assert_eq!(resync(b"1;31mred\x1b[0m"), 8);
+        assert_eq!(resync(b"31m tail\r\nnext"), 10);
+        assert_eq!(resync(b"\x1b[0mclean"), 0);
+        assert_eq!(resync(b"plain"), 0);
     }
 
     #[test]
