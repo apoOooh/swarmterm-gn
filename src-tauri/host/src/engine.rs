@@ -45,6 +45,11 @@ pub type FrameTx = UnboundedSender<Vec<u8>>;
 struct Client {
     id: u64,
     tx: FrameTx,
+    /// Dropped when a newer client replaces this one. The server's
+    /// connection task holds its own frame sender (for answers), so dropping
+    /// `tx` alone would leave the replaced pipe open and silent; the kick
+    /// tells that task to close it.
+    _kick: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 /// Output side of one generation, shared by the flusher, `attach` and exit.
@@ -148,10 +153,28 @@ impl Host {
     /// Make `tx` the current client. The previous client's sender is dropped,
     /// which ends its writer and closes that connection.
     pub fn connect_client(&self, tx: FrameTx) -> u64 {
+        self.register(tx, None)
+    }
+
+    /// `connect_client` for a pipe connection: the receiver resolves (with
+    /// an error) once a newer client took over, so the connection can close.
+    pub fn connect_client_kickable(
+        &self,
+        tx: FrameTx,
+    ) -> (u64, tokio::sync::oneshot::Receiver<()>) {
+        let (kick, kicked) = tokio::sync::oneshot::channel();
+        (self.register(tx, Some(kick)), kicked)
+    }
+
+    fn register(&self, tx: FrameTx, kick: Option<tokio::sync::oneshot::Sender<()>>) -> u64 {
         let id = self
             .next_client
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        *self.client.lock().unwrap() = Some(Client { id, tx });
+        *self.client.lock().unwrap() = Some(Client {
+            id,
+            tx,
+            _kick: kick,
+        });
         id
     }
 
@@ -515,6 +538,18 @@ mod tests {
         assert!(host.has_client());
         host.disconnect_client(c2);
         assert!(!host.has_client());
+    }
+
+    #[test]
+    fn a_replaced_pipe_client_is_kicked() {
+        use tokio::sync::oneshot::error::TryRecvError;
+        let host = Host::new(1024);
+        let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel();
+        let (_c1, mut kicked) = host.connect_client_kickable(tx1);
+        assert_eq!(kicked.try_recv(), Err(TryRecvError::Empty));
+        let (tx2, _rx2) = tokio::sync::mpsc::unbounded_channel();
+        host.connect_client(tx2);
+        assert_eq!(kicked.try_recv(), Err(TryRecvError::Closed));
     }
 
     #[test]

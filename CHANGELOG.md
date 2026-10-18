@@ -6,6 +6,13 @@
 - Internal: terminal host crate `src-tauri/host` (`swarmterm-host.exe`,
   ADR 0001 phase 1, SWA-54): named-pipe protocol v1, PTY ownership with a
   replay ring. Not used by the app yet.
+- Settings → Terminal: **Run new panes in the terminal host** (preview, off by
+  default; ADR 0001 phase 2, SWA-55). New panes spawn in `swarmterm-host.exe`;
+  MCP, War Room, voice and hooks work unchanged. Keystroke round trip over the
+  host pipe: p99 under 0.1 ms.
+- Terminal host: a host with no client and no pane exits after ten minutes, and
+  a client replaced by a newer connection is now disconnected instead of being
+  left open without output.
 
 ## [1.17.0] - 2026-10-18
 

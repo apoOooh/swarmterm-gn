@@ -9,6 +9,7 @@ mod devlog;
 mod files;
 mod folder_list;
 mod git;
+mod host_client;
 mod json_style;
 mod links;
 mod mcp;
@@ -22,6 +23,7 @@ mod shell;
 pub mod statusline;
 // Public so `main.rs` can reach `--hook` without booting Tauri.
 pub mod hook;
+mod terminal_env;
 mod tray;
 mod voice;
 mod warroom;
@@ -36,6 +38,7 @@ use tauri::WindowEvent;
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(host_client::HostHub::default())
         .manage(voice::VoiceHub::default())
         .manage(voice::tts::TtsHub::default())
         .manage(voice::companion::Companion::default())
@@ -119,6 +122,9 @@ pub fn run() {
             // Voice dictation endpoint (SWA-12): named pipe + discovery file
             // for buzzkey; follows Settings → Voice. Failure is logged only.
             crate::voice::init(app.handle());
+            // Terminal host switch (SWA-55); the host starts with the first
+            // pane that needs it, not here.
+            crate::host_client::init(app.handle());
             // Boot the MCP server. Any failure is logged and swallowed: browser
             // preview via MCP just won't work for this run, but Swarmterm as a
             // whole still functions.
@@ -153,6 +159,9 @@ pub fn run() {
             commands::create_terminal,
             commands::write_terminal,
             commands::write_terminal_checked,
+            host_client::terminal_host_get_settings,
+            host_client::terminal_host_set_settings,
+            host_client::terminal_host_status,
             voice::voice_focus_response,
             voice::voice_insert_result,
             voice::voice_indicator_stop,

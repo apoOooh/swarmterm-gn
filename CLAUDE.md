@@ -414,16 +414,32 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `rescan` change after `RESCAN_QUIET`; the explorer then reloads every
   loaded folder and documents re-check disk. Only the root itself stays
   non-renameable (user-guide Known limits).
-- **Terminal host (SWA-54, `docs/adr/0001`).** `src-tauri/host` is a
-  workspace member building `swarmterm-host.exe`; the app does not use it
-  until phase 2. It spawns exactly the resolved `CreateSpec` it is sent
-  (env cleared first, generation stamped by the host) — accounts, MCP URL
-  and Codex isolation stay in the app. Framing is length-prefixed
-  (`frame.rs`, JSON + binary data tagged with the spawn id — a killed
-  generation flushes until EOF, even after a same-id respawn), one client at a time (a new hello
-  replaces the old), lock order `terminals` → `Output` → `client`.
+- **Terminal host (SWA-54/55, `docs/adr/0001`).** `src-tauri/host` is a
+  workspace member building `swarmterm-host.exe`. It spawns exactly the
+  resolved `CreateSpec` it is sent (env cleared first, generation stamped by
+  the host) — accounts, MCP URL and Codex isolation stay in the app. Framing
+  is length-prefixed (`frame.rs`, JSON + binary data tagged with the spawn
+  id — a killed generation flushes until EOF, even after a same-id respawn),
+  one client at a time (a new hello replaces and kicks the old), lock order
+  `terminals` → `Output` → `client`; no client and no PTY for 10 min = exit.
+  App side (`host_client/`, Settings → Terminal, default off): every pane is
+  still a `ManagedTerminal` in `AppState.terminals`, only `io` differs
+  (`TerminalIo::Local | Host`), so every liveness reader is untouched.
+  `pty::plan_spawn` resolves ONE `EnvPlan` for both backends (Local applies
+  it after `env_clear`). The mirror entry is inserted on the host's
+  `spawned` event (`register_hosted`; it precedes data and the create
+  answer), `removed` = the waiter's `drop_generation`, `exit` =
+  `finish_generation` (shared with `read_loop`); the template line is sent
+  only after the entry exists. Output routes by `(id, spawn id)`
+  (`host_client/routes.rs`), stale frames are dropped. Calls only enqueue
+  for the connection's writer, so sending under the `terminals` lock keeps
+  keystroke FIFO; a hosted pane's `input-queue-full` comes back as
+  `pty:input-dropped`. Lost connection = every hosted pane exits; the next
+  create reconnects or starts a host (`launch.rs`, binary next to the app
+  exe — dev: `cargo build -p swarmterm-host`); unavailable = in-process
+  fallback with the reason in Settings. Quit flushes the host's `kill`s.
   `input.rs`, `job.rs` and `output.rs` are copies of `pty.rs` parts until
-  phase 2 removes the app-side PTY code: change both or neither.
+  the in-process backend goes away: change both or neither.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that
