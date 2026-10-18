@@ -165,4 +165,15 @@ describe('pane names (BUZ-5)', () => {
     const storage = { getItem: () => raw }
     expect(collectLeaves(fromSaved(readSaved(storage)[0], () => 'x').layout)[0].name).toBeUndefined()
   })
+
+  it('round-trips a pane identity icon + color and drops invalid ones on read', () => {
+    const leaves = collectLeaves(workspace.layout)
+    const layout = updateLeaf(workspace.layout, leaves[0].id, { name: 'Reviewer', icon: 'bug', color: '#5865f2' })
+    const raw = JSON.stringify({ version: 1, workspaces: [toSaved({ ...workspace, layout }, 'powershell', 1)] })
+    const leaf = collectLeaves(fromSaved(readSaved({ getItem: () => raw })[0], () => crypto.randomUUID()).layout)[0]
+    expect([leaf.name, leaf.icon, leaf.color]).toEqual(['Reviewer', 'bug', '#5865f2'])
+    const bad = JSON.stringify({ version: 1, workspaces: [toSaved({ ...workspace, layout: updateLeaf(layout, leaves[0].id, { icon: 'evil text', color: 'red' }) }, 'powershell', 1)] })
+    const dropped = collectLeaves(fromSaved(readSaved({ getItem: () => bad })[0], () => 'x').layout)[0]
+    expect([dropped.icon, dropped.color]).toEqual([undefined, undefined])
+  })
 })

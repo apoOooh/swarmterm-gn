@@ -51,6 +51,11 @@ export interface LeafNode {
    *  addressable by voice. Never a pure number (that would shadow the pane
    *  number). Changing it must never respawn the PTY. */
   name?: string
+  /** Identity icon (lib/pane-identity: curated lucide id or one emoji), shown
+   *  before the name. Cosmetic only — never respawns. */
+  icon?: string
+  /** Identity color from PANE_COLORS, tints the icon. */
+  color?: string
 }
 
 export interface SplitNode {
@@ -94,6 +99,8 @@ export function updateLeaf(
       | 'launchMode'
       | 'continueSession'
       | 'name'
+      | 'icon'
+      | 'color'
     >
   >
 ): LayoutNode {

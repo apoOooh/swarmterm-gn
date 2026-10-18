@@ -60,6 +60,7 @@ import {
 import { useHandoffStore } from '@/store/handoff-store'
 import {
   describeFocusedElement,
+  isEditableElement,
   shouldReturnFocus,
   FOCUS_RETURN_ATTR
 } from '@/lib/terminal-focus'
@@ -73,6 +74,7 @@ import { resolvePaneTitle } from '@/lib/pane-title'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { FileDropListener } from '@/components/FileDropListener'
 import { FileDialog } from '@/components/Files/FileDialog'
+import { PaneIdentityDialog } from '@/components/TerminalPane/PaneIdentityDialog'
 import { collectEditorCache } from '@/lib/files/editor-cache'
 import { useDocumentStore } from '@/store/document-store'
 import { useExplorerStore } from '@/store/explorer-store'
@@ -640,6 +642,10 @@ export default function App(): ReactElement {
     const appState = useAppStore.getState()
     const workspace = appState.workspaces.find((w) => w.id === appState.activeWorkspaceId)
     const pane = workspace ? useDocumentStore.getState().panes[workspace.focusedLeafId] : undefined
+    // A text field the user is typing in (e.g. a workspace rename input) keeps
+    // the keyboard — checked before the editor branch, which would otherwise
+    // steal focus mid-edit, blur the input and commit a half-typed name.
+    if (isEditableElement(document.activeElement)) return
     if (pane?.active && pane.keyboard === 'file') {
       if (document.activeElement?.closest('[role="dialog"],[role="menu"],[data-keyboard-owner="explorer"]')) return
       window.dispatchEvent(new Event('swarmterm:focus-editor'))
@@ -1172,6 +1178,7 @@ export default function App(): ReactElement {
     >
       <FileDropListener />
       <FileDialog />
+      <PaneIdentityDialog />
       <BuzzkeyUpdateToast />
       <TitleBar fullscreen={isFullscreen} />
       <SavedWorkspaceNotice />

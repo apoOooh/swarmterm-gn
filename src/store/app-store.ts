@@ -30,6 +30,7 @@ import { applyPreset } from '@/lib/layout-presets'
 import { fromSaved, type ReattachLeaf, type SavedLeaf, type SavedWorkspace } from '@/lib/saved-workspaces'
 import { isValidSessionId } from '@/lib/resume-command'
 import { sanitizePaneName } from '@/lib/pane-address'
+import { sanitizePaneIdentity, type PaneIdentity } from '@/lib/pane-identity'
 import { splitAccountFor, type AccountSelection } from '@/lib/agent-accounts'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 
@@ -126,6 +127,8 @@ export interface CreateWorkspaceConfig {
   defaultAgentId?: string
   /** Workspace account choice per agent CLI, kept for later splits. */
   accountSelections?: Record<string, AccountSelection>
+  /** Name typed in the wizard; blank/absent ⇒ derived from the folder. */
+  name?: string
 }
 
 /** One worktree to clear: the bound leaf, its worktree path + branch, and the repo root. */
@@ -224,6 +227,8 @@ export interface AppActions {
   setPaneShell: (leafId: string, shellId: ShellId) => void
   /** Name a pane of the active workspace (BUZ-5); blank clears it. Never respawns. */
   renamePane: (leafId: string, name: string) => void
+  /** Set a pane's identity (name + icon + color) at once; blank fields clear. Never respawns. */
+  setPaneIdentity: (leafId: string, identity: PaneIdentity) => void
   spawnWorktreePane: (p: {
     requesterTerminalId: string
     path: string
@@ -360,7 +365,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         name: workspaceNameFor(
           config.cwd,
           s.workspaces.map((w) => w.name),
-          s.nextWorkspaceNumber
+          s.nextWorkspaceNumber,
+          config.name
         ),
         cwd: config.cwd,
         layout,
@@ -809,6 +815,9 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
 
   renamePane: (leafId, name) =>
     set((s) => mapActive(s, (w) => ({ ...w, layout: updateLeaf(w.layout, leafId, { name: sanitizePaneName(name) }) }))),
+
+  setPaneIdentity: (leafId, identity) =>
+    set((s) => mapActive(s, (w) => ({ ...w, layout: updateLeaf(w.layout, leafId, sanitizePaneIdentity(identity)) }))),
 
   // Worker panes are spawned by the backend's worktree.spawn MCP tool: split
   // the *requester's* leaf (which may live in a non-active workspace, so this
