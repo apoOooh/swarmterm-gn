@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { collectLeaves } from '@/lib/layout-tree'
 import { MAX_PANE_NAME } from '@/lib/pane-address'
-import { PANE_COLORS, PANE_ICONS, sanitizePaneIcon } from '@/lib/pane-identity'
+import { PANE_COLORS, PANE_ICONS, isPaneIconId, sanitizePaneIcon } from '@/lib/pane-identity'
 import { resolvePaneTitle } from '@/lib/pane-title'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
@@ -37,10 +37,16 @@ export function PaneIdentityDialog(): ReactElement | null {
     if (!leaf) return
     setName(leaf.name ?? '')
     setIcon(leaf.icon)
-    setEmoji(leaf.icon && sanitizePaneIcon(leaf.icon) && !(PANE_ICONS as readonly string[]).includes(leaf.icon) ? leaf.icon : '')
+    setEmoji(leaf.icon && sanitizePaneIcon(leaf.icon) && !isPaneIconId(leaf.icon) ? leaf.icon : '')
     setColor(leaf.color)
     // Reseed only on open / target change, not on every layout update.
   }, [leafId, open])
+
+  // The target vanished (workspace switched, pane closed): drop the request,
+  // or the dialog would pop up again when its workspace comes back.
+  useEffect(() => {
+    if (leafId !== null && !leaf) close()
+  }, [leafId, leaf, close])
 
   if (!leaf) return null
   const autoTitle = resolvePaneTitle(leaf.agentId ?? DEFAULT_TEMPLATE_ID, agentTitle)
@@ -121,7 +127,7 @@ export function PaneIdentityDialog(): ReactElement | null {
                 setEmoji(e.target.value)
                 const valid = sanitizePaneIcon(e.target.value)
                 if (valid) setIcon(valid)
-                else if (e.target.value.trim() === '' && icon && !(PANE_ICONS as readonly string[]).includes(icon)) setIcon(undefined)
+                else if (e.target.value.trim() === '' && icon && !isPaneIconId(icon)) setIcon(undefined)
               }}
               className={cn('w-16 rounded border bg-background px-2 py-0.5 text-center text-sm outline-none focus:ring-1 focus:ring-ring', emojiValid ? 'border-input' : 'border-destructive')}
             />

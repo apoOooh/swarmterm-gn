@@ -43,10 +43,16 @@ export function shouldReturnFocus(focused: FocusedElementInfo | null, modalOpen 
   return !EDITABLE_TAGS.includes(focused.tagName.toUpperCase())
 }
 
-/** True for a focused text field the user is typing into (input, textarea, select, contenteditable). */
-export function isEditableElement(element: Element | null): boolean {
+/**
+ * True for a focused text field the user is typing into (input, textarea,
+ * select, contenteditable) — but not xterm's hidden helper textarea: a
+ * terminal holding focus is not "typing in a field", and treating it as one
+ * would stop focus from moving on to the pane the user actually selected.
+ */
+export function isEditableElement(element: Pick<Element, 'tagName' | 'closest'> & { isContentEditable?: boolean } | null): boolean {
   if (element === null) return false
-  if (element instanceof HTMLElement && element.isContentEditable) return true
+  if (element.closest('.xterm') !== null) return false
+  if (element.isContentEditable === true) return true
   return EDITABLE_TAGS.includes(element.tagName.toUpperCase())
 }
 
