@@ -373,8 +373,8 @@ async fn status_handler(
         .into_response()
 }
 
-/// `POST /hook` — the `swarmterm --hook` CLI reporting one Claude Code hook
-/// event for its own pane. The body is a closed enum (`HookBody`), never the
+/// `POST /hook` — the `swarmterm --hook` / `--codex-session-hook` CLI
+/// reporting one Claude Code or Codex hook event for its own pane. The body is a closed enum (`HookBody`), never the
 /// hook's stdin: prompt text, tool input and cwd stay inside the pane. The
 /// verdict is re-emitted to the renderer as `agent:hook` (payload in lockstep
 /// with `src/tauri/agent-state.ts::AgentHookEvent`); precedence over
@@ -392,7 +392,7 @@ async fn hook_handler(
     if body.turn.as_ref().is_some_and(|t| !t.is_valid()) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    // SWA-58: true asks the hook CLI to hand Claude the `<voice>` instruction.
+    // SWA-58: true asks the hook CLI to hand the agent the `<voice>` instruction.
     let mut voice = false;
     if let Some(session) = &body.session {
         // Generation and profile dir copied out under the lock; the voice
@@ -406,7 +406,7 @@ async fn hook_handler(
             terminals
                 .get(&terminal_id)
                 .filter(|t| session.matches(&t.spawn_id, t.agent_id.as_deref()))
-                .map(|t| (t.spawn_id.clone(), t.claude_config_dir.clone()))
+                .map(|t| (t.spawn_id.clone(), t.profile_dir.clone()))
         };
         let Some((spawn_id, config_dir)) = matched else {
             return StatusCode::NO_CONTENT.into_response();
@@ -438,15 +438,29 @@ async fn hook_handler(
                 &app,
                 &terminal_id,
                 &spawn_id,
+                &session.agent_id,
                 &session.session_id,
                 turn,
                 config_dir,
             );
         }
     }
-    // Codex capture carries no Claude lifecycle authority.
-    if body.session.as_ref().is_some_and(|s| s.agent_id == "codex") {
-        return StatusCode::NO_CONTENT.into_response();
+    // SWA-71: Codex edges drive the pane like Claude's do, but every one of
+    // them names its session and was matched above. A body without one in a
+    // Codex pane comes from something nested — a `claude` started inside it
+    // inherits SWARMTERM_SESSION, and its PostToolUse would drive the wrong
+    // detector.
+    if body.session.is_none() {
+        let state = app.state::<crate::pty::AppState>();
+        let codex_pane = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&terminal_id)
+            .is_some_and(|t| t.agent_id.as_deref() == Some("codex"));
+        if codex_pane {
+            return StatusCode::NO_CONTENT.into_response();
+        }
     }
     // SessionStart/SessionEnd: whatever turn was open belongs to a
     // conversation that is over.

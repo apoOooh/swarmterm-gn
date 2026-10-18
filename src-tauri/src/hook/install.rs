@@ -69,9 +69,9 @@ pub fn is_ours_hook(command: &str) -> bool {
 /// these events anyway and the CLI filters `notification_type` itself. No
 /// `async`: a synchronous hook guarantees the signal lands before Claude
 /// proceeds, and the CLI returns in well under its 300 ms POST budget.
-fn our_group(command: &str) -> Value {
+fn our_group(command: &str, timeout_secs: u64) -> Value {
     json!({
-        "hooks": [{ "type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECS }]
+        "hooks": [{ "type": "command", "command": command, "timeout": timeout_secs }]
     })
 }
 
@@ -118,6 +118,18 @@ pub fn merge_events(
     events: &[&str],
     is_ours: fn(&str) -> bool,
 ) -> Result<HooksWrite, String> {
+    merge_events_timed(existing, command, events, is_ours, |_| HOOK_TIMEOUT_SECS)
+}
+
+/// `merge_events` with a timeout per event: Codex clamps some events
+/// (`Interrupt` to 3 s) and warns on every start if we ask for more.
+pub fn merge_events_timed(
+    existing: Option<&str>,
+    command: Option<&str>,
+    events: &[&str],
+    is_ours: fn(&str) -> bool,
+    timeout_secs: fn(&str) -> u64,
+) -> Result<HooksWrite, String> {
     let before: Value = match existing.map(str::trim).filter(|s| !s.is_empty()) {
         None => json!({}),
         Some(s) => serde_json::from_str(s).map_err(|e| format!("parse: {e}"))?,
@@ -140,7 +152,10 @@ pub fn merge_events(
     for &event in events {
         if !hooks.contains_key(event) {
             if let Some(cmd) = command {
-                hooks.insert(event.to_owned(), Value::Array(vec![our_group(cmd)]));
+                hooks.insert(
+                    event.to_owned(),
+                    Value::Array(vec![our_group(cmd, timeout_secs(event))]),
+                );
             }
             continue;
         }
@@ -152,7 +167,7 @@ pub fn merge_events(
         // stale exe path (dev build → release build, or a moved app).
         groups.retain(|g| !group_is_ours(g, is_ours));
         if let Some(cmd) = command {
-            groups.push(our_group(cmd));
+            groups.push(our_group(cmd, timeout_secs(event)));
         }
         if groups.is_empty() {
             hooks.shift_remove(event);
