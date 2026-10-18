@@ -65,7 +65,7 @@ export function PaneTitle({ leafId, title, name, number, tooltip, className, sub
             !icon && 'text-muted-foreground opacity-0 group-hover/pane-title:opacity-60 focus-visible:opacity-100'
           )}
         >
-          {icon ? <PaneIdentityIcon icon={icon} color={color} /> : <SmilePlus aria-hidden className="h-3 w-3" />}
+          {icon ? <PaneIdentityIcon icon={icon} color={color} fallback={<SmilePlus aria-hidden className="h-3 w-3" />} /> : <SmilePlus aria-hidden className="h-3 w-3" />}
         </button>
       ) : icon ? (
         <PaneIdentityIcon icon={icon} color={color} />
