@@ -114,6 +114,17 @@ pub(crate) mod job {
 #[serde(rename_all = "camelCase", tag = "type", content = "payload")]
 pub enum PtyOut {
     Data(String),
+    /// First message of a pane taken over from the terminal host (SWA-56):
+    /// its history, rendered at `cols`x`rows`. Not new output — the renderer
+    /// writes it without activity ticks and without answering queries in it.
+    #[serde(rename_all = "camelCase")]
+    Replay {
+        data: String,
+        cols: u16,
+        rows: u16,
+        /// Older output was dropped by the host's ring.
+        truncated: bool,
+    },
     Exit {
         #[serde(rename = "exitCode")]
         exit_code: i32,
@@ -600,6 +611,20 @@ pub fn spawn_terminal(
     if state.terminals.lock().unwrap().contains_key(&id) {
         return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
     }
+    // A pane that survived the last app instance in the terminal host
+    // (SWA-56): take it over instead of starting a new one. No template line,
+    // no resume — the program is still running.
+    #[cfg(windows)]
+    let on_data = match app
+        .try_state::<crate::host_client::HostHub>()
+        .and_then(|hub| hub.take_detached(&id))
+    {
+        Some((pane, client)) => match attach_hosted(state, &id, pane, on_data, client) {
+            Ok(result) => return result,
+            Err(on_data) => on_data,
+        },
+        None => on_data,
+    };
     let plan = match plan_spawn(app, state, &id, options) {
         Ok(plan) => plan,
         Err(e) => return CreateTerminalResult::err(e),
@@ -974,6 +999,67 @@ fn spawn_hosted(
     }
 }
 
+/// Attach to a detached host pane. The mirror comes from the host's `meta`
+/// (it, not the possibly stale saved snapshot, knows the pane's agent and
+/// directory); `Conn::attach` returns only after the sink's `attached` has
+/// published it and bound the route for the replay. `Err` hands the channel
+/// back when the pane is gone by now, so the caller spawns a fresh one.
+#[cfg(windows)]
+fn attach_hosted(
+    state: &AppState,
+    id: &str,
+    pane: crate::host_client::detached::DetachedPane,
+    on_data: Channel<PtyOut>,
+    client: crate::host_client::Client,
+) -> Result<CreateTerminalResult, Channel<PtyOut>> {
+    let meta = &pane.meta;
+    let text = |k: &str| meta[k].as_str().map(str::to_string);
+    let pending = crate::host_client::PendingTerminal {
+        agent_id: text("agentId"),
+        cwd: std::path::PathBuf::from(&pane.cwd),
+        worktree_mode: meta["worktreeMode"].as_bool().unwrap_or(false),
+        repo_root: text("repoRoot"),
+        claude_config_dir: text("claudeConfigDir").map(std::path::PathBuf::from),
+    };
+    client
+        .sink
+        .routes
+        .lock()
+        .unwrap()
+        .add_pending(id, pending, on_data);
+    let facts = match client
+        .conn
+        .attach(id, crate::host_client::conn::REQUEST_TIMEOUT)
+    {
+        Ok(v) => v,
+        Err(e) => {
+            let back = client.sink.routes.lock().unwrap().cancel_pending(id);
+            return match (e.as_str(), back) {
+                ("target-gone", Some((_, on_data))) => Err(on_data),
+                _ => Ok(CreateTerminalResult::err(format!("terminal host: {e}"))),
+            };
+        }
+    };
+    let spawn_id = facts["spawnId"].as_str().unwrap_or("");
+    let registered = state
+        .terminals
+        .lock()
+        .unwrap()
+        .get(id)
+        .is_some_and(|t| t.spawn_id == spawn_id);
+    if !registered {
+        return Ok(CreateTerminalResult::err(format!(
+            "Terminal \"{id}\" already exists"
+        )));
+    }
+    Ok(CreateTerminalResult {
+        ok: true,
+        pid: facts["pid"].as_u64().map(|p| p as u32),
+        shell: None,
+        error: None,
+    })
+}
+
 /// `spawned` from the host: the generation exists, publish it in the map.
 #[cfg(windows)]
 pub fn register_hosted(
@@ -1131,6 +1217,19 @@ pub fn deliver_output(app: &AppHandle, id: &str, text: String, on_data: &Channel
         state.peer_wake.notify_waiters();
     }
     let _ = on_data.send(PtyOut::Data(text));
+}
+
+/// A reattached pane's history: into the screen tail like output (so
+/// `read_peer` sees what xterm shows), then to the renderer as `Replay`.
+pub fn deliver_replay(app: &AppHandle, id: &str, replay: PtyOut, on_data: &Channel<PtyOut>) {
+    if let (Some(state), PtyOut::Replay { data, .. }) = (app.try_state::<AppState>(), &replay) {
+        state
+            .peer_states
+            .lock()
+            .unwrap()
+            .push_output(id, data, crate::warroom::now_ms());
+    }
+    let _ = on_data.send(replay);
 }
 
 /// A generation ended (EOF in-process, `exit` or a lost connection for a

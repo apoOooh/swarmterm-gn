@@ -22,10 +22,34 @@ use crate::pty::AppState;
 /// The URL is also stored in `AppState.mcp_url` so `spawn_terminal` can inject
 /// it into shell env.
 pub async fn start(app: AppHandle) -> Result<Arc<str>, String> {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|e| format!("mcp: bind failed: {e}"))?;
+    // Panes that survived in the terminal host (SWA-56) carry the previous
+    // instance's URL in their environment, which cannot be changed from
+    // outside; binding its port again keeps them connected. Taken by
+    // something else: a fresh port, and those panes show `mcp offline`
+    // until their agent restarts.
+    let preferred = {
+        let app = app.clone();
+        tokio::task::spawn_blocking(move || crate::host_client::preferred_mcp_port(&app))
+            .await
+            .ok()
+            .flatten()
+    };
+    let listener = match preferred {
+        Some(port) => match TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[mcp] previous port {port} unavailable ({e}); binding a new one");
+                TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .map_err(|e| format!("mcp: bind failed: {e}"))?
+            }
+        },
+        None => TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| format!("mcp: bind failed: {e}"))?,
+    };
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
+    crate::host_client::publish_mcp_port(&app, addr.port());
     let url: Arc<str> = Arc::from(format!("http://{addr}/mcp"));
 
     // Store before spawning so any race with early PTY creation still sees it.

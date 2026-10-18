@@ -608,7 +608,10 @@ mod tests {
     #[test]
     fn a_wrapped_ring_skips_an_ended_alternate_segment() {
         // (b) the switch on is pushed out, its end is retained.
-        let (r, cut) = replay(24, &[b"\x1b[?1049h", b"frame-1 frame-2 ", b"\x1b[?1049l$ ok"]);
+        let (r, cut) = replay(
+            24,
+            &[b"\x1b[?1049h", b"frame-1 frame-2 ", b"\x1b[?1049l$ ok"],
+        );
         assert_eq!(r, "$ ok");
         assert!(cut);
     }
