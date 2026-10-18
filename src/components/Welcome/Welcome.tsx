@@ -10,7 +10,7 @@ import { TERMINAL_COUNTS, layoutSummary } from '@/lib/layout-tree'
 import { allocateAgents } from '@/lib/agent-allocation'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
-import { allocateAccounts, type AccountSelection } from '@/lib/agent-accounts'
+import { allocateAccounts, workspaceAccountSelections, type AccountSelection } from '@/lib/agent-accounts'
 import { useAppStore } from '@/store/app-store'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { AgentIcon } from '@/components/AgentIcon'
@@ -317,6 +317,7 @@ export function Welcome(): ReactElement {
         terminalCount,
         agentIds,
         accountIds: allocateAccounts(agentIds, accounts, accountSelections),
+        accountSelections: workspaceAccountSelections(accountSelections),
         worktreeMode: isolate,
         paneWorktrees,
         resumePanes: panesToResume.length > 0 ? panesToResume : undefined,

@@ -158,8 +158,10 @@ export function TerminalPane({
       return
     }
     try {
-      await transferAgentSession(agentId, sessionId, leaf.accountId, accountId)
-      setPaneAccount(leafId, accountId, true)
+      // No transcript yet (e.g. a fresh split pane): no history to lose, so
+      // the pane simply restarts on the new subscription.
+      const carried = await transferAgentSession(agentId, sessionId, leaf.accountId, accountId)
+      setPaneAccount(leafId, accountId, carried)
     } catch (error) {
       reportSwitch(`Could not move the session to the other subscription: ${String(error)}`)
     }

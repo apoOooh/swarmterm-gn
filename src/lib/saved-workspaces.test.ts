@@ -25,6 +25,7 @@ describe('saved workspace snapshots', () => {
     const restored = fromSaved(saved(), () => `new-${++n}`)
     expect(restored.savedId).toBe('saved')
     expect(restored.worktreeMode).toBe(true)
+    expect(restored.accountSelections).toBeUndefined()
     expect(restored.layout.type === 'split' && restored.layout.sizes).toEqual([30, 70])
     const leaves = collectLeaves(restored.layout)
     expect(leaves[0]).toMatchObject({ agentId: 'codex', shellId: 'powershell', cwd: 'C:/project', resumeSessionId: session, sessionId: session, launchMode: 'safe' })
@@ -105,6 +106,13 @@ it('retains a session together with its profile across storage and restore while
   const loaded = readSaved(storage(JSON.stringify({ version: 1, workspaces: [snapshot] })))[0]
   expect(collectLeaves(fromSaved(loaded, () => crypto.randomUUID()).layout)[0]).toMatchObject({ accountId: 'profile-a', sessionId: session, resumeSessionId: session })
   expect(collectLeaves(fromSaved(saved(), () => crypto.randomUUID()).layout)[0].accountId).toBeUndefined()
+})
+
+it('keeps the workspace account choice across storage and drops malformed entries', () => {
+  const choice = { 'claude-code': { mode: 'fixed' as const, accountId: 'claude-b' }, codex: { mode: 'round-robin' as const } }
+  const snapshot = { ...toSaved({ ...workspace, accountSelections: choice }, 'default', 20)!, accountSelections: { ...choice, terminal: { mode: 'round-robin' }, gemini: 'x' } }
+  const loaded = readSaved(storage(JSON.stringify({ version: 1, workspaces: [snapshot] })))[0]
+  expect(fromSaved(loaded, () => crypto.randomUUID()).accountSelections).toEqual(choice)
 })
 
 describe('open on startup', () => {

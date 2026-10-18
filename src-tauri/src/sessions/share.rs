@@ -170,20 +170,23 @@ fn find_claude(base: &Path, id: &str) -> Option<PathBuf> {
 
 /// Copy one session from the `from` store to the `to` store (config-dir
 /// bases). Same id, same relative path; the source is never modified.
-pub fn transfer(agent_id: &str, id: &str, from: &Path, to: &Path) -> Result<(), String> {
+/// `Ok(false)` when the source has no transcript yet (a session that never
+/// got a turn): there is nothing to carry, so the caller may start fresh.
+pub fn transfer(agent_id: &str, id: &str, from: &Path, to: &Path) -> Result<bool, String> {
     if !super::is_uuid(id) {
         return Err("Invalid session id".into());
     }
     if same_target(from, to) {
-        return Ok(());
+        return Ok(true);
     }
     let backup = backup_root()
         .unwrap_or_else(|_| to.join("session-share-backups"))
         .join(stamp());
     match agent_id {
         "claude-code" => {
-            let file =
-                find_claude(from, id).ok_or("Session not found in the source subscription")?;
+            let Some(file) = find_claude(from, id) else {
+                return Ok(false);
+            };
             let rel = file.strip_prefix(from).map_err(|e| e.to_string())?;
             copy_file_newer(&file, &to.join(rel), &backup.join(rel))?;
             // Tool-result sidecars next to the transcript, rewind checkpoints.
@@ -200,13 +203,14 @@ pub fn transfer(agent_id: &str, id: &str, from: &Path, to: &Path) -> Result<(), 
                     &backup.join(&history),
                 )?;
             }
-            Ok(())
+            Ok(true)
         }
         "codex" => {
-            let file = super::codex::find_rollout(&from.join("sessions"), id)
-                .ok_or("Session not found in the source subscription")?;
+            let Some(file) = super::codex::find_rollout(&from.join("sessions"), id) else {
+                return Ok(false);
+            };
             let rel = file.strip_prefix(from).map_err(|e| e.to_string())?;
-            copy_file_newer(&file, &to.join(rel), &backup.join(rel)).map(|_| ())
+            copy_file_newer(&file, &to.join(rel), &backup.join(rel)).map(|_| true)
         }
         _ => Err("This agent's sessions cannot be moved between subscriptions".into()),
     }
@@ -537,13 +541,15 @@ mod tests {
         transfer("claude-code", ID, &a, &b).unwrap();
         assert_eq!(fs::read_to_string(&dst).unwrap(), "newer");
         assert!(transfer("claude-code", "../evil", &a, &b).is_err());
-        assert!(transfer(
-            "claude-code",
-            "00000000-0000-0000-0000-000000000000",
-            &a,
-            &b
-        )
-        .is_err());
+        assert_eq!(
+            transfer(
+                "claude-code",
+                "00000000-0000-0000-0000-000000000000",
+                &a,
+                &b
+            ),
+            Ok(false)
+        );
     }
 
     #[test]

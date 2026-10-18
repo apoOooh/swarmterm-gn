@@ -19,8 +19,8 @@ function fakeStorage(initial: Record<string, string> = {}): PaneStatusPrefStorag
 }
 
 describe('readStoredPaneStatusPrefs', () => {
-  it('defaults to off with a 10-minute gradient', () => {
-    expect(readStoredPaneStatusPrefs(fakeStorage())).toEqual({ enabled: false, gradientMinutes: 10 })
+  it('defaults to on with a 10-minute gradient', () => {
+    expect(readStoredPaneStatusPrefs(fakeStorage())).toEqual({ enabled: true, gradientMinutes: 10 })
   })
 
   it('round-trips a stored choice', () => {
@@ -49,6 +49,6 @@ describe('readStoredPaneStatusPrefs', () => {
     const storage = fakeStorage({
       [PANE_STATUS_PREF_STORAGE_KEY]: JSON.stringify({ enabled: 'yes', gradientMinutes: 0 })
     })
-    expect(readStoredPaneStatusPrefs(storage)).toEqual({ enabled: false, gradientMinutes: 0 })
+    expect(readStoredPaneStatusPrefs(storage)).toEqual({ enabled: true, gradientMinutes: 0 })
   })
 })
