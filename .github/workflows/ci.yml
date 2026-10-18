@@ -66,6 +66,8 @@ jobs:
         working-directory: .
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      # The build without the speech engine (no LLVM) must stay warning-free too.
+      - run: cargo clippy --all-targets --no-default-features -- -D warnings
       - run: cargo test
       - name: Compile desktop application
         run: npx tauri build --no-bundle -- --locked

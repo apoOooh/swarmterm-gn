@@ -1,6 +1,6 @@
 [package]
 name = "swarmterm"
-version = "1.18.0"
+version = "1.19.0"
 description = "One window for a whole swarm of AI coding agents — split terminals, per-agent git worktrees, live web previews, and a War Room where agents collaborate"
 authors = ["Duong Duc Nguyen"]
 license = "GPL-3.0-only"
@@ -12,6 +12,13 @@ edition = "2021"
 default-run = "swarmterm"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+# The built-in speech engine (whisper.cpp). Its bindgen step needs LLVM
+# (`LIBCLANG_PATH`). Build with `--no-default-features` to skip it: everything
+# else works, the built-in speech source reports `speech-engine-unavailable`.
+default = ["local-speech"]
+local-speech = ["dep:whisper-rs"]
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -68,8 +75,9 @@ libc = "0.2"
 swarmterm-host = { path = "host" }
 # Built-in speech source (SWA-38, docs/adr/0002): whisper.cpp on the CPU and
 # WASAPI capture. Windows-only like the voice pipe; no GPU backend so the CI
-# needs no Vulkan SDK.
-whisper-rs = "0.16"
+# needs no Vulkan SDK. Optional: building it needs libclang (LLVM), see the
+# `local-speech` feature below.
+whisper-rs = { version = "0.16", optional = true }
 cpal = "0.18"
 # Built-in announcements (SWA-66, docs/adr/0003): the system's SAPI voices.
 # Same version tauri/wry already pull in, so this adds features, not a crate.

@@ -9,8 +9,8 @@ export interface PaneStatusPrefs {
   gradientMinutes: GradientMinutes
 }
 
-/** Off by default: a coloured frame on every pane is a look the user opts into. */
-export const DEFAULT_PANE_STATUS_PREFS: PaneStatusPrefs = { enabled: false, gradientMinutes: 10 }
+/** On by default for new installs; an explicit choice is stored and kept. */
+export const DEFAULT_PANE_STATUS_PREFS: PaneStatusPrefs = { enabled: true, gradientMinutes: 10 }
 
 /** localStorage key the pane status preference is persisted under. */
 export const PANE_STATUS_PREF_STORAGE_KEY = 'swarmterm.paneStatusHighlight'

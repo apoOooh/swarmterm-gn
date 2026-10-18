@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import {
   appStoreCreator,
@@ -8,7 +8,8 @@ import {
   type CreateWorkspaceConfig,
   type Workspace
 } from './app-store'
-import { collectLeaves, type SplitNode } from '@/lib/layout-tree'
+import { collectLeaves, findLeaf, type SplitNode } from '@/lib/layout-tree'
+import { useAgentAccountsStore } from './agent-accounts-store'
 import { toSaved } from '@/lib/saved-workspaces'
 
 function freshStore(): StoreApi<AppStore> {
@@ -366,6 +367,37 @@ describe('splitPane', () => {
     store.getState().splitPane(original, 'horizontal', 'terminal')
     const created = collectLeaves(activeWorkspace(store).layout).find((l) => l.id !== original)
     expect(created?.agentId).toBeUndefined()
+  })
+
+  describe('account of a split pane', () => {
+    const profiles = [
+      { id: 'claude-a', agentId: 'claude-code' as const, name: 'A', configDir: 'C:/a' },
+      { id: 'claude-b', agentId: 'claude-code' as const, name: 'B', configDir: 'C:/b' }
+    ]
+    beforeEach(() => useAgentAccountsStore.setState({ accounts: profiles }))
+    afterEach(() => useAgentAccountsStore.setState({ accounts: [] }))
+    const splitAccount = (store: ReturnType<typeof storeWithWorkspace>): string | undefined => {
+      const ws = activeWorkspace(store)
+      store.getState().splitPane(ws.focusedLeafId, 'horizontal', 'claude-code')
+      return findLeaf(activeWorkspace(store).layout, activeWorkspace(store).focusedLeafId)?.accountId
+    }
+
+    it('uses the workspace fixed account', () => {
+      const store = storeWithWorkspace({ cwd: 'C:/w', terminalCount: 1, agentIds: ['claude-code'], accountSelections: { 'claude-code': { mode: 'fixed', accountId: 'claude-b' } } })
+      expect(splitAccount(store)).toBe('claude-b')
+    })
+
+    it('continues the workspace round-robin', () => {
+      const store = storeWithWorkspace({ cwd: 'C:/w', terminalCount: 1, agentIds: ['claude-code'], accountSelections: { 'claude-code': { mode: 'round-robin' } } })
+      expect(splitAccount(store)).toBe('claude-a')
+      expect(splitAccount(store)).toBe('claude-b')
+      expect(splitAccount(store)).toBeUndefined()
+    })
+
+    it("inherits the source pane's account without a workspace choice", () => {
+      const store = storeWithWorkspace({ cwd: 'C:/w', terminalCount: 1, agentIds: ['claude-code'], accountIds: ['claude-a'] })
+      expect(splitAccount(store)).toBe('claude-a')
+    })
   })
 })
 

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-10-18
+
+- Accounts: a workspace keeps the composer's account choice per agent (fixed
+  profile or round robin), also in saved workspaces. Split panes use it: the
+  fixed profile, or the next account in the rotation. Without a choice, a
+  split pane takes the account of the pane it was split from (same agent).
+- Accounts: switching the account of a pane whose conversation has not had a
+  turn yet (for example a pane just split off) now restarts it on the new
+  account instead of failing with "Session not found in the source
+  subscription".
+- Settings → Appearance: **Highlight panes by agent state** is on by default
+  for anyone who has not changed it.
+- Build: the built-in speech engine (whisper.cpp) is the default Cargo
+  feature `local-speech`. `--no-default-features` (`npm run
+  tauri:dev:no-speech`, `npm run test:rust:no-speech`) builds and tests
+  without LLVM and CMake; built-in dictation then reports that it is not
+  available. Release builds keep it. CI also lints the build without it.
+
 ## [1.18.0] - 2026-10-18
 
 - Panes: every open pane shows a number in its header and the navbar list,

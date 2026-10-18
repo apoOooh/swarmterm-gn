@@ -30,6 +30,8 @@ import { applyPreset } from '@/lib/layout-presets'
 import { fromSaved, type ReattachLeaf, type SavedLeaf, type SavedWorkspace } from '@/lib/saved-workspaces'
 import { isValidSessionId } from '@/lib/resume-command'
 import { sanitizePaneName } from '@/lib/pane-address'
+import { splitAccountFor, type AccountSelection } from '@/lib/agent-accounts'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 
 /** A workspace: a named binary split-tree of terminal panes. */
 export interface Workspace {
@@ -60,6 +62,9 @@ export interface Workspace {
   /** Agent a split pane starts with in this workspace (template id).
    *  Absent ⇒ inherit the global default from Settings (agent-pref-store). */
   defaultAgentId?: string
+  /** Account choice per agent CLI from the composer, applied to split panes
+   *  (see `splitAccountFor`). Absent ⇒ splits inherit the source pane's account. */
+  accountSelections?: Record<string, AccountSelection>
 }
 
 /** Whether `leafId` is parked in `ws`'s drawer. */
@@ -119,6 +124,8 @@ export interface CreateWorkspaceConfig {
   resumePanes?: Array<{ agentId: string; sessionId: string; cwd: string; accountId?: string }>
   /** Per-workspace default split agent; absent ⇒ the global default. */
   defaultAgentId?: string
+  /** Workspace account choice per agent CLI, kept for later splits. */
+  accountSelections?: Record<string, AccountSelection>
 }
 
 /** One worktree to clear: the bound leaf, its worktree path + branch, and the repo root. */
@@ -361,7 +368,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         broadcastActive: false,
         broadcastLeafIds: [],
         worktreeMode: config.worktreeMode ?? false,
-        ...(config.defaultAgentId ? { defaultAgentId: config.defaultAgentId } : {})
+        ...(config.defaultAgentId ? { defaultAgentId: config.defaultAgentId } : {}),
+        ...(config.accountSelections ? { accountSelections: config.accountSelections } : {})
       }
       return {
         workspaces: [...s.workspaces, ws],
@@ -456,13 +464,17 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   splitPane: (leafId, direction, agentId) =>
     set((s) =>
       mapActive(s, (w) => {
-        if (!findLeaf(w.layout, leafId) || isDrawered(w, leafId)) return w
+        const source = findLeaf(w.layout, leafId)
+        if (!source || isDrawered(w, leafId)) return w
         // Plain shells keep agentId absent (the layout-tree convention). The
         // split pane spawns at the workspace cwd, never in a fresh worktree:
         // a branch per click would litter <repo>.worktrees; agents that need
         // isolation mid-session use the worktree.spawn MCP tool instead.
         const newLeaf: LeafNode =
           agentId && agentId !== DEFAULT_TEMPLATE_ID ? { ...makeLeaf(), agentId } : makeLeaf()
+        const accountId = splitAccountFor(newLeaf.agentId, newLeaf.agentId ? w.accountSelections?.[newLeaf.agentId] : undefined,
+          useAgentAccountsStore.getState().accounts, collectLeaves(w.layout), source)
+        if (accountId) newLeaf.accountId = accountId
         return {
           ...w,
           layout: splitLeaf(w.layout, leafId, direction, newLeaf, uid()),
