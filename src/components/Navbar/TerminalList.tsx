@@ -4,6 +4,7 @@ import type { LeafNode } from '@/lib/layout-tree'
 import { collectLeaves } from '@/lib/layout-tree'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { resolvePaneTitle } from '@/lib/pane-title'
+import { PaneIdentityIcon } from '@/components/TerminalPane/PaneIdentityIcon'
 import { useAppStore, isDrawered } from '@/store/app-store'
 import { useDocumentStore } from '@/store/document-store'
 import { useExplorerStore } from '@/store/explorer-store'
@@ -148,7 +149,11 @@ const TerminalRow = memo(function TerminalRow({ leaf, inDrawer, number, focused,
       >
         {/* Dim only icon + title of a covered pane: its state dot stays at full
             strength so an agent needing input behind the zoom still shows. */}
-        <AgentIcon template={template} className={cn('h-3.5 w-3.5 shrink-0', behindZoom && 'opacity-50')} />
+        {/* A pane identity icon replaces the agent icon: it is the user's
+            own marker for "who this pane is". */}
+        {leaf.icon
+          ? <PaneIdentityIcon icon={leaf.icon} color={leaf.color} className={cn(behindZoom && 'opacity-50')} />
+          : <AgentIcon template={template} className={cn('h-3.5 w-3.5 shrink-0', behindZoom && 'opacity-50')} />}
         <PaneTitle
           leafId={leaf.id}
           title={title}

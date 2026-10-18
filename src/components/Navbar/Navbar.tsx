@@ -543,7 +543,11 @@ function RenameInput({ initialValue, onCommit, onCancel }: RenameInputProps): Re
       ref={inputRef}
       value={value}
       onChange={(e) => setValue(e.target.value)}
+      // Keep keys and pointer presses inside the field: the draggable row
+      // around it (dnd-kit sensors) and app-level handlers must not see them.
+      onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
+        e.stopPropagation()
         if (e.key === 'Enter') {
           e.preventDefault()
           finish(true)

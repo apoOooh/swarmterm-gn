@@ -11,6 +11,7 @@ import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { resolveLaunchMode, resolveSplitAgent } from '@/lib/agent-pref'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
+import { usePaneIdentityDialogStore } from '@/store/pane-identity-dialog-store'
 import { useTerminalSearchStore } from '@/store/terminal-search-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
 import { Button } from '@/components/ui/button'
@@ -503,6 +504,8 @@ export function TerminalPane({
         agentTitle={agentTitle}
         leafId={leafId}
         paneName={leaf.name}
+        paneIcon={leaf.icon}
+        paneColor={leaf.color}
         paneNumber={paneNumber}
         ctxPct={ctxPct}
         warRoom={warRoomStatus}
@@ -571,6 +574,9 @@ export function TerminalPane({
     <ContextMenu onOpenChange={(open) => { if (open) setMenuTargetCount(resolveWorktreeTargets().length) }}>
       <ContextMenuTrigger asChild>{pane}</ContextMenuTrigger>
       <ContextMenuContent>
+        <ContextMenuItem onSelect={() => usePaneIdentityDialogStore.getState().open(leafId)}>
+          Set identity…
+        </ContextMenuItem>
         <ContextMenuItem
           disabled={menuTargetCount === 0}
           onSelect={() => void openClearDialog()}

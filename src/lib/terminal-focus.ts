@@ -43,6 +43,13 @@ export function shouldReturnFocus(focused: FocusedElementInfo | null, modalOpen 
   return !EDITABLE_TAGS.includes(focused.tagName.toUpperCase())
 }
 
+/** True for a focused text field the user is typing into (input, textarea, select, contenteditable). */
+export function isEditableElement(element: Element | null): boolean {
+  if (element === null) return false
+  if (element instanceof HTMLElement && element.isContentEditable) return true
+  return EDITABLE_TAGS.includes(element.tagName.toUpperCase())
+}
+
 /** DOM adapter for `shouldReturnFocus` — the only part that touches the document. */
 export function describeFocusedElement(element: Element | null): FocusedElementInfo | null {
   if (element === null) return null
