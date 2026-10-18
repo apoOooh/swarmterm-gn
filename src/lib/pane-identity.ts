@@ -62,7 +62,3 @@ export function sanitizePaneIdentity(raw: PaneIdentity): { name: string | undefi
     color: sanitizePaneColor(raw.color)
   }
 }
-
-export function hasPaneIdentity(identity: PaneIdentity): boolean {
-  return Boolean(identity.name || identity.icon)
-}

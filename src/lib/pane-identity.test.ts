@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   PANE_COLORS,
-  hasPaneIdentity,
   sanitizePaneColor,
   sanitizePaneIcon,
   sanitizePaneIdentity
@@ -47,13 +46,5 @@ describe('sanitizePaneIdentity', () => {
 
   it('clears a numeric name (would shadow the pane number)', () => {
     expect(sanitizePaneIdentity({ name: '3' }).name).toBeUndefined()
-  })
-})
-
-describe('hasPaneIdentity', () => {
-  it('is true with a name or an icon, not with a color alone', () => {
-    expect(hasPaneIdentity({ name: 'A' })).toBe(true)
-    expect(hasPaneIdentity({ icon: 'bug' })).toBe(true)
-    expect(hasPaneIdentity({ color: PANE_COLORS[0] })).toBe(false)
   })
 })

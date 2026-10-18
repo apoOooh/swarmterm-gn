@@ -3,6 +3,7 @@
 // re-joins; everything else stays in the app's VS Code palette.
 import { type ReactElement } from 'react'
 import { Crown } from 'lucide-react'
+import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '@/store/app-store'
 import { focusTerminal } from '@/lib/terminal-registry'
 import { templateById, DEFAULT_TEMPLATE_ID } from '@/lib/templates'
@@ -36,14 +37,13 @@ export function Avatar({
   const template = templateById(agentId ?? DEFAULT_TEMPLATE_ID)
   // A pane identity (icon + color) the user set wins, read live from the
   // layout so a later change shows here without re-joining the room.
-  const identity = useAppStore((s) => {
+  const { identityIcon, identityColor } = useAppStore(useShallow((s) => {
     for (const w of s.workspaces) {
       const leaf = collectLeaves(w.layout).find((l) => l.terminalId === terminalId)
-      if (leaf) return leaf.icon ? `${leaf.icon}\u0000${leaf.color ?? ''}` : undefined
+      if (leaf) return { identityIcon: leaf.icon, identityColor: leaf.icon ? leaf.color : undefined }
     }
-    return undefined
-  })
-  const [identityIcon, identityColor] = identity ? identity.split('\u0000') : []
+    return { identityIcon: undefined, identityColor: undefined }
+  }))
   const color = identityColor || memberColor(terminalId)
   return (
     <button
