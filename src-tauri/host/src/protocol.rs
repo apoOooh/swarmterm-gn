@@ -32,7 +32,11 @@ pub struct CreateSpec {
     #[serde(default)]
     pub args: Vec<String>,
     /// The complete environment. The host clears its own first, so a pane
-    /// never inherits whatever the host happened to be started with.
+    /// never inherits whatever the host happened to be started with. The
+    /// app must therefore send everything a shell needs, not just its own
+    /// additions: without `SystemRoot`, `PATH`, `PATHEXT`, `ComSpec` & co.
+    /// cmd and PowerShell start broken (phase 2: the app's `std::env::vars()`
+    /// plus the variables `spawn_terminal` adds today).
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     pub cwd: String,
@@ -161,6 +165,10 @@ pub fn err(id: Option<u64>, reason: &str) -> Vec<u8> {
 /// Lifecycle events. `exit` is sent only after every `data` frame of that
 /// generation, and `removed` before `exit`, so a client that respawns on
 /// `exit` always finds the id free (same rule as `read_loop` in the app).
+/// `removed` does NOT end the data of that generation: a killed pane keeps
+/// flushing until its reader sees EOF, possibly after a same-id respawn.
+/// Data frames carry the spawn id; clients drop frames whose spawn id is not
+/// the one they currently track for that terminal.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {

@@ -371,7 +371,10 @@ impl Host {
             let mut out = output.lock().unwrap();
             out.ring.push(text.as_bytes());
             if let Some(client) = out.attached {
-                self.send(frame::encode_data(&id, text.as_bytes()), Some(client));
+                self.send(
+                    frame::encode_data(&id, &spawn_id, text.as_bytes()),
+                    Some(client),
+                );
             }
             drop(out);
             last_flush = std::time::Instant::now();
@@ -463,7 +466,7 @@ impl Host {
             Some(client),
         );
         if !replay.is_empty() {
-            self.send(frame::encode_data(id, &replay), Some(client));
+            self.send(frame::encode_data(id, &spawn_id, &replay), Some(client));
         }
         Ok(())
     }

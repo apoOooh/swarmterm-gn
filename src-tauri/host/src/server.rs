@@ -25,8 +25,10 @@ use crate::frame::{self, Decoder, Frame};
 use crate::protocol::{self, Op, Request};
 use crate::security::CurrentUserOnly;
 
-/// A connection must say `hello` within this time.
+/// A connection must complete `hello` within this time after accept.
 const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Frame limit before authentication; a `hello` is well under 1 KiB.
+const HELLO_MAX_FRAME: usize = 4096;
 /// One frame that cannot be written within this time means the client
 /// stopped reading; it is dropped instead of buffering output forever.
 const WRITE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
@@ -175,6 +177,12 @@ async fn serve(
     });
 
     let mut dec = Decoder::default();
+    // Until `hello` succeeds the peer is unauthenticated: one small frame,
+    // and one deadline for the whole connection (not per read), so a
+    // same-user process without the token cannot trickle bytes to keep a
+    // connection open or make us buffer 16 MiB.
+    dec.set_limit(HELLO_MAX_FRAME);
+    let hello_deadline = tokio::time::Instant::now() + HELLO_TIMEOUT;
     let mut chunk = vec![0u8; 64 * 1024];
     let mut client: Option<u64> = None;
     'conn: loop {
@@ -207,17 +215,20 @@ async fn serve(
             };
             match client {
                 None => match hello(&host, &token, &tx, req) {
-                    Some(id) => client = Some(id),
+                    Some(id) => {
+                        client = Some(id);
+                        dec.set_limit(frame::MAX_FRAME);
+                    }
                     None => break 'conn,
                 },
-                Some(cid) => dispatch(&host, cid, &tx, req),
+                Some(cid) => dispatch(&host, cid, &tx, req).await,
             }
         }
         let read = async {
             if client.is_some() {
                 rd.read(&mut chunk).await
             } else {
-                tokio::time::timeout(HELLO_TIMEOUT, rd.read(&mut chunk))
+                tokio::time::timeout_at(hello_deadline, rd.read(&mut chunk))
                     .await
                     .unwrap_or(Ok(0))
             }
@@ -277,7 +288,17 @@ fn hello(
     Some(host.connect_client(tx.clone()))
 }
 
-fn dispatch(host: &Arc<Host>, client: u64, tx: &mpsc::UnboundedSender<Vec<u8>>, req: Request) {
+/// Requests of one connection run strictly in order (the keystroke FIFO), so
+/// this is awaited by the reader. `create` (openpty + process spawn, tens of
+/// ms) runs on the blocking pool: it still holds back later requests of the
+/// same connection — they may target the pane being created — but no longer
+/// parks a runtime worker that other connections' I/O needs.
+async fn dispatch(
+    host: &Arc<Host>,
+    client: u64,
+    tx: &mpsc::UnboundedSender<Vec<u8>>,
+    req: Request,
+) {
     let id = req.id;
     let answer = |r: Result<serde_json::Value, String>| {
         let body = match r {
@@ -288,10 +309,13 @@ fn dispatch(host: &Arc<Host>, client: u64, tx: &mpsc::UnboundedSender<Vec<u8>>, 
     };
     match req.op {
         Op::Hello { .. } => answer(Err("already-hello".into())),
-        Op::Create(spec) => answer(
-            host.create(client, spec)
-                .map(|s| serde_json::to_value(s).expect("serialises")),
-        ),
+        Op::Create(spec) => {
+            let h = host.clone();
+            let r = tokio::task::spawn_blocking(move || h.create(client, spec))
+                .await
+                .unwrap_or_else(|_| Err("spawn-failed: panic".into()));
+            answer(r.map(|s| serde_json::to_value(s).expect("serialises")))
+        }
         Op::Write { terminal_id, data } => {
             answer(host.write(&terminal_id, data.as_bytes()).map(|_| json!({})))
         }

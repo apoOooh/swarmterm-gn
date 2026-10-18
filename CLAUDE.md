@@ -419,7 +419,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   until phase 2. It spawns exactly the resolved `CreateSpec` it is sent
   (env cleared first, generation stamped by the host) — accounts, MCP URL
   and Codex isolation stay in the app. Framing is length-prefixed
-  (`frame.rs`, JSON + binary data), one client at a time (a new hello
+  (`frame.rs`, JSON + binary data tagged with the spawn id — a killed
+  generation flushes until EOF, even after a same-id respawn), one client at a time (a new hello
   replaces the old), lock order `terminals` → `Output` → `client`.
   `input.rs`, `job.rs` and `output.rs` are copies of `pty.rs` parts until
   phase 2 removes the app-side PTY code: change both or neither.

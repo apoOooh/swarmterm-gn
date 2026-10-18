@@ -31,6 +31,8 @@ struct Inbox {
     rx: UnboundedReceiver<Vec<u8>>,
     dec: Decoder,
     data: String,
+    /// (spawn id, text) per data frame, in arrival order.
+    chunks: Vec<(String, String)>,
     events: Vec<Value>,
 }
 
@@ -40,6 +42,7 @@ impl Inbox {
             rx,
             dec: Decoder::default(),
             data: String::new(),
+            chunks: Vec::new(),
             events: Vec::new(),
         }
     }
@@ -50,9 +53,13 @@ impl Inbox {
             while let Some(f) = self.dec.next_frame().unwrap() {
                 match f {
                     Frame::Json(p) => self.events.push(serde_json::from_slice(&p).unwrap()),
-                    Frame::Data { bytes, .. } => {
+                    Frame::Data {
+                        spawn_id, bytes, ..
+                    } => {
                         // Every data frame must be whole UTF-8 (flusher rule).
-                        self.data.push_str(std::str::from_utf8(&bytes).unwrap());
+                        let text = std::str::from_utf8(&bytes).unwrap().to_string();
+                        self.data.push_str(&text);
+                        self.chunks.push((spawn_id, text));
                         self.events.push(json!({"data": true}));
                     }
                 }
@@ -140,6 +147,52 @@ fn kill_frees_the_id_for_an_immediate_respawn() {
     assert!(host.list().is_empty());
 }
 
+/// Review blocker (84e5): a killed generation keeps flushing until EOF, after
+/// `removed` and after a same-id respawn. Every frame must carry its own
+/// generation so the client can drop the stale tail.
+#[test]
+fn stale_output_after_a_respawn_is_tagged_with_the_old_generation() {
+    let host = Host::new(1 << 20);
+    let (c, mut inbox) = client(&host);
+    let flood = CreateSpec {
+        initial_input: Some(format!(
+            "for /l %i in (1,1,1000000) do @{} old-%i{}",
+            "ec\x68o", '\r'
+        )),
+        ..spec("t-stale", &["/d", "/q", "/k"])
+    };
+    let first = host.create(c, flood).unwrap();
+    inbox.wait_for("flood", |i| i.data.contains("old-50"));
+    let grace = host.kill("t-stale");
+    let second = host
+        .create(
+            c,
+            CreateSpec {
+                initial_input: Some(format!("{} new-gen{}", "ec\x68o", '\r')),
+                ..spec("t-stale", &["/d", "/q", "/k"])
+            },
+        )
+        .unwrap();
+    inbox.wait_for("old exit and new output", |i| {
+        i.events
+            .iter()
+            .any(|e| e["event"] == "exit" && e["spawnId"] == first.spawn_id)
+            && i.data.contains("new-gen")
+    });
+    for (g, text) in &inbox.chunks {
+        if text.contains("old-") {
+            assert_eq!(*g, first.spawn_id, "old output tagged as new: {text:?}");
+        }
+        if text.contains("new-gen") {
+            assert_eq!(*g, second.spawn_id);
+        }
+    }
+    if let Some(g) = grace {
+        g.join().unwrap();
+    }
+    host.shutdown_all();
+}
+
 #[test]
 fn write_checked_lands_only_in_the_pinned_generation() {
     let host = Host::new(1 << 20);
@@ -155,6 +208,7 @@ fn write_checked_lands_only_in_the_pinned_generation() {
         .unwrap();
     inbox.wait_for("echo", |i| i.data.matches("pinned-ok").count() >= 2);
     assert!(!inbox.data.contains("nope"));
+    assert!(inbox.chunks.iter().all(|(g, _)| *g == s.spawn_id));
     host.shutdown_all();
 }
 
@@ -325,6 +379,19 @@ mod pipe {
         assert_eq!(c.answer(id).await["reason"], "hello-required");
         assert!(c.recv().await.is_none());
 
+        // Before hello only a small frame is accepted.
+        let mut c = Conn::open(&name).await;
+        let big = json!({"op": "hello", "token": "x".repeat(5000)});
+        c.send(big).await;
+        match c.recv().await {
+            Some(Frame::Json(p)) => {
+                let v: Value = serde_json::from_slice(&p).unwrap();
+                assert_eq!(v["reason"], "too-large");
+            }
+            other => panic!("expected too-large, got {other:?}"),
+        }
+        assert!(c.recv().await.is_none());
+
         // Wrong token.
         let mut c = Conn::open(&name).await;
         let id = c
@@ -364,7 +431,10 @@ mod pipe {
         assert_eq!(c.answer(id).await["ok"], true);
         let mut seen = String::new();
         while seen.matches("over-the-pipe").count() < 2 {
-            if let Some(Frame::Data { terminal_id, bytes }) = c.recv().await {
+            if let Some(Frame::Data {
+                terminal_id, bytes, ..
+            }) = c.recv().await
+            {
                 assert_eq!(terminal_id, "p1");
                 seen.push_str(&String::from_utf8(bytes).unwrap());
             }
