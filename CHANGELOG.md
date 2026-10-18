@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-10-18
+
+- Panes: identity — an icon (curated lucide set or one emoji), a name and a
+  palette color per pane, edited in one dialog from the header's icon slot or
+  the pane context menu (*Set identity…*). The header shows the name in bold
+  with the agent title muted beside it; the sidebar list and the War Room
+  avatar show the icon. Kept with saved workspaces (re-checked on load);
+  never respawns the pane.
+- Composer: optional workspace *Name*; blank keeps the folder-derived name.
+- Fix: renaming a workspace while the focused pane had a file open could hand
+  the keyboard to the editor on a click inside the field, committing a
+  half-typed name. Focus return now leaves a focused text field alone, and
+  the rename inputs keep key and pointer events from the draggable row.
+
 ## [1.19.0] - 2026-10-18
 
 - Accounts: a workspace keeps the composer's account choice per agent (fixed
