@@ -506,6 +506,7 @@ export function TerminalPane({
         paneName={leaf.name}
         paneIcon={leaf.icon}
         paneColor={leaf.color}
+        paneHeaderTint={leaf.headerTint}
         paneNumber={paneNumber}
         ctxPct={ctxPct}
         warRoom={warRoomStatus}
