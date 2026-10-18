@@ -948,7 +948,23 @@ fn spawn_hosted(
             return CreateTerminalResult::err(format!("terminal host: {e}"));
         }
     };
-    let spawn_id = answer["spawnId"].as_str().unwrap_or_default();
+    let Some(spawn_id) = answer["spawnId"].as_str() else {
+        client.conn.kill(&id);
+        return CreateTerminalResult::err("terminal host: answer without a generation");
+    };
+    // `spawned` precedes the answer on the same pipe, so the entry exists
+    // by now — unless `register_hosted` refused it (a live generation held
+    // the id). Then this pane is already being closed: say so, don't report
+    // a pane that dies on its first frame.
+    let registered = state
+        .terminals
+        .lock()
+        .unwrap()
+        .get(&id)
+        .is_some_and(|t| t.spawn_id == spawn_id);
+    if !registered {
+        return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
+    }
     send_initial_line(state, &id, spawn_id, plan.initial_line);
     CreateTerminalResult {
         ok: true,

@@ -75,7 +75,7 @@ impl HostHub {
         if let Some(c) = slot.as_ref().filter(|c| c.conn.is_alive()) {
             return Some(c.clone());
         }
-        match connect(app) {
+        match connect(app, true) {
             Ok(c) => {
                 *slot = Some(c.clone());
                 *self.last_error.lock().unwrap() = None;
@@ -133,9 +133,43 @@ impl HostHub {
     }
 }
 
+/// Attempts per connect: covers a host that decided to idle out while we
+/// connected (its pipe name lingers, a new host exits with code 3, and the
+/// next attempt finds the file gone or the successor running).
 #[cfg(windows)]
-fn connect(app: &AppHandle) -> Result<Client, String> {
+const CONNECT_ATTEMPTS: u32 = 3;
+#[cfg(windows)]
+const CONNECT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Connect to the running host, starting one when `start` is set. Blocking:
+/// runs on `create_terminal`'s blocking thread or a plain thread.
+#[cfg(windows)]
+fn connect(app: &AppHandle, start: bool) -> Result<Client, String> {
     let data_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    let mut last = String::from("terminal host unavailable");
+    for attempt in 0..CONNECT_ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(CONNECT_RETRY_DELAY);
+        }
+        match connect_once(app, &data_dir, start) {
+            Ok(c) => {
+                reap(app, &c);
+                return Ok(c);
+            }
+            Err(e) if start => last = e,
+            // Cleanup-only reconnect: no host, nothing to clean.
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
+}
+
+#[cfg(windows)]
+fn connect_once(
+    app: &AppHandle,
+    data_dir: &std::path::Path,
+    start: bool,
+) -> Result<Client, String> {
     let sink = std::sync::Arc::new(AppSink {
         app: app.clone(),
         routes: Mutex::default(),
@@ -144,17 +178,35 @@ fn connect(app: &AppHandle) -> Result<Client, String> {
     let try_connect = |ep: &launch::Endpoint| {
         tauri::async_runtime::block_on(conn::Conn::connect(&ep.pipe, &ep.token, sink.clone()))
     };
-    let existing = launch::read_endpoint(&data_dir);
+    let existing = launch::read_endpoint(data_dir);
     let conn = match existing.as_ref().map(try_connect) {
         Some(Ok(c)) => c,
         // No file, or a stale one (host gone, pipe missing): start a host.
+        Some(Err(e)) if !start => return Err(e),
+        _ if !start => return Err("no terminal host running".into()),
         _ => {
-            let ep = launch::start(&data_dir, existing.as_ref())?;
+            let ep = launch::start(data_dir, existing.as_ref())?;
             try_connect(&ep)?
         }
     };
     let _ = sink.conn.set(conn.clone());
     Ok(Client { conn, sink })
+}
+
+/// A fresh connection tracks no pane yet, so every host pane the app's map
+/// does not hold is an orphan (see `Conn::reap_orphans`). Phase 3 turns this
+/// into `attach`.
+#[cfg(windows)]
+fn reap(app: &AppHandle, client: &Client) {
+    let Some(state) = app.try_state::<crate::pty::AppState>() else {
+        return;
+    };
+    let keep = |id: &str| state.terminals.lock().unwrap().contains_key(id);
+    match client.conn.reap_orphans(keep, conn::REQUEST_TIMEOUT) {
+        Ok(0) => {}
+        Ok(n) => eprintln!("[host] closed {n} pane(s) no window shows"),
+        Err(e) => eprintln!("[host] orphan check failed: {e}"),
+    }
 }
 
 /// Mirror fields a pane needs once its generation exists; they ride along
@@ -185,10 +237,19 @@ impl conn::Sink for AppSink {
             .lock()
             .unwrap()
             .on_spawned(terminal_id, spawn_id);
-        // `spawned` can only follow our own `create`, which runs after
-        // `connect` set the cell; a missing cell means a foreign pane.
-        if let (Some(p), Some(conn)) = (pending, self.conn.get()) {
-            crate::pty::register_hosted(&self.app, terminal_id, spawn_id, pid, p, conn.clone());
+        let Some(conn) = self.conn.get() else {
+            return;
+        };
+        match pending {
+            Some(p) => {
+                crate::pty::register_hosted(&self.app, terminal_id, spawn_id, pid, p, conn.clone())
+            }
+            // Nobody waits for it any more (its `create` timed out): until
+            // phase 3 can attach, it would run invisibly in the host.
+            None => {
+                eprintln!("[host] closing unrequested pane {terminal_id}");
+                conn.kill(terminal_id);
+            }
         }
     }
 
@@ -232,6 +293,21 @@ impl conn::Sink for AppSink {
         for (terminal_id, spawn_id, channel) in ended {
             crate::pty::finish_generation(&self.app, &terminal_id, &spawn_id, -1, &channel);
         }
+        // The host may live on (a write deadline, a kick): its PTYs for the
+        // panes just ended would keep running and keep it from idling out.
+        // Reconnect to clean up, without starting a host; off the reader
+        // task, because connecting blocks.
+        let app = self.app.clone();
+        std::thread::spawn(move || {
+            if let Ok(c) = connect(&app, false) {
+                if let Some(hub) = app.try_state::<HostHub>() {
+                    let mut slot = hub.client.lock().unwrap();
+                    if slot.as_ref().is_none_or(|s| !s.conn.is_alive()) {
+                        *slot = Some(c);
+                    }
+                }
+            }
+        });
     }
 }
 

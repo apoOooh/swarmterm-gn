@@ -104,6 +104,30 @@ mod tests {
         assert!(p.into_map().is_empty());
     }
 
+    /// The in-process backend now spawns from the plan after `env_clear`
+    /// (SWA-55), so the plan must hold exactly what a pane inherited before.
+    #[test]
+    fn inherited_is_the_whole_process_environment() {
+        let plan = EnvPlan::inherited();
+        let mut names: Vec<String> = Vec::new();
+        for (k, v) in std::env::vars() {
+            assert_eq!(plan.get(&k), Some(v.as_str()), "{k}");
+            let norm = if cfg!(windows) {
+                k.to_ascii_lowercase()
+            } else {
+                k
+            };
+            if !names.contains(&norm) {
+                names.push(norm);
+            }
+        }
+        assert_eq!(
+            plan.into_map().len(),
+            names.len(),
+            "no extra or doubled names"
+        );
+    }
+
     #[test]
     fn inherited_carries_the_process_environment() {
         // Every Windows process has SystemRoot; a host-spawned shell without

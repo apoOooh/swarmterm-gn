@@ -222,6 +222,31 @@ impl Conn {
     pub fn flush(&self, timeout: Duration) -> Result<(), String> {
         self.request(json!({"op": "list"}), timeout).map(|_| ())
     }
+
+    /// Close every host pane the app does not track (`keep` = false). Until
+    /// phase 3 can reattach, such a pane runs invisibly: a `create` whose
+    /// answer timed out, or the panes of a connection the app lost while
+    /// the host lived on. Left alone they would also keep the host from
+    /// ever idling out. Returns how many were closed.
+    pub fn reap_orphans(
+        &self,
+        keep: impl Fn(&str) -> bool,
+        timeout: Duration,
+    ) -> Result<usize, String> {
+        let listed = self.request(json!({"op": "list"}), timeout)?;
+        let orphans: Vec<String> = listed["terminals"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t["terminalId"].as_str())
+            .filter(|id| !keep(id))
+            .map(str::to_string)
+            .collect();
+        for id in &orphans {
+            self.kill(id);
+        }
+        Ok(orphans.len())
+    }
 }
 
 /// Input arrives from the renderer as a `String` and only becomes bytes for
@@ -464,6 +489,46 @@ mod tests {
         );
         conn.kill("dup");
         conn.flush(REQUEST_TIMEOUT).unwrap();
+        let _ = h.stop.send(true);
+    }
+
+    fn listed(conn: &Conn) -> usize {
+        conn.request(json!({"op": "list"}), REQUEST_TIMEOUT)
+            .unwrap()["terminals"]
+            .as_array()
+            .map_or(0, Vec::len)
+    }
+
+    #[test]
+    fn a_timed_out_create_is_reaped() {
+        let h = start_host();
+        let conn = connect(&h, Arc::new(Recorder::default()));
+        // The answer comes too late for us, but the host spawns anyway.
+        assert_eq!(
+            conn.request(cmd_spec("late"), Duration::ZERO)
+                .err()
+                .as_deref(),
+            Some("host-timeout")
+        );
+        assert_eq!(conn.reap_orphans(|_| false, REQUEST_TIMEOUT), Ok(1));
+        assert_eq!(listed(&conn), 0);
+        let _ = h.stop.send(true);
+    }
+
+    #[test]
+    fn panes_of_a_lost_connection_are_reaped_by_the_next_one() {
+        let h = start_host();
+        let first = connect(&h, Arc::new(Recorder::default()));
+        first.request(cmd_spec("kept"), REQUEST_TIMEOUT).unwrap();
+        first.request(cmd_spec("gone"), REQUEST_TIMEOUT).unwrap();
+        let second = connect(&h, Arc::new(Recorder::default()));
+        assert_eq!(
+            second.reap_orphans(|id| id == "kept", REQUEST_TIMEOUT),
+            Ok(1)
+        );
+        assert_eq!(listed(&second), 1);
+        assert_eq!(second.reap_orphans(|_| false, REQUEST_TIMEOUT), Ok(1));
+        assert_eq!(listed(&second), 0);
         let _ = h.stop.send(true);
     }
 

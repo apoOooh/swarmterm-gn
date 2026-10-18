@@ -445,7 +445,11 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `pty:input-dropped`. Lost connection = every hosted pane exits; the next
   create reconnects or starts a host (`launch.rs`, binary next to the app
   exe — dev: `cargo build -p swarmterm-host`); unavailable = in-process
-  fallback with the reason in Settings. Quit flushes the host's `kill`s.
+  fallback with the reason in Settings (connect retries 3x for a host that
+  was idling out). Until phase 3 attaches, the host must hold no pane the map
+  lacks: an unrequested `spawned` is killed, and every connection — also a
+  cleanup-only reconnect after a lost one — `reap_orphans` first. Quit
+  flushes the host's `kill`s.
   `input.rs`, `job.rs` and `output.rs` are copies of `pty.rs` parts until
   the in-process backend goes away: change both or neither.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
