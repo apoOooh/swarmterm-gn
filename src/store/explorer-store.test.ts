@@ -2,7 +2,11 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import { useExplorerStore } from './explorer-store'
 import { listFiles, openFileContext, watchFiles } from '@/tauri/files'
 vi.mock('@/tauri/files', () => ({ listFiles: vi.fn(() => Promise.resolve([])), getFileGitStatus: vi.fn(() => Promise.resolve([])), openFileContext: vi.fn(), watchFiles: vi.fn(() => Promise.resolve()), unwatchFiles: vi.fn(() => Promise.resolve()) }))
+// Every folder lists the children the tests expand, so pruning of vanished folders leaves them alone.
+const dir = (path: string) => ({ name: path.split('/').pop()!, path, isDir: true, isSymlink: false })
+const children: Record<string, string[]> = { '/one': ['/one/src'], '/p': ['/p/a', '/p/b'] }
 beforeEach(async () => {
+  vi.mocked(listFiles).mockImplementation((_, path) => Promise.resolve((children[path] ?? []).map(dir)))
   await useExplorerStore.getState().follow(null)
   useExplorerStore.setState({ roots: {}, current: null, error: null, clipboard: null, undo: [] }); vi.clearAllMocks()
 })
@@ -30,4 +34,18 @@ it('reloads only folders on a changed path, but every loaded folder on a rescan'
   vi.mocked(listFiles).mockClear()
   await useExplorerStore.getState().changed({ contextId: 'p', paths: [], gitChanged: false, rescan: true })
   expect(vi.mocked(listFiles).mock.calls.map(([, path]) => path).sort()).toEqual(['/p', '/p/a', '/p/b'])
+})
+it('forgets expanded folders that vanished from disk instead of showing a retry error', async () => {
+  vi.mocked(openFileContext).mockResolvedValue({ id: 'g', root: '/g' })
+  await useExplorerStore.getState().follow('t')
+  useExplorerStore.getState().toggle('g', '/g/wt'); useExplorerStore.getState().toggle('g', '/g/wt/src'); useExplorerStore.getState().toggle('g', '/g/keep')
+  await vi.waitFor(() => expect(useExplorerStore.getState().roots.g.dirs['/g/keep']?.entries).toBeDefined())
+  // The worktree folder was removed: its own listings fail, the parent no longer lists it.
+  vi.mocked(listFiles).mockImplementation((_, path) => path === '/g'
+    ? Promise.resolve([{ name: 'keep', path: '/g/keep', isDir: true, isSymlink: false }])
+    : path.startsWith('/g/wt') ? Promise.reject('os error 3') : Promise.resolve([]))
+  await useExplorerStore.getState().refresh('g')
+  const root = useExplorerStore.getState().roots.g
+  expect(root.expanded).toEqual(['/g/keep'])
+  expect(Object.keys(root.dirs).sort()).toEqual(['/g', '/g/keep'])
 })
