@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-10-18
+
+- Panes: every open pane shows a number in its header and the navbar list,
+  and can be renamed by double-clicking its title. Names are kept with
+  saved workspaces and never restart the pane.
+- Voice: spoken pane addressing (BUZ-5). The voice pipe gains the `address`
+  capability: a dictation may name its target pane by number, name or title.
+  It is resolved to exactly one pane of the foreground workspace, or refused
+  as missing or ambiguous; the focused pane is never taken as a guess.
+  Needs a buzzkey release with addressing.
+- Explorer: folders that vanished from disk are no longer kept as expanded.
+- Terminal host: the installer does not ship `swarmterm-host.exe` yet
+  (ADR 0001 phase 4, version-stamped install), so in installed builds the
+  setting falls back to in-process panes and says why. Source builds can use
+  it after `cargo build -p swarmterm-host`.
 - Settings: toggle switches no longer overflow their track.
 - Internal: terminal host crate `src-tauri/host` (`swarmterm-host.exe`,
   ADR 0001 phase 1, SWA-54): named-pipe protocol v1, PTY ownership with a
