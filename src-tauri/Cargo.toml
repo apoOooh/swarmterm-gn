@@ -7,6 +7,9 @@ license = "GPL-3.0-only"
 homepage = "https://github.com/apoOooh/swarmterm-gn"
 repository = "https://github.com/apoOooh/swarmterm-gn"
 edition = "2021"
+# The workspace builds two binaries (app + swarmterm-host), so `cargo run` —
+# and with it `tauri dev` — needs to be told which one is the app.
+default-run = "swarmterm"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
