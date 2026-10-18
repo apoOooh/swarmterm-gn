@@ -1,11 +1,10 @@
-import type { ReactElement } from 'react'
+import { lazy, Suspense, type ReactElement, type ReactNode } from 'react'
 import {
   Bird, BookOpen, Bot, Brain, Bug, Cat, Cloud, Code, Compass, Crown, Database, Dog, Eye, Fish, Flag, Flame,
   GitBranch, Globe, Hammer, Heart, Layers, ListChecks, MessageSquare, Moon, Package, Palette, Pencil, Rocket,
   Search, Server, Shield, Sparkles, Star, Sun, Terminal, TestTube, User, Users, Wrench, Zap,
   type LucideIcon
 } from 'lucide-react'
-import { DynamicIcon, iconNames, type IconName } from 'lucide-react/dynamic'
 import { isIconNameShape, isPaneIconId, type PaneIconId } from '@/lib/pane-identity'
 import { cn } from '@/lib/utils'
 
@@ -22,27 +21,32 @@ interface PaneIdentityIconProps {
   icon: string
   color?: string
   className?: string
+  /** Shown while a searched icon loads, and instead of an unknown icon name. */
+  fallback?: ReactNode
 }
 
-/** Every lucide icon name, for the picker's search. */
-export const ALL_ICON_NAMES: readonly string[] = iconNames
-const KNOWN_ICON_NAMES = new Set<string>(iconNames)
+// Split out so the map of every lucide icon loads only when a non-suggested
+// icon is first shown (see DynamicPaneIcon).
+const DynamicPaneIcon = lazy(() => import('./DynamicPaneIcon'))
 
 /**
  * A pane identity icon: a lucide glyph tinted with the identity color, or an
  * emoji as-is. Suggested icons are static imports; any other lucide name is
  * loaded on demand (its own small chunk), so the full set costs nothing until
- * used. A name lucide does not know (hand-edited save file) renders nothing.
+ * used. A name lucide does not know (hand-edited save file) shows `fallback`.
  */
-export function PaneIdentityIcon({ icon, color, className }: PaneIdentityIconProps): ReactElement | null {
+export function PaneIdentityIcon({ icon, color, className, fallback = null }: PaneIdentityIconProps): ReactElement | null {
   const style = color ? { color } : undefined
   if (isPaneIconId(icon)) {
     const Icon = PANE_ICON_COMPONENTS[icon]
     return <Icon aria-hidden className={cn('h-3.5 w-3.5 shrink-0', className)} style={style} />
   }
   if (isIconNameShape(icon)) {
-    if (!KNOWN_ICON_NAMES.has(icon)) return null
-    return <DynamicIcon name={icon as IconName} aria-hidden className={cn('h-3.5 w-3.5 shrink-0', className)} style={style} />
+    return (
+      <Suspense fallback={fallback}>
+        <DynamicPaneIcon icon={icon} className={cn('h-3.5 w-3.5 shrink-0', className)} style={style} fallback={fallback} />
+      </Suspense>
+    )
   }
   return <span aria-hidden className={cn('shrink-0 text-xs leading-none', className)}>{icon}</span>
 }

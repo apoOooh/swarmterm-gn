@@ -152,7 +152,8 @@ const TerminalRow = memo(function TerminalRow({ leaf, inDrawer, number, focused,
         {/* A pane identity icon replaces the agent icon: it is the user's
             own marker for "who this pane is". */}
         {leaf.icon
-          ? <PaneIdentityIcon icon={leaf.icon} color={leaf.color} className={cn(behindZoom && 'opacity-50')} />
+          ? <PaneIdentityIcon icon={leaf.icon} color={leaf.color} className={cn(behindZoom && 'opacity-50')}
+              fallback={<AgentIcon template={template} className={cn('h-3.5 w-3.5 shrink-0', behindZoom && 'opacity-50')} />} />
           : <AgentIcon template={template} className={cn('h-3.5 w-3.5 shrink-0', behindZoom && 'opacity-50')} />}
         <PaneTitle
           leafId={leaf.id}

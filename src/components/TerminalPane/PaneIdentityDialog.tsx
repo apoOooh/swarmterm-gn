@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement, type UIEvent } from 'react'
+import { useEffect, useMemo, useState, type ReactElement, type UIEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { collectLeaves } from '@/lib/layout-tree'
 import { MAX_PANE_NAME } from '@/lib/pane-address'
@@ -10,7 +10,12 @@ import { selectActiveWorkspace, useAppStore } from '@/store/app-store'
 import { usePaneIdentityDialogStore } from '@/store/pane-identity-dialog-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useModalFocus } from '@/components/ui/use-modal-focus'
-import { ALL_ICON_NAMES, PaneIdentityIcon } from './PaneIdentityIcon'
+import { iconNames } from 'lucide-react/dynamic'
+import { PaneIdentityIcon } from './PaneIdentityIcon'
+
+/** Every lucide icon name. The dialog is lazy-loaded (App), so this list
+ *  stays out of the startup bundle. */
+const ALL_ICON_NAMES: readonly string[] = iconNames
 
 /** Icon grid geometry: 10 columns of h-7 buttons with a gap-1 (4px). */
 const GRID_COLUMNS = 10
@@ -57,14 +62,19 @@ export function PaneIdentityDialog(): ReactElement | null {
     if (leafId !== null && !leaf) close()
   }, [leafId, leaf, close])
 
+  // Sorting ~2000 names is not free: only redo it when the query or the
+  // pane's saved icon changes, not on every keystroke in the other fields.
+  const leafIcon = leaf?.icon
+  const shownIcons: readonly string[] = useMemo(
+    () => iconQuery.trim()
+      ? searchIconNames(ALL_ICON_NAMES, iconQuery, ALL_ICON_NAMES.length)
+      : browseIconNames(ALL_ICON_NAMES, leafIcon),
+    [iconQuery, leafIcon]
+  )
+
   if (!leaf) return null
   const autoTitle = resolvePaneTitle(leaf.agentId ?? DEFAULT_TEMPLATE_ID, agentTitle)
   const emojiValid = emoji.trim() === '' || isEmojiIcon(emoji)
-  // Empty search: every icon, suggestions first (and the pane's current icon
-  // on top). A search narrows the same scrollable grid to its matches.
-  const shownIcons: readonly string[] = iconQuery.trim()
-    ? searchIconNames(ALL_ICON_NAMES, iconQuery, ALL_ICON_NAMES.length)
-    : browseIconNames(ALL_ICON_NAMES, leaf.icon)
   const pickIcon = (id: string): void => { setIcon(icon === id ? undefined : id); setEmoji('') }
 
   const save = (): void => {

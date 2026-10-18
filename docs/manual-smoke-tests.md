@@ -87,8 +87,10 @@ Do not mark them passed from the in-memory fixture alone.
       and then the header bar take the color (bottom border full color); the
       checkbox is disabled with No color. Search icons for "arrow up": matches
       appear, Enter picks the first without saving the dialog; the chosen
-      icon shows in the header, sidebar and after a restart. Maximize the pane: the zoom border
-      stays violet. Light and dark theme: header text stays readable.
+      icon shows in the header, sidebar and after a restart. Scroll the grid
+      to the end: icons appear as you scroll. Maximize the pane: the zoom
+      border stays violet. Light and dark theme: header text stays readable.
+      Clicking the bold identity name also opens the dialog.
 - [ ] Composer: type a Name, create — the tab uses it (with its case); leave it
       blank — the tab is named after the folder.
 - [ ] Open a file in the focused pane's editor, then rename a workspace (tab
