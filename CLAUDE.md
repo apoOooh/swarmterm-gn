@@ -266,7 +266,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
 - **Saved workspaces.** Welcome lists up to 24 local snapshots. `saved-workspaces`
   serializes structure only; `saved-workspace-sync` debounces meaningful changes
   and flushes on close/quit. Restore verifies directories and exact session ids,
-  then allocates fresh runtime ids. Forget detaches a live instance from saving.
+  then allocates fresh runtime ids — except a pane still detached in the
+  terminal host, which keeps its saved `terminalId` (SWA-56). Forget detaches a live instance from saving.
   `autoOpen` (startup order) belongs to the stored entry: `upsertSaved` keeps it
   across live snapshots; `openAutostart` runs once per process and hides Welcome meanwhile.
   Never persist prompts, terminal output, startup commands or unsaved buffers.
@@ -317,6 +318,14 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   Lock order is `pins` → `terminals` (`begin` re-checks the spawn_id under
   the pins lock): never call `voice::drop_terminal` while holding
   `terminals`.
+  BUZ-5 addressing: capability `address`, then `begin` may carry `target`
+  (≤ 64 chars). The renderer resolves it with `lib/pane-address.ts`
+  (pane number = `visibleLeaves` order, then user `leaf.name`, then title;
+  duplicates or a user name another pane has as title → `ambiguous`, none →
+  `no-target`, never the focused pane; only the zoomed pane while one is
+  maximized) and
+  skips only the keyboard-focus check of `dictationTarget`. A `target`
+  without the capability is `bad-request`. Pane names never respawn.
 - **Voice companion (SWA-42).** `voice/companion/` installs buzzkey only on
   click: newest signed `buzzkey-*` release (`release::select`), minisign
   signature over `SHA256SUMS.txt` against the compiled-in key FIRST, then
@@ -414,6 +423,55 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `rescan` change after `RESCAN_QUIET`; the explorer then reloads every
   loaded folder and documents re-check disk. Only the root itself stays
   non-renameable (user-guide Known limits).
+- **Terminal host (SWA-54/55, `docs/adr/0001`).** `src-tauri/host` is a
+  workspace member building `swarmterm-host.exe`. It spawns exactly the
+  resolved `CreateSpec` it is sent (env cleared first, generation stamped by
+  the host) — accounts, MCP URL and Codex isolation stay in the app. Framing
+  is length-prefixed (`frame.rs`, JSON + binary data tagged with the spawn
+  id — a killed generation flushes until EOF, even after a same-id respawn),
+  one client at a time (a new hello replaces and kicks the old), lock order
+  `terminals` → `Output` → `client`; no client and no PTY for 10 min = exit.
+  App side (`host_client/`, Settings → Terminal, default off): every pane is
+  still a `ManagedTerminal` in `AppState.terminals`, only `io` differs
+  (`TerminalIo::Local | Host`), so every liveness reader is untouched.
+  `pty::plan_spawn` resolves ONE `EnvPlan` for both backends (Local applies
+  it after `env_clear`). The mirror entry is inserted on the host's
+  `spawned` event (`register_hosted`; it precedes data and the create
+  answer), `removed` = the waiter's `drop_generation`, `exit` =
+  `finish_generation` (shared with `read_loop`); the template line is sent
+  only after the entry exists. Output routes by `(id, spawn id)`
+  (`host_client/routes.rs`), stale frames are dropped. Calls only enqueue
+  for the connection's writer, so sending under the `terminals` lock keeps
+  keystroke FIFO; a hosted pane's `input-queue-full` comes back as
+  `pty:input-dropped`. Lost connection = every hosted pane exits; the next
+  create reconnects or starts a host (`launch.rs`, binary next to the app
+  exe — dev: `cargo build -p swarmterm-host`); unavailable = in-process
+  fallback with the reason in Settings (connect retries 3x for a host that
+  was idling out). The host must hold no pane the app does not track: an
+  unrequested `spawned` is killed, and every connection — also a
+  cleanup-only reconnect after a lost one — `reap_orphans` first, except for
+  the detached set. Quit flushes the host's `kill`s.
+  Reattach (SWA-56): only the boot connection (`init` → `boot`, host already
+  running) `adopt`s; its list becomes the FIXED `detached` set
+  (`detached.rs` — never "host list minus map", a same-id respawn would
+  attach to its dying predecessor). `create_terminal` for a detached id
+  attaches (`attach_hosted`, mirror from `meta`, no template line); the
+  `Waiter::Attach` answer runs `Sink::attached` on the reader BEFORE the
+  replay frame, which becomes `PtyOut::Replay` (host size; the renderer
+  suppresses onData while parsing it, then fits with a cols−1 nudge).
+  Saved leaves keep `terminalId` as the reattach key; the host's meta wins
+  over the snapshot for agent and cwd. The renderer reports `keep` (all
+  saved ids) once; no report in 120 s = everything detached is closed.
+  The host's replay comes from `modes.rs` (DECSET state + alternate-screen
+  positions across ring cuts; a cut front resyncs at the first ESC/LF; 2026
+  is never prefixed). Switch off at boot = `sweep`: kill every host pane,
+  then `Conn::close` (the sink holds the conn, so dropping never hangs up).
+  An attach whose `create_terminal` timed out is killed like an unrequested
+  `spawned`. Pane ids are saved only while the switch is on (`paneIds`).
+  MCP rebinds the port kept in the host's app state (`set_app_state`,
+  returned by hello).
+  `input.rs`, `job.rs` and `output.rs` are copies of `pty.rs` parts until
+  the in-process backend goes away: change both or neither.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that

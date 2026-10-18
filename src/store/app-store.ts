@@ -27,8 +27,9 @@ import { isTransientLock } from '@/lib/worktree-cleanup'
 import { awaitTerminalRelocated } from '@/lib/terminal-registry'
 import { workspaceNameFor } from '@/lib/workspace-name'
 import { applyPreset } from '@/lib/layout-presets'
-import { fromSaved, type SavedWorkspace } from '@/lib/saved-workspaces'
+import { fromSaved, type ReattachLeaf, type SavedLeaf, type SavedWorkspace } from '@/lib/saved-workspaces'
 import { isValidSessionId } from '@/lib/resume-command'
+import { sanitizePaneName } from '@/lib/pane-address'
 
 /** A workspace: a named binary split-tree of terminal panes. */
 export interface Workspace {
@@ -149,7 +150,8 @@ export interface AppState {
 
 export interface AppActions {
   createWorkspace: (config: CreateWorkspaceConfig) => void
-  restoreWorkspace: (saved: SavedWorkspace) => void
+  /** `reattach` names saved panes still running in the terminal host (SWA-56). */
+  restoreWorkspace: (saved: SavedWorkspace, reattach?: (leaf: SavedLeaf) => ReattachLeaf | undefined) => void
   forgetWorkspace: (savedId: string) => void
   recordPaneSession: (terminalId: string, agentId: string, sessionId: string) => void
   setWelcomeFolder: (path: string) => void
@@ -213,6 +215,8 @@ export interface AppActions {
   seedPaneLaunchMode: (leafId: string, modeId: string) => void
   pickPaneSession: (leafId: string) => void
   setPaneShell: (leafId: string, shellId: ShellId) => void
+  /** Name a pane of the active workspace (BUZ-5); blank clears it. Never respawns. */
+  renamePane: (leafId: string, name: string) => void
   spawnWorktreePane: (p: {
     requesterTerminalId: string
     path: string
@@ -368,10 +372,10 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       }
     }),
 
-  restoreWorkspace: (saved) => set((s) => {
+  restoreWorkspace: (saved, reattach) => set((s) => {
     const open = s.workspaces.find(w => w.savedId === saved.id)
     if (open) return { activeWorkspaceId: open.id, welcomeFocused: false }
-    const ws = fromSaved(saved, uid)
+    const ws = fromSaved(saved, uid, reattach)
     return { workspaces: [...s.workspaces, ws], activeWorkspaceId: ws.id, welcomeFocused: false, welcomeOpen: false }
   }),
 
@@ -790,6 +794,9 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
 
   setPaneShell: (leafId, shellId) =>
     set((s) => mapActive(s, (w) => ({ ...w, layout: updateLeaf(w.layout, leafId, { shellId }) }))),
+
+  renamePane: (leafId, name) =>
+    set((s) => mapActive(s, (w) => ({ ...w, layout: updateLeaf(w.layout, leafId, { name: sanitizePaneName(name) }) }))),
 
   // Worker panes are spawned by the backend's worktree.spawn MCP tool: split
   // the *requester's* leaf (which may live in a non-active workspace, so this

@@ -17,6 +17,7 @@ import { StateDot } from '@/components/StateDot'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 import { accountLabel } from '@/lib/agent-accounts'
 import { cn } from '@/lib/utils'
+import { PaneTitle } from '@/components/TerminalPane/PaneTitle'
 
 /**
  * The TERMINALS section of the left rail: one row per pane of the *active*
@@ -48,17 +49,20 @@ export function TerminalList(): ReactElement | null {
   // Mirrors Workspace: a zoom only takes effect on a docked, non-drawered pane.
   const zoomActive = openLeaves.some((l) => l.id === active.zoomedLeafId)
     && !(active.floating ?? []).some((r) => r.leafId === active.zoomedLeafId)
+  // Navbar order = pane number for voice addressing (BUZ-5); drawered panes
+  // have none, so parking one renumbers the rest.
   const drawered = (active.drawerLeafIds ?? [])
     .map((id) => leaves.find((l) => l.id === id))
     .filter((l): l is LeafNode => l !== undefined)
 
-  function renderRow(leaf: LeafNode, inDrawer: boolean): ReactElement {
+  function renderRow(leaf: LeafNode, inDrawer: boolean, number = 0): ReactElement {
     const zoomed = zoomActive && !inDrawer && leaf.id === active!.zoomedLeafId
     return (
       <TerminalRow
         key={leaf.id}
         leaf={leaf}
         inDrawer={inDrawer}
+        number={number}
         focused={!inDrawer && leaf.id === active!.focusedLeafId}
         zoomed={zoomed}
         // Open but covered by another pane's zoom; it keeps running off-screen.
@@ -83,7 +87,7 @@ export function TerminalList(): ReactElement | null {
         )}
       </p>
       <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-        {openLeaves.map((leaf) => renderRow(leaf, false))}
+        {openLeaves.map((leaf, i) => renderRow(leaf, false, i + 1))}
         {drawered.length > 0 && (
           <li
             aria-hidden="true"
@@ -102,13 +106,14 @@ export function TerminalList(): ReactElement | null {
 interface TerminalRowProps {
   leaf: LeafNode
   inDrawer: boolean
+  number: number
   focused: boolean
   zoomed: boolean
   behindZoom: boolean
 }
 
 /** One navbar row; subscribes to its own terminal's title, activity and state. */
-const TerminalRow = memo(function TerminalRow({ leaf, inDrawer, focused, zoomed, behindZoom }: TerminalRowProps): ReactElement {
+const TerminalRow = memo(function TerminalRow({ leaf, inDrawer, number, focused, zoomed, behindZoom }: TerminalRowProps): ReactElement {
   const setFocusedLeaf = useAppStore((s) => s.setFocusedLeaf)
   const accounts = useAgentAccountsStore(s => s.accounts)
   const rawTitle = useTerminalTitleStore((s) => s.titles[leaf.terminalId])
@@ -116,7 +121,7 @@ const TerminalRow = memo(function TerminalRow({ leaf, inDrawer, focused, zoomed,
   const agentState = useAgentStateStore((s) => s.byId[leaf.terminalId])
   const agentId = leaf.agentId ?? DEFAULT_TEMPLATE_ID
   const template = templateById(agentId)
-  const title = resolvePaneTitle(agentId, rawTitle)
+  const title = resolvePaneTitle(agentId, rawTitle, leaf.name)
   const dot = paneDot(displayState(agentState), isActive)
   return (
     <li>
@@ -144,7 +149,14 @@ const TerminalRow = memo(function TerminalRow({ leaf, inDrawer, focused, zoomed,
         {/* Dim only icon + title of a covered pane: its state dot stays at full
             strength so an agent needing input behind the zoom still shows. */}
         <AgentIcon template={template} className={cn('h-3.5 w-3.5 shrink-0', behindZoom && 'opacity-50')} />
-        <span className={cn('flex-1 truncate', behindZoom && 'opacity-50')}>{title}</span>
+        <PaneTitle
+          leafId={leaf.id}
+          title={title}
+          name={leaf.name}
+          number={number}
+          tooltip={`${title} — double-click to rename`}
+          className={cn('flex-1', behindZoom && 'opacity-50')}
+        />
         {zoomed && <Maximize2 aria-label="Maximized" className="h-3 w-3 shrink-0 text-zoom" />}
         {behindZoom && <EyeOff aria-label="Hidden behind maximized pane" className="h-3 w-3 shrink-0 opacity-60" />}
         {(agentId === 'claude-code' || agentId === 'codex') && <span className="max-w-20 truncate text-[10px]" title={`Account: ${accountLabel(leaf.accountId, accounts)}`}>{accountLabel(leaf.accountId, accounts)}</span>}

@@ -16,9 +16,17 @@ import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useStatuslineStore } from '@/store/statusline-store'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
+import { setSavedPaneIds } from '@/store/saved-workspaces-store'
 import { TEMPLATES, isTemplateAvailable, launchMode } from '@/lib/templates'
 import { AgentIcon } from '@/components/AgentIcon'
 import { listAvailableShells, type AvailableShell } from '@/tauri/shell'
+import {
+  getTerminalHostSettings,
+  getTerminalHostStatus,
+  setTerminalHostSettings,
+  type TerminalHostStatus
+} from '@/tauri/terminal-host'
+import { describeHostStatus } from '@/lib/terminal-host-status'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -112,6 +120,7 @@ export function TerminalPanel(): ReactElement {
       <DefaultLaunchModeSettings />
 
       <StatusLineSettings />
+      <TerminalHostSettings />
     </div>
   )
 }
@@ -269,6 +278,85 @@ function StatusLineSettings(): ReactElement {
           onClick={() => void setEnabled(!enabled)}
           className={cn(
             'relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
+            enabled ? 'bg-primary' : 'bg-muted'
+          )}
+        >
+          <span
+            aria-hidden
+            className={cn(
+              'absolute top-0.5 h-4 w-4 rounded-full bg-background transition-transform',
+              enabled ? 'left-0.5 translate-x-4' : 'left-0.5'
+            )}
+          />
+        </button>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * Terminal host (SWA-55, ADR 0001 phase 2): new panes spawn in the separate
+ * `swarmterm-host.exe` instead of inside the app. Off by default until
+ * panes can survive a restart (phase 3/4); running panes keep their backend.
+ */
+function TerminalHostSettings(): ReactElement | null {
+  const [status, setStatus] = useState<TerminalHostStatus | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getTerminalHostStatus()
+      .then((s) => {
+        if (!cancelled) setStatus(s)
+      })
+      .catch((err) => console.error('[TerminalPanel] terminal host status failed', err))
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (!status) return null
+  const enabled = status.enabled
+
+  const toggle = async (): Promise<void> => {
+    try {
+      const current = await getTerminalHostSettings()
+      const next = await setTerminalHostSettings({ ...current, enabled: !enabled })
+      setSavedPaneIds(next.enabled)
+      setStatus(await getTerminalHostStatus())
+    } catch (err) {
+      console.error('[TerminalPanel] terminal host switch failed', err)
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+      <div className="mb-4">
+        <h2 className="text-sm font-semibold text-foreground">Terminal host (preview)</h2>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          Runs new panes in a separate background process instead of inside
+          Swarmterm. Groundwork for keeping terminals alive across a restart;
+          today it behaves like the built-in terminals.
+        </p>
+      </div>
+
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <span className="block text-xs font-medium text-muted-foreground">
+            Run new panes in the terminal host
+          </span>
+          <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground/70">
+            {describeHostStatus(status)} Open panes keep running where they started.
+          </span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Toggle terminal host"
+          disabled={!status.supported}
+          onClick={() => void toggle()}
+          className={cn(
+            'relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-50',
             enabled ? 'bg-primary' : 'bg-muted'
           )}
         >

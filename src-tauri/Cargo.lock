@@ -4539,7 +4539,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "swarmterm"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "axum",
  "clipboard-rs",
@@ -4557,6 +4557,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "swarmterm-host",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -4573,6 +4574,19 @@ dependencies = [
  "uuid",
  "whisper-rs",
  "windows 0.61.3",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "swarmterm-host"
+version = "0.1.0"
+dependencies = [
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
  "windows-sys 0.59.0",
 ]
 

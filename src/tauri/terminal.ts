@@ -1,10 +1,23 @@
 import { invoke, Channel } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import type { ShellId } from '@/lib/terminal-pref'
 
 /** Output streamed from a pty: decoded text, then a final exit. */
 export type PtyOut =
   | { type: 'data'; payload: string }
+  | { type: 'replay'; payload: PtyReplay }
   | { type: 'exit'; payload: { exitCode: number } }
+
+/**
+ * A pane taken over from the terminal host (SWA-56): its history, rendered
+ * at `cols`×`rows`. `truncated` = the host's ring dropped older output.
+ */
+export interface PtyReplay {
+  data: string
+  cols: number
+  rows: number
+  truncated: boolean
+}
 
 export interface CreateTerminalOptions {
   agentId?: string
@@ -37,10 +50,15 @@ export function createTerminal(
 }
 
 let inputDropped: ((id: string) => void) | undefined
+let hostDropListener: Promise<() => void> | undefined
 
 /** Register who tells the user that a pane's input was dropped (queue full). */
 export function setInputDroppedHandler(handler: ((id: string) => void) | undefined): void {
   inputDropped = handler
+  // A pane in the terminal host (SWA-55) cannot reject the write call
+  // itself — Rust only enqueues it for the pipe — so its full queue arrives
+  // later as an event. One listener for the app's lifetime.
+  hostDropListener ??= listen<string>('pty:input-dropped', (e) => inputDropped?.(e.payload))
 }
 
 /**

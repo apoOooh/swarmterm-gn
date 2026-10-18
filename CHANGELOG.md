@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-10-18
+
+- Panes: every open pane shows a number in its header and the navbar list,
+  and can be renamed by double-clicking its title. Names are kept with
+  saved workspaces and never restart the pane.
+- Voice: spoken pane addressing (BUZ-5). The voice pipe gains the `address`
+  capability: a dictation may name its target pane by number, name or title.
+  It is resolved to exactly one pane of the foreground workspace, or refused
+  as missing or ambiguous; the focused pane is never taken as a guess.
+  Needs a buzzkey release with addressing.
+- Explorer: folders that vanished from disk are no longer kept as expanded.
+- Terminal host: the installer does not ship `swarmterm-host.exe` yet
+  (ADR 0001 phase 4, version-stamped install), so in installed builds the
+  setting falls back to in-process panes and says why. Source builds can use
+  it after `cargo build -p swarmterm-host`.
+- Settings: toggle switches no longer overflow their track.
+- Internal: terminal host crate `src-tauri/host` (`swarmterm-host.exe`,
+  ADR 0001 phase 1, SWA-54): named-pipe protocol v1, PTY ownership with a
+  replay ring. Not used by the app yet.
+- Settings → Terminal: **Run new panes in the terminal host** (preview, off by
+  default; ADR 0001 phase 2, SWA-55). New panes spawn in `swarmterm-host.exe`;
+  MCP, War Room, voice and hooks work unchanged. Keystroke round trip over the
+  host pipe: p99 under 0.1 ms.
+- Terminal host: a host with no client and no pane exits after ten minutes, and
+  a client replaced by a newer connection is now disconnected instead of being
+  left open without output.
+- Terminal host: panes survive an app crash (ADR 0001 phase 3, SWA-56). With the
+  host switched on, reopening a saved workspace takes over its panes that are
+  still running instead of starting them again: the output so far is replayed
+  (full-screen programs such as Claude Code repaint in place), and agents keep
+  their MCP connection when the previous port is free. Panes no saved workspace
+  references are closed after startup, and all of them if the host was switched
+  off in the meantime. Saved workspaces store pane ids only while the host is
+  on. Quit still closes every pane.
+- Release: winget manifest generator (`scripts/release/winget.mjs`,
+  per-user NSIS) and an opt-in `winget` job in the release workflow that
+  runs a pinned komac after publishing. Skipped until the `WINGET_TOKEN`
+  secret and `WINGET_PACKAGE_ID` variable exist; nothing is submitted yet
+  (SWA-43).
+
 ## [1.17.0] - 2026-10-18
 
 - Voice: spoken replies for Claude Code (SWA-58). With Settings → Voice →

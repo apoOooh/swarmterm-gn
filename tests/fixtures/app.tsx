@@ -46,6 +46,10 @@ mockIPC(async (command, raw) => {
     mcpWrites.push({ ...args }); configured[args.entryId] = 'configured'; return
   }
   if (command === 'list_agent_sessions') { counters.sessionFolders.push(args.folder); return [] }
+  // Terminal host off: nothing survived, so saved workspaces open fresh (SWA-56).
+  if (command === 'terminal_host_get_settings') return { enabled: false }
+  if (command === 'terminal_host_detached') return []
+  if (command === 'terminal_host_keep' || command === 'terminal_host_release') return
   if (command === 'kill_terminal') { counters.killed++; terminals.delete(args.id); return }
   if (command === 'plugin:dialog|message') return
   if (command === 'write_terminal') { counters.writes.push(args.data); return }
