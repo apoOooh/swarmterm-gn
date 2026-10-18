@@ -17,7 +17,10 @@ pub const VERSION: u64 = 1;
 /// Protocol revisions this host speaks; `hello` picks the highest shared one.
 pub const PROTOS: &[u32] = &[1];
 /// Feature flags reported by `hello`.
-pub const CAPABILITIES: &[&str] = &["attach", "binary-data", "write-checked"];
+pub const CAPABILITIES: &[&str] = &["app-state", "attach", "binary-data", "write-checked"];
+/// Upper bound for one `set_app_state` payload: it is a handful of numbers
+/// (the MCP port), not a store.
+pub const MAX_APP_STATE: usize = 4096;
 
 /// Everything a pane needs to start, fully resolved by the app. The host does
 /// not know about accounts, MCP URLs, Codex isolation or shell discovery:
@@ -86,6 +89,11 @@ pub enum Op {
     Attach {
         terminal_id: String,
     },
+    /// Facts a restarted app needs back (SWA-56: the MCP port its panes'
+    /// `SWARMTERM_MCP_URL` points at). Merged; `hello` returns them.
+    SetAppState {
+        state: serde_json::Map<String, Value>,
+    },
 }
 
 const KNOWN_OPS: &[&str] = &[
@@ -97,6 +105,7 @@ const KNOWN_OPS: &[&str] = &[
     "kill",
     "list",
     "attach",
+    "set_app_state",
 ];
 
 #[derive(Debug, PartialEq)]
@@ -209,8 +218,24 @@ pub struct TerminalInfo {
     pub pid: Option<u32>,
     pub cwd: String,
     pub meta: Value,
+    pub cols: u16,
+    pub rows: u16,
     /// Output bytes ever produced; `attach` replays at most the ring size.
     pub output_total: u64,
+}
+
+/// Answer facts of `attach`. The replay that follows was produced at
+/// `cols`x`rows`; `truncated` = older output was dropped (or skipped).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Attached {
+    pub spawn_id: String,
+    pub pid: Option<u32>,
+    pub cols: u16,
+    pub rows: u16,
+    pub replay_bytes: usize,
+    pub output_total: u64,
+    pub truncated: bool,
 }
 
 #[cfg(test)]
@@ -254,6 +279,17 @@ mod tests {
                 data: "ls\r".into()
             }
         );
+    }
+
+    #[test]
+    fn parses_set_app_state() {
+        let r = req(json!({"v": 1, "id": 2, "op": "set_app_state", "state": {"mcpPort": 5000}}))
+            .unwrap();
+        let Op::SetAppState { state } = r.op else {
+            panic!("not set_app_state")
+        };
+        assert_eq!(state.get("mcpPort"), Some(&json!(5000)));
+        assert!(req(json!({"v": 1, "id": 2, "op": "set_app_state", "state": 5})).is_err());
     }
 
     #[test]

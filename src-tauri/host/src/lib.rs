@@ -12,6 +12,7 @@ pub mod idle;
 pub mod input;
 #[cfg(windows)]
 pub mod job;
+pub mod modes;
 pub mod output;
 pub mod protocol;
 pub mod ring;

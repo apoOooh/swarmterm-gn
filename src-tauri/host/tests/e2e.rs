@@ -232,9 +232,17 @@ fn attach_replays_history_then_streams_live() {
     let listed = host.list();
     assert_eq!(listed[0].terminal_id, "t-attach");
     assert_eq!(listed[0].meta, json!({"agent": null}));
-    host.attach(b, "t-attach", |spawn, replay, total| {
+    host.resize("t-attach", 100, 30).unwrap();
+    assert_eq!((host.list()[0].cols, host.list()[0].rows), (100, 30));
+    host.attach(b, "t-attach", |facts| {
+        assert_eq!(
+            (facts.cols, facts.rows),
+            (100, 30),
+            "last size, not create's"
+        );
+        assert!(!facts.truncated);
         frame::encode_json(
-            json!({"answer": true, "spawnId": spawn, "replay": replay, "total": total})
+            json!({"answer": true, "spawnId": facts.spawn_id})
                 .to_string()
                 .as_bytes(),
         )
@@ -264,9 +272,12 @@ fn ring_is_bounded_per_pane() {
     first.wait_for("loop end", |i| i.data.contains("line-200"));
     std::thread::sleep(Duration::from_millis(200));
     let (b, mut second) = client(&host);
-    host.attach(b, "t-ring", |_, replay, total| {
-        assert!(replay <= 256, "replay {replay} exceeds the ring");
-        assert!(total > 256);
+    host.attach(b, "t-ring", |facts| {
+        // The ring plus at most the restored modes in front.
+        let replay = facts.replay_bytes;
+        assert!(replay <= 256 + 64, "replay {replay} exceeds the ring");
+        assert!(facts.output_total > 256);
+        assert!(facts.truncated);
         frame::encode_json(b"{}")
     })
     .unwrap();
@@ -466,6 +477,22 @@ mod pipe {
         }
         let pos = |n: &str| c.events.iter().position(|e| e == n).unwrap();
         assert!(pos("removed") < pos("exit"));
+
+        // App state survives the client: a restarted app reads it in hello.
+        assert_eq!(hello["appState"], json!({}));
+        let id = c
+            .send(json!({"op": "set_app_state", "state": {"mcpPort": 5123}}))
+            .await;
+        assert_eq!(c.answer(id).await["ok"], true);
+        let id = c
+            .send(json!({"op": "set_app_state", "state": {"x": "y".repeat(5000)}}))
+            .await;
+        assert_eq!(c.answer(id).await["reason"], "too-large");
+        let mut next = Conn::open(&name).await;
+        let id = next
+            .send(json!({"op": "hello", "token": ep.token, "proto": [1]}))
+            .await;
+        assert_eq!(next.answer(id).await["appState"], json!({"mcpPort": 5123}));
 
         stop_tx.send(true).unwrap();
         server.await.unwrap().unwrap();

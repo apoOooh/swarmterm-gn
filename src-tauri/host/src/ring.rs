@@ -56,6 +56,19 @@ impl Ring {
         out
     }
 
+    /// The retained history from output-total offset `from` on (clamped to
+    /// what is retained). `from` must not split a UTF-8 character; the
+    /// replay plan only ever points after an escape sequence.
+    pub fn snapshot_from(&self, from: u64) -> Vec<u8> {
+        let skip = from.saturating_sub(self.start()).min(self.buf.len() as u64) as usize;
+        self.buf.range(skip..).copied().collect()
+    }
+
+    /// Output-total offset of the oldest retained byte.
+    pub fn start(&self) -> u64 {
+        self.total - self.buf.len() as u64
+    }
+
     pub fn total(&self) -> u64 {
         self.total
     }
@@ -117,6 +130,17 @@ mod tests {
         r.push("😀".as_bytes()); // F0 9F 98 80
         r.push(b"abc"); // overflow 1 -> F0 dropped, 3 orphans follow
         assert_eq!(r.snapshot(), b"abc");
+    }
+
+    #[test]
+    fn snapshot_from_counts_in_output_totals() {
+        let mut r = Ring::new(8);
+        r.push(b"abcdef");
+        r.push(b"ghij"); // retains cdefghij, start 2
+        assert_eq!(r.start(), 2);
+        assert_eq!(r.snapshot_from(0), b"cdefghij");
+        assert_eq!(r.snapshot_from(5), b"fghij");
+        assert_eq!(r.snapshot_from(99), b"");
     }
 
     #[test]
