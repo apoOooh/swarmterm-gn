@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   PANE_COLORS,
   sanitizePaneColor,
+  isEmojiIcon,
   paneHeaderTintStyle,
+  searchIconNames,
   sanitizePaneIcon,
   sanitizePaneIdentity
 } from './pane-identity'
@@ -18,8 +20,16 @@ describe('sanitizePaneIcon', () => {
     expect(sanitizePaneIcon('🧑‍💻')).toBe('🧑‍💻')
   })
 
-  it('rejects text, digits, unknown ids and blanks', () => {
-    expect(sanitizePaneIcon('reviewer')).toBeUndefined()
+  it('keeps any lucide-shaped icon name (existence is checked at render)', () => {
+    expect(sanitizePaneIcon('arrow-big-up')).toBe('arrow-big-up')
+    expect(sanitizePaneIcon('circle-dot-2')).toBe('circle-dot-2')
+  })
+
+  it('rejects mixed text, digits, odd shapes and blanks', () => {
+    expect(sanitizePaneIcon('Reviewer')).toBeUndefined()
+    expect(sanitizePaneIcon('two words')).toBeUndefined()
+    expect(sanitizePaneIcon('-bug')).toBeUndefined()
+    expect(sanitizePaneIcon('a'.repeat(49))).toBeUndefined()
     expect(sanitizePaneIcon('🔍 a')).toBeUndefined()
     expect(sanitizePaneIcon('1')).toBeUndefined()
     expect(sanitizePaneIcon('   ')).toBeUndefined()
@@ -38,10 +48,11 @@ describe('sanitizePaneColor', () => {
 
 describe('sanitizePaneIdentity', () => {
   it('cleans each field independently and keeps name case', () => {
-    expect(sanitizePaneIdentity({ name: '  Reviewer  ', icon: 'nope', color: PANE_COLORS[1] })).toEqual({
+    expect(sanitizePaneIdentity({ name: '  Reviewer  ', icon: 'Not An Icon', color: PANE_COLORS[1] })).toEqual({
       name: 'Reviewer',
       icon: undefined,
-      color: PANE_COLORS[1]
+      color: PANE_COLORS[1],
+      headerTint: undefined
     })
   })
 
@@ -54,6 +65,42 @@ describe('sanitizePaneIdentity', () => {
     expect(sanitizePaneIdentity({ headerTint: true }).headerTint).toBeUndefined()
     expect(sanitizePaneIdentity({ color: 'red', headerTint: true }).headerTint).toBeUndefined()
     expect(sanitizePaneIdentity({ color: PANE_COLORS[0], headerTint: false }).headerTint).toBeUndefined()
+  })
+})
+
+describe('isEmojiIcon', () => {
+  it('tells emoji apart from icon names', () => {
+    expect(isEmojiIcon('🔍')).toBe(true)
+    expect(isEmojiIcon('bug')).toBe(false)
+    expect(isEmojiIcon('nope nope')).toBe(false)
+    expect(isEmojiIcon(undefined)).toBe(false)
+  })
+})
+
+describe('searchIconNames', () => {
+  const names = ['bug', 'bug-off', 'ladybug', 'arrow-big-up', 'arrow-up', 'rocket']
+
+  it('ranks exact, then prefix, then substring matches', () => {
+    expect(searchIconNames(names, 'bug', 10)).toEqual(['bug', 'bug-off', 'ladybug'])
+  })
+
+  it('needs every word and accepts spaces or dashes', () => {
+    expect(searchIconNames(names, 'arrow up', 10)).toEqual(['arrow-up', 'arrow-big-up'])
+    expect(searchIconNames(names, 'Arrow-Big', 10)).toEqual(['arrow-big-up'])
+  })
+
+  it('caps the result and returns nothing for a blank query', () => {
+    expect(searchIconNames(names, 'u', 2)).toHaveLength(2)
+    expect(searchIconNames(names, '  ', 10)).toEqual([])
+  })
+})
+
+describe('PANE_COLORS', () => {
+  it('has 20 distinct lowercase hex colors without the execute orange', () => {
+    expect(PANE_COLORS).toHaveLength(20)
+    expect(new Set(PANE_COLORS).size).toBe(20)
+    expect(PANE_COLORS.every((c) => /^#[0-9a-f]{6}$/.test(c))).toBe(true)
+    expect(PANE_COLORS).not.toContain('#f97316')
   })
 })
 

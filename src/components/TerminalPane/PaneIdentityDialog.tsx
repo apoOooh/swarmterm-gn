@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { collectLeaves } from '@/lib/layout-tree'
 import { MAX_PANE_NAME } from '@/lib/pane-address'
-import { PANE_COLORS, PANE_ICONS, isPaneIconId, paneHeaderTintStyle, sanitizePaneIcon } from '@/lib/pane-identity'
+import { PANE_COLORS, PANE_ICONS, isEmojiIcon, isPaneIconId, paneHeaderTintStyle, sanitizePaneIcon, searchIconNames } from '@/lib/pane-identity'
 import { resolvePaneTitle } from '@/lib/pane-title'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
@@ -10,7 +10,10 @@ import { selectActiveWorkspace, useAppStore } from '@/store/app-store'
 import { usePaneIdentityDialogStore } from '@/store/pane-identity-dialog-store'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useModalFocus } from '@/components/ui/use-modal-focus'
-import { PaneIdentityIcon } from './PaneIdentityIcon'
+import { ALL_ICON_NAMES, PaneIdentityIcon } from './PaneIdentityIcon'
+
+/** Search results shown at once; each loads its own small icon chunk. */
+const ICON_RESULTS = 60
 
 /**
  * Edits a pane's identity — name, icon, color — in one place. Mounted once in
@@ -30,6 +33,7 @@ export function PaneIdentityDialog(): ReactElement | null {
   const [emoji, setEmoji] = useState('')
   const [color, setColor] = useState<string | undefined>()
   const [headerTint, setHeaderTint] = useState(false)
+  const [iconQuery, setIconQuery] = useState('')
   const open = leaf !== undefined
   const root = useModalFocus(open, close, leaf?.terminalId)
 
@@ -38,7 +42,8 @@ export function PaneIdentityDialog(): ReactElement | null {
     if (!leaf) return
     setName(leaf.name ?? '')
     setIcon(leaf.icon)
-    setEmoji(leaf.icon && sanitizePaneIcon(leaf.icon) && !isPaneIconId(leaf.icon) ? leaf.icon : '')
+    setEmoji(isEmojiIcon(leaf.icon) ? leaf.icon ?? '' : '')
+    setIconQuery('')
     setColor(leaf.color)
     setHeaderTint(leaf.headerTint === true)
     // Reseed only on open / target change, not on every layout update.
@@ -52,7 +57,13 @@ export function PaneIdentityDialog(): ReactElement | null {
 
   if (!leaf) return null
   const autoTitle = resolvePaneTitle(leaf.agentId ?? DEFAULT_TEMPLATE_ID, agentTitle)
-  const emojiValid = emoji.trim() === '' || sanitizePaneIcon(emoji) !== undefined
+  const emojiValid = emoji.trim() === '' || isEmojiIcon(emoji)
+  // Empty search: the suggestions, plus the pane's current icon if it came
+  // from a search earlier. Otherwise the best matches from all lucide icons.
+  const shownIcons: readonly string[] = iconQuery.trim()
+    ? searchIconNames(ALL_ICON_NAMES, iconQuery, ICON_RESULTS)
+    : icon && !isPaneIconId(icon) && !isEmojiIcon(icon) ? [icon, ...PANE_ICONS] : PANE_ICONS
+  const pickIcon = (id: string): void => { setIcon(icon === id ? undefined : id); setEmoji('') }
 
   const save = (): void => {
     useAppStore.getState().setPaneIdentity(leaf.id, { name, icon, color, headerTint })
@@ -103,9 +114,29 @@ export function PaneIdentityDialog(): ReactElement | null {
             className="mt-1 w-full rounded border border-input bg-background px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-ring"
           />
 
-          <p className="mt-3 text-xs font-medium">Icon</p>
-          <div role="radiogroup" aria-label="Icon" className="mt-1 grid grid-cols-10 gap-1">
-            {PANE_ICONS.map((id) => (
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <p className="text-xs font-medium">Icon</p>
+            <input
+              value={iconQuery}
+              onChange={(e) => setIconQuery(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter picks the best match instead of saving the dialog.
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  if (shownIcons[0] && iconQuery.trim()) pickIcon(shownIcons[0])
+                }
+              }}
+              placeholder={`Search ${ALL_ICON_NAMES.length} icons…`}
+              aria-label="Search icons"
+              spellCheck={false}
+              className="w-44 rounded border border-input bg-background px-2 py-0.5 text-xs outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+          {iconQuery.trim() !== '' && shownIcons.length === 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">No icon matches “{iconQuery.trim()}”.</p>
+          )}
+          <div role="radiogroup" aria-label="Icon" className="mt-1 grid max-h-40 grid-cols-10 gap-1 overflow-y-auto">
+            {shownIcons.map((id) => (
               <button
                 key={id}
                 type="button"
@@ -113,13 +144,16 @@ export function PaneIdentityDialog(): ReactElement | null {
                 aria-checked={icon === id}
                 aria-label={id}
                 title={id}
-                onClick={() => { setIcon(icon === id ? undefined : id); setEmoji('') }}
+                onClick={() => pickIcon(id)}
                 className={cn('flex h-7 items-center justify-center rounded hover:bg-accent', icon === id && 'bg-accent ring-1 ring-ring')}
               >
                 <PaneIdentityIcon icon={id} color={icon === id ? color : undefined} className="h-4 w-4" />
               </button>
             ))}
           </div>
+          {iconQuery.trim() !== '' && shownIcons.length === ICON_RESULTS && (
+            <p className="mt-1 text-[11px] text-muted-foreground">Showing the first {ICON_RESULTS} matches — type more to narrow down.</p>
+          )}
           <div className="mt-2 flex items-center gap-2">
             <label htmlFor="pane-identity-emoji" className="text-xs text-muted-foreground">or an emoji</label>
             <input
@@ -130,9 +164,8 @@ export function PaneIdentityDialog(): ReactElement | null {
               aria-invalid={!emojiValid}
               onChange={(e) => {
                 setEmoji(e.target.value)
-                const valid = sanitizePaneIcon(e.target.value)
-                if (valid) setIcon(valid)
-                else if (e.target.value.trim() === '' && icon && !isPaneIconId(icon)) setIcon(undefined)
+                if (isEmojiIcon(e.target.value)) setIcon(sanitizePaneIcon(e.target.value))
+                else if (e.target.value.trim() === '' && isEmojiIcon(icon)) setIcon(undefined)
               }}
               className={cn('w-16 rounded border bg-background px-2 py-0.5 text-center text-sm outline-none focus:ring-1 focus:ring-ring', emojiValid ? 'border-input' : 'border-destructive')}
             />

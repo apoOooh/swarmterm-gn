@@ -85,7 +85,9 @@ Do not mark them passed from the in-memory fixture alone.
       plain title. Restart the app: the identity is kept.
 - [ ] Identity dialog: pick a color and tick *Tint the top bar* — the preview
       and then the header bar take the color (bottom border full color); the
-      checkbox is disabled with No color. Maximize the pane: the zoom border
+      checkbox is disabled with No color. Search icons for "arrow up": matches
+      appear, Enter picks the first without saving the dialog; the chosen
+      icon shows in the header, sidebar and after a restart. Maximize the pane: the zoom border
       stays violet. Light and dark theme: header text stays readable.
 - [ ] Composer: type a Name, create — the tab uses it (with its case); leave it
       blank — the tab is named after the folder.
