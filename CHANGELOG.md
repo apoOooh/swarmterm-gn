@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-10-19
+
+- Panes: the identity dialog can tint the pane's top bar with the identity
+  color (light background, full-color bottom border; a maximized pane keeps
+  its zoom border). Saved with workspaces; dropped on load without a valid
+  color.
+- Panes: identity icons may be any Lucide icon, loaded on demand via
+  `lucide-react/dynamic`. The picker is a scrollable, windowed grid of all
+  icons (current icon, suggestions, then A–Z) with name search.
+- Panes: the identity palette grows from 10 to 20 colors (orange stays out,
+  it marks War Room execute messages).
+- Panes: clicking the identity name in the header opens the identity dialog.
+
 ## [1.20.0] - 2026-10-18
 
 - Panes: identity — an icon (curated lucide set or one emoji), a name and a
