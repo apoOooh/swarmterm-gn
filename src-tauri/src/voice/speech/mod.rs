@@ -171,6 +171,7 @@ async fn start(app: &AppHandle) -> Result<(), String> {
         app,
         Request::Begin {
             request_id: request_id(),
+            target: None,
         },
         &mut conn,
     )

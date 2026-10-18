@@ -41,8 +41,12 @@ pub const CAP_QUIT: &str = "quit";
 /// `subscribe` answer `ttsOwner`. Whether Swarmterm speaks right now is
 /// those fields, never this capability.
 pub const CAP_TTS: &str = "tts";
+/// BUZ-5: `begin` may carry `target` (a spoken pane number or name). The
+/// renderer resolves it to exactly one pane of the foreground workspace or
+/// answers `no-target` / `ambiguous`; it never falls back to the focused pane.
+pub const CAP_ADDRESS: &str = "address";
 /// What this build offers. Active is the intersection with the client's list.
-pub const CAPABILITIES: &[&str] = &[CAP_INDICATOR, CAP_TURNS, CAP_QUIT, CAP_TTS];
+pub const CAPABILITIES: &[&str] = &[CAP_INDICATOR, CAP_TURNS, CAP_QUIT, CAP_TTS, CAP_ADDRESS];
 /// Longest accepted request line, enforced while reading (not after).
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
 /// Longest dictated text; anything longer is not dictation. Kept small on
@@ -76,6 +80,8 @@ pub enum Request {
     },
     Begin {
         request_id: String,
+        /// BUZ-5 spoken pane address; needs the `address` capability.
+        target: Option<String>,
     },
     Insert {
         request_id: String,
@@ -114,7 +120,11 @@ enum Op {
         capabilities: Vec<String>,
     },
     #[serde(rename_all = "camelCase")]
-    Begin { request_id: String },
+    Begin {
+        request_id: String,
+        #[serde(default)]
+        target: Option<String>,
+    },
     #[serde(rename_all = "camelCase")]
     Insert {
         request_id: String,
@@ -177,7 +187,7 @@ impl Request {
     pub fn request_id(&self) -> Option<String> {
         match self {
             Self::Hello { request_id, .. }
-            | Self::Begin { request_id }
+            | Self::Begin { request_id, .. }
             | Self::Insert { request_id, .. }
             | Self::Subscribe { request_id }
             | Self::Ping { request_id }
@@ -440,7 +450,7 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
             version,
             capabilities,
         },
-        Op::Begin { request_id } => Request::Begin { request_id },
+        Op::Begin { request_id, target } => Request::Begin { request_id, target },
         Op::Insert {
             request_id,
             pin,
@@ -477,8 +487,12 @@ pub fn parse(line: &str, token: &str) -> Result<Request, &'static str> {
                 Ok(req)
             }
         }
-        Request::Begin { request_id }
-        | Request::Subscribe { request_id }
+        Request::Begin { request_id, target }
+            if !valid_id(request_id) || target.as_deref().is_some_and(|t| !valid_label(t)) =>
+        {
+            Err("bad-request")
+        }
+        Request::Subscribe { request_id }
         | Request::Ping { request_id }
         | Request::TtsStop { request_id }
             if !valid_id(request_id) =>
@@ -630,9 +644,30 @@ mod tests {
                 TOKEN
             ),
             Ok(Request::Begin {
-                request_id: "r1".into()
+                request_id: "r1".into(),
+                target: None
             })
         );
+        assert_eq!(
+            parse(
+                r#"{"v":1,"token":"secret-token","op":"begin","requestId":"r1","target":"Backend"}"#,
+                TOKEN
+            ),
+            Ok(Request::Begin {
+                request_id: "r1".into(),
+                target: Some("Backend".into())
+            })
+        );
+        for bad in [
+            "\"\"",
+            "\"a\\nb\"",
+            &format!("\"{}\"", "x".repeat(MAX_LABEL_CHARS + 1)),
+        ] {
+            let line = format!(
+                r#"{{"v":1,"token":"secret-token","op":"begin","requestId":"r1","target":{bad}}}"#
+            );
+            assert_eq!(parse(&line, TOKEN), Err("bad-request"), "{bad}");
+        }
         assert_eq!(
             parse(
                 r#"{"v":1,"token":"secret-token","op":"insert","requestId":"r2","pin":"p1","text":"hi"}"#,

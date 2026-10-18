@@ -7,7 +7,9 @@ import { templateById } from '@/lib/templates'
  * pure rule so every surface that names a pane — the pane header and the navbar
  * terminal list — resolves it identically and can never drift.
  */
-export function resolvePaneTitle(agentId: string, agentTitle?: string): string {
+export function resolvePaneTitle(agentId: string, agentTitle?: string, userName?: string): string {
+  // A name the user gave wins: it exists to tell look-alike panes apart.
+  if (userName?.trim()) return userName.trim()
   const trimmed = agentTitle?.trim()
   return trimmed ? trimmed : templateById(agentId).name
 }

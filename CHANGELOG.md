@@ -13,6 +13,11 @@
 - Terminal host: a host with no client and no pane exits after ten minutes, and
   a client replaced by a newer connection is now disconnected instead of being
   left open without output.
+- Release: winget manifest generator (`scripts/release/winget.mjs`,
+  per-user NSIS) and an opt-in `winget` job in the release workflow that
+  runs a pinned komac after publishing. Skipped until the `WINGET_TOKEN`
+  secret and `WINGET_PACKAGE_ID` variable exist; nothing is submitted yet
+  (SWA-43).
 
 ## [1.17.0] - 2026-10-18
 
