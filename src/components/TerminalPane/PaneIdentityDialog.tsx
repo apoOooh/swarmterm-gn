@@ -1,8 +1,8 @@
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement, type UIEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { collectLeaves } from '@/lib/layout-tree'
 import { MAX_PANE_NAME } from '@/lib/pane-address'
-import { PANE_COLORS, PANE_ICONS, isEmojiIcon, isPaneIconId, paneHeaderTintStyle, sanitizePaneIcon, searchIconNames } from '@/lib/pane-identity'
+import { PANE_COLORS, browseIconNames, isEmojiIcon, paneHeaderTintStyle, sanitizePaneIcon, searchIconNames, visibleRows } from '@/lib/pane-identity'
 import { resolvePaneTitle } from '@/lib/pane-title'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
@@ -12,8 +12,10 @@ import { useTerminalTitleStore } from '@/store/terminal-title-store'
 import { useModalFocus } from '@/components/ui/use-modal-focus'
 import { ALL_ICON_NAMES, PaneIdentityIcon } from './PaneIdentityIcon'
 
-/** Search results shown at once; each loads its own small icon chunk. */
-const ICON_RESULTS = 60
+/** Icon grid geometry: 10 columns of h-7 buttons with a gap-1 (4px). */
+const GRID_COLUMNS = 10
+const GRID_ROW_PX = 32
+const GRID_HEIGHT_PX = 192
 
 /**
  * Edits a pane's identity — name, icon, color — in one place. Mounted once in
@@ -58,11 +60,11 @@ export function PaneIdentityDialog(): ReactElement | null {
   if (!leaf) return null
   const autoTitle = resolvePaneTitle(leaf.agentId ?? DEFAULT_TEMPLATE_ID, agentTitle)
   const emojiValid = emoji.trim() === '' || isEmojiIcon(emoji)
-  // Empty search: the suggestions, plus the pane's current icon if it came
-  // from a search earlier. Otherwise the best matches from all lucide icons.
+  // Empty search: every icon, suggestions first (and the pane's current icon
+  // on top). A search narrows the same scrollable grid to its matches.
   const shownIcons: readonly string[] = iconQuery.trim()
-    ? searchIconNames(ALL_ICON_NAMES, iconQuery, ICON_RESULTS)
-    : icon && !isPaneIconId(icon) && !isEmojiIcon(icon) ? [icon, ...PANE_ICONS] : PANE_ICONS
+    ? searchIconNames(ALL_ICON_NAMES, iconQuery, ALL_ICON_NAMES.length)
+    : browseIconNames(ALL_ICON_NAMES, leaf.icon)
   const pickIcon = (id: string): void => { setIcon(icon === id ? undefined : id); setEmoji('') }
 
   const save = (): void => {
@@ -135,25 +137,10 @@ export function PaneIdentityDialog(): ReactElement | null {
           {iconQuery.trim() !== '' && shownIcons.length === 0 && (
             <p className="mt-1 text-xs text-muted-foreground">No icon matches “{iconQuery.trim()}”.</p>
           )}
-          <div role="radiogroup" aria-label="Icon" className="mt-1 grid max-h-40 grid-cols-10 gap-1 overflow-y-auto">
-            {shownIcons.map((id) => (
-              <button
-                key={id}
-                type="button"
-                role="radio"
-                aria-checked={icon === id}
-                aria-label={id}
-                title={id}
-                onClick={() => pickIcon(id)}
-                className={cn('flex h-7 items-center justify-center rounded hover:bg-accent', icon === id && 'bg-accent ring-1 ring-ring')}
-              >
-                <PaneIdentityIcon icon={id} color={icon === id ? color : undefined} className="h-4 w-4" />
-              </button>
-            ))}
-          </div>
-          {iconQuery.trim() !== '' && shownIcons.length === ICON_RESULTS && (
-            <p className="mt-1 text-[11px] text-muted-foreground">Showing the first {ICON_RESULTS} matches — type more to narrow down.</p>
-          )}
+          <IconGrid key={iconQuery.trim()} icons={shownIcons} selected={icon} color={color} onPick={pickIcon} />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {iconQuery.trim() ? `${shownIcons.length} matching icons` : `${shownIcons.length} icons — suggestions first, then A–Z`}
+          </p>
           <div className="mt-2 flex items-center gap-2">
             <label htmlFor="pane-identity-emoji" className="text-xs text-muted-foreground">or an emoji</label>
             <input
@@ -220,5 +207,57 @@ export function PaneIdentityDialog(): ReactElement | null {
       </div>
     </div>,
     document.body
+  )
+}
+
+interface IconGridProps {
+  icons: readonly string[]
+  selected: string | undefined
+  color: string | undefined
+  onPick: (id: string) => void
+}
+
+/**
+ * Scrollable icon grid that mounts only the rows near the viewport: the full
+ * list is ~2000 icons and each non-suggested one loads its own chunk, so
+ * rendering all of them would fetch the whole set on open. A spacer keeps
+ * the scrollbar sized to the full list. Keyed by the query in the parent, so
+ * a new search starts at the top.
+ */
+function IconGrid({ icons, selected, color, onPick }: IconGridProps): ReactElement {
+  const [scrollTop, setScrollTop] = useState(0)
+  const rowCount = Math.ceil(icons.length / GRID_COLUMNS)
+  const { first, last } = visibleRows(scrollTop, GRID_HEIGHT_PX, GRID_ROW_PX, rowCount)
+  const slice = icons.slice(first * GRID_COLUMNS, (last + 1) * GRID_COLUMNS)
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Icon"
+      onScroll={(e: UIEvent<HTMLDivElement>) => setScrollTop(e.currentTarget.scrollTop)}
+      className="mt-1 overflow-y-auto rounded border border-border"
+      style={{ height: GRID_HEIGHT_PX }}
+    >
+      <div style={{ height: rowCount * GRID_ROW_PX, position: 'relative' }}>
+        <div
+          className="absolute inset-x-0 grid grid-cols-10 gap-1 px-1"
+          style={{ top: first * GRID_ROW_PX, paddingTop: 2 }}
+        >
+          {slice.map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={selected === id}
+              aria-label={id}
+              title={id}
+              onClick={() => onPick(id)}
+              className={cn('flex h-7 items-center justify-center rounded hover:bg-accent', selected === id && 'bg-accent ring-1 ring-ring')}
+            >
+              <PaneIdentityIcon icon={id} color={selected === id ? color : undefined} className="h-4 w-4" />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
   )
 }

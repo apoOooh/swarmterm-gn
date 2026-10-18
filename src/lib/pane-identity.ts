@@ -94,6 +94,33 @@ export function searchIconNames(names: readonly string[], query: string, limit: 
     .slice(0, limit)
 }
 
+/**
+ * The full browse order for the icon grid: the pane's current icon (when it
+ * is not a suggestion), then the suggestions, then every other icon A–Z.
+ */
+export function browseIconNames(all: readonly string[], current?: string): string[] {
+  const head = current && isIconNameShape(current) && !isPaneIconId(current) && all.includes(current) ? [current] : []
+  const first = new Set<string>([...head, ...PANE_ICONS])
+  return [...head, ...PANE_ICONS, ...[...all].filter((n) => !first.has(n)).sort()]
+}
+
+/**
+ * Rows of a fixed-height grid to render for the current scroll position,
+ * plus `overscan` rows either side — the grid holds ~2000 icons and each one
+ * loads its own chunk, so only what is (nearly) on screen is mounted.
+ */
+export function visibleRows(
+  scrollTop: number,
+  viewportHeight: number,
+  rowHeight: number,
+  rowCount: number,
+  overscan = 2
+): { first: number; last: number } {
+  const first = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan)
+  const last = Math.min(rowCount - 1, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan)
+  return { first, last }
+}
+
 /** Only palette colors: keeps every identity legible on both themes. */
 export function sanitizePaneColor(raw: string | undefined): string | undefined {
   const color = raw?.trim().toLowerCase()

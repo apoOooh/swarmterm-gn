@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   PANE_COLORS,
   sanitizePaneColor,
+  PANE_ICONS,
+  browseIconNames,
   isEmojiIcon,
+  visibleRows,
   paneHeaderTintStyle,
   searchIconNames,
   sanitizePaneIcon,
@@ -92,6 +95,32 @@ describe('searchIconNames', () => {
   it('caps the result and returns nothing for a blank query', () => {
     expect(searchIconNames(names, 'u', 2)).toHaveLength(2)
     expect(searchIconNames(names, '  ', 10)).toEqual([])
+  })
+})
+
+describe('browseIconNames', () => {
+  const all = ['zap', 'bug', 'anchor', 'bot', 'alarm-clock']
+
+  it('lists suggestions first, then the rest A–Z, without duplicates', () => {
+    const list = browseIconNames(all)
+    expect(list.slice(0, PANE_ICONS.length)).toEqual([...PANE_ICONS])
+    expect(list.slice(PANE_ICONS.length)).toEqual(['alarm-clock', 'anchor'])
+  })
+
+  it('puts a non-suggested current icon on top', () => {
+    expect(browseIconNames(all, 'anchor')[0]).toBe('anchor')
+    expect(browseIconNames(all, 'anchor').filter((n) => n === 'anchor')).toHaveLength(1)
+    expect(browseIconNames(all, 'bug')[0]).toBe(PANE_ICONS[0])
+    expect(browseIconNames(all, '🔍')[0]).toBe(PANE_ICONS[0])
+  })
+})
+
+describe('visibleRows', () => {
+  it('covers the viewport plus overscan, clamped to the grid', () => {
+    expect(visibleRows(0, 160, 32, 200)).toEqual({ first: 0, last: 7 })
+    expect(visibleRows(3200, 160, 32, 200)).toEqual({ first: 98, last: 107 })
+    expect(visibleRows(6300, 160, 32, 200)).toEqual({ first: 194, last: 199 })
+    expect(visibleRows(0, 160, 32, 0)).toEqual({ first: 0, last: -1 })
   })
 })
 
