@@ -32,9 +32,10 @@ describe('carryBlockedReason', () => {
 describe('carryResumePanes', () => {
   it('copies moved panes, leaves the rest, and keeps a failed copy on its original subscription', async () => {
     const calls: string[] = []
-    const transfer = async (_a: string, id: string, from?: string, to?: string): Promise<void> => {
+    const transfer = async (_a: string, id: string, from?: string, to?: string): Promise<boolean> => {
       calls.push(`${id}:${from ?? 'default'}->${to ?? 'default'}`)
       if (id === 'bad') throw new Error('disk full')
+      return true
     }
     const { panes, failed } = await carryResumePanes([
       { ...pane('ok', 'p2'), moved: true, fromAccountId: 'p1' },
@@ -44,5 +45,11 @@ describe('carryResumePanes', () => {
     expect(calls).toEqual(['ok:p1->p2', 'bad:default->p2'])
     expect(panes).toEqual([pane('ok', 'p2'), pane('bad', undefined), pane('stay', 'p1')])
     expect(failed).toEqual(['Error: disk full'])
+  })
+
+  it('keeps a pane whose session has no transcript on its original subscription', async () => {
+    const { panes, failed } = await carryResumePanes([{ ...pane('empty', 'p2'), moved: true, fromAccountId: 'p1' }], async () => false)
+    expect(panes).toEqual([pane('empty', 'p1')])
+    expect(failed).toEqual(['Error: Session not found in the source subscription'])
   })
 })

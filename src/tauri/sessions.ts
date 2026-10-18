@@ -24,7 +24,8 @@ export const readAgentThread = (agentId: string, sessionId: string, accountId?: 
 
 /** Copy one session into another subscription's store (SWA-64) so it can be
  *  resumed there; the source stays. `undefined` is the default profile. */
-export const transferAgentSession = (agentId: string, sessionId: string, fromAccountId: string | undefined, toAccountId: string | undefined): Promise<void> =>
+/** Resolves false when the session has no transcript yet (nothing to copy). */
+export const transferAgentSession = (agentId: string, sessionId: string, fromAccountId: string | undefined, toAccountId: string | undefined): Promise<boolean> =>
   invoke('transfer_agent_session', { agentId, sessionId, fromAccountId: fromAccountId ?? null, toAccountId: toAccountId ?? null })
 
 /** Lockstep with `src-tauri/src/sessions/share.rs::ShareSettings`. */

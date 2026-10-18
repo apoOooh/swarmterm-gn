@@ -311,6 +311,7 @@ pub async fn list_agent_sessions(
 
 /// Copy one session into another subscription's store so it can be resumed
 /// there (a fork; the source stays). `None` is the default profile.
+/// `false` when the session has no transcript yet, so nothing was copied.
 #[tauri::command]
 pub async fn transfer_agent_session(
     app: AppHandle,
@@ -318,7 +319,7 @@ pub async fn transfer_agent_session(
     session_id: String,
     from_account_id: Option<String>,
     to_account_id: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let accounts = accounts_blocking(app).await?;
     let base = |id: &Option<String>| -> Result<std::path::PathBuf, String> {
         match id {
