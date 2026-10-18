@@ -266,7 +266,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
 - **Saved workspaces.** Welcome lists up to 24 local snapshots. `saved-workspaces`
   serializes structure only; `saved-workspace-sync` debounces meaningful changes
   and flushes on close/quit. Restore verifies directories and exact session ids,
-  then allocates fresh runtime ids. Forget detaches a live instance from saving.
+  then allocates fresh runtime ids — except a pane still detached in the
+  terminal host, which keeps its saved `terminalId` (SWA-56). Forget detaches a live instance from saving.
   `autoOpen` (startup order) belongs to the stored entry: `upsertSaved` keeps it
   across live snapshots; `openAutostart` runs once per process and hides Welcome meanwhile.
   Never persist prompts, terminal output, startup commands or unsaved buffers.
@@ -446,10 +447,24 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   create reconnects or starts a host (`launch.rs`, binary next to the app
   exe — dev: `cargo build -p swarmterm-host`); unavailable = in-process
   fallback with the reason in Settings (connect retries 3x for a host that
-  was idling out). Until phase 3 attaches, the host must hold no pane the map
-  lacks: an unrequested `spawned` is killed, and every connection — also a
-  cleanup-only reconnect after a lost one — `reap_orphans` first. Quit
-  flushes the host's `kill`s.
+  was idling out). The host must hold no pane the app does not track: an
+  unrequested `spawned` is killed, and every connection — also a
+  cleanup-only reconnect after a lost one — `reap_orphans` first, except for
+  the detached set. Quit flushes the host's `kill`s.
+  Reattach (SWA-56): only the boot connection (`init` → `boot`, host already
+  running) `adopt`s; its list becomes the FIXED `detached` set
+  (`detached.rs` — never "host list minus map", a same-id respawn would
+  attach to its dying predecessor). `create_terminal` for a detached id
+  attaches (`attach_hosted`, mirror from `meta`, no template line); the
+  `Waiter::Attach` answer runs `Sink::attached` on the reader BEFORE the
+  replay frame, which becomes `PtyOut::Replay` (host size; the renderer
+  suppresses onData while parsing it, then fits with a cols−1 nudge).
+  Saved leaves keep `terminalId` as the reattach key; the host's meta wins
+  over the snapshot for agent and cwd. The renderer reports `keep` (all
+  saved ids) once; no report in 120 s = everything detached is closed.
+  The host's replay comes from `modes.rs` (DECSET state + alternate-screen
+  positions across ring cuts). MCP rebinds the port kept in the host's app
+  state (`set_app_state`, returned by hello).
   `input.rs`, `job.rs` and `output.rs` are copies of `pty.rs` parts until
   the in-process backend goes away: change both or neither.
 - **App shortcut gate contract.** Window-level app shortcuts matched by

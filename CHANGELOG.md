@@ -13,6 +13,12 @@
 - Terminal host: a host with no client and no pane exits after ten minutes, and
   a client replaced by a newer connection is now disconnected instead of being
   left open without output.
+- Terminal host: panes survive an app crash (ADR 0001 phase 3, SWA-56). With the
+  host switched on, reopening a saved workspace takes over its panes that are
+  still running instead of starting them again: the output so far is replayed
+  (full-screen programs such as Claude Code repaint in place), and agents keep
+  their MCP connection when the previous port is free. Panes no saved workspace
+  references are closed after startup. Quit still closes every pane.
 - Release: winget manifest generator (`scripts/release/winget.mjs`,
   per-user NSIS) and an opt-in `winget` job in the release workflow that
   runs a pinned komac after publishing. Skipped until the `WINGET_TOKEN`
