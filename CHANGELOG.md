@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 - Settings: toggle switches no longer overflow their track.
+- Internal: terminal host crate `src-tauri/host` (`swarmterm-host.exe`,
+  ADR 0001 phase 1, SWA-54): named-pipe protocol v1, PTY ownership with a
+  replay ring. Not used by the app yet.
 
 ## [1.17.0] - 2026-10-18
 
