@@ -414,6 +414,15 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `rescan` change after `RESCAN_QUIET`; the explorer then reloads every
   loaded folder and documents re-check disk. Only the root itself stays
   non-renameable (user-guide Known limits).
+- **Terminal host (SWA-54, `docs/adr/0001`).** `src-tauri/host` is a
+  workspace member building `swarmterm-host.exe`; the app does not use it
+  until phase 2. It spawns exactly the resolved `CreateSpec` it is sent
+  (env cleared first, generation stamped by the host) — accounts, MCP URL
+  and Codex isolation stay in the app. Framing is length-prefixed
+  (`frame.rs`, JSON + binary data), one client at a time (a new hello
+  replaces the old), lock order `terminals` → `Output` → `client`.
+  `input.rs`, `job.rs` and `output.rs` are copies of `pty.rs` parts until
+  phase 2 removes the app-side PTY code: change both or neither.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that
