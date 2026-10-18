@@ -26,6 +26,8 @@ export interface PaneIdentity {
   name?: string
   icon?: string
   color?: string
+  /** Also tint the pane's top bar with `color`. */
+  headerTint?: boolean
 }
 
 /** Longest emoji sequence accepted (ZWJ families, flags, skin tones fit). */
@@ -55,10 +57,37 @@ export function sanitizePaneColor(raw: string | undefined): string | undefined {
 }
 
 /** Cleans a whole identity; every field independently clears to undefined. */
-export function sanitizePaneIdentity(raw: PaneIdentity): { name: string | undefined; icon: string | undefined; color: string | undefined } {
+export function sanitizePaneIdentity(raw: PaneIdentity): {
+  name: string | undefined
+  icon: string | undefined
+  color: string | undefined
+  headerTint: true | undefined
+} {
+  const color = sanitizePaneColor(raw.color)
   return {
     name: sanitizePaneName(raw.name ?? ''),
     icon: sanitizePaneIcon(raw.icon),
-    color: sanitizePaneColor(raw.color)
+    color,
+    // A tint without a color has nothing to paint with.
+    headerTint: color && raw.headerTint === true ? true : undefined
   }
+}
+
+/** Alpha (hex) of the top-bar tint: enough to tell panes apart, low enough
+ *  that the header's text and controls keep their contrast in both themes. */
+const HEADER_TINT_ALPHA = '2e'
+
+/**
+ * Inline style for a tinted pane header, or undefined for the default look.
+ * The bottom border takes the full color so the bar still reads as tinted
+ * when the background blends in; a zoomed pane keeps its zoom border.
+ */
+export function paneHeaderTintStyle(
+  color: string | undefined,
+  headerTint: boolean | undefined,
+  zoomed = false
+): { backgroundColor: string; borderBottomColor?: string } | undefined {
+  const c = sanitizePaneColor(color)
+  if (!c || headerTint !== true) return undefined
+  return zoomed ? { backgroundColor: `${c}${HEADER_TINT_ALPHA}` } : { backgroundColor: `${c}${HEADER_TINT_ALPHA}`, borderBottomColor: c }
 }

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { collectLeaves } from '@/lib/layout-tree'
 import { MAX_PANE_NAME } from '@/lib/pane-address'
-import { PANE_COLORS, PANE_ICONS, isPaneIconId, sanitizePaneIcon } from '@/lib/pane-identity'
+import { PANE_COLORS, PANE_ICONS, isPaneIconId, paneHeaderTintStyle, sanitizePaneIcon } from '@/lib/pane-identity'
 import { resolvePaneTitle } from '@/lib/pane-title'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { cn } from '@/lib/utils'
@@ -29,6 +29,7 @@ export function PaneIdentityDialog(): ReactElement | null {
   const [icon, setIcon] = useState<string | undefined>()
   const [emoji, setEmoji] = useState('')
   const [color, setColor] = useState<string | undefined>()
+  const [headerTint, setHeaderTint] = useState(false)
   const open = leaf !== undefined
   const root = useModalFocus(open, close, leaf?.terminalId)
 
@@ -39,6 +40,7 @@ export function PaneIdentityDialog(): ReactElement | null {
     setIcon(leaf.icon)
     setEmoji(leaf.icon && sanitizePaneIcon(leaf.icon) && !isPaneIconId(leaf.icon) ? leaf.icon : '')
     setColor(leaf.color)
+    setHeaderTint(leaf.headerTint === true)
     // Reseed only on open / target change, not on every layout update.
   }, [leafId, open])
 
@@ -53,7 +55,7 @@ export function PaneIdentityDialog(): ReactElement | null {
   const emojiValid = emoji.trim() === '' || sanitizePaneIcon(emoji) !== undefined
 
   const save = (): void => {
-    useAppStore.getState().setPaneIdentity(leaf.id, { name, icon, color })
+    useAppStore.getState().setPaneIdentity(leaf.id, { name, icon, color, headerTint })
     close()
   }
   const clear = (): void => {
@@ -80,7 +82,10 @@ export function PaneIdentityDialog(): ReactElement | null {
         </p>
         <form onSubmit={(e) => { e.preventDefault(); if (emojiValid) save() }}>
           {/* Preview — exactly what the pane header will show. */}
-          <div className="mt-3 flex min-w-0 items-center gap-1.5 rounded border border-border bg-background px-2 py-1 text-xs">
+          <div
+            className="mt-3 flex min-w-0 items-center gap-1.5 rounded border border-border bg-card px-2 py-1 text-xs"
+            style={paneHeaderTintStyle(color, headerTint)}
+          >
             {icon && <PaneIdentityIcon icon={icon} color={color} />}
             {name.trim() && <span className="truncate font-semibold">{name.trim()}</span>}
             {name.trim() && <span className="text-muted-foreground">·</span>}
@@ -159,6 +164,15 @@ export function PaneIdentityDialog(): ReactElement | null {
               />
             ))}
           </div>
+          <label className={cn('mt-2 flex items-center gap-2 text-xs', color === undefined && 'opacity-50')}>
+            <input
+              type="checkbox"
+              checked={headerTint && color !== undefined}
+              disabled={color === undefined}
+              onChange={(e) => setHeaderTint(e.target.checked)}
+            />
+            Tint the top bar with this color
+          </label>
 
           <div className="mt-4 flex items-center justify-between gap-2">
             <button type="button" onClick={clear} className="rounded px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">
