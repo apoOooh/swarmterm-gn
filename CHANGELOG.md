@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-10-19
+
+- Terminal: Ctrl + mouse wheel zooms the text of the pane under the mouse,
+  of all panes (moves the global Size), or nothing — Settings → Terminal →
+  *Ctrl + scroll zoom*. Per-pane zoom sits on top of the global size and
+  lasts until restart. `Ctrl + 0` resets (rebindable). The wheel is not
+  forwarded to TUIs with mouse tracking and never page-zooms the app.
+- CI: end-to-end tests no longer flake on a cold Vite start.
+
 ## [1.21.0] - 2026-10-19
 
 - Panes: the identity dialog can tint the pane's top bar with the identity
