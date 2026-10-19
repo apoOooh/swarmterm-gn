@@ -4,6 +4,15 @@ export interface TextPrefStorage {
   setItem: (key: string, value: string) => void
 }
 
+/**
+ * What Ctrl+mouse wheel over a terminal resizes: only the pane under the
+ * pointer (an offset on top of the global size), the global size itself, or
+ * nothing (the wheel event reaches xterm as before).
+ */
+export type WheelZoomMode = 'pane' | 'global' | 'off'
+
+export const WHEEL_ZOOM_MODES: readonly WheelZoomMode[] = ['pane', 'global', 'off']
+
 /** User-configurable terminal text settings. */
 export interface TerminalTextPref {
   /** Full CSS font-family stack; should end in `monospace`. */
@@ -14,6 +23,8 @@ export interface TerminalTextPref {
   lineHeight: number
   /** Enable programming ligatures via CSS font-feature-settings. */
   ligatures: boolean
+  /** Ctrl+mouse wheel zoom behaviour. */
+  wheelZoom: WheelZoomMode
 }
 
 /** A selectable monospace font in the curated catalog. */
@@ -56,7 +67,8 @@ export const DEFAULT_TERMINAL_TEXT: TerminalTextPref = {
   fontFamily: SYSTEM_FONT_STACK,
   fontSize: 13,
   lineHeight: 1.0,
-  ligatures: false
+  ligatures: false,
+  wheelZoom: 'pane'
 }
 
 /** localStorage key the text prefs are persisted under. */
@@ -125,7 +137,10 @@ export function readStoredTerminalText(storage: TextPrefStorage): TerminalTextPr
     ligatures:
       typeof obj.ligatures === 'boolean'
         ? obj.ligatures
-        : DEFAULT_TERMINAL_TEXT.ligatures
+        : DEFAULT_TERMINAL_TEXT.ligatures,
+    wheelZoom: WHEEL_ZOOM_MODES.includes(obj.wheelZoom as WheelZoomMode)
+      ? (obj.wheelZoom as WheelZoomMode)
+      : DEFAULT_TERMINAL_TEXT.wheelZoom
   }
 }
 

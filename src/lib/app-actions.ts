@@ -1,6 +1,6 @@
 import type { AppShortcutAction } from './keybindings'
 
-export type BuiltinActionId = AppShortcutAction | 'new-workspace' | 'open-settings' | 'split-horizontal' | 'split-vertical' | 'close-pane' | 'close-workspace' | 'next-workspace' | 'previous-workspace' | 'next-pane' | 'previous-pane' | 'tidy-layout' | 'select-all-broadcast' | 'clear-broadcast' | 'save-file' | 'cycle-markdown' | 'open-prompts' | 'open-routines' | 'dictate' | 'stop-announcement'
+export type BuiltinActionId = AppShortcutAction | 'new-workspace' | 'open-settings' | 'split-horizontal' | 'split-vertical' | 'close-pane' | 'close-workspace' | 'next-workspace' | 'previous-workspace' | 'next-pane' | 'previous-pane' | 'tidy-layout' | 'select-all-broadcast' | 'clear-broadcast' | 'save-file' | 'cycle-markdown' | 'open-prompts' | 'open-routines' | 'dictate' | 'stop-announcement' | 'reset-terminal-zoom'
 export interface AppAction { id: BuiltinActionId; label: string; group: string; defaultBinding?: string; macro?: boolean }
 /** The window handler and terminal gate resolve the same registry and overrides. */
 export const APP_ACTIONS: AppAction[] = [
@@ -24,6 +24,9 @@ export const APP_ACTIONS: AppAction[] = [
   { id: 'toggle-zoom', label: 'Maximize / restore focused pane', group: 'Panes', defaultBinding: 'Mod+Shift+Enter', macro: true },
   { id: 'jump-to-attention', label: 'Jump to pane needing attention', group: 'Panes', defaultBinding: 'Mod+Shift+J', macro: true },
   { id: 'find-in-terminal', label: 'Find in terminal', group: 'Terminal', defaultBinding: 'Mod+F' },
+  // Undoes Ctrl+wheel zoom. Ctrl+0 means nothing to shells or agent CLIs, and
+  // with wheel zoom off it is not claimed and reaches the pane untouched.
+  { id: 'reset-terminal-zoom', label: 'Reset terminal text zoom', group: 'Terminal', defaultBinding: 'Mod+0' },
   { id: 'clear-input', label: 'Clear pending input line', group: 'Terminal', defaultBinding: 'Mod+Shift+Backspace' },
   // Built-in speech (SWA-38). Shift is mandatory: bare Ctrl+Space is NUL /
   // set-mark in shells and editors. Not a recipe step — it records audio.
