@@ -230,6 +230,14 @@ run is not a measurement. The 3-run comparison before and after P1 is pending.
   (Settings > Terminal in the dev instance) to fill in the host row. That run is
   not in this baseline.
 
+## Phase 2 note: flow control
+
+Since perf phase 2 output is flow-controlled (`host/src/flow.rs`): at most
+~512 KB per pane is in flight between Rust and xterm, the rest stays in the
+child (ConPTY backpressure). Scenario a/b throughput is therefore bounded by
+xterm's parse rate, and WebView memory should stay flat during floods. Compare
+memory, not just MB/s, against the baseline above.
+
 ## Limitations (stated honestly)
 
 - **No byte checksum.** ConPTY does not pass bytes through. It re-renders the

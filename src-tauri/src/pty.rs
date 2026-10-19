@@ -157,6 +157,8 @@ pub struct CreateTerminalResult {
     pub pid: Option<u32>,
     pub shell: Option<String>,
     pub error: Option<String>,
+    /// The generation the renderer names in `ack_output` (flow control).
+    pub spawn_id: Option<String>,
 }
 
 impl CreateTerminalResult {
@@ -166,6 +168,7 @@ impl CreateTerminalResult {
             pid: None,
             shell: None,
             error: Some(msg.into()),
+            spawn_id: None,
         }
     }
 }
@@ -279,6 +282,9 @@ pub enum TerminalIo {
         killer: Box<dyn ChildKiller + Send + Sync>,
         #[cfg(windows)]
         job: Option<job::JobHandle>,
+        /// Output backpressure (perf phase 2), shared with the flusher. A
+        /// hosted pane's gate lives in the host; its acks are forwarded.
+        flow: std::sync::Arc<swarmterm_host::flow::FlowGate>,
     },
     /// In `swarmterm-host.exe`. Every call only enqueues a frame for the
     /// connection's writer, so it is as cheap under the `terminals` lock as
@@ -321,6 +327,33 @@ impl ManagedTerminal {
         }
     }
 
+    /// The renderer parsed `bytes` of generation `spawn_id`'s output. An ack
+    /// for an older generation is dropped: its gate closed when it ended.
+    pub fn ack(&self, spawn_id: &str, bytes: u64) {
+        if !matches_generation(&self.spawn_id, spawn_id) {
+            return;
+        }
+        match &self.io {
+            TerminalIo::Local { flow, .. } => flow.ack(bytes),
+            #[cfg(windows)]
+            TerminalIo::Host { conn, terminal_id } => conn.ack(terminal_id, spawn_id, bytes),
+        }
+    }
+
+    /// The renderer stopped consuming `spawn_id` (pane disposed). A hosted
+    /// pane's debt is forgiven with a saturating ack; the kill that follows
+    /// a dispose closes the host gate for good.
+    pub fn release_output(&self, spawn_id: &str) {
+        if !matches_generation(&self.spawn_id, spawn_id) {
+            return;
+        }
+        match &self.io {
+            TerminalIo::Local { flow, .. } => flow.release(),
+            #[cfg(windows)]
+            TerminalIo::Host { conn, terminal_id } => conn.ack(terminal_id, spawn_id, u64::MAX),
+        }
+    }
+
     pub fn resize(&self, cols: u16, rows: u16) {
         match &self.io {
             TerminalIo::Local { master, .. } => {
@@ -356,7 +389,10 @@ impl ManagedTerminal {
                 killer,
                 #[cfg(windows)]
                 job,
+                flow,
             } => {
+                // The rest of the output and `Exit` must not wait on acks.
+                flow.close();
                 #[cfg(windows)]
                 let job = job;
                 #[cfg(not(windows))]
@@ -410,6 +446,12 @@ impl ManagedTerminal {
             None
         }
     }
+}
+
+/// Whether an ack/release naming `given` is for the live generation
+/// `current`; one for an older (respawned-over) generation is dropped.
+fn matches_generation(current: &str, given: &str) -> bool {
+    !given.is_empty() && current == given
 }
 
 /// How long a closed pane's process tree may take to exit on its own before
@@ -870,6 +912,7 @@ fn spawn_local(
 
     let waiter_spawn_id = spawn_id.clone();
     let reader_spawn_id = spawn_id.clone();
+    let flow = std::sync::Arc::new(swarmterm_host::flow::FlowGate::default());
     state.terminals.lock().unwrap().insert(
         id.clone(),
         ManagedTerminal {
@@ -882,6 +925,7 @@ fn spawn_local(
                 killer,
                 #[cfg(windows)]
                 job,
+                flow: flow.clone(),
             },
             worktree_mode: plan.worktree_mode,
             repo_root: plan.repo_root,
@@ -901,16 +945,20 @@ fn spawn_local(
     let (exit_tx, exit_rx) = std::sync::mpsc::channel::<i32>();
     let waiter_app = app.clone();
     let waiter_id = id.clone();
+    let waiter_flow = flow.clone();
     std::thread::spawn(move || {
         let mut child = child;
         let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
+        // The entry (and with it the ack route) goes away next: the tail of
+        // the output must flow ungated so `Exit` is never held back.
+        waiter_flow.close();
         drop_generation(&waiter_app, &waiter_id, &waiter_spawn_id);
         let _ = exit_tx.send(exit_code);
     });
 
     let app = app.clone();
     std::thread::spawn(move || {
-        read_loop(app, id, reader_spawn_id, reader, exit_rx, on_data);
+        read_loop(app, id, reader_spawn_id, reader, exit_rx, on_data, flow);
     });
 
     CreateTerminalResult {
@@ -918,6 +966,7 @@ fn spawn_local(
         pid,
         shell: Some(plan.shell),
         error: None,
+        spawn_id: Some(spawn_id),
     }
 }
 
@@ -996,6 +1045,7 @@ fn spawn_hosted(
         pid: answer["pid"].as_u64().map(|p| p as u32),
         shell: Some(plan.shell),
         error: None,
+        spawn_id: Some(spawn_id.to_string()),
     }
 }
 
@@ -1057,6 +1107,7 @@ fn attach_hosted(
         pid: facts["pid"].as_u64().map(|p| p as u32),
         shell: None,
         error: None,
+        spawn_id: Some(spawn_id.to_string()),
     })
 }
 
@@ -1155,6 +1206,7 @@ fn read_loop(
     mut reader: Box<dyn Read + Send>,
     exit_rx: std::sync::mpsc::Receiver<i32>,
     on_data: Channel<PtyOut>,
+    flow: std::sync::Arc<swarmterm_host::flow::FlowGate>,
 ) {
     // Reader → flusher split. ConPTY reads block, so coalescing needs its own
     // thread: the reader decodes (UTF-8 boundary handling stays HERE, so the
@@ -1165,7 +1217,13 @@ fn read_loop(
     // OUTPUT_COALESCE. The channel closing means EOF with every byte —
     // including the lossy trailing flush — already queued, so `Exit` below
     // can never overtake output.
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    //
+    // Flow control (perf phase 2): the flusher parks while the renderer is
+    // more than FLOW_HIGH behind (`FlowGate`), and the queue is bounded, so
+    // the reader then blocks, stops reading, and ConPTY backpressures the
+    // child instead of the WebView buffering GBs. Input is a separate thread
+    // (`PtyInput`) and never waits on this.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<String>(swarmterm_host::flow::READ_QUEUE_DEPTH);
     std::thread::spawn(move || {
         let mut pending: Vec<u8> = Vec::new();
         let mut chunk = vec![0u8; READ_BUF_BYTES];
@@ -1193,7 +1251,10 @@ fn read_loop(
     let mut last_flush = std::time::Instant::now() - OUTPUT_IDLE;
     while let Ok(first) = rx.recv() {
         let text = next_batch(&rx, first, last_flush.elapsed() >= OUTPUT_IDLE);
+        flow.wait();
+        let n = text.len();
         deliver_output(&app, &id, text, &on_data);
+        flow.sent(n);
         last_flush = std::time::Instant::now();
     }
     // The waiter thread owns the child; EOF means it is dead or about to be
@@ -1299,6 +1360,15 @@ pub fn finish_generation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flow_acks_only_reach_the_live_generation() {
+        assert!(matches_generation("gen-2", "gen-2"));
+        assert!(!matches_generation("gen-2", "gen-3"));
+        // A stale id from before a same-id respawn.
+        assert!(!matches_generation("gen-2", "gen-1"));
+        assert!(!matches_generation("gen-2", ""));
+    }
 
     #[test]
     fn remove_generation_spares_a_respawned_entry() {

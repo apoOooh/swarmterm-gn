@@ -7,6 +7,7 @@
 //! spawns panes here behind Settings → Terminal (`src/host_client/`).
 
 pub mod engine;
+pub mod flow;
 pub mod frame;
 pub mod idle;
 pub mod input;

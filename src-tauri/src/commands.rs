@@ -139,6 +139,24 @@ pub fn write_terminal_checked(
     t.send_checked(&expected_spawn_id, data.as_bytes())
 }
 
+/// The renderer's xterm parsed `bytes` more of generation `spawn_id`'s
+/// output (perf phase 2 flow control; batched, ~64 KB per call).
+#[tauri::command]
+pub fn ack_output(state: State<'_, AppState>, id: String, spawn_id: String, bytes: u64) {
+    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
+        t.ack(&spawn_id, bytes);
+    }
+}
+
+/// The renderer disposed generation `spawn_id`'s xterm: open its flow gate
+/// now rather than after the no-ack timeout.
+#[tauri::command]
+pub fn release_output(state: State<'_, AppState>, id: String, spawn_id: String) {
+    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
+        t.release_output(&spawn_id);
+    }
+}
+
 #[tauri::command]
 pub fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) {
     if let Some(t) = state.terminals.lock().unwrap().get(&id) {

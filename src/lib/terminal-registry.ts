@@ -7,7 +7,7 @@ import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
 import { terminalTheme } from '@/lib/theme-adapter'
 import { useAppearanceStore } from '@/store/appearance-store'
 import '@xterm/xterm/css/xterm.css'
-import { createTerminal, killTerminal, resizeTerminal, writeTerminal } from '@/tauri/terminal'
+import { ackOutput, createTerminal, releaseOutput, killTerminal, resizeTerminal, writeTerminal } from '@/tauri/terminal'
 import { TerminalSession, type TerminalStatus } from '@/lib/terminal-session'
 import { createFrameTaskQueue } from '@/lib/frame-task-queue'
 import { describeFocusedElement, OVERLAY_SELECTOR, shouldReturnFocus } from '@/lib/terminal-focus'
@@ -1113,15 +1113,18 @@ function getOrCreate(id: string): Entry {
   const session = new TerminalSession(
     id,
     {
-      write: (data) => {
+      write: (data, onParsed) => {
         // Every decoded pty chunk is one activity tick: the pane is "working"
         // while bytes flow (including agent spinner redraws) and goes idle after
         // ACTIVITY_IDLE_MS of silence.
         activityTracker.notify(id)
         entries.get(id)?.detector?.noteOutput()
-        term.write(data)
+        // The callback acks parsed bytes to Rust's flow gate (perf phase 2):
+        // it fires only after xterm parsed this chunk, so a flood is paced
+        // by the parser instead of piling up in the write queue.
+        term.write(data, onParsed)
       },
-      replay: ({ data, cols, rows, truncated }) => {
+      replay: ({ data, cols, rows, truncated }, onParsed) => {
         // The history was rendered at the host pane's size: parse it at that
         // size, so wrapped lines and cursor positions land where the program
         // put them, then fit to this pane. The pty goes one column narrower
@@ -1132,6 +1135,7 @@ function getOrCreate(id: string): Entry {
         try { term.resize(Math.max(2, cols), Math.max(1, rows)) } catch { /* disposed */ }
         const note = truncated ? '\x1b[2m[older output is not available]\x1b[0m\r\n' : ''
         term.write(note + data, () => {
+          onParsed?.()
           replaying -= 1
           const entry = entries.get(id)
           if (!entry) return
@@ -1143,7 +1147,7 @@ function getOrCreate(id: string): Entry {
         })
       }
     },
-    { createTerminal, killTerminal }
+    { createTerminal, killTerminal, ackOutput, releaseOutput }
   )
   // Mirror pty death into the detector: the session is the source of truth for
   // exit/error, and the detector has no pty visibility of its own.

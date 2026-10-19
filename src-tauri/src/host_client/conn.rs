@@ -66,6 +66,8 @@ pub struct Conn {
     pub host_version: String,
     /// What an earlier app instance stored with `set_app_state`, as of hello.
     pub app_state: Value,
+    /// The host gates output on acks (`flow-control`), so `ack` is sent.
+    flow_control: bool,
     /// Ends the reader task (`close`): the sink holds the connection, so
     /// dropping every outside handle never closes the pipe by itself.
     closing: Arc<tokio::sync::Notify>,
@@ -98,7 +100,14 @@ impl Conn {
         // Hello is the first frame on the wire and its answer the first
         // frame back (the host registers the client only after answering),
         // so it is read inline before the reader task takes over.
-        let hello = request_frame(0, json!({"op": "hello", "token": token, "proto": PROTO}));
+        let hello = request_frame(
+            0,
+            json!({
+                "op": "hello", "token": token, "proto": PROTO,
+                // This app acks parsed output; the host gates only then.
+                "capabilities": [swarmterm_host::protocol::FLOW_CONTROL],
+            }),
+        );
         tx.send(hello).map_err(|_| "host-lost".to_string())?;
         let mut dec = Decoder::default();
         let mut chunk = vec![0u8; 64 * 1024];
@@ -128,6 +137,13 @@ impl Conn {
             .unwrap_or("?")
             .to_string();
         let app_state = v.get("appState").cloned().unwrap_or(Value::Null);
+        let flow_control = v
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .is_some_and(|c| {
+                c.iter()
+                    .any(|c| c == swarmterm_host::protocol::FLOW_CONTROL)
+            });
 
         let closing = Arc::new(tokio::sync::Notify::new());
         let conn = Arc::new(Conn {
@@ -137,6 +153,7 @@ impl Conn {
             alive: alive.clone(),
             host_version,
             app_state,
+            flow_control,
             closing: closing.clone(),
         });
         tokio::spawn(async move {
@@ -256,6 +273,22 @@ impl Conn {
         });
         self.enqueue(op, Waiter::Write(terminal_id.to_string()))
             .map(|_| ())
+    }
+
+    /// Forward a renderer ack (perf phase 2). Fire and forget, and only to a
+    /// host with `flow-control`: an older one never gates, so it needs none.
+    pub fn ack(&self, terminal_id: &str, spawn_id: &str, bytes: u64) {
+        if !self.flow_control {
+            return;
+        }
+        let op =
+            json!({"op": "ack", "terminalId": terminal_id, "spawnId": spawn_id, "bytes": bytes});
+        // The host never answers an ack, so no waiter is registered (it
+        // would never be removed).
+        if self.is_alive() {
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let _ = self.tx.send(request_frame(id, op));
+        }
     }
 
     pub fn resize(&self, terminal_id: &str, cols: u16, rows: u16) {

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Performance: end-to-end output flow control. The renderer acks output once
+  xterm parsed it; a pane more than 512 KB behind pauses its output (resumes
+  below 128 KB) and the shell is backpressured, so floods no longer grow
+  WebView memory by GBs. Applies in-process and in the terminal host (new
+  `ack` op, `flow-control` capability; older apps are never gated). The gate
+  opens on detach, exit or 2 s without an ack; input is never gated.
 - Memory: panes hold a WebGL context only while visible (at most 12, least
   recently shown falls back to DOM first; re-acquired after a context loss).
   New Settings → Terminal → *Scrollback* (default 5,000 lines). The terminal
