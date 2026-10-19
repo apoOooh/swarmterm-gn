@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Terminal: emoji and other wide characters now measure 2 cells (Unicode 11
+  widths), fixing stray characters and broken borders in agent TUI tables
+  (e.g. Claude Code with ✅ ❌ 🔶).
 - Memory: panes hold a WebGL context only while visible (at most 12, least
   recently shown falls back to DOM first; re-acquired after a context loss).
   New Settings → Terminal → *Scrollback* (default 5,000 lines). The terminal
