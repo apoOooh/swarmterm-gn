@@ -19,6 +19,8 @@ const manifest: Manifest = {
 interface Harness {
   detector: AgentStateDetector
   published: AgentEngineState[]
+  /** How many times the detector materialized the screen (a real scan). */
+  scans(): number
   setScreen(text: string): void
   /** Advance the manual clock and fire the single pending timer. */
   tick(ms?: number): void
@@ -28,9 +30,13 @@ function makeHarness(): Harness {
   let screen = ''
   let now = 0
   let pending: { fn: () => void } | null = null
+  let scans = 0
   const published: AgentEngineState[] = []
   const deps: DetectorDeps = {
-    getView: () => ({ rows: 24, length: 1, line: () => screen }),
+    getView: () => {
+      scans++
+      return { rows: 24, length: 1, line: () => screen }
+    },
     isPaneWatched: () => false,
     publish: (state) => published.push(state),
     now: () => now,
@@ -46,6 +52,7 @@ function makeHarness(): Harness {
   return {
     detector,
     published,
+    scans: () => scans,
     setScreen: (text) => {
       screen = text
       detector.noteOutput()
@@ -257,5 +264,62 @@ describe('AgentStateDetector — hook signals', () => {
     h.detector.noteHook('blocked')
     h.tick(0)
     expect(h.published).toEqual(['idle', 'working'])
+  })
+})
+
+describe('AgentStateDetector working-state scan skip', () => {
+  function working(): Harness {
+    const h = makeHarness()
+    h.detector.start()
+    h.setScreen('thinking… esc to interrupt')
+    h.tick(SPAWN_GRACE_MS)
+    expect(h.published).toEqual(['working'])
+    return h
+  }
+
+  it('skips the screen read while working with no new output, rescans on output', () => {
+    const h = working()
+    const before = h.scans()
+    h.tick()
+    h.tick()
+    expect(h.scans()).toBe(before)
+    h.setScreen('$ done')
+    h.tick()
+    expect(h.scans()).toBe(before + 1)
+  })
+
+  it('an OSC title change counts as new content', () => {
+    const h = working()
+    const before = h.scans()
+    h.detector.noteTitle('✳ Claude Code')
+    h.tick()
+    expect(h.scans()).toBe(before + 1)
+  })
+
+  it('noteHook(forget) on a silent working pane still rescans', () => {
+    const h = makeHarness()
+    h.detector.start()
+    h.tick(SPAWN_GRACE_MS)
+    h.detector.noteHook('working')
+    h.tick(0)
+    expect(h.published).toEqual(['idle', 'working'])
+    const before = h.scans()
+    h.detector.noteHook('forget')
+    h.tick(0)
+    expect(h.scans()).toBe(before + 1)
+  })
+
+  it('an expired hook forces exactly one scan on a silent working pane', () => {
+    // The screen scrapes working too, so the fallback scan opens no idle hold
+    // (which would keep scanning on its own).
+    const h = working()
+    h.detector.noteHook('working')
+    h.tick(0)
+    const before = h.scans()
+    h.tick(TTL_WORKING_MS) // TTL expired, no new output: one fallback scan
+    expect(h.scans()).toBe(before + 1)
+    h.tick() // expiry observed, seq unchanged: skipped again
+    h.tick()
+    expect(h.scans()).toBe(before + 1)
   })
 })

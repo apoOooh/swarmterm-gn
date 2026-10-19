@@ -12,8 +12,12 @@ export function inSpawnGrace(spawnedAt: number, now: number): boolean {
   return now - spawnedAt < SPAWN_GRACE_MS
 }
 
-/** Steady-state idle with no new pty output since the last scan: don't even
- *  materialize the buffer text. This is what makes 300ms polling free.
+/** Steady-state idle or working with no new pty output since the last scan:
+ *  don't even materialize the buffer text. This is what makes 300ms polling
+ *  free. The verdict is a pure function of the screen and the OSC title /
+ *  progress (both of which bump `contentSeq`, see detector.ts), so an
+ *  unchanged seq cannot change it — a `working` pane whose agent is thinking
+ *  silently would otherwise rebuild the same snapshot ~3x a second.
  *
  *  A live hook mark disables the skip: hooks are clock-driven, not
  *  output-driven, so both the arrival tick AND the TTL expiry must be
@@ -27,7 +31,7 @@ export function shouldSkipScreenScan(args: {
   hookActive: boolean
 }): boolean {
   return (
-    args.state === 'idle' &&
+    (args.state === 'idle' || args.state === 'working') &&
     !args.pendingIdle &&
     args.contentSeq === args.lastScannedSeq &&
     !args.hookActive

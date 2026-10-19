@@ -9,10 +9,15 @@ describe('inSpawnGrace', () => {
 })
 
 describe('shouldSkipScreenScan', () => {
-  it('skips only when idle with no new output and no pending hold', () => {
+  it('skips only when idle or working with no new output and no pending hold', () => {
     expect(shouldSkipScreenScan({ state: 'idle', contentSeq: 5, lastScannedSeq: 5, pendingIdle: false, hookActive: false })).toBe(true)
     expect(shouldSkipScreenScan({ state: 'idle', contentSeq: 6, lastScannedSeq: 5, pendingIdle: false, hookActive: false })).toBe(false)
-    expect(shouldSkipScreenScan({ state: 'working', contentSeq: 5, lastScannedSeq: 5, pendingIdle: false, hookActive: false })).toBe(false)
+    expect(shouldSkipScreenScan({ state: 'working', contentSeq: 5, lastScannedSeq: 5, pendingIdle: false, hookActive: false })).toBe(true)
+    expect(shouldSkipScreenScan({ state: 'working', contentSeq: 6, lastScannedSeq: 5, pendingIdle: false, hookActive: false })).toBe(false)
+    expect(shouldSkipScreenScan({ state: 'working', contentSeq: 5, lastScannedSeq: 5, pendingIdle: true, hookActive: false })).toBe(false)
+    // Blocked/unknown keep scanning every tick, as before.
+    expect(shouldSkipScreenScan({ state: 'blocked', contentSeq: 5, lastScannedSeq: 5, pendingIdle: false, hookActive: false })).toBe(false)
+    expect(shouldSkipScreenScan({ state: 'unknown', contentSeq: 5, lastScannedSeq: 5, pendingIdle: false, hookActive: false })).toBe(false)
     expect(shouldSkipScreenScan({ state: 'idle', contentSeq: 5, lastScannedSeq: 5, pendingIdle: true, hookActive: false })).toBe(false)
   })
 
@@ -21,5 +26,6 @@ describe('shouldSkipScreenScan', () => {
     // expires — even on a pane that emits nothing, which is exactly the case
     // the idle+unchanged-seq skip was built for.
     expect(shouldSkipScreenScan({ state: 'idle', contentSeq: 5, lastScannedSeq: 5, pendingIdle: false, hookActive: true })).toBe(false)
+    expect(shouldSkipScreenScan({ state: 'working', contentSeq: 5, lastScannedSeq: 5, pendingIdle: false, hookActive: true })).toBe(false)
   })
 })

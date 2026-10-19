@@ -103,3 +103,9 @@ windows-sys = { version = "0.59", features = [
 [workspace]
 members = ["host"]
 default-members = [".", "host"]
+
+[dev-dependencies]
+# Paused-clock tests for the `wait_peer` loop (stall/deadline timers).
+# Cargo unions features per crate, so tests get the main tokio features plus
+# `test-util`; release builds are unaffected (dev-deps are test-only).
+tokio = { version = "1", features = ["test-util"] }
