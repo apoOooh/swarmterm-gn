@@ -1637,7 +1637,11 @@ function attachWheelZoom(entry: Entry): void {
   entry.term.attachCustomWheelEventHandler((event) => {
     const store = useTerminalTextStore.getState()
     const mode = store.text.wheelZoom
-    if (!event.ctrlKey || event.altKey || event.metaKey || mode === 'off') return true
+    // Same modifier as the reset shortcut (Mod+0): Cmd on mac, Ctrl elsewhere.
+    const isMac = isMacPlatform()
+    const zoomKey = isMac ? event.metaKey : event.ctrlKey
+    const otherKey = isMac ? event.ctrlKey : event.metaKey
+    if (!zoomKey || otherKey || event.altKey || mode === 'off') return true
     event.preventDefault()
     const { steps, carry } = wheelZoomSteps(event, entry.wheelCarry)
     entry.wheelCarry = carry
