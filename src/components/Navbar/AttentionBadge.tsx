@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { attentionCount, collectAttentionPanes } from '@/lib/attention'
+import { collectAttentionPanes } from '@/lib/attention'
+import { attentionCounts } from '@/lib/pane-selectors'
 import { jumpToAttention } from '@/lib/attention-jump'
 import { formatStateAge, longestWaitMs } from '@/lib/state-age'
 import { cn } from '@/lib/utils'
@@ -21,7 +22,7 @@ export function AttentionBadge(): ReactElement | null {
   // leaves them unchanged and no longer re-renders the badge. The longest
   // wait is read from the live store at hover time anyway.
   const { blocked, done } = useAgentStateStore(
-    useShallow((s) => attentionCount(collectAttentionPanes(workspaces, s.byId)))
+    useShallow((s) => attentionCounts(workspaces, s.byId))
   )
   if (blocked === 0 && done === 0) return null
   return (

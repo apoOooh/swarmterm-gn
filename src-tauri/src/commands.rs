@@ -658,14 +658,7 @@ pub fn war_room_join(
     if state.mcp_url.get().is_none() {
         return Err("MCP server failed to start this run — War Room is unavailable".into());
     }
-    let outcome = state.war_rooms.lock().unwrap().join(
-        &room_id,
-        terminal_id,
-        agent_id,
-        cwd,
-        display_name,
-        crate::warroom::now_ms(),
-    )?;
+    let outcome = join_war_room(&state, &room_id, terminal_id, agent_id, cwd, display_name)?;
     // Old room's Leave first, then the Join — the renderer's queue cleanup
     // must run before the new membership appears.
     if let Some((old_room, ev)) = outcome.left {
@@ -681,6 +674,116 @@ pub fn war_room_join(
         connect_war_room_member(&app, &joined_id);
     }
     Ok(())
+}
+
+// Membership mutations wake every `wait_peer` sleeper (`peer_wake`, see
+// mcp/tools/peers.rs): a peer that leaves, moves or loses its room must be
+// reported as gone at once, not after the stall/deadline timer. The
+// `war_rooms` lock is released before the wake. The pty death paths
+// (`kill_terminal`, `read_loop`) wake on their own.
+pub(crate) fn join_war_room(
+    state: &AppState,
+    room_id: &str,
+    terminal_id: String,
+    agent_id: Option<String>,
+    cwd: String,
+    display_name: String,
+) -> Result<crate::warroom::JoinOutcome, String> {
+    let outcome = state.war_rooms.lock().unwrap().join(
+        room_id,
+        terminal_id,
+        agent_id,
+        cwd,
+        display_name,
+        crate::warroom::now_ms(),
+    )?;
+    state.peer_wake.notify_waiters();
+    Ok(outcome)
+}
+
+pub(crate) fn leave_war_rooms(
+    state: &AppState,
+    terminal_id: &str,
+) -> Option<(String, crate::warroom::WarRoomEvent)> {
+    let left = state
+        .war_rooms
+        .lock()
+        .unwrap()
+        .leave_everywhere(terminal_id, crate::warroom::now_ms());
+    if left.is_some() {
+        state.peer_wake.notify_waiters();
+    }
+    left
+}
+
+pub(crate) fn delete_war_room(
+    state: &AppState,
+    room_id: &str,
+) -> Result<(Vec<crate::warroom::WarRoomEvent>, Vec<crate::warroom::RoomMeta>), String> {
+    let (leaves, rooms) = {
+        let mut reg = state.war_rooms.lock().unwrap();
+        let leaves = reg.delete(room_id, crate::warroom::now_ms())?;
+        (leaves, reg.rooms_meta())
+    };
+    if !leaves.is_empty() {
+        state.peer_wake.notify_waiters();
+    }
+    Ok((leaves, rooms))
+}
+
+#[cfg(test)]
+mod war_room_wake_tests {
+    use super::*;
+    use std::time::Duration;
+
+    // True when a waiter that started listening before `f` is woken by it.
+    async fn wakes(state: &AppState, f: impl FnOnce(&AppState)) -> bool {
+        let mut n = std::pin::pin!(state.peer_wake.notified());
+        n.as_mut().enable();
+        f(state);
+        tokio::time::timeout(Duration::from_millis(50), n).await.is_ok()
+    }
+
+    fn room(state: &AppState) -> String {
+        state.war_rooms.lock().unwrap().rooms_meta()[0].room_id.clone()
+    }
+
+    fn join(state: &AppState, room: &str, id: &str) {
+        join_war_room(state, room, id.into(), Some("claude-code".into()), "C:/".into(), id.into()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn join_wakes_waiters() {
+        let s = AppState::default();
+        let r = room(&s);
+        assert!(wakes(&s, |s| join(s, &r, "t1")).await);
+    }
+
+    #[tokio::test]
+    async fn move_between_rooms_wakes_waiters() {
+        let s = AppState::default();
+        let r1 = room(&s);
+        let r2 = s.war_rooms.lock().unwrap().create("Second").unwrap().room_id;
+        join(&s, &r1, "t1");
+        assert!(wakes(&s, |s| join(s, &r2, "t1")).await);
+    }
+
+    #[tokio::test]
+    async fn leave_wakes_waiters_only_when_a_member_left() {
+        let s = AppState::default();
+        let r = room(&s);
+        join(&s, &r, "t1");
+        assert!(wakes(&s, |s| assert!(leave_war_rooms(s, "t1").is_some())).await);
+        assert!(!wakes(&s, |s| assert!(leave_war_rooms(s, "t1").is_none())).await);
+    }
+
+    #[tokio::test]
+    async fn delete_with_members_wakes_waiters() {
+        let s = AppState::default();
+        let r2 = s.war_rooms.lock().unwrap().create("Second").unwrap().room_id;
+        join(&s, &r2, "t1");
+        assert!(wakes(&s, |s| assert_eq!(delete_war_room(s, &r2).unwrap().0.len(), 1)).await);
+    }
 }
 
 /// Flip a room member to connected and emit the transcript event on the
@@ -711,11 +814,7 @@ pub fn war_room_rooms(state: State<'_, AppState>) -> Vec<crate::warroom::RoomInf
 
 #[tauri::command]
 pub fn war_room_leave(app: AppHandle, state: State<'_, AppState>, terminal_id: String) {
-    let left = state
-        .war_rooms
-        .lock()
-        .unwrap()
-        .leave_everywhere(&terminal_id, crate::warroom::now_ms());
+    let left = leave_war_rooms(&state, &terminal_id);
     if let Some((room_id, event)) = left {
         let _ = app.emit("warroom:event", &crate::warroom::scoped(&room_id, event));
     }
@@ -758,11 +857,7 @@ pub fn war_room_delete(
     state: State<'_, AppState>,
     room_id: String,
 ) -> Result<(), String> {
-    let (leaves, rooms) = {
-        let mut reg = state.war_rooms.lock().unwrap();
-        let leaves = reg.delete(&room_id, crate::warroom::now_ms())?;
-        (leaves, reg.rooms_meta())
-    };
+    let (leaves, rooms) = delete_war_room(&state, &room_id)?;
     // Leaves first (queue/held cleanup per member), snapshot last (tab strip).
     for ev in leaves {
         let _ = app.emit("warroom:event", &crate::warroom::scoped(&room_id, ev));

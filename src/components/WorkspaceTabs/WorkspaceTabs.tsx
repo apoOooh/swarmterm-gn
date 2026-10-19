@@ -24,7 +24,8 @@ import { cn } from '@/lib/utils'
 import { collectLeaves } from '@/lib/layout-tree'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useAgentStateStore } from '@/store/agent-state-store'
-import { displayState, workspaceDot, type DotState } from '@/lib/agent-state/rollup'
+import { workspaceDot, type DotState } from '@/lib/agent-state/rollup'
+import { paneDisplays, paneOutputs } from '@/lib/pane-selectors'
 import { ActivityDot } from '@/components/ActivityDot'
 import { StateDot } from '@/components/StateDot'
 
@@ -214,10 +215,10 @@ function useWorkspaceDot(workspace: Workspace, active: boolean): DotState | null
     [workspace.layout]
   )
   const displays = useAgentStateStore(
-    useShallow((s) => (active ? [] : ids.map((id) => displayState(s.byId[id]))))
+    useShallow((s) => paneDisplays(ids, s.byId, active))
   )
   const outputs = useTerminalActivityStore(
-    useShallow((s) => (active ? [] : ids.map((id) => s.active[id] === true)))
+    useShallow((s) => paneOutputs(ids, s.active, active))
   )
   if (active) return null
   return workspaceDot(ids.map((_, i) => ({ display: displays[i], outputActive: outputs[i] })))
