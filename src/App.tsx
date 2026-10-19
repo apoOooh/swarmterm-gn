@@ -55,7 +55,8 @@ import {
   getTerminalGeneration,
   isAnyTerminalFocused,
   noteAgentHook,
-  refitAttachedTerminals
+  refitAttachedTerminals,
+  resetTerminalZoom
 } from '@/lib/terminal-registry'
 import { useHandoffStore } from '@/store/handoff-store'
 import {
@@ -583,6 +584,12 @@ export default function App(): ReactElement {
         if (!ws || st.welcomeFocused) return
         e.preventDefault()
         st.drawerPane(ws.focusedLeafId)
+        return
+      }
+      if (action === 'reset-terminal-zoom') {
+        if (!requestedAction && !isAnyTerminalFocused()) return
+        const terminalId = selectFocusedTerminalId(useAppStore.getState())
+        if (terminalId && resetTerminalZoom(terminalId)) e.preventDefault()
         return
       }
       if (action === 'clear-input') {

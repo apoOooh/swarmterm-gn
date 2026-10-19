@@ -258,6 +258,11 @@ Do not mark them passed from the in-memory fixture alone.
       typing once reaches every group member; `Esc` exits.
 - [ ] Settings → Terminal: changing font / size / line height / ligatures
       updates the preview and every pane.
+- [ ] Ctrl + mouse wheel over a pane: *Pane under the mouse* resizes only that
+      pane (shell and Claude Code reflow, plain wheel still scrolls, Claude Code
+      fullscreen does not scroll), `Ctrl + 0` resets it; *All panes* moves every
+      pane and the Size stepper; *Off* leaves Ctrl + wheel alone. The app UI
+      itself never page-zooms.
 - [ ] Settings → Keyboard Shortcuts lists the bindings for the current platform.
 - [ ] `⌘/Ctrl + B` toggles the sidebar; `Esc` closes Settings.
 - [ ] Sidebar hidden: resting the mouse on the left window edge slides it in over

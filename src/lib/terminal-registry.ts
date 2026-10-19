@@ -16,7 +16,8 @@ import { resolveBroadcastTargets } from '@/lib/broadcast-input'
 import { isFocusReport, shouldDropFocusReport } from '@/lib/focus-report'
 import { useAppStore, selectWorkspaceByTerminalId, selectFocusedTerminalId } from '@/store/app-store'
 import { collectLeaves } from '@/lib/layout-tree'
-import type { TerminalTextPref } from '@/lib/terminal-text'
+import { DEFAULT_TERMINAL_TEXT, type TerminalTextPref } from '@/lib/terminal-text'
+import { clampZoomOffset, paneFontSize, wheelZoomSteps } from '@/lib/terminal-zoom'
 import { decideClipboardAction, isMacPlatform } from '@/lib/terminal-clipboard'
 import { isWindowsPlatform } from '@/lib/platform'
 import { windowsPtyOption } from '@/lib/windows-pty'
@@ -183,6 +184,12 @@ interface Entry {
   /** When the current pty reached `running` — anchors the start window in
    *  which agent panes drop focus reports (`lib/focus-report.ts`). */
   ptyStartedAt?: number
+  /** Ctrl+wheel zoom of this pane only, in px on top of the global size —
+   *  relative so a later global size change still moves a zoomed pane. Kept
+   *  here (not in React) so it survives remounts; not persisted. */
+  zoomOffset: number
+  /** Unused touchpad wheel delta toward the next zoom step. */
+  wheelCarry: number
 }
 
 /** Live terminals keyed by terminalId, owned outside React's render tree. */
@@ -1113,9 +1120,12 @@ function getOrCreate(id: string): Entry {
     cwd: '',
     opened: false,
     resetInputSegment: resetSegment,
-    isComposing: () => compositionOpen
+    isComposing: () => compositionOpen,
+    zoomOffset: 0,
+    wheelCarry: 0
   }
   entries.set(id, entry)
+  attachWheelZoom(entry)
   return entry
 }
 
@@ -1608,6 +1618,59 @@ export function onTerminalSearchResults(
   return () => disposable.dispose()
 }
 
+/** Apply this pane's effective font size (global + its own zoom) and reflow. */
+function applyPaneFontSize(entry: Entry): void {
+  const size = paneFontSize(useTerminalTextStore.getState().text.fontSize, entry.zoomOffset)
+  if (entry.term.options.fontSize === size) return
+  entry.term.options.fontSize = size
+  refitEntry(entry)
+}
+
+/**
+ * Ctrl+mouse wheel resizes the text (Settings → Terminal picks this pane,
+ * every pane, or off). Returning false stops xterm from scrolling AND from
+ * forwarding the wheel to a TUI with mouse tracking on (Claude Code
+ * fullscreen), which would otherwise scroll its view as well. preventDefault
+ * keeps WebView2 from page-zooming the whole UI.
+ */
+function attachWheelZoom(entry: Entry): void {
+  entry.term.attachCustomWheelEventHandler((event) => {
+    const store = useTerminalTextStore.getState()
+    const mode = store.text.wheelZoom
+    if (!event.ctrlKey || event.altKey || event.metaKey || mode === 'off') return true
+    event.preventDefault()
+    const { steps, carry } = wheelZoomSteps(event, entry.wheelCarry)
+    entry.wheelCarry = carry
+    if (steps === 0) return false
+    if (mode === 'global') {
+      store.setFontSize(store.text.fontSize + steps)
+    } else {
+      entry.zoomOffset = clampZoomOffset(store.text.fontSize, entry.zoomOffset + steps)
+      applyPaneFontSize(entry)
+    }
+    return false
+  })
+}
+
+/**
+ * Ctrl+0: undo the zoom. Per-pane mode drops only this pane's offset; global
+ * mode puts the shared size back to the default. Returns false when there was
+ * nothing to claim (mode off), so the key can reach the pane.
+ */
+export function resetTerminalZoom(id: string): boolean {
+  const store = useTerminalTextStore.getState()
+  if (store.text.wheelZoom === 'off') return false
+  if (store.text.wheelZoom === 'global') {
+    store.setFontSize(DEFAULT_TERMINAL_TEXT.fontSize)
+    return true
+  }
+  const entry = entries.get(id)
+  if (!entry) return false
+  entry.zoomOffset = 0
+  applyPaneFontSize(entry)
+  return true
+}
+
 /**
  * Push the latest text prefs onto every live terminal, then reflow so cols/rows
  * follow the new metrics. Font family/size/line-height set xterm options
@@ -1617,7 +1680,9 @@ export function onTerminalSearchResults(
 export function applyTerminalText(pref: TerminalTextPref): void {
   for (const entry of entries.values()) {
     entry.term.options.fontFamily = pref.fontFamily
-    entry.term.options.fontSize = pref.fontSize
+    // Per-pane zoom only exists in 'pane' mode; switching away snaps back.
+    if (pref.wheelZoom !== 'pane') entry.zoomOffset = 0
+    entry.term.options.fontSize = paneFontSize(pref.fontSize, entry.zoomOffset)
     entry.term.options.lineHeight = pref.lineHeight
     entry.host.style.fontFeatureSettings = ligatureFeatureSettings(pref.ligatures)
     refitEntry(entry)
