@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
+import { enableUnicode11 } from './terminal-unicode'
 import { terminalTheme } from '@/lib/theme-adapter'
 import { useAppearanceStore } from '@/store/appearance-store'
 import '@xterm/xterm/css/xterm.css'
@@ -445,6 +446,10 @@ function getOrCreate(id: string): Entry {
   term.loadAddon(fit)
   const search = new SearchAddon()
   term.loadAddon(search)
+  // xterm defaults to Unicode 6 widths (emoji = 1 cell); agent TUIs such as
+  // Claude Code assume Unicode 11 (emoji = 2 cells), and the mismatch leaves
+  // stray characters behind on partial redraws.
+  enableUnicode11(term)
   // Forward the terminal title straight from the program running in the pty.
   // xterm parses the standard OSC 0/2 title escape sequences ("ESC ] 0 ; text
   // BEL") natively and fires onTitleChange — the same mechanism VS Code uses to
