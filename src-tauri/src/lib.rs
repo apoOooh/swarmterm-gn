@@ -159,6 +159,8 @@ pub fn run() {
             commands::create_terminal,
             commands::write_terminal,
             commands::write_terminal_checked,
+            commands::ack_output,
+            commands::release_output,
             host_client::terminal_host_get_settings,
             host_client::terminal_host_set_settings,
             host_client::terminal_host_status,

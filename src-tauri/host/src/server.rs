@@ -274,6 +274,7 @@ fn hello(
     let Op::Hello {
         token: offered,
         proto,
+        capabilities,
     } = req.op
     else {
         reply(protocol::err(Some(req.id), "hello-required"));
@@ -299,7 +300,8 @@ fn hello(
             "appState": host.app_state(),
         }),
     ));
-    Some(host.connect_client_kickable(tx.clone()))
+    let flow_control = capabilities.iter().any(|c| c == protocol::FLOW_CONTROL);
+    Some(host.connect_client_kickable(tx.clone(), flow_control))
 }
 
 /// Requests of one connection run strictly in order (the keystroke FIFO), so
@@ -363,6 +365,11 @@ async fn dispatch(
                 answer(Err(reason));
             }
         }
+        Op::Ack {
+            terminal_id,
+            spawn_id,
+            bytes,
+        } => host.ack(client, &terminal_id, &spawn_id, bytes),
         Op::SetAppState { state } => {
             let size = serde_json::to_vec(&state).map_or(usize::MAX, |b| b.len());
             if size > protocol::MAX_APP_STATE {

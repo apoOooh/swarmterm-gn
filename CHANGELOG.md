@@ -2,11 +2,12 @@
 
 ## [Unreleased]
 
-## [1.22.1] - 2026-10-19
-
-- Terminal: emoji and other wide characters now measure 2 cells (Unicode 11
-  widths), fixing stray characters and broken borders in agent TUI tables
-  (e.g. Claude Code with ✅ ❌ 🔶).
+- Performance: end-to-end output flow control. The renderer acks output once
+  xterm parsed it; a pane more than 512 KB behind pauses its output (resumes
+  below 128 KB) and the shell is backpressured, so floods no longer grow
+  WebView memory by GBs. Applies in-process and in the terminal host (new
+  `ack` op, `flow-control` capability; older apps are never gated). The gate
+  opens on detach, exit or 2 s without an ack; input is never gated.
 - Memory: panes hold a WebGL context only while visible (at most 12, least
   recently shown falls back to DOM first; re-acquired after a context loss).
   New Settings → Terminal → *Scrollback* (default 5,000 lines). The terminal
@@ -19,6 +20,12 @@
   `wait_peer` calls at once, so a peer that left is reported immediately.
 - Dev: perf benchmark harness (`scripts/perf/flood.ps1`) with an "agents"
   scenario of synthetic agent-like streams; it never starts an agent CLI.
+
+## [1.22.1] - 2026-10-19
+
+- Terminal: emoji and other wide characters now measure 2 cells (Unicode 11
+  widths), fixing stray characters and broken borders in agent TUI tables
+  (e.g. Claude Code with ✅ ❌ 🔶).
 
 ## [1.22.0] - 2026-10-19
 

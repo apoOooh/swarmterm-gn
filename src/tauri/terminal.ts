@@ -36,6 +36,8 @@ export interface CreateTerminalResult {
   pid?: number
   shell?: string
   error?: string
+  /** The pty generation, named by `ackOutput` (flow control). */
+  spawnId?: string
 }
 
 /** Spawn a pty; `onOutput` receives every data chunk and the final exit. */
@@ -79,6 +81,20 @@ export const resizeTerminal = (id: string, cols: number, rows: number): Promise<
   invoke('resize_terminal', { id, cols, rows })
 
 export const killTerminal = (id: string): Promise<void> => invoke('kill_terminal', { id })
+
+/**
+ * xterm parsed `bytes` more of generation `spawnId`'s output (perf phase 2
+ * flow control, batched by `lib/output-ack.ts`). Fire and forget: a lost ack
+ * only makes Rust's gate time out open.
+ */
+export const ackOutput = (id: string, spawnId: string, bytes: number): void => {
+  invoke('ack_output', { id, spawnId, bytes }).catch(() => undefined)
+}
+
+/** The renderer stopped consuming generation `spawnId` (pane disposed). */
+export const releaseOutput = (id: string, spawnId: string): void => {
+  invoke('release_output', { id, spawnId }).catch(() => undefined)
+}
 
 /**
  * Screen-independent liveness proof: true only if a process matching the
