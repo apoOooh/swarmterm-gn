@@ -1139,7 +1139,8 @@ function getOrCreate(id: string): Entry {
         replaying += 1
         try { term.resize(Math.max(2, cols), Math.max(1, rows)) } catch { /* disposed */ }
         const note = truncated ? '\x1b[2m[older output is not available]\x1b[0m\r\n' : ''
-        term.write(note + data, () => {
+        if (note) term.write(note)
+        term.write(data, () => {
           onParsed?.()
           replaying -= 1
           const entry = entries.get(id)

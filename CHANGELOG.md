@@ -8,6 +8,11 @@
   WebView memory by GBs. Applies in-process and in the terminal host (new
   `ack` op, `flow-control` capability; older apps are never gated). The gate
   opens on detach, exit or 2 s without an ack; input is never gated.
+- Performance: terminal output reaches the renderer as raw bytes instead of
+  JSON strings (no escaping, no copy of the batch) and xterm parses them
+  directly. The host connection decodes many frames per read without
+  shifting its buffer per frame, and the app shares the host's output
+  batching code instead of a copy.
 - Memory: panes hold a WebGL context only while visible (at most 12, least
   recently shown falls back to DOM first; re-acquired after a context loss).
   New Settings → Terminal → *Scrollback* (default 5,000 lines). The terminal

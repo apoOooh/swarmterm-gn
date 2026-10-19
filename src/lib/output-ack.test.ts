@@ -1,16 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ACK_CHUNK, OutputAcker, utf8Length } from './output-ack'
-
-describe('utf8Length', () => {
-  it('counts UTF-8 bytes, not UTF-16 units', () => {
-    expect(utf8Length('abc')).toBe(3)
-    expect(utf8Length('é')).toBe(2)
-    expect(utf8Length('─')).toBe(3)
-    expect(utf8Length('日本')).toBe(6)
-    expect(utf8Length('😀')).toBe(4)
-    expect(utf8Length('a😀─')).toBe(new TextEncoder().encode('a😀─').length)
-  })
-})
+import { ACK_CHUNK, OutputAcker } from './output-ack'
 
 describe('OutputAcker', () => {
   it('batches acks per chunk instead of one per write', () => {

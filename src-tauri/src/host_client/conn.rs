@@ -41,7 +41,7 @@ pub trait Sink: Send + Sync {
     /// rows, replayBytes, outputTotal, truncated). Called on the reader task
     /// before the replay frame is handled, so routing can be bound for it.
     fn attached(&self, terminal_id: &str, facts: &Value);
-    fn data(&self, terminal_id: &str, spawn_id: &str, bytes: &[u8]);
+    fn data(&self, terminal_id: &str, spawn_id: &str, bytes: Vec<u8>);
     fn removed(&self, terminal_id: &str, spawn_id: &str);
     fn exit(&self, terminal_id: &str, spawn_id: &str, exit_code: i32);
     fn input_dropped(&self, terminal_id: &str);
@@ -379,7 +379,7 @@ fn handle(waiters: &Mutex<HashMap<u64, Waiter>>, sink: &dyn Sink, f: Frame) {
             terminal_id,
             spawn_id,
             bytes,
-        } => return sink.data(&terminal_id, &spawn_id, &bytes),
+        } => return sink.data(&terminal_id, &spawn_id, bytes),
         Frame::Json(p) => p,
     };
     let Ok(v) = serde_json::from_slice::<Value>(&payload) else {
@@ -450,10 +450,10 @@ mod tests {
                 facts["spawnId"].as_str().unwrap_or("")
             ));
         }
-        fn data(&self, id: &str, spawn: &str, bytes: &[u8]) {
+        fn data(&self, id: &str, spawn: &str, bytes: Vec<u8>) {
             self.events.lock().unwrap().push(format!(
                 "data {id} {spawn} {}",
-                String::from_utf8_lossy(bytes)
+                String::from_utf8_lossy(&bytes)
             ));
         }
         fn removed(&self, id: &str, spawn: &str) {

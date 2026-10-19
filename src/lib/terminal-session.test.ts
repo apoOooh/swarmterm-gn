@@ -27,6 +27,9 @@ function makeDeps(): SessionDeps & {
 
 const OPTS = { cols: 80, rows: 24, cwd: '/tmp' }
 
+/** UTF-8 bytes of `s`, as pty output arrives. */
+const b = (s: string): Uint8Array => new TextEncoder().encode(s)
+
 describe('TerminalSession', () => {
   it('releases a generation whose create resolves after dispose, never a stale one', async () => {
     const deps = makeDeps()
@@ -69,11 +72,11 @@ describe('TerminalSession', () => {
     })
     const ackOutput = vi.fn()
     const parsed: (() => void)[] = []
-    const write = vi.fn((_d: string, onParsed?: () => void) => { if (onParsed) parsed.push(onParsed) })
+    const write = vi.fn((_d: Uint8Array, onParsed?: () => void) => { if (onParsed) parsed.push(onParsed) })
     const session = new TerminalSession('t1', { write }, { ...deps, ackOutput })
     session.start(OPTS)
     const chunk = 'x'.repeat(16 * 1024)
-    for (let i = 0; i < 8; i++) deps.emit({ type: 'data', payload: chunk })
+    for (let i = 0; i < 8; i++) deps.emit({ type: 'data', payload: b(chunk) })
     // Nothing parsed yet: no acks, however much was written.
     expect(ackOutput).not.toHaveBeenCalled()
     for (const p of parsed.splice(0)) p()
@@ -92,12 +95,12 @@ describe('TerminalSession', () => {
     const replay = vi.fn()
     const session = new TerminalSession('t1', { write, replay }, deps)
     session.start(OPTS)
-    const payload = { data: 'history', cols: 100, rows: 30, truncated: true }
+    const payload = { data: b('history'), cols: 100, rows: 30, truncated: true }
     deps.emit({ type: 'replay', payload })
-    deps.emit({ type: 'data', payload: 'live' })
+    deps.emit({ type: 'data', payload: b('live') })
     expect(replay).toHaveBeenCalledWith(payload, undefined)
     expect(write).toHaveBeenCalledTimes(1)
-    expect(write).toHaveBeenCalledWith('live', undefined)
+    expect(write).toHaveBeenCalledWith(b('live'), undefined)
   })
 
   it('writes a replay as plain output when the sink has no replay handler', () => {
@@ -105,8 +108,8 @@ describe('TerminalSession', () => {
     const write = vi.fn()
     const session = new TerminalSession('t1', { write }, deps)
     session.start(OPTS)
-    deps.emit({ type: 'replay', payload: { data: 'history', cols: 80, rows: 24, truncated: false } })
-    expect(write).toHaveBeenCalledWith('history', undefined)
+    deps.emit({ type: 'replay', payload: { data: b('history'), cols: 80, rows: 24, truncated: false } })
+    expect(write).toHaveBeenCalledWith(b('history'), undefined)
   })
 
   it('cleans up a successful creation that completes after disposal', async () => {
@@ -215,9 +218,9 @@ describe('TerminalSession', () => {
     const session = new TerminalSession('t1', { write }, deps)
 
     session.start(OPTS)
-    deps.emit({ type: 'data', payload: 'hello' })
+    deps.emit({ type: 'data', payload: b('hello') })
 
-    expect(write).toHaveBeenCalledWith('hello', undefined)
+    expect(write).toHaveBeenCalledWith(b('hello'), undefined)
   })
 
   it('kills the pty exactly once on dispose, even if called twice', () => {
@@ -289,8 +292,8 @@ describe('TerminalSession', () => {
     session.retry(OPTS)
 
     // A late message from the OLD pty channel must not reach the sink.
-    staleChannel({ type: 'data', payload: 'ghost' })
-    expect(write).not.toHaveBeenCalledWith('ghost', undefined)
+    staleChannel({ type: 'data', payload: b('ghost') })
+    expect(write).not.toHaveBeenCalledWith(b('ghost'), undefined)
   })
 
   it('kills a running pty and re-spawns only after its exit is observed', () => {
