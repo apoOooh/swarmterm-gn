@@ -25,6 +25,9 @@ export interface TerminalTextPref {
   ligatures: boolean
   /** Ctrl+mouse wheel zoom behaviour. */
   wheelZoom: WheelZoomMode
+  /** Lines of scrollback per pane. Each line costs ~cols x 12 bytes in the
+   *  xterm buffer, so this is the main per-pane memory knob. */
+  scrollback: number
 }
 
 /** A selectable monospace font in the curated catalog. */
@@ -61,6 +64,10 @@ export const FONT_SIZE_MIN = 8
 export const FONT_SIZE_MAX = 32
 export const LINE_HEIGHT_MIN = 1.0
 export const LINE_HEIGHT_MAX = 2.0
+export const SCROLLBACK_MIN = 500
+export const SCROLLBACK_MAX = 50000
+/** Values offered in Settings; a stored value outside the list is still honoured. */
+export const SCROLLBACK_CHOICES: readonly number[] = [1000, 2500, 5000, 10000, 25000, 50000]
 
 /** Default text prefs — reproduce the historical hardcoded rendering exactly. */
 export const DEFAULT_TERMINAL_TEXT: TerminalTextPref = {
@@ -68,7 +75,8 @@ export const DEFAULT_TERMINAL_TEXT: TerminalTextPref = {
   fontSize: 13,
   lineHeight: 1.0,
   ligatures: false,
-  wheelZoom: 'pane'
+  wheelZoom: 'pane',
+  scrollback: 5000
 }
 
 /** localStorage key the text prefs are persisted under. */
@@ -86,6 +94,12 @@ export function clampLineHeight(n: number): number {
   const clamped = Math.min(LINE_HEIGHT_MAX, Math.max(LINE_HEIGHT_MIN, n))
   // Round to one decimal to avoid float drift from stepper arithmetic.
   return Math.round(clamped * 10) / 10
+}
+
+/** Clamp a scrollback line count into [SCROLLBACK_MIN, SCROLLBACK_MAX]; non-finite → default. */
+export function clampScrollback(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_TERMINAL_TEXT.scrollback
+  return Math.min(SCROLLBACK_MAX, Math.max(SCROLLBACK_MIN, Math.round(n)))
 }
 
 /** Wrap a raw family name as a stack with a monospace fallback. */
@@ -140,7 +154,11 @@ export function readStoredTerminalText(storage: TextPrefStorage): TerminalTextPr
         : DEFAULT_TERMINAL_TEXT.ligatures,
     wheelZoom: WHEEL_ZOOM_MODES.includes(obj.wheelZoom as WheelZoomMode)
       ? (obj.wheelZoom as WheelZoomMode)
-      : DEFAULT_TERMINAL_TEXT.wheelZoom
+      : DEFAULT_TERMINAL_TEXT.wheelZoom,
+    scrollback:
+      typeof obj.scrollback === 'number'
+        ? clampScrollback(obj.scrollback)
+        : DEFAULT_TERMINAL_TEXT.scrollback
   }
 }
 

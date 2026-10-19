@@ -40,7 +40,7 @@ app becomes its client.
 - `ManagedTerminal`, `PtyInput`, reader, flusher and Job Objects, moved
   from `pty.rs` largely unchanged
 - generation identity (`spawn_id`) and graceful `shutdown` with `KILL_GRACE`
-- a bounded output ring buffer per pane (default 1 MiB) for replay on attach
+- a bounded output ring buffer per pane (default 1 MiB; lowered to 512 KiB in perf phase 4) for replay on attach
 
 **App keeps:** MCP server, War Room, Voice, preview webviews, status line and
 hooks, the renderer. It holds a mirrored terminal registry (id, `spawn_id`,

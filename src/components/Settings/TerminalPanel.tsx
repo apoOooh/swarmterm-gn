@@ -7,6 +7,7 @@ import {
   FONT_SIZE_MAX,
   LINE_HEIGHT_MIN,
   LINE_HEIGHT_MAX,
+  SCROLLBACK_CHOICES,
   customFontStack,
   primaryFamily,
   type TerminalTextPref,
@@ -473,6 +474,7 @@ function TextSettings(): ReactElement {
   const setLineHeight = useTerminalTextStore((s) => s.setLineHeight)
   const setLigatures = useTerminalTextStore((s) => s.setLigatures)
   const setWheelZoom = useTerminalTextStore((s) => s.setWheelZoom)
+  const setScrollback = useTerminalTextStore((s) => s.setScrollback)
   const reset = useTerminalTextStore((s) => s.reset)
 
   const matched = MONO_FONTS.find((f) => f.stack === text.fontFamily)
@@ -583,6 +585,25 @@ function TextSettings(): ReactElement {
             atMin={text.lineHeight <= LINE_HEIGHT_MIN}
             atMax={text.lineHeight >= LINE_HEIGHT_MAX}
           />
+
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Scrollback</span>
+            <select
+              value={String(text.scrollback)}
+              onChange={(e) => setScrollback(Number(e.target.value))}
+              className="w-full rounded-md border border-pane-border bg-card px-2.5 py-1.5 text-sm text-foreground"
+            >
+              {SCROLLBACK_CHOICES.includes(text.scrollback) ? null : (
+                <option value={String(text.scrollback)}>{text.scrollback.toLocaleString()} lines</option>
+              )}
+              {SCROLLBACK_CHOICES.map((n) => (
+                <option key={n} value={String(n)}>{n.toLocaleString()} lines</option>
+              ))}
+            </select>
+            <span className="mt-1 block text-[11px] leading-snug text-muted-foreground/70">
+              Lines kept per pane. More lines cost more memory in every pane.
+            </span>
+          </label>
 
           <div className="flex items-start justify-between gap-3">
             <div>

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Memory: panes hold a WebGL context only while visible (at most 12, least
+  recently shown falls back to DOM first; re-acquired after a context loss).
+  New Settings → Terminal → *Scrollback* (default 5,000 lines). The terminal
+  host keeps 512 KiB of replay history per pane instead of 1 MB.
 - Performance: workspace tabs, the attention badge and the prompt library no
   longer re-render on every agent state flip, the agent detector skips its
   screen scan while nothing changed, and `wait_peer` waiters are no longer
