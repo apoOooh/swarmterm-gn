@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { attentionCount, collectAttentionPanes } from '@/lib/attention'
 import { jumpToAttention } from '@/lib/attention-jump'
 import { formatStateAge, longestWaitMs } from '@/lib/state-age'
@@ -16,9 +17,12 @@ import { useAppStore } from '@/store/app-store'
  */
 export function AttentionBadge(): ReactElement | null {
   const workspaces = useAppStore((s) => s.workspaces)
-  const byId = useAgentStateStore((s) => s.byId)
-  const panes = collectAttentionPanes(workspaces, byId)
-  const { blocked, done } = attentionCount(panes)
+  // Only the two counts are subscribed: a pane flipping working ↔ idle (seen)
+  // leaves them unchanged and no longer re-renders the badge. The longest
+  // wait is read from the live store at hover time anyway.
+  const { blocked, done } = useAgentStateStore(
+    useShallow((s) => attentionCount(collectAttentionPanes(workspaces, s.byId)))
+  )
   if (blocked === 0 && done === 0) return null
   return (
     <span className="flex items-center gap-1">
@@ -26,7 +30,13 @@ export function AttentionBadge(): ReactElement | null {
         <Pill
           count={blocked}
           tone="blocked"
-          longest={() => longestWaitMs(panes, 'blocked', Date.now())}
+          longest={() =>
+            longestWaitMs(
+              collectAttentionPanes(workspaces, useAgentStateStore.getState().byId),
+              'blocked',
+              Date.now()
+            )
+          }
         />
       )}
       {done > 0 && <Pill count={done} tone="done" />}
