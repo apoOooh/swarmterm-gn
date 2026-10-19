@@ -11,21 +11,44 @@ pwsh scripts/perf/flood.ps1                          # a, b, c x 3 runs, 4 flood
 pwsh scripts/perf/flood.ps1 -Scenario a -Panes 8     # one scenario, more panes
 pwsh scripts/perf/flood.ps1 -SizeMB 200 -TuiSizeMB 50 -Repeat 1   # long soak (memory growth)
 pwsh scripts/perf/flood.ps1 -Trace                   # also save a Chromium perf trace per run
+pwsh scripts/perf/flood.ps1 -Scenario d -Repeat 3     # agents: 15 synthetic agent panes x 150 s (~10 min)
 ```
 
 A single run is too noisy to compare (see Variance below). Always compare the
 medians of the default 3 runs. The summary prints the median and the min-max
 range per metric.
 
-The script:
+### Hard rule: no agent, no AI provider
 
+The harness never starts an agent CLI (claude, codex, gemini, opencode, ...)
+or anything that uses AI usage. Scenario d's "agents" are a local generator
+script. This is enforced three ways:
+
+1. **Fresh empty profile.** The instance runs with its own identifier
+   `com.apooooh.swarmterm.gn.perf` (a generated `--config`), and its
+   `%APPDATA%` and `%LOCALAPPDATA%` folders (app data, WebView2 profile with
+   the saved workspaces) are wiped before every start. The shared dev
+   profile `com.apooooh.swarmterm.gn.dev` is never used, so no saved
+   workspace can restore or resume an agent session.
+2. **Abort on agent panes.** The spec refuses to run, before and after it
+   creates its panes, if ANY workspace has a default agent or any pane has an
+   agent other than `terminal`, a session id, a resume or continue session, a
+   start prompt or a startup command. Panes are created as plain terminals.
+3. **Process guard.** A thread polls the instance's process tree (including
+   the terminal host) every second. On an agent CLI, by executable name or by
+   its node package path in the command line, it writes
+   `AGENT-DETECTED.txt` and kills the instance, and the run fails.
+
+The script:
 1. Generates the data files in `%TEMP%\swarmterm-perf` (once, then cached):
    - `seq-<SizeMB>.txt`: 48-byte lines `S########|<filler>`
    - `tui-<TuiSizeMB>.txt`: htop-like frames (cursor positioning, 256-colour and truecolour SGR, erase-to-EOL)
-2. Starts the isolated dev instance (`npm run tauri:dev:no-speech` by default,
-   `-DevScript tauri:dev:isolated` where LLVM is available) with
-   `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`. It refuses to
-   start if port 1420 or 9333 is already in use.
+2. Starts an isolated dev instance on the fresh perf profile (see the hard rule
+   above): `npx tauri dev --config <run>/tauri.perf.conf.json -- --no-default-features`
+   by default (`-DevScript tauri:dev:isolated` keeps speech, where LLVM is
+   available), with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>`.
+   It refuses to start if port 1420 is in use; if CDP port 9333 is taken it
+   uses the next free one.
 3. Runs `tests/perf/flood.perf.ts` once per scenario and repeat (`-Repeat`) through
    `playwright.perf.config.ts`. That config extends `playwright.config.ts` but
    attaches to the real WebView over CDP instead of the mock fixture. The spec
@@ -35,8 +58,8 @@ The script:
    samples inside the flood window that the driver reports. The window runs
    from the flood command to xterm's last parse of flood output.
 5. Stops only what it started: `taskkill /T` on its own npm PID (after checking
-   the PID's start time) and any dev `swarmterm-host.exe` of this worktree that
-   was not running before. A running Swarmterm (`com.apooooh.swarmterm.gn`) is a
+   the PID's start time) and the dev `swarmterm-host.exe` processes the guard saw
+   start during the run, matched by PID and start time. A running Swarmterm (`com.apooooh.swarmterm.gn`) is a
    different process tree, has its host under AppData and uses a different
    WebView2 user-data folder, so it is never touched or sampled. An existing
    `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` value is kept and restored.
@@ -51,7 +74,45 @@ Output goes to `test-results/perf-runs/<timestamp>/`: `summary.md`, `summary.jso
 | a | `-Panes` (4) | 1 (probed) | `-SizeMB` (50) sequence file each |
 | b | `-Panes` (4) | 1 (probed) | `-TuiSizeMB` (20) escape-heavy TUI stream each |
 | c | 4 | 20 (8 visible, 12 in a hidden workspace) | `-SizeMB` (50) sequence file each |
+| d | `-AgentPanes` (15): 11 visible, 4 in a hidden workspace | 1 (probed, first pane) | `scripts/perf/agent-stream.mjs` for `-AgentSeconds` (150) each |
 
+Scenario d is not part of `all`. Run it with `-Scenario d`.
+
+### Scenario d (agents)
+
+`agent-stream.mjs` imitates a TUI coding agent with a seeded random model.
+It uses no network.
+
+- A spinner and status line redrawn at ~15 Hz (save/restore cursor, SGR,
+  erase line) below a scroll region.
+- Phases: think (spinner only, 1-5 s), stream (markdown/code lines at about
+  40-90 tokens/s, 4-14 s), and tool (a 100-400 KB dump in one write, ~25 % of
+  phase changes).
+- OSC 0 title and OSC 9;4 progress about once a second.
+- An input box that echoes each keystroke at once as `IN#<n>:<char>`.
+
+Extra metrics:
+
+- **Echo in a busy pane.** Probes alternate in blocks of 16 between the idle
+  pane and the first agent pane. A busy probe counts when `IN#<n>:<char>`
+  appears on the parsed screen. ConPTY sends only changed cells, so the
+  screen is matched, not the chunk. The busy timeout is 10 s, so stalls behind
+  a tool dump are measured instead of being cut off at 3 s.
+- **Delivery lag.** Each line starts with `@T<epoch ms>|` (streamed text) or
+  `@D<epoch ms>|` (tool dump), stamped when the generator writes it. The probe
+  records `Date.now() - ts` at hand-over to xterm (`Terminal.write`) and at
+  xterm's parse callback. It reports p50/p95/max over all panes, the worst
+  pane's p95, and each pane's figures in the JSON. Tokens older than the last
+  one seen in that pane are ConPTY repaints and are not counted.
+- **Hand-over vs parse.** Hand-over lag covers generator, ConPTY, reader,
+  flusher and IPC. The gap from hand-over to parse is xterm's own write queue.
+- CPU and memory as in a-c, over the fixed `-AgentSeconds` window.
+
+Smoke run (15 panes x 30 s, 1 run, P1 build, other builds running): idle echo
+p95 47 ms; busy echo p95 33 ms with 4 of 40 probes over 3 s; streamed and
+dump lag pooled at parse p50 92 / p95 249 / max 284 ms, of which hand-over
+was p50 84 / p95 202 ms; 2 frames over 50 ms; WebView 688 -> 1016 MB. This
+run is not a measurement. The 3-run comparison before and after P1 is pending.
 ### Metrics and how they are measured
 
 - **CPU / private memory**:
@@ -207,6 +268,12 @@ Output goes to `test-results/perf-runs/<timestamp>/`: `summary.md`, `summary.jso
   treated as foreign: the script warns, does not sample or stop it, and the
   host row stays empty.
 - **Probe overhead.** The probe adds work to every write: one regex scan per
-  chunk. Compare runs only with runs from the same harness version.
+  chunk (scenario d: three). Compare runs only with runs from the same harness version.
 - **The host path is untested.** Host discovery and stopping by path are
   implemented, but this baseline ran with the host off.
+- **Delivery-lag clock.** The generator and the WebView both use the system
+  clock (`Date.now()`), with 1 ms resolution. A tool dump's tokens are stamped
+  while its string is built, just before the single write.
+- **Shared startup side effects.** The perf instance does what any dev
+  instance does at boot (for example the Codex config rewrite in
+  `hook/codex.rs` and the MCP server). None of it starts an agent.

@@ -5,6 +5,7 @@ import { useModalFocus } from '@/components/ui/use-modal-focus'
 import { dispatchTargets, filterPrompts, type SavedPrompt } from '@/lib/prompt-library'
 import { deliverSavedPrompt } from '@/lib/prompt-delivery'
 import { handoffTargets } from '@/lib/handoff-flow'
+import { recognisedPanes } from '@/lib/pane-selectors'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { DEFAULT_TEMPLATE_ID, templateById } from '@/lib/templates'
 import { collectLeaves } from '@/lib/layout-tree'
@@ -46,16 +47,7 @@ export function PromptLibraryDialog(): React.ReactElement | null {
   // Per-pane "agent recognised" flags, not the whole `byId`: state flips
   // (working ↔ idle) leave these booleans unchanged, so they no longer
   // re-render the dialog — and while closed it subscribes to nothing at all.
-  const recognised = useAgentStateStore(
-    useShallow((s) => {
-      const out: Record<string, boolean> = {}
-      if (!open) return out
-      for (const [id, st] of Object.entries(s.byId)) {
-        out[id] = st?.state !== undefined && st.state !== 'unknown'
-      }
-      return out
-    })
-  )
+  const recognised = useAgentStateStore(useShallow((s) => recognisedPanes(s.byId, open)))
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState<Draft>(EMPTY)
   const [confirmDelete, setConfirmDelete] = useState(false)

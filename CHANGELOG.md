@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Performance: workspace tabs, the attention badge and the prompt library no
+  longer re-render on every agent state flip, the agent detector skips its
+  screen scan while nothing changed, and `wait_peer` waiters are no longer
+  woken by every output batch.
+- War Room: joining, moving, leaving or deleting a room now wakes pending
+  `wait_peer` calls at once, so a peer that left is reported immediately.
+- Dev: perf benchmark harness (`scripts/perf/flood.ps1`) with an "agents"
+  scenario of synthetic agent-like streams; it never starts an agent CLI.
+
 ## [1.22.0] - 2026-10-19
 
 - Terminal: Ctrl + mouse wheel zooms the text of the pane under the mouse,
