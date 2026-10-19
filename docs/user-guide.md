@@ -349,6 +349,7 @@ Click into a pane and press **Ctrl+Shift+Space** (or the microphone in the pane 
 - **Programs can copy to your clipboard** — nvim `"+y`, tmux `set -s set-clipboard on`, yazi and `gh` copy through OSC 52, exactly as in VS Code's terminal. Only writes are honoured: a program can never read your clipboard.
 - **Click a URL** to open it in your browser; `⌘/Ctrl + click` a file path (`src/foo.ts:42:9`, `src/foo.ts(42,9)`, `File "x.py", line 42`) to open project files in the integrated editor at that line; the file is also selected in **Files**, with its folders expanded and the row scrolled into view. Hold `⌘/Ctrl` on a detected path and drag it onto another pane to insert it there (as a path, or an `@` mention in Claude Code). Paths outside the configured project retain the external-editor behavior.
 - **Drop a file or folder** onto a pane — from your OS file manager or from **Files** (several selected entries at once) — to insert its path, quoted for that pane's shell. While dragging from **Files** a label follows the pointer and the cursor shows what a release does: insert into a terminal, move into a folder (hold `Ctrl` to copy), or nothing; `Esc` cancels. Dragged from **Files** onto a Claude Code pane, entries become `@` mentions relative to the pane's folder (`@src/foo.ts`), so Claude attaches them; paths with spaces stay quoted.
+- **Zoom the text with `Ctrl` + mouse wheel** over a terminal (shell or agent CLI): scroll up for bigger, down for smaller (8–32 px). Settings → Terminal → *Ctrl + scroll zoom* picks whether only the pane under the mouse changes (default; the pane keeps its zoom on top of the global size until the app restarts), all panes change (moves the global *Size*, saved), or nothing. `Ctrl + 0` in the focused pane resets the zoom (global mode: back to 13 px).
 - **Choose your shell** — PowerShell, cmd, PowerShell 7 or Git Bash — per pane, or as a default in Settings.
 
 ## Shell integration
@@ -508,6 +509,8 @@ the file editor owns the keyboard.
 | `⌘/Ctrl + Shift + D` | Move the focused pane to the drawer (keeps running; click it in the sidebar to restore) |
 | `⌘/Ctrl + Shift + Space` | Start / stop a dictation with built-in speech recognition (only while it is enabled; without its model on disk the bell says so) |
 | `⌘/Ctrl + Shift + Backspace` | Clear the pending input line of the focused terminal (e.g. after a submit hook refused a prompt). Agents get one Ctrl+C, shells their line-kill; a second press within 2 s is ignored so an agent never quits |
+| `Ctrl + mouse wheel` | Zoom the terminal text (pane under the mouse or all panes, see Settings → Terminal) |
+| `⌘/Ctrl + 0` | Reset the terminal text zoom (not claimed while wheel zoom is off) |
 | `⌘/Ctrl + Shift + J` | Jump to the next pane needing attention (longest-waiting blocked → done → working → idle) |
 
 On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the terminal for tmux.

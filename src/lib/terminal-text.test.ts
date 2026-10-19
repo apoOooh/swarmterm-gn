@@ -56,7 +56,8 @@ describe('DEFAULT_TERMINAL_TEXT', () => {
       fontFamily: SYSTEM_FONT_STACK,
       fontSize: 13,
       lineHeight: 1.0,
-      ligatures: false
+      ligatures: false,
+      wheelZoom: 'pane'
     })
   })
 })
@@ -114,7 +115,8 @@ describe('readStoredTerminalText', () => {
       fontFamily: '"Fira Code", monospace',
       fontSize: 16,
       lineHeight: 1.4,
-      ligatures: true
+      ligatures: true,
+      wheelZoom: 'global'
     }
     const storage = fakeStorage()
     storeTerminalText(storage, pref)
@@ -143,5 +145,23 @@ describe('readStoredTerminalText', () => {
     const read = readStoredTerminalText(storage)
     expect(read.fontSize).toBe(FONT_SIZE_MAX)
     expect(read.lineHeight).toBe(LINE_HEIGHT_MIN)
+  })
+
+  it('defaults Ctrl+scroll zoom to the pane under the mouse', () => {
+    expect(DEFAULT_TERMINAL_TEXT.wheelZoom).toBe('pane')
+  })
+
+  it('falls back to the default for an unknown wheel zoom mode', () => {
+    const storage = fakeStorage({
+      [TERMINAL_TEXT_STORAGE_KEY]: JSON.stringify({ wheelZoom: 'everything' })
+    })
+    expect(readStoredTerminalText(storage).wheelZoom).toBe('pane')
+  })
+
+  it('reads a stored wheel zoom mode', () => {
+    const storage = fakeStorage({
+      [TERMINAL_TEXT_STORAGE_KEY]: JSON.stringify({ wheelZoom: 'off' })
+    })
+    expect(readStoredTerminalText(storage).wheelZoom).toBe('off')
   })
 })

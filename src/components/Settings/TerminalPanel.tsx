@@ -9,7 +9,8 @@ import {
   LINE_HEIGHT_MAX,
   customFontStack,
   primaryFamily,
-  type TerminalTextPref
+  type TerminalTextPref,
+  type WheelZoomMode
 } from '@/lib/terminal-text'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useTerminalTextStore } from '@/store/terminal-text-store'
@@ -471,6 +472,7 @@ function TextSettings(): ReactElement {
   const setFontSize = useTerminalTextStore((s) => s.setFontSize)
   const setLineHeight = useTerminalTextStore((s) => s.setLineHeight)
   const setLigatures = useTerminalTextStore((s) => s.setLigatures)
+  const setWheelZoom = useTerminalTextStore((s) => s.setWheelZoom)
   const reset = useTerminalTextStore((s) => s.reset)
 
   const matched = MONO_FONTS.find((f) => f.stack === text.fontFamily)
@@ -556,6 +558,22 @@ function TextSettings(): ReactElement {
             atMin={text.fontSize <= FONT_SIZE_MIN}
             atMax={text.fontSize >= FONT_SIZE_MAX}
           />
+
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Ctrl + scroll zoom</span>
+            <select
+              value={text.wheelZoom}
+              onChange={(e) => setWheelZoom(e.target.value as WheelZoomMode)}
+              className="w-full rounded-md border border-pane-border bg-card px-2.5 py-1.5 text-sm text-foreground"
+            >
+              <option value="pane">Pane under the mouse</option>
+              <option value="global">All panes (changes Size)</option>
+              <option value="off">Off</option>
+            </select>
+            <span className="mt-1 block text-[11px] leading-snug text-muted-foreground/70">
+              Hold Ctrl and scroll over a terminal. Ctrl+0 resets.
+            </span>
+          </label>
 
           <Stepper
             label="Line height"
