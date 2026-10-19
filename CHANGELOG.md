@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.22.1] - 2026-10-19
+
 - Terminal: emoji and other wide characters now measure 2 cells (Unicode 11
   widths), fixing stray characters and broken borders in agent TUI tables
   (e.g. Claude Code with ✅ ❌ 🔶).
