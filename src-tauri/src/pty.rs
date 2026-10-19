@@ -1214,7 +1214,10 @@ pub fn deliver_output(app: &AppHandle, id: &str, text: String, on_data: &Channel
             .lock()
             .unwrap()
             .push_output(id, &text, crate::warroom::now_ms());
-        state.peer_wake.notify_waiters();
+        // No `peer_wake` here: output only pushes a `wait_peer` stall verdict
+        // later, never produces one, and the loop re-reads the output clock
+        // on its own stall timer (`mcp::tools::peers::wait_loop`). Waking
+        // every waiter per batch only churned locks under a flood.
     }
     let _ = on_data.send(PtyOut::Data(text));
 }
