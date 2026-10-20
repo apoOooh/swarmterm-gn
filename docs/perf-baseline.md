@@ -26,17 +26,19 @@ host this run started is sampled and stopped (see step 5 below).
 
 ### Coverage: which change each scenario exercises
 
-| scenario | P0 harness / probes | P1 PTY I/O threads, flusher | P2 output flow control | P3 binary IPC / host frame decoder | P4 ring size | P5 | detector / badges / renders |
+| scenario | P0 harness / probes | P1 PTY I/O threads, flusher | P2 output flow control | P3 binary IPC / host frame decoder | P4 ring size, scrollback, WebGL budget | P5 watcher storm mode | detector / badges / renders |
 |---|---|---|---|---|---|---|---|
-| a: sequence flood | yes | yes | yes (backpressure) | with `-HostMode` | with `-HostMode` | see P5 notes | no |
-| b: TUI flood | yes | yes | yes | with `-HostMode` | with `-HostMode` | see P5 notes | no |
-| c: flood + 20 idle | yes | yes | yes | with `-HostMode` | with `-HostMode` | see P5 notes | no |
-| d: agents | yes | yes (echo in busy panes) | yes (tool dumps) | with `-HostMode` | with `-HostMode` | see P5 notes | with `-MockAgents` |
-| e: War Room | yes | yes | yes | with `-HostMode` | with `-HostMode` | see P5 notes | yes (wait_peer path) |
-| f: many visible | yes | yes | yes | with `-HostMode` | with `-HostMode` | see P5 notes | WebGL budget, DOM fallback |
+| a: sequence flood | yes | yes | yes (backpressure) | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | no |
+| b: TUI flood | yes | yes | yes | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | no |
+| c: flood + 20 idle | yes | yes | yes | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | no |
+| d: agents | yes | yes (echo in busy panes) | yes (tool dumps) | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | with `-MockAgents` |
+| e: War Room | yes | yes | yes | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | yes (wait_peer path) |
+| f: many visible | yes | yes | yes | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | WebGL budget, DOM fallback |
 
-Without `-HostMode` the in-process PTY carries the output, so the host-side
-parts of P2, P3 and P4 are not on the path. Add a column when a phase lands.
+Without `-HostMode` the in-process PTY carries the output: the P2 flow gate
+and P3's raw channel bodies still apply (both paths share them), but the host
+frame decoder and the P4 ring buffer are not on the path. P5 (file-watcher
+storm mode) is not exercised by any scenario. Add a column when a phase lands.
 
 A single run is too noisy to compare (see Variance below). Always compare the
 medians of the default 3 runs. The summary prints the median and the min-max
@@ -66,7 +68,7 @@ dir). This is enforced three ways:
    command), a session id, an account, a resume or continue session, a
    start prompt or a startup command. Panes are created as plain terminals.
 3. **Process guard.** A thread polls the instance's process tree (including
-   the terminal host) every second. On an agent CLI, by executable name or by
+   the terminal host) every 200 ms. On an agent CLI, by executable name or by
    its node package path in the command line, it writes
    `AGENT-DETECTED.txt` and kills the instance, and the run fails.
 
@@ -296,11 +298,31 @@ run is not a measurement. The 3-run comparison before and after P1 is pending.
 
 ## Phase 2 note: flow control
 
-Since perf phase 2 output is flow-controlled (`host/src/flow.rs`): at most
-~512 KB per pane is in flight between Rust and xterm, the rest stays in the
-child (ConPTY backpressure). Scenario a/b throughput is therefore bounded by
-xterm's parse rate, and WebView memory should stay flat during floods. Compare
-memory, not just MB/s, against the baseline above.
+Since perf phase 2 output is flow-controlled (`host/src/flow.rs`, used by the
+host and the in-process PTY alike): while more than 512 KiB per pane is unacked between
+Rust and xterm, reading pauses until xterm's parse callbacks ack it back below
+128 KiB (or no ack arrives for 2 s), and the rest stays in the child (ConPTY
+backpressure). Scenario a/b throughput is therefore bounded by xterm's parse
+rate, and WebView memory should stay flat during floods. Compare memory, not
+just MB/s, against the baseline above.
+
+## Phase 3 note: channel bodies
+
+A `Data` batch whose JSON string is under 8 KiB (`DIRECT_JSON_LIMIT` in
+`pty.rs`, Tauri's direct-eval limit) still goes as JSON, as before phase 3;
+only larger batches go as raw bytes, which skip JSON escaping and parsing.
+Small echo-sized batches therefore cost the same as before.
+
+## Phase 4 note: memory and GPU
+
+The host keeps 512 KiB of replay history per pane (was 1 MiB). Scrollback is a
+setting (Settings > Terminal, default 5,000 lines, 500-50,000), and at most 12
+visible panes hold a WebGL context; the rest use the DOM renderer (scenario f).
+
+## Phase 5 note: file watcher
+
+The file watcher switches to storm mode on a burst of 64 raw events and sends
+one rescan after 500 ms of quiet. None of the flood scenarios touches it.
 
 ## Limitations (stated honestly)
 

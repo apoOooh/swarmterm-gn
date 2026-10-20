@@ -240,7 +240,11 @@ fn pump(
                 }
                 continue;
             }
-            // Every sender is gone, so nobody listens for a pending rescan.
+            // Every sender is gone: the `WatchHandle` (its drop sends `Stop`
+            // first) and the native watcher closure both hold one, so this
+            // only happens once the watch was torn down. Its subscribers are
+            // gone with it, so a pending rescan is dropped on purpose, exactly
+            // like on `Stop`; a new watch starts from a fresh listing.
             Recv::Closed => return,
         };
         let mut batch = Vec::new();
@@ -631,6 +635,16 @@ mod tests {
         let steps = (0..RESCAN_BURST).map(|i| ev(&format!("/p/f{i}"))).collect();
         let (out, _) = run(steps);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn pump_stop_during_a_storm_drops_the_pending_rescan() {
+        let mut steps: Vec<_> = (0..RESCAN_BURST).map(|i| ev(&format!("/p/f{i}"))).collect();
+        // The storm batch ends, a rescan is pending, then the watch stops.
+        steps.push(Step::Gap(BATCH_GAP * 2));
+        steps.push(Step::Msg(Msg::Stop));
+        let (out, _) = run(steps);
+        assert!(out.is_empty(), "no rescan after teardown");
     }
 
     #[test]

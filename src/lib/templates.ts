@@ -232,12 +232,15 @@ export const DEFAULT_TEMPLATE_ID = 'terminal'
  */
 export const PERF_MOCK_AGENT_ID = 'perf-mock-agent'
 export const PERF_MOCK_AGENT_COMMAND = 'node agent-stream.mjs --mock'
-const PERF_MOCK_TEMPLATE: WorkspaceTemplate = {
+// Frozen and carrying only `command`: no executable, launch modes, resume,
+// continue or prompt flags, so nothing can append arguments or swap in a real
+// CLI, and nothing at runtime can mutate it into one.
+const PERF_MOCK_TEMPLATE: WorkspaceTemplate = Object.freeze({
   id: PERF_MOCK_AGENT_ID,
   name: 'Perf mock agent',
   description: 'Synthetic agent output for the perf harness (no AI).',
   command: PERF_MOCK_AGENT_COMMAND
-}
+})
 const perfMockEnabled = (): boolean => import.meta.env.DEV === true
 
 /** The template with `id`, or the default template when `id` is unknown. */

@@ -125,7 +125,9 @@ function New-TuiFile([string]$path, [long]$bytes) {
 $agentNamePattern = '^(claude|codex|gemini|opencode|aider|goose|qwen|crush|cursor-agent|amp|copilot)(\.exe|\.cmd)?$'
 $agentCmdPattern = '@anthropic-ai[\\/]claude-code|@openai[\\/]codex|@google[\\/]gemini-cli|opencode-ai|[\\/]claude(\.exe)?["\s]|[\\/]codex(\.exe)?["\s]'
 
-# Polls the instance's tree every second; on an agent CLI it writes the
+# Polls the instance's tree every 200 ms (Win32_ProcessStartTrace events would
+# be instant but need an elevated shell, and this harness runs unelevated); on
+# an agent CLI it writes the
 # offender to $flag and kills the whole instance, so the run fails at once.
 # It also records every dev host seen (pid + start time), so the cleanup can
 # stop exactly those and nothing that reuses a PID or path.
@@ -147,7 +149,7 @@ function Start-Guard([int]$rootPid, [string]$hostExe, [int[]]$foreignHosts, [str
           return
         }
       }
-      Start-Sleep -Milliseconds 1000
+      Start-Sleep -Milliseconds 200
     }
   }
 }
