@@ -427,8 +427,10 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   held 100k+ handles. `ignored()` filters events by their PARENT instead of
   pruning folders; git metadata watches and explicitly requested files pass
   regardless. notify 8 drops a ReadDirectoryChangesW buffer overflow
-  silently, so a burst (`RESCAN_BURST` raw events) schedules one trailing
-  `rescan` change after `RESCAN_QUIET`; the explorer then reloads every
+  silently, so a burst (`RESCAN_BURST` raw events) enters storm mode
+  (`Storm`: later batches are skipped, not filtered) and one trailing
+  `rescan` change goes out after `RESCAN_QUIET`; the thread (`pump`) blocks on
+  one `Msg` channel (events, extra files, `Stop`) with no idle tick; the explorer then reloads every
   loaded folder and documents re-check disk. Only the root itself stays
   non-renameable (user-guide Known limits).
 - **Terminal host (SWA-54/55, `docs/adr/0001`).** `src-tauri/host` is a
