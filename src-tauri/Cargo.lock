@@ -4581,6 +4581,7 @@ dependencies = [
 name = "swarmterm-host"
 version = "0.1.0"
 dependencies = [
+ "memchr",
  "portable-pty",
  "serde",
  "serde_json",

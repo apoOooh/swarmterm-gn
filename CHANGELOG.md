@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Performance: the file watcher stops handling individual events during an
+  event storm (a batch of 64+ raw events, e.g. `cargo build` or `npm install`
+  under the root) and sends one rescan once the tree has been quiet for
+  500 ms. With nothing pending it blocks without an idle tick (was a 100 ms
+  poll); stop is a channel message, so unwatching still releases the root at once.
+- Performance: the terminal host's mode tracker skips plain text with
+  `memchr` to the next ESC instead of parsing byte by byte (same results).
 - Performance: end-to-end output flow control. The renderer acks output once
   xterm parsed it; a pane more than 512 KB behind pauses its output (resumes
   below 128 KB) and the shell is backpressured, so floods no longer grow
