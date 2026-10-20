@@ -4,6 +4,7 @@ import {
   DEFAULT_TEMPLATE_ID,
   templateById,
   agentCommand,
+  withLaunchMode,
   isPlainShellPane,
   isTemplateAvailable,
   PERF_MOCK_AGENT_ID,
@@ -156,5 +157,13 @@ describe('perf mock agent (perf harness only)', () => {
     expect(templateById(PERF_MOCK_AGENT_ID).executable).toBeUndefined()
     expect(isPlainShellPane(PERF_MOCK_AGENT_ID)).toBe(false)
     expect(manifestForAgent(PERF_MOCK_AGENT_ID)?.id).toBe(PERF_MOCK_AGENT_ID)
+  })
+  it('cannot start a real CLI by construction', () => {
+    const t = templateById(PERF_MOCK_AGENT_ID)
+    expect(Object.isFrozen(t)).toBe(true)
+    expect(Object.keys(t).sort()).toEqual(['command', 'description', 'id', 'name'])
+    expect(withLaunchMode(PERF_MOCK_AGENT_COMMAND, PERF_MOCK_AGENT_ID, 'yolo')).toBe(PERF_MOCK_AGENT_COMMAND)
+    const realCommands = TEMPLATES.map((x) => x.command?.split(' ')[0]).filter(Boolean)
+    expect(realCommands).not.toContain(PERF_MOCK_AGENT_COMMAND.split(' ')[0])
   })
 })

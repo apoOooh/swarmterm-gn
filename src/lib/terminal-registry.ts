@@ -50,6 +50,7 @@ import {
   revealInFileManager
 } from '@/tauri/links'
 import { ActivityTracker } from '@/lib/activity-tracker'
+import { writeReplayHistory } from '@/lib/replay-history'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
 import { displayPath } from '@/lib/files/paths'
@@ -1138,9 +1139,8 @@ function getOrCreate(id: string): Entry {
         // tick: none of this is new output.
         replaying += 1
         try { term.resize(Math.max(2, cols), Math.max(1, rows)) } catch { /* disposed */ }
-        const note = truncated ? '\x1b[2m[older output is not available]\x1b[0m\r\n' : ''
-        if (note) term.write(note)
-        term.write(data, () => {
+        // Only the history is acked; the note is never counted (see helper).
+        writeReplayHistory(term, data, truncated, () => {
           onParsed?.()
           replaying -= 1
           const entry = entries.get(id)

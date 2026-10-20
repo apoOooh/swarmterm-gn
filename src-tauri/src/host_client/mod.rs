@@ -480,14 +480,13 @@ impl conn::Sink for AppSink {
         };
         // The host's flusher only emits whole UTF-8 strings (SWA-54
         // `take_valid_utf8`), so this never splits a character and takes
-        // the frame's buffer as is. The lossy fallback is practically
-        // unreachable; if it fires, each U+FFFD (3 bytes) replaces 1 bad
-        // byte, so the renderer acks more than the host's gate counted. The
-        // gate saturates at zero unacked, so it only opens early (less
-        // backpressure for that batch), never wedges. Logged.
+        // the frame's buffer as is. The fallback is practically
+        // unreachable; it keeps the byte length, so the renderer (which
+        // acks the UTF-8 length it received) acks exactly what the host's
+        // gate counted. Logged.
         let text = String::from_utf8(bytes).unwrap_or_else(|e| {
             eprintln!("[host] non-UTF-8 output frame for {terminal_id}, decoded lossily");
-            String::from_utf8_lossy(e.as_bytes()).into_owned()
+            decode_same_len(e.as_bytes())
         });
         let replay = self.replays.take(terminal_id, spawn_id);
         match replay {
@@ -711,6 +710,39 @@ pub fn terminal_host_set_settings(
 #[tauri::command]
 pub fn terminal_host_status(hub: tauri::State<'_, HostHub>) -> HostStatus {
     hub.status()
+}
+
+/// Decodes `bytes` replacing every invalid byte with one `?`, so the result
+/// has exactly `bytes.len()` UTF-8 bytes. `from_utf8_lossy` would put a
+/// 3-byte U+FFFD per invalid sequence and the renderer would ack more than
+/// the host's flow gate counted.
+fn decode_same_len(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        out.push_str(chunk.valid());
+        out.extend(std::iter::repeat('?').take(chunk.invalid().len()));
+    }
+    out
+}
+
+#[cfg(test)]
+mod decode_tests {
+    use super::decode_same_len;
+
+    #[test]
+    fn invalid_bytes_keep_the_byte_count() {
+        let cases: [&[u8]; 4] = [
+            b"plain",
+            b"a\xffb",
+            b"\xe2\x82 cut \xf0\x9f\x98",
+            "ok \u{1F600}".as_bytes(),
+        ];
+        for bytes in cases {
+            assert_eq!(decode_same_len(bytes).len(), bytes.len(), "{bytes:?}");
+        }
+        assert_eq!(decode_same_len(b"a\xffb"), "a?b");
+        assert_eq!(decode_same_len(b"\xe2\x82x"), "??x");
+    }
 }
 
 #[cfg(test)]
