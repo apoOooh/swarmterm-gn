@@ -21,6 +21,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { GuardedPointerSensor } from '@/lib/dnd-sensors'
 import { useAppStore, type Workspace } from '@/store/app-store'
 import { cn } from '@/lib/utils'
+import { countRender } from '@/lib/perf-render-count'
 import { collectLeaves } from '@/lib/layout-tree'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useAgentStateStore } from '@/store/agent-state-store'
@@ -50,6 +51,7 @@ function tabStateClass(active: boolean): string {
  * the Welcome tab stays pinned first. Stays in sync with the navbar list.
  */
 export function WorkspaceTabs({ onNewWorkspace }: WorkspaceTabsProps): ReactElement {
+  countRender('WorkspaceTabs')
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)

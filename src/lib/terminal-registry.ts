@@ -1569,6 +1569,21 @@ export function getTerminalStatus(id: string): TerminalStatus {
 }
 
 /** The terminal's live cwd — OSC 7 if the shell reports it, else the spawn cwd. */
+/** Perf harness hook (tests/perf/flood.perf.ts, scenario f) only: live WebGL
+ *  contexts and visible panes that render with the DOM fallback instead. */
+export function perfRendererStats(): { webgl: number; domVisible: number; visible: number } {
+  let webgl = 0
+  let domVisible = 0
+  let visible = 0
+  for (const entry of entries.values()) {
+    if (entry.webgl) webgl++
+    if (!isPaneVisible(entry)) continue
+    visible++
+    if (!entry.webgl) domVisible++
+  }
+  return { webgl, domVisible, visible }
+}
+
 /** Last `lines` rows of a terminal's buffer as text — for the dev test hook (testlab) only. */
 export function readTerminalText(id: string, lines = 40): string {
   const buffer = entries.get(id)?.term.buffer.active

@@ -3,27 +3,40 @@
 // remote debugging on, generates the data files and samples process CPU and
 // memory while this spec drives the real app over CDP.
 //
-// Inputs (env): PERF_CDP (http://127.0.0.1:9333), PERF_SCENARIO (a|b|c|d),
+// Inputs (env): PERF_CDP (http://127.0.0.1:9333), PERF_SCENARIO (a|b|c|d|e|f),
 // PERF_FLOOD (flooding panes), PERF_IDLE (idle panes), PERF_FILE (data file),
 // PERF_LINES (sequence lines in the file, scenario a/c), PERF_CWD,
 // PERF_OUT (result JSON), PERF_TRACE (optional Chromium trace path),
-// PERF_TIMEOUT_S (max flood duration), PERF_SECONDS (scenario d: stream
-// duration; PERF_FILE is then scripts/perf/agent-stream.mjs).
+// PERF_TIMEOUT_S (max flood duration), PERF_SECONDS (scenario d/e/f: stream
+// duration; PERF_FILE is then scripts/perf/agent-stream.mjs, also copied to
+// PERF_CWD), PERF_HOST (1 = switch the terminal host on before creating
+// panes), PERF_MOCK (1 = scenario d's agent panes use the perf-mock-agent
+// template), PERF_WAR (scenario e: War Room peer/waiter pairs), PERF_STREAM
+// (scenario e: extra streaming panes), PERF_VISIBLE (scenario f: visible panes
+// in the main workspace), PERF_SWITCH_S (scenario f: workspace switch period).
 //
-// Hard rule: every pane is a plain shell. The harness never starts an agent
-// CLI or AI provider; scenario d's "agents" are the local generator script.
+// Hard rule: no agent CLI or AI provider, ever. Panes are plain shells, except
+// the dev-only `perf-mock-agent` template (scenario d with PERF_MOCK, scenario
+// e), whose command is the local generator `node agent-stream.mjs --mock`.
 // assertPlainPanes() aborts the run before any command is typed if ANY
-// workspace in the instance holds an agent pane or a session, and flood.ps1
-// runs the instance on a fresh empty profile and kills it if an agent CLI
-// process ever shows up in its tree.
+// workspace in the instance holds another agent or a session, or if the mock
+// template resolves to anything but that exact command; flood.ps1 runs the
+// instance on a fresh empty profile and kills it if an agent CLI process ever
+// shows up in its tree.
 import { chromium, test, type Page } from '@playwright/test'
-import { writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const env = (k: string, d?: string): string => {
   const v = process.env[k] ?? d
   if (v === undefined) throw new Error(`missing ${k}`)
   return v
 }
+
+// Must match src/lib/templates.ts; assertPlainPanes checks both in-page.
+const MOCK_ID = 'perf-mock-agent'
+const MOCK_COMMAND = 'node agent-stream.mjs --mock'
+const REG = '/src/lib/terminal-registry.ts'
 
 test('flood', async () => {
   const scenario = env('PERF_SCENARIO')
@@ -32,11 +45,16 @@ test('flood', async () => {
   const file = env('PERF_FILE')
   const lines = Number(env('PERF_LINES', '0'))
   const timeoutS = Number(env('PERF_TIMEOUT_S', '600'))
-  // The visible workspace holds at most 12 panes; the probed idle pane must be in it.
+  const cwd = env('PERF_CWD')
+  const hostMode = process.env.PERF_HOST === '1'
   const agents = scenario === 'd'
-  // Scenario d puts the idle pane first, so it and the probed busy pane are
-  // visible while the agent panes beyond the first workspace's 12 are hidden.
-  if (!agents && flood > 11) throw new Error('PERF_FLOOD must be <= 11')
+  const warRoom = scenario === 'e'
+  const many = scenario === 'f'
+  // Fixed-duration scenarios: they run PERF_SECONDS instead of until the
+  // flood is complete or quiet.
+  const fixed = agents || warRoom || many
+  const mock = (agents && process.env.PERF_MOCK === '1') || warRoom
+  if (!fixed && flood > 11) throw new Error('PERF_FLOOD must be <= 11')
   const seconds = Number(env('PERF_SECONDS', '150'))
   const browser = await chromium.connectOverCDP(env('PERF_CDP'))
   const page = findMain(browser.contexts().flatMap(c => c.pages()))
@@ -46,44 +64,126 @@ test('flood', async () => {
   // which would make the frame times meaningless.
   if (await page.evaluate(() => document.visibilityState) !== 'visible') throw new Error('dev window is not visible; un-minimise it')
   // Abort before touching anything if the instance holds any agent pane.
-  await assertPlainPanes(page)
+  await assertPlainPanes(page, mock)
   await closePerfWorkspaces(page)
   await installProbes(page)
-  const ids = await createPanes(page, env('PERF_CWD'), flood + idle)
-  await assertPlainPanes(page)
-  const floodIds = agents ? ids.slice(1) : ids.slice(0, flood)
-  const idleId = agents ? ids[0] : ids[flood]
-  const busyId = floodIds[0]
-  // Wait for every shell prompt, so startup output is not counted as flood.
-  await page.waitForFunction(async (all) => {
-    const reg = await import('/src/lib/terminal-registry.ts' as string)
-    return all.every((id: string) => /[>$#]\s*$/.test(reg.readTerminalText(id, 3)))
-  }, ids, { timeout: 120_000, polling: 500 })
-  await page.waitForTimeout(2000)
+  // The mock generators start on perf-mock.json; stale logs would mix runs.
+  clearMockFiles(cwd)
+  if (hostMode) await page.evaluate(async () => { await (await import('/src/tauri/terminal-host.ts' as string)).setTerminalHostSettings({ enabled: true }) })
 
-  // Focus the idle pane by clicking its xterm, like a user would.
-  await page.evaluate(async (id) => { (await import('/src/lib/terminal-registry.ts' as string)).focusTerminal(id) }, idleId)
-  await page.waitForTimeout(300)
-  // The probe letters must not occur in the idle prompt (it shows the cwd,
-  // %TEMP%\swarmterm-perf), or a prompt redraw would pass for an echo.
-  const prompt: string = await page.evaluate(async (id) => (await import('/src/lib/terminal-registry.ts' as string)).readTerminalText(id, 3), idleId)
-  if (/[zxjq]/i.test(prompt)) throw new Error(`idle prompt contains a probe letter (z x j q): ${prompt}`)
+  // ---- panes ----
+  const war = Number(env('PERF_WAR', '4'))
+  const streamN = Number(env('PERF_STREAM', '4'))
+  let ids: string[]
+  let floodIds: string[]
+  let idleId: string
+  let peerIds: string[] = []
+  let waiterIds: string[] = []
+  let wsIds: string[] = []
+  if (many) {
+    const made = await createManyVisible(page, cwd, Number(env('PERF_VISIBLE', '16')))
+    ids = made.ids; wsIds = made.wsIds; floodIds = ids; idleId = ''
+  } else if (warRoom) {
+    // Waiters (plain shells, the first is the probed idle pane), then the
+    // mock agent peers they wait on, then panes that only stream.
+    const kinds = [...Array(war).fill('terminal'), ...Array(war).fill(MOCK_ID), ...Array(streamN).fill('terminal')]
+    ids = await createPanes(page, cwd, kinds)
+    waiterIds = ids.slice(0, war); peerIds = ids.slice(war, 2 * war)
+    floodIds = ids.slice(2 * war, 2 * war + streamN); idleId = waiterIds[0]
+  } else {
+    const kinds = agents ? ['terminal', ...Array(flood).fill(mock ? MOCK_ID : 'terminal')] : Array(flood + idle).fill('terminal')
+    ids = await createPanes(page, cwd, kinds)
+    floodIds = agents ? ids.slice(1, 1 + flood) : ids.slice(0, flood)
+    idleId = agents ? ids[0] : ids[flood]
+  }
+  await assertPlainPanes(page, mock)
+  const mockIds: string[] = await page.evaluate(async ({ ids, MOCK_ID }) => {
+    const { useAppStore } = await import('/src/store/app-store.ts' as string)
+    const { collectLeaves } = await import('/src/lib/layout-tree.ts' as string)
+    const leaves = useAppStore.getState().workspaces.flatMap((w: any) => collectLeaves(w.layout))
+    return ids.filter((id: string) => leaves.find((l: any) => l.terminalId === id)?.agentId === MOCK_ID)
+  }, { ids, MOCK_ID })
+  if (warRoom && mockIds.join() !== peerIds.join()) throw new Error('scenario e: peer panes are not the mock agents')
+  const busyId = agents ? floodIds[0] : ''
+  // Wait for every shell prompt (mock panes: the mock's wait line), so
+  // startup output is not counted as flood.
+  await page.waitForFunction(async ({ all, REG }) => {
+    const reg = await import(REG)
+    return all.every((id: string) => { const t = reg.readTerminalText(id, 3); return /[>$#]\s*$/.test(t) || t.includes('perf-mock: waiting') })
+  }, { all: ids, REG }, { timeout: 120_000, polling: 500 }).catch(async (e) => {
+    // Name the panes that never got ready (a mock whose `node` failed shows
+    // a shell error instead of its wait line).
+    const tails: string[] = await page.evaluate(async ({ all, REG }) => {
+      const reg = await import(REG)
+      return all.map((id: string) => `${id}: ${reg.readTerminalText(id, 3).replace(/\s+/g, ' ').slice(-120)}`)
+    }, { all: ids, REG })
+    throw new Error(`panes not ready after 120 s:\n${tails.join('\n')}\n${e}`)
+  })
+  await page.waitForTimeout(2000)
+  let host: unknown = null
+  if (hostMode) {
+    host = await page.evaluate(async () => (await import('/src/tauri/terminal-host.ts' as string)).getTerminalHostStatus())
+    if (!(host as any).connected) throw new Error('PERF_HOST: terminal host is not connected: ' + JSON.stringify(host))
+  }
+
+  // ---- scenario e: War Room setup ----
+  let room: WarRoomRun | undefined
+  if (warRoom) room = await setupWarRoom(page, cwd, waiterIds, peerIds)
+
+  if (idleId) {
+    // Focus the idle pane by clicking its xterm, like a user would.
+    await page.evaluate(async ({ id, REG }) => { (await import(REG)).focusTerminal(id) }, { id: idleId, REG })
+    await page.waitForTimeout(300)
+    // The probe letters must not occur in the idle prompt (it shows the cwd,
+    // %TEMP%\swarmterm-perf), or a prompt redraw would pass for an echo.
+    const prompt: string = await page.evaluate(async ({ id, REG }) => (await import(REG)).readTerminalText(id, 3), { id: idleId, REG })
+    if (/[zxjq]/i.test(prompt)) throw new Error(`idle prompt contains a probe letter (z x j q): ${prompt}`)
+  }
 
   if (process.env.PERF_TRACE) await browser.startTracing(page, { path: process.env.PERF_TRACE, screenshots: false, categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline.frame'] })
   await page.evaluate(() => (window as any).__perf.start())
   const t0 = Date.now()
-  await page.evaluate(async ({ ids, file, agents, seconds }) => {
+  // Start signal for the mock agents (their template line already runs).
+  if (mockIds.length) writeFileSync(join(cwd, 'perf-mock.json'), JSON.stringify({ seconds }))
+  const typed = mock && agents ? [] : floodIds
+  await page.evaluate(async ({ ids, file, fixed, seconds }) => {
     const term = await import('/src/tauri/terminal.ts' as string)
-    for (const [i, id] of ids.entries()) await term.writeTerminal(id, agents ? `node "${file}" ${seconds} ${i + 1}\r` : `cmd /d /c type "${file}"\r`)
-  }, { ids: floodIds, file, agents, seconds })
+    for (const [i, id] of ids.entries()) await term.writeTerminal(id, fixed ? `node "${file}" ${seconds} ${i + 1}\r` : `cmd /d /c type "${file}"\r`)
+  }, { ids: typed, file, fixed, seconds })
 
-  // Keystroke probes into the idle pane, one at a time: press a letter, wait
-  // for its echo (or 3 s = unanswered), keep probes >= 250 ms apart. Only one
-  // probe is ever outstanding, so a lost echo cannot shift later matches. The
-  // letters never occur in the prompt (path ...\swarmterm-perf), so a prompt
-  // redraw cannot pass for an echo; Escape (clear line) is sent only while no
-  // probe is outstanding. Runs until every flood pane is done (sequence
-  // complete, or quiet for QUIET_MS) or the timeout.
+  const waits = room ? runWaiters(room, t0 + seconds * 1000) : undefined
+  let switches: SwitchSample[] = []
+  if (many) switches = await switchWorkspaces(page, wsIds, t0, seconds, Number(env('PERF_SWITCH_S', '3')))
+  else await probeLoop(page, { scenario, fixed, agents, seconds, lines, flood, timeoutS, t0, busyId, idleId })
+  const waitResults = waits ? await waits : undefined
+
+  if (idleId) await page.keyboard.press('Escape')
+  await page.waitForTimeout(1500)
+  const result = await page.evaluate((lines) => (window as any).__perf.stop(lines), lines)
+  if (process.env.PERF_TRACE) await browser.stopTracing()
+  result.scenario = scenario; result.flood = flood; result.idle = idle; result.wallSeconds = (Date.now() - t0) / 1000
+  result.hostMode = hostMode; result.host = host; result.mockAgents = mockIds.length
+  if (waitResults) result.warRoom = summarizeWaits(waitResults, cwd, peerIds, war, streamN)
+  if (many) result.renderers = summarizeSwitches(switches, ids.length)
+  // Epoch window for flood.ps1 to trim its CPU/memory samples to the flood.
+  result.windowStartMs = t0; result.windowEndMs = t0 + Math.round((fixed ? seconds : result.floodSeconds) * 1000)
+  writeFileSync(env('PERF_OUT'), JSON.stringify(result, null, 2))
+  // Ctrl+C any generator still running so the instance can be closed cleanly.
+  await page.evaluate(async (ids) => { const t = await import('/src/tauri/terminal.ts' as string); for (const id of ids) await t.writeTerminal(id, '\x03') }, [...floodIds, ...mockIds])
+  if (room) await page.evaluate(async (roomId) => { await (await import('/src/tauri/warroom.ts' as string)).warRoomDelete(roomId).catch(() => {}) }, room.roomId)
+  await closePerfWorkspaces(page)
+  clearMockFiles(cwd)
+})
+
+// Keystroke probes into the idle pane, one at a time: press a letter, wait
+// for its echo (or 3 s = unanswered), keep probes >= 250 ms apart. Only one
+// probe is ever outstanding, so a lost echo cannot shift later matches. The
+// letters never occur in the prompt (path ...\swarmterm-perf), so a prompt
+// redraw cannot pass for an echo; Escape (clear line) is sent only while no
+// probe is outstanding. Runs until every flood pane is done (sequence
+// complete, or quiet for QUIET_MS), the timeout, or (fixed-duration
+// scenarios) PERF_SECONDS.
+async function probeLoop(page: Page, o: { scenario: string; fixed: boolean; agents: boolean; seconds: number; lines: number; flood: number; timeoutS: number; t0: number; busyId: string; idleId: string }): Promise<void> {
   // Long enough to ride out real output stalls (one of 15+ s was seen in a
   // baseline run); the stall itself is reported as maxOutputGapMs.
   const QUIET_MS = 60_000
@@ -95,14 +195,14 @@ test('flood', async () => {
   // lost or doubled keystroke cannot desync later probes).
   let busy = false
   for (;;) {
-    if (agents && n % 16 === 0 && n > 0) {
+    if (o.agents && n % 16 === 0 && n > 0) {
       busy = !busy
-      await page.evaluate(async (id) => { (await import('/src/lib/terminal-registry.ts' as string)).focusTerminal(id) }, busy ? busyId : idleId)
+      await page.evaluate(async ({ id, REG }) => { (await import(REG)).focusTerminal(id) }, { id: busy ? o.busyId : o.idleId, REG })
       await page.waitForTimeout(300)
     }
     const pressed = Date.now()
     const ch = letters[n % letters.length]
-    if (agents) await page.evaluate((c) => (window as any).__perf.expect(c), busy ? ch : null)
+    if (o.agents) await page.evaluate((c) => (window as any).__perf.expect(c), busy ? ch : null)
     await page.keyboard.press(ch)
     n++
     // One round trip that resolves in-page on the echo: polling over CDP would
@@ -110,49 +210,233 @@ test('flood', async () => {
     // A busy agent pane may stall for seconds behind a tool dump: wait long
     // enough to measure the stall instead of censoring it at 3 s.
     // Capped at the scenario's end, so the run does not overshoot it.
-    const left = (seconds + 5) * 1000 - (Date.now() - t0)
+    const left = (o.seconds + 5) * 1000 - (Date.now() - o.t0)
     await page.evaluate((ms) => (window as any).__perf.waitEcho(ms), busy ? Math.max(500, Math.min(10_000, left)) : 3000)
     if (n % 16 === 0 && !busy) await page.keyboard.press('Escape')
     await page.waitForTimeout(Math.max(0, 250 - (Date.now() - pressed)))
     const st = await page.evaluate(() => (window as any).__perf.status())
-    const elapsed = (Date.now() - t0) / 1000
+    const elapsed = (Date.now() - o.t0) / 1000
     // Quiet = no new output for QUIET_MS AND xterm has parsed everything it was
     // given (or has parsed nothing for QUIET_MS: xterm drops writes past its 50 MB
     // pending limit and never calls back). Writes stopping alone is not the end.
     const quiet = st.sinceLastData > QUIET_MS && (st.backlog === 0 || st.sinceLastParse > QUIET_MS)
-    const complete = scenario !== 'b' && lines > 0 && st.completeStreams >= flood
-    if (agents) { if (elapsed > seconds + 5) break; continue }
-    if ((complete && elapsed > 3) || (quiet && elapsed > 20) || elapsed > timeoutS) break
+    const complete = o.scenario !== 'b' && o.lines > 0 && st.completeStreams >= o.flood
+    if (o.fixed) { if (elapsed > o.seconds + 5) break; continue }
+    if ((complete && elapsed > 3) || (quiet && elapsed > 20) || elapsed > o.timeoutS) break
   }
-  await page.keyboard.press('Escape')
-  await page.waitForTimeout(1500)
-  const result = await page.evaluate((lines) => (window as any).__perf.stop(lines), lines)
-  if (process.env.PERF_TRACE) await browser.stopTracing()
-  result.scenario = scenario; result.flood = flood; result.idle = idle; result.wallSeconds = (Date.now() - t0) / 1000
-  // Epoch window for flood.ps1 to trim its CPU/memory samples to the flood.
-  result.windowStartMs = t0; result.windowEndMs = t0 + Math.round((agents ? seconds : result.floodSeconds) * 1000)
-  writeFileSync(env('PERF_OUT'), JSON.stringify(result, null, 2))
-  // Ctrl+C any flood still running so the instance can be closed cleanly.
-  await page.evaluate(async (ids) => { const t = await import('/src/tauri/terminal.ts' as string); for (const id of ids) await t.writeTerminal(id, '\x03') }, floodIds)
-  await closePerfWorkspaces(page)
-})
+}
+
+function clearMockFiles(cwd: string): void {
+  if (!existsSync(cwd)) return
+  for (const f of readdirSync(cwd)) if (f === 'perf-mock.json' || f === 'perf-mcp.json' || /^perf-mock-.*\.log$/.test(f)) rmSync(join(cwd, f), { force: true })
+}
+
+// ---------- scenario e: War Room waiters ----------
+type WarRoomRun = { roomId: string; mcpUrl: string; pairs: { waiter: string; peer: string }[] }
+type WaitRecord = { peer: string; calledAt: number; returnedAt: number; outcome: string; state: string; error?: string }
+
+// Puts the waiters and the mock peers into a fresh War Room through the same
+// command the app's drag-and-drop uses (war_room_join), and reads the MCP URL
+// from a waiter's environment. Each waiter's bearer is its pane id, exactly
+// what an agent CLI in that pane would send (SWARMTERM_SESSION).
+async function setupWarRoom(page: Page, cwd: string, waiters: string[], peers: string[]): Promise<WarRoomRun> {
+  const roomId: string = await page.evaluate(async ({ waiters, peers, cwd, MOCK_ID }) => {
+    const wr = await import('/src/tauri/warroom.ts' as string)
+    const { roomId } = await wr.warRoomCreate(`perf-room-${Date.now()}`)
+    for (const [i, id] of waiters.entries()) await wr.warRoomJoin({ roomId, terminalId: id, cwd, displayName: `perf-waiter-${i}` })
+    for (const [i, id] of peers.entries()) await wr.warRoomJoin({ roomId, terminalId: id, agentId: MOCK_ID, cwd, displayName: `perf-peer-${i}` })
+    return roomId
+  }, { waiters, peers, cwd, MOCK_ID })
+  // The waiter pane writes its own MCP env to a file (screen text of a narrow
+  // pane wraps).
+  const envFile = join(cwd, 'perf-mcp.json')
+  await page.evaluate(async (id) => (await import('/src/tauri/terminal.ts' as string)).writeTerminal(id,
+    'node -e "require(\'fs\').writeFileSync(\'perf-mcp.json\',JSON.stringify({url:process.env.SWARMTERM_MCP_URL,tok:process.env.SWARMTERM_SESSION}))"\r'), waiters[0])
+  let mcpEnv: { url?: string; tok?: string } = {}
+  for (const until = Date.now() + 30_000; Date.now() < until; await new Promise(r => setTimeout(r, 250))) {
+    try { mcpEnv = JSON.parse(readFileSync(envFile, 'utf8')); break } catch { /* not written yet */ }
+  }
+  const url = mcpEnv.url
+  if (!url || !/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) throw new Error(`scenario e: no loopback MCP URL from the waiter pane: ${url}`)
+  if (mcpEnv.tok !== waiters[0]) throw new Error(`scenario e: pane token ${mcpEnv.tok} is not its pane id ${waiters[0]}`)
+  // Clear the line, so the probe letters land on an empty prompt.
+  await page.evaluate(async (id) => (await import('/src/tauri/terminal.ts' as string)).writeTerminal(id, 'cls\r'), waiters[0])
+  await page.waitForTimeout(1000)
+  return { roomId, mcpUrl: url, pairs: waiters.map((w, i) => ({ waiter: w, peer: peers[i] })) }
+}
+
+// Minimal MCP Streamable-HTTP client (initialize, then tools/call), like an
+// agent CLI's MCP client. Answers come as JSON or as an SSE stream.
+async function mcpSession(url: string, token: string): Promise<(name: string, args: unknown) => Promise<any>> {
+  let sid: string | undefined
+  let next = 0
+  const rpc = async (method: string, params: unknown, notify = false): Promise<any> => {
+    const id = ++next
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}`, ...(sid ? { 'mcp-session-id': sid } : {}) },
+      body: JSON.stringify(notify ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id, method, params })
+    })
+    sid ??= res.headers.get('mcp-session-id') ?? undefined
+    const body = await res.text()
+    if (notify) return undefined
+    if (!res.ok) throw new Error(`MCP ${method}: HTTP ${res.status} ${body.slice(0, 200)}`)
+    const msgs = (res.headers.get('content-type') ?? '').includes('event-stream')
+      ? body.split(/\r?\n/).filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).filter(Boolean).map(l => JSON.parse(l))
+      : [JSON.parse(body)]
+    const msg = msgs.find(x => x.id === id)
+    if (!msg) throw new Error(`MCP ${method}: no answer`)
+    if (msg.error) throw new Error(`MCP ${method}: ${JSON.stringify(msg.error)}`)
+    return msg.result
+  }
+  await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'swarmterm-perf', version: '0' } })
+  await rpc('notifications/initialized', {}, true)
+  return async (name, args) => {
+    const r = await rpc('tools/call', { name, arguments: args })
+    if (r.isError) throw new Error(`${name}: ${JSON.stringify(r.content)}`)
+    return r.structuredContent ?? JSON.parse(r.content?.[0]?.text ?? 'null')
+  }
+}
+
+// One loop per waiter until the deadline: war_room.wait_peer with
+// afterChange (only a state entered after the call counts), so every return
+// is one fresh working -> idle flip of the mock peer.
+async function runWaiters(room: WarRoomRun, deadline: number): Promise<WaitRecord[]> {
+  const out: WaitRecord[] = []
+  await Promise.all(room.pairs.map(async ({ waiter, peer }) => {
+    const call = await mcpSession(room.mcpUrl, waiter)
+    while (Date.now() < deadline - 500) {
+      const calledAt = Date.now()
+      try {
+        const r = await call('war_room.wait_peer', { peer, afterChange: true, timeoutMs: Math.max(1000, Math.min(30_000, deadline - calledAt)) })
+        out.push({ peer, calledAt, returnedAt: Date.now(), outcome: String(r.outcome), state: String(r.state) })
+        // A peer that left (or any instant non-reached answer) must not turn
+        // this into a busy loop against the MCP server.
+        if (r.outcome !== 'reached' && r.outcome !== 'timeout') await new Promise(res => setTimeout(res, 1000))
+      } catch (e) {
+        out.push({ peer, calledAt, returnedAt: Date.now(), outcome: 'error', state: '', error: String(e).slice(0, 300) })
+        await new Promise(r => setTimeout(r, 1000))
+      }
+    }
+  }))
+  return out
+}
+
+// Resolve latency = wait_peer's return minus the mock's own idle flip (its
+// log, same clock): the newest idle flip after the call started and before it
+// returned. Covers generator -> ConPTY -> xterm -> detector -> mirror IPC ->
+// peer_states -> wake -> MCP answer.
+function summarizeWaits(recs: WaitRecord[], cwd: string, peers: string[], pairs: number, streaming: number): unknown {
+  const flips = new Map<string, number[]>()
+  for (const p of peers) {
+    const f = join(cwd, `perf-mock-${p}.log`)
+    flips.set(p, existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l: string) => l.startsWith('idle ')).map((l: string) => Number(l.slice(5))) : [])
+  }
+  const lat: number[] = []
+  let unmatched = 0
+  // The mock only flips working <-> idle, which the app shows as idle or done
+  // (unseen idle); any other reached state is counted apart, not timed.
+  const idleLike = (s: string): boolean => s === 'idle' || s === 'done'
+  for (const r of recs.filter(r => r.outcome === 'reached' && idleLike(r.state))) {
+    const idle = (flips.get(r.peer) ?? []).filter(t => t >= r.calledAt && t <= r.returnedAt)
+    if (idle.length) lat.push(r.returnedAt - Math.max(...idle)); else unmatched++
+  }
+  const count = (o: string): number => recs.filter(r => r.outcome === o).length
+  return {
+    pairs, streaming, calls: recs.length, reached: count('reached'), timeout: count('timeout'), stalled: count('stalled'), peerLeft: count('peer_left'), errors: count('error'),
+    firstError: recs.find(r => r.error)?.error ?? null,
+    reachedOtherState: recs.filter(r => r.outcome === 'reached' && !idleLike(r.state)).length,
+    idleFlips: [...flips.values()].reduce((a, f) => a + f.length, 0), unmatched,
+    resolve: { samples: lat.length, p50: pctl(lat, 0.5), p95: pctl(lat, 0.95), max: pctl(lat, 1) }
+  }
+}
+
+function pctl(a: number[], p: number): number | null {
+  if (!a.length) return null
+  const b = [...a].sort((x, y) => x - y)
+  return b[Math.min(b.length - 1, Math.floor(p * b.length))]
+}
+
+// ---------- scenario f: many visible panes + workspace switching ----------
+type SwitchSample = { ws: number; t: number; webgl: number; domVisible: number; visible: number }
+
+// Main workspace: 12 panes from the wizard, split up to `visible`; two more
+// workspaces of 4 panes each to switch between. Every pane streams.
+async function createManyVisible(page: Page, cwd: string, visible: number): Promise<{ ids: string[]; wsIds: string[] }> {
+  return page.evaluate(async ({ cwd, visible }) => {
+    const { useAppStore, visibleLeaves } = await import('/src/store/app-store.ts' as string)
+    const st = (): any => useAppStore.getState()
+    st().createWorkspace({ cwd, terminalCount: 12, agentIds: Array(12).fill('terminal'), name: 'perf-0' })
+    const main = st().activeWorkspaceId
+    const ws = (): any => st().workspaces.find((w: any) => w.id === main)
+    for (let i = 0; visibleLeaves(ws()).length < visible; i++) st().splitPane(visibleLeaves(ws())[i].id, i % 2 ? 'horizontal' : 'vertical', 'terminal')
+    const wsIds = [main]
+    for (const k of [1, 2]) {
+      st().createWorkspace({ cwd, terminalCount: 4, agentIds: Array(4).fill('terminal'), name: `perf-${k}` })
+      wsIds.push(st().activeWorkspaceId)
+    }
+    useAppStore.setState({ activeWorkspaceId: main })
+    const ids = wsIds.flatMap(w => visibleLeaves(st().workspaces.find((x: any) => x.id === w)).map((l: any) => l.terminalId))
+    return { ids, wsIds }
+  }, { cwd, visible })
+}
+
+async function switchWorkspaces(page: Page, wsIds: string[], t0: number, seconds: number, periodS: number): Promise<SwitchSample[]> {
+  const out: SwitchSample[] = []
+  for (let k = 0; Date.now() - t0 < seconds * 1000; k++) {
+    const ws = k % wsIds.length
+    await page.evaluate(async (id) => { (await import('/src/store/app-store.ts' as string)).useAppStore.getState().setActiveWorkspace(id) }, wsIds[ws])
+    // Sample once the switch has settled (attach, fit, renderer swap).
+    await page.waitForTimeout(Math.min(1000, periodS * 500))
+    const s = await page.evaluate(async (REG) => (await import(REG)).perfRendererStats(), REG)
+    out.push({ ws, t: Date.now() - t0, ...s })
+    await page.waitForTimeout(Math.max(0, periodS * 1000 - Math.min(1000, periodS * 500)))
+  }
+  await page.evaluate(async (id) => { (await import('/src/store/app-store.ts' as string)).useAppStore.getState().setActiveWorkspace(id) }, wsIds[0])
+  return out
+}
+
+function summarizeSwitches(s: SwitchSample[], panes: number): unknown {
+  const main = s.filter(x => x.ws === 0)
+  const max = (a: SwitchSample[], k: 'webgl' | 'domVisible' | 'visible'): number | null => a.length ? Math.max(...a.map(x => x[k])) : null
+  return {
+    panes, switches: s.length,
+    mainVisible: max(main, 'visible'), mainWebglMax: max(main, 'webgl'), mainDomFallbackMax: max(main, 'domVisible'),
+    webglMax: max(s, 'webgl'), domFallbackMax: max(s, 'domVisible'),
+    samples: s
+  }
+}
 
 // Hard rule (docs/perf-baseline.md): the harness never runs an agent CLI or AI
 // provider. Fails the run if ANY workspace in the instance (not only perf-*
 // ones: a restored workspace could resume an agent session) has a default
 // agent, or any leaf has a non-terminal agent, a session to resume, a
-// start prompt or a startup command.
-async function assertPlainPanes(page: Page): Promise<void> {
-  const bad: string[] = await page.evaluate(async () => {
+// start prompt or a startup command. The ONE exception, only when the
+// scenario asks for it (allowMock), is the dev-only perf-mock-agent template,
+// and only after checking in-page that it resolves to exactly the local
+// generator command and is not one of the real templates.
+async function assertPlainPanes(page: Page, allowMock: boolean): Promise<void> {
+  const bad: string[] = await page.evaluate(async ({ allowMock, MOCK_ID, MOCK_COMMAND }) => {
     const { useAppStore } = await import('/src/store/app-store.ts' as string)
     // Every leaf in the layout, including drawered and floating ones.
     const { collectLeaves } = await import('/src/lib/layout-tree.ts' as string)
+    const tpl = await import('/src/lib/templates.ts' as string)
     const out: string[] = []
+    if (allowMock) {
+      const t = tpl.templateById(MOCK_ID)
+      if (tpl.TEMPLATES.some((x: any) => x.id === MOCK_ID)) out.push('perf-mock-agent is a real template')
+      if (t.id !== MOCK_ID || t.command !== MOCK_COMMAND || tpl.agentCommand(MOCK_ID) !== MOCK_COMMAND || t.executable || t.launchModes || t.resume || t.continueCommand || t.spawnPromptFlag) {
+        out.push(`perf-mock-agent does not resolve to exactly "${MOCK_COMMAND}"`)
+      }
+    }
+    const allowed = (id: string): boolean => id === 'terminal' || (allowMock && id === MOCK_ID)
     for (const w of useAppStore.getState().workspaces as any[]) {
       if (w.defaultAgentId && w.defaultAgentId !== 'terminal') out.push(`workspace ${w.name}: defaultAgentId ${w.defaultAgentId}`)
       for (const l of collectLeaves(w.layout) as any[]) {
         const why = [
-          l.agentId && l.agentId !== 'terminal' && `agentId ${l.agentId}`,
+          l.agentId && !allowed(l.agentId) && `agentId ${l.agentId}`,
+          l.agentId === MOCK_ID && !w.name?.startsWith('perf-') && 'mock agent outside a perf workspace',
+          l.accountId && 'accountId', l.launchModeId && 'launchModeId',
           l.sessionId && 'sessionId', l.resumeSessionId && 'resumeSessionId', l.continueSession && 'continueSession',
           l.initialPrompt && 'initialPrompt', l.startupCommand && 'startupCommand'
         ].filter(Boolean)
@@ -160,7 +444,7 @@ async function assertPlainPanes(page: Page): Promise<void> {
       }
     }
     return out
-  })
+  }, { allowMock, MOCK_ID, MOCK_COMMAND })
   if (bad.length) throw new Error('refusing to run: agent panes/sessions present (harness must never start an agent):\n' + bad.join('\n'))
 }
 
@@ -189,8 +473,11 @@ function findMain(pages: Page[]): Page {
   return p
 }
 
-async function createPanes(page: Page, cwd: string, total: number): Promise<string[]> {
-  return page.evaluate(async ({ cwd, total }) => {
+// kinds[i] is pane i's template id ('terminal' or the mock agent); padding
+// panes that round a workspace up are plain terminals.
+async function createPanes(page: Page, cwd: string, kinds: string[]): Promise<string[]> {
+  return page.evaluate(async ({ cwd, kinds }) => {
+    const total = kinds.length
     const { useAppStore } = await import('/src/store/app-store.ts' as string)
     const { visibleLeaves } = await import('/src/store/app-store.ts' as string)
     // TERMINAL_COUNTS only allows these sizes. The first workspace is the
@@ -202,7 +489,9 @@ async function createPanes(page: Page, cwd: string, total: number): Promise<stri
     const wsIds: string[] = []
     while (left > 0) {
       const c = counts.find(c => c >= Math.min(left, 12))!
-      useAppStore.getState().createWorkspace({ cwd, terminalCount: c, agentIds: Array(c).fill('terminal'), name: `perf-${wsIds.length}` })
+      const from = total - left
+      const agentIds = Array.from({ length: c }, (_, i) => kinds[from + i] ?? 'terminal')
+      useAppStore.getState().createWorkspace({ cwd, terminalCount: c, agentIds, name: `perf-${wsIds.length}` })
       const s = useAppStore.getState()
       wsIds.push(s.activeWorkspaceId)
       left -= c
@@ -215,7 +504,7 @@ async function createPanes(page: Page, cwd: string, total: number): Promise<stri
       for (const leaf of visibleLeaves(ws)) ids.push(leaf.terminalId)
     }
     return ids
-  }, { cwd, total })
+  }, { cwd, kinds })
 }
 
 // Hooks Terminal.prototype.write (the app's own xterm module instance) to
@@ -337,6 +626,8 @@ async function installProbes(page: Page): Promise<void> {
         streams.clear(); longTasks.length = 0; frames.length = 0; echoes.length = 0; echoesBusy.length = 0
         pending = undefined; unanswered = 0; unansweredBusy = 0; expectBusy = false; lastBusyN = 0; hiddenMs = 0; maxGap = 0
         recording = true; prev = 0; lastData = lastParse = startAt = floodEnd = performance.now()
+        // Dev-only render counter (src/lib/perf-render-count.ts) counts while set.
+        ;(window as any).__perfRenderCounts = {}
       },
       // Next keystroke goes to the busy agent pane (a char) or the idle one (null).
       expect(ch: string | null) { expectBusy = ch !== null },
@@ -352,6 +643,9 @@ async function installProbes(page: Page): Promise<void> {
       },
       stop(lines: number) {
         recording = false
+        // Zero renders is a result, not a missing value.
+        const renders = { WorkspaceTabs: 0, AttentionBadge: 0, ...((window as any).__perfRenderCounts ?? {}) }
+        delete (window as any).__perfRenderCounts
         if (pending) { if (pending.busy) unansweredBusy++; else unanswered++; pending = undefined }
         const seq = [...streams.values()].filter(s => s.seen > 0)
         const lagged = [...streams.values()].filter(s => s.parse.length)
@@ -361,6 +655,8 @@ async function installProbes(page: Page): Promise<void> {
         for (let i = 0; i < lines; i++) expected = FNV(expected, i)
         return {
           floodSeconds: Math.round(floodEnd - startAt) / 1000,
+          // Component renders during the window (WorkspaceTabs, AttentionBadge).
+          renders,
           hiddenMs: Math.round(hiddenMs),
           // Longest pause between flood writes (the final quiet wait not included).
           maxOutputGapMs: Math.round(maxGap),

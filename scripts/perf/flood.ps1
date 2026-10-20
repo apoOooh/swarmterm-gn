@@ -14,7 +14,20 @@
        local generator of agent-like output (spinner/status redraws, streamed
        markdown, tool-output dumps, OSC title/progress) for -AgentSeconds,
        plus 1 idle pane; echo is probed in the idle and in a busy pane, and
-       per-pane delivery lag is read from timestamps in the stream
+       per-pane delivery lag is read from timestamps in the stream.
+       -MockAgents: the agent panes use the dev-only perf-mock-agent template
+       (same generator in --mock mode), so the agent detector, tab badges and
+       state flips run; WorkspaceTabs/AttentionBadge renders are counted
+    e  War Room: -WarPairs mock agent peers plus as many plain waiter panes
+       in one room; each waiter calls war_room.wait_peer over MCP (as an
+       agent's MCP client would, with the pane's own token) while
+       -StreamPanes other panes stream; reports the resolve latency
+    f  -VisiblePanes (16-20) streaming panes visible in one workspace plus two
+       4-pane workspaces, switching every -SwitchSeconds; reports live WebGL
+       contexts and visible DOM-fallback panes
+    full  a, b, c, d (mock agents), e and f, once each
+  -HostMode switches the terminal host on in the throwaway perf profile
+  (builds swarmterm-host first), so output runs through the host path.
   HARD RULE: no agent CLI or AI provider is ever started. Every pane is a
   plain shell. The instance runs on its own identifier
   (com.apooooh.swarmterm.gn.perf) whose app-data and WebView2 profile are
@@ -33,8 +46,15 @@
 #>
 [CmdletBinding()]
 param(
-  # 'all' is a, b and c; d (agents, ~3 min per run) is run on its own.
-  [ValidateSet('a', 'b', 'c', 'd', 'all')] [string]$Scenario = 'all',
+  # 'all' is a, b and c; d (agents, ~3 min per run), e and f are run on their
+  # own; 'full' runs a, b, c, d (mock agents), e and f once each.
+  [ValidateSet('a', 'b', 'c', 'd', 'e', 'f', 'all', 'full')] [string]$Scenario = 'all',
+  [switch]$HostMode,
+  [switch]$MockAgents,
+  [ValidateRange(1, 5)] [int]$WarPairs = 4,
+  [ValidateRange(0, 4)] [int]$StreamPanes = 4,
+  [ValidateRange(16, 20)] [int]$VisiblePanes = 16,
+  [ValidateRange(1, 30)] [int]$SwitchSeconds = 3,
   [ValidateRange(1, 11)] [int]$Panes = 4,
   [ValidateRange(1, 40)] [int]$AgentPanes = 15,
   [ValidateRange(10, 1800)] [int]$AgentSeconds = 150,
@@ -136,6 +156,10 @@ function Start-Guard([int]$rootPid, [string]$hostExe, [int[]]$foreignHosts, [str
 function Get-Tree([int]$rootPid, [string]$hostExe, [int[]]$foreignHosts) {
   $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine
   $set = [Collections.Generic.HashSet[int]]::new(); [void]$set.Add($rootPid)
+  # Our dev host (see below) and everything under it: with -HostMode the
+  # shells and whatever they start descend from the host, not from npm, and
+  # the agent guard must see them too.
+  foreach ($p in $all) { if ($p.ExecutablePath -eq $hostExe -and [int]$p.ProcessId -notin $foreignHosts) { [void]$set.Add([int]$p.ProcessId) } }
   do { $added = 0; foreach ($p in $all) { if ($set.Contains([int]$p.ParentProcessId) -and $set.Add([int]$p.ProcessId)) { $added++ } } } while ($added)
   # The terminal host is launched with CREATE_BREAKAWAY_FROM_JOB and is not a
   # child in this tree. Ours is this worktree's dev binary (the installed app's
@@ -210,8 +234,17 @@ function Get-Stats([string]$csv, [long]$startMs, [long]$endMs) {
 $seqFile = Join-Path $dataDir "seq-$SizeMB.txt"
 $tuiFile = Join-Path $dataDir "tui-$TuiSizeMB.txt"
 $seqLines = New-SeqFile $seqFile ([long]$SizeMB * 1MB)
-if ($Scenario -in 'b', 'all') { New-TuiFile $tuiFile ([long]$TuiSizeMB * 1MB) }
+if ($Scenario -in 'b', 'all', 'full') { New-TuiFile $tuiFile ([long]$TuiSizeMB * 1MB) }
 $agentScript = Join-Path $PSScriptRoot 'agent-stream.mjs'
+# The perf-mock-agent template runs `node agent-stream.mjs --mock` in the pane's
+# cwd (the data dir): refresh that copy from this checkout every run.
+Copy-Item $agentScript (Join-Path $dataDir 'agent-stream.mjs') -Force
+if ($Scenario -eq 'full') { $Repeat = 1; $MockAgents = $true }
+if ($HostMode) {
+  # tauri dev builds only the app; the host binary is a separate package.
+  Push-Location $repo
+  try { cargo build -p swarmterm-host --manifest-path src-tauri/Cargo.toml 2>&1 | Select-Object -Last 1 | Write-Host; if ($LASTEXITCODE) { throw "cargo build -p swarmterm-host failed" } } finally { Pop-Location }
+}
 
 if (Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue) {
   throw "port 1420 is already in use (another dev server?). Stop it first; the running Swarmterm is not affected by this script."
@@ -239,6 +272,7 @@ $hostExe = Join-Path $targetDir 'debug\swarmterm-host.exe'
 # Dev hosts of this worktree that already run belong to someone else: never
 # sample or stop them.
 $foreignHosts = Get-DevHostPids $hostExe
+if ($foreignHosts.Count -and $HostMode) { throw "dev host(s) $($foreignHosts -join ', ') from $hostExe already run; -HostMode would attach to a host this run did not start. Stop them first." }
 if ($foreignHosts.Count) { Write-Warning "dev host(s) $($foreignHosts -join ', ') from $hostExe already run (leaked from an earlier run?); they are excluded, so the host row will be empty. Stop them first for host numbers." }
 
 # Only the new instance reads this: WebView2 picks it up at browser start.
@@ -264,7 +298,7 @@ try {
   if (-not $ok) { throw "CDP endpoint did not come up; see $log" }
   Start-Sleep 5
 
-  $plan = switch ($Scenario) { 'all' { 'a', 'b', 'c' } default { $Scenario } }
+  $plan = switch ($Scenario) { 'all' { 'a', 'b', 'c' } 'full' { 'a', 'b', 'c', 'd', 'e', 'f' } default { $Scenario } }
   $flag = Join-Path $outDir 'AGENT-DETECTED.txt'
   $hostLog = Join-Path $outDir 'hosts.txt'
   $guard = Start-Guard $npm.Id $hostExe $foreignHosts $flag $hostLog
@@ -275,7 +309,12 @@ try {
       'b' { @{ flood = $Panes; idle = 1; file = $tuiFile; lines = 0 } }
       'c' { @{ flood = 4; idle = 20; file = $seqFile; lines = $seqLines } }
       'd' { @{ flood = $AgentPanes; idle = 1; file = $agentScript; lines = 0 } }
+      'e' { @{ flood = $StreamPanes; idle = 2 * $WarPairs; file = $agentScript; lines = 0 } }
+      'f' { @{ flood = $VisiblePanes + 8; idle = 0; file = $agentScript; lines = 0 } }
     }
+    $env:PERF_HOST = if ($HostMode) { '1' } else { '' }
+    $env:PERF_MOCK = if ($MockAgents) { '1' } else { '' }
+    $env:PERF_WAR = $WarPairs; $env:PERF_STREAM = $StreamPanes; $env:PERF_VISIBLE = $VisiblePanes; $env:PERF_SWITCH_S = $SwitchSeconds
     if (Test-Path $flag) { throw "agent CLI detected in the instance, run aborted: $(Get-Content $flag -Raw)" }
     Write-Host "scenario $s run $rep/$Repeat : $($cfg.flood) flooding + $($cfg.idle) idle"
     $csv = Join-Path $outDir "proc-$s-$rep.csv"; $json = Join-Path $outDir "webview-$s-$rep.json"
@@ -307,10 +346,13 @@ try {
   function Get-Spread([object[]]$v) { $n = @($v | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ }); if (-not $n.Count) { return 'n/a' }; "$(Get-Median $n) ($(($n | Measure-Object -Minimum).Minimum)-$(($n | Measure-Object -Maximum).Maximum))" }
 
   $md = @("# Perf run $stamp", '', "Panes: $Panes, seq file: $SizeMB MB ($seqLines lines), TUI file: $TuiSizeMB MB, $Repeat run(s) per scenario", '',
-    '## Summary: median (min-max) over runs', '',
-    '| scenario | echo p50 ms | echo p95 ms | echo max ms | frames > 50 ms | long tasks > 50 ms | app CPU avg % | WebView CPU avg % | WebView MB max (cumulative in instance) | lines lost | flood s |',
-    '|---|---|---|---|---|---|---|---|---|---|---|')
-  foreach ($g in ($results | Group-Object scenario | Where-Object Name -NE 'd')) {
+    "Backend: $(if ($HostMode) { 'terminal host (-HostMode)' } else { 'in-process PTY' }); scenario d agents: $(if ($MockAgents) { 'perf-mock-agent template (-MockAgents)' } else { 'plain shells running the generator' }). Simulation only: no agent CLI or AI provider.", '')
+  if ($results | Where-Object scenario -In 'a', 'b', 'c') {
+    $md += '## Summary: median (min-max) over runs', '',
+      '| scenario | echo p50 ms | echo p95 ms | echo max ms | frames > 50 ms | long tasks > 50 ms | app CPU avg % | WebView CPU avg % | WebView MB max (cumulative in instance) | lines lost | flood s |',
+      '|---|---|---|---|---|---|---|---|---|---|---|'
+  }
+  foreach ($g in ($results | Group-Object scenario | Where-Object Name -NotIn 'd', 'e', 'f')) {
     $w = @($g.Group | ForEach-Object { $_.webview } | Where-Object { $_ })
     $pa = @($g.Group | ForEach-Object { $_.proc | Where-Object group -EQ 'app' })
     $pw = @($g.Group | ForEach-Object { $_.proc | Where-Object group -EQ 'webview' })
@@ -345,7 +387,34 @@ try {
       "| app CPU avg % | $(Get-Spread ($pa | % { $_.cpuAvg })) |",
       "| WebView CPU avg / p95 % | $(Get-Spread ($pw | % { $_.cpuAvg })) / $(Get-Spread ($pw | % { $_.cpuP95 })) |",
       "| WebView MB start / max / end | $(Get-Spread ($pw | % { $_.memStartMB })) / $(Get-Spread ($pw | % { $_.memMaxMB })) / $(Get-Spread ($pw | % { $_.memEndMB })) |",
-      "| app MB max | $(Get-Spread ($pa | % { $_.memMaxMB })) |", ''
+      "| app MB max | $(Get-Spread ($pa | % { $_.memMaxMB })) |",
+      "| host CPU avg % / MB max | $(Get-Spread ($d | % { $_.proc | Where-Object group -EQ 'host' } | % { $_.cpuAvg })) / $(Get-Spread ($d | % { $_.proc | Where-Object group -EQ 'host' } | % { $_.memMaxMB })) |",
+      "| WorkspaceTabs / AttentionBadge renders | $(Get-Spread ($w | % { $_.renders.WorkspaceTabs })) / $(Get-Spread ($w | % { $_.renders.AttentionBadge })) |", ''
+  }
+  $er = @($results | Where-Object scenario -EQ 'e')
+  if ($er.Count) {
+    $w = @($er | ForEach-Object { $_.webview } | Where-Object { $_ })
+    $pa = @($er | ForEach-Object { $_.proc | Where-Object group -EQ 'app' })
+    $md += "## Scenario e (War Room): $WarPairs mock peers + $WarPairs waiters, $StreamPanes streaming, $AgentSeconds s", '',
+      '| metric | value |', '|---|---|',
+      "| wait_peer resolve p50 / p95 / max ms | $(Get-Spread ($w | % { $_.warRoom.resolve.p50 })) / $(Get-Spread ($w | % { $_.warRoom.resolve.p95 })) / $(Get-Spread ($w | % { $_.warRoom.resolve.max })) |",
+      "| calls / reached / timeout / stalled / errors | $(Get-Spread ($w | % { $_.warRoom.calls })) / $(Get-Spread ($w | % { $_.warRoom.reached })) / $(Get-Spread ($w | % { $_.warRoom.timeout })) / $(Get-Spread ($w | % { $_.warRoom.stalled })) / $(Get-Spread ($w | % { $_.warRoom.errors })) |",
+      "| idle flips / reached without a matching flip | $(Get-Spread ($w | % { $_.warRoom.idleFlips })) / $(Get-Spread ($w | % { $_.warRoom.unmatched })) |",
+      "| app CPU avg / p95 % | $(Get-Spread ($pa | % { $_.cpuAvg })) / $(Get-Spread ($pa | % { $_.cpuP95 })) |",
+      "| echo idle waiter p95 ms | $(Get-Spread ($w | % { $_.echo.p95 })) |", ''
+    foreach ($x in $w) { if ($x.warRoom.firstError) { $md += "- first wait_peer error: $($x.warRoom.firstError)", '' } }
+  }
+  $fr = @($results | Where-Object scenario -EQ 'f')
+  if ($fr.Count) {
+    $w = @($fr | ForEach-Object { $_.webview } | Where-Object { $_ })
+    $pw = @($fr | ForEach-Object { $_.proc | Where-Object group -EQ 'webview' })
+    $md += "## Scenario f (many visible): $VisiblePanes visible + 2 x 4, switch every $SwitchSeconds s, $AgentSeconds s", '',
+      '| metric | value |', '|---|---|',
+      "| main workspace visible panes / live WebGL max / DOM fallback max | $(Get-Spread ($w | % { $_.renderers.mainVisible })) / $(Get-Spread ($w | % { $_.renderers.mainWebglMax })) / $(Get-Spread ($w | % { $_.renderers.mainDomFallbackMax })) |",
+      "| live WebGL contexts max (any workspace) / DOM fallback max | $(Get-Spread ($w | % { $_.renderers.webglMax })) / $(Get-Spread ($w | % { $_.renderers.domFallbackMax })) |",
+      "| switches | $(Get-Spread ($w | % { $_.renderers.switches })) |",
+      "| frames > 50 ms / long tasks > 50 ms | $(Get-Spread ($w | % { $_.frames.over50 })) / $(Get-Spread ($w | % { $_.longTasks.over50 })) |",
+      "| WebView CPU avg % / MB max | $(Get-Spread ($pw | % { $_.cpuAvg })) / $(Get-Spread ($pw | % { $_.memMaxMB })) |", ''
   }
   foreach ($r in $results) {
     $w = $r.webview
