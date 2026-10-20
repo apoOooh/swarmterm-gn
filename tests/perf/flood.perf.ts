@@ -38,7 +38,48 @@ const MOCK_ID = 'perf-mock-agent'
 const MOCK_COMMAND = 'node agent-stream.mjs --mock'
 const REG = '/src/lib/terminal-registry.ts'
 
+// Degradation notes of the current run, also kept when it fails.
+const runNotes: string[] = []
+
 test('flood', async () => {
+  // Any failure still leaves a result file with its reason, so flood.ps1
+  // reports it loudly instead of a silent n/a.
+  const tStart = Date.now()
+  try { await runScenario(tStart) } catch (e) {
+    const out = env('PERF_OUT')
+    let prev: any = null
+    try { prev = JSON.parse(readFileSync(out, 'utf8')) } catch { /* none yet */ }
+    const error = String(e instanceof Error ? e.stack ?? e.message : e).slice(0, 4000)
+    // A failure during teardown keeps the measured result, marked failed.
+    // Failed before the run started: all elapsed time counts as setup.
+    const elapsed = (Date.now() - tStart) / 1000
+    writeFileSync(out, JSON.stringify(prev ? { ...prev, failed: true, error } : { scenario: process.env.PERF_SCENARIO, failed: true, error, notes: runNotes, timing: { setupS: elapsed, runS: null, teardownS: null, totalS: elapsed } }, null, 2))
+    throw e
+  }
+})
+
+// What this build offers beyond the plain app: the dev-only mock agent
+// template, the renderer stats (WebGL count), the render counter and named
+// War Rooms. Release builds before the perf work (1.22.1) lack the first
+// three; the scenarios degrade instead of failing (see notes in the result).
+type Caps = { mockTemplate: boolean; rendererStats: boolean; renderCounter: boolean; warRoomRooms: boolean }
+async function probeCaps(page: Page): Promise<Caps> {
+  return page.evaluate(async ({ MOCK_ID, REG }) => {
+    const tpl = await import('/src/lib/templates.ts' as string)
+    const reg = await import(REG)
+    const wr = await import('/src/tauri/warroom.ts' as string)
+    // Vite answers a missing module with an error, not an empty module.
+    const renderCounter = await import('/src/lib/perf-render-count.ts' as string).then(() => true, () => false)
+    return {
+      mockTemplate: tpl.templateById(MOCK_ID)?.id === MOCK_ID,
+      rendererStats: typeof reg.perfRendererStats === 'function',
+      renderCounter,
+      warRoomRooms: typeof wr.warRoomCreate === 'function' && typeof wr.warRoomDelete === 'function'
+    }
+  }, { MOCK_ID, REG })
+}
+
+async function runScenario(tStart: number): Promise<void> {
   const scenario = env('PERF_SCENARIO')
   const flood = Number(env('PERF_FLOOD'))
   const idle = Number(env('PERF_IDLE'))
@@ -53,7 +94,7 @@ test('flood', async () => {
   // Fixed-duration scenarios: they run PERF_SECONDS instead of until the
   // flood is complete or quiet.
   const fixed = agents || warRoom || many
-  const mock = (agents && process.env.PERF_MOCK === '1') || warRoom
+  const wantMock = (agents && process.env.PERF_MOCK === '1') || warRoom
   if (!fixed && flood > 11) throw new Error('PERF_FLOOD must be <= 11')
   const seconds = Number(env('PERF_SECONDS', '150'))
   const browser = await chromium.connectOverCDP(env('PERF_CDP'))
@@ -63,6 +104,18 @@ test('flood', async () => {
   // Window must be visible: a hidden or minimised WebView throttles rAF,
   // which would make the frame times meaningless.
   if (await page.evaluate(() => document.visibilityState) !== 'visible') throw new Error('dev window is not visible; un-minimise it')
+  const caps = await probeCaps(page)
+  const notes = runNotes
+  // No mock template: scenario d falls back to plain shells typing the
+  // generator, scenario e to plain-shell peers running it in --mock mode.
+  // assertPlainPanes then allows NO agent at all.
+  const mock = wantMock && caps.mockTemplate
+  if (wantMock && !mock) notes.push(agents
+    ? 'fallback: no perf-mock-agent template in this build; agent panes are plain shells running agent-stream.mjs (no detector, tab badges or state flips)'
+    : 'fallback: no perf-mock-agent template in this build; War Room peers are plain shells running agent-stream.mjs --mock (no agent detector, so wait_peer may never see a flip)')
+  if (!caps.renderCounter) notes.push('unsupported: render counter (src/lib/perf-render-count.ts) missing; WorkspaceTabs/AttentionBadge renders not measured')
+  if (many && !caps.rendererStats) notes.push('unsupported: perfRendererStats missing; WebGL/DOM-fallback counts not measured')
+  if (warRoom && !caps.warRoomRooms) notes.push('fallback: no named War Room API; panes join the default room')
   // Abort before touching anything if the instance holds any agent pane.
   await assertPlainPanes(page, mock)
   await closePerfWorkspaces(page)
@@ -86,7 +139,7 @@ test('flood', async () => {
   } else if (warRoom) {
     // Waiters (plain shells, the first is the probed idle pane), then the
     // mock agent peers they wait on, then panes that only stream.
-    const kinds = [...Array(war).fill('terminal'), ...Array(war).fill(MOCK_ID), ...Array(streamN).fill('terminal')]
+    const kinds = [...Array(war).fill('terminal'), ...Array(war).fill(mock ? MOCK_ID : 'terminal'), ...Array(streamN).fill('terminal')]
     ids = await createPanes(page, cwd, kinds)
     waiterIds = ids.slice(0, war); peerIds = ids.slice(war, 2 * war)
     floodIds = ids.slice(2 * war, 2 * war + streamN); idleId = waiterIds[0]
@@ -103,7 +156,11 @@ test('flood', async () => {
     const leaves = useAppStore.getState().workspaces.flatMap((w: any) => collectLeaves(w.layout))
     return ids.filter((id: string) => leaves.find((l: any) => l.terminalId === id)?.agentId === MOCK_ID)
   }, { ids, MOCK_ID })
-  if (warRoom && mockIds.join() !== peerIds.join()) throw new Error('scenario e: peer panes are not the mock agents')
+  // Fallback peers: plain shells start the generator in --mock mode now; it
+  // prints the same wait line and waits for perf-mock.json like the template.
+  if (warRoom && !mock) await page.evaluate(async (ids) => { const t = await import('/src/tauri/terminal.ts' as string); for (const id of ids) await t.writeTerminal(id, 'node agent-stream.mjs --mock\r') }, peerIds)
+  const runIds = warRoom && !mock ? peerIds : mockIds
+  if (warRoom && mock && mockIds.join() !== peerIds.join()) throw new Error('scenario e: peer panes are not the mock agents')
   const busyId = agents ? floodIds[0] : ''
   // Wait for every shell prompt (mock panes: the mock's wait line), so
   // startup output is not counted as flood.
@@ -128,7 +185,7 @@ test('flood', async () => {
 
   // ---- scenario e: War Room setup ----
   let room: WarRoomRun | undefined
-  if (warRoom) room = await setupWarRoom(page, cwd, waiterIds, peerIds)
+  if (warRoom) room = await setupWarRoom(page, cwd, waiterIds, peerIds, mock, caps.warRoomRooms)
 
   if (idleId) {
     // Focus the idle pane by clicking its xterm, like a user would.
@@ -144,7 +201,7 @@ test('flood', async () => {
   await page.evaluate(() => (window as any).__perf.start())
   const t0 = Date.now()
   // Start signal for the mock agents (their template line already runs).
-  if (mockIds.length) writeFileSync(join(cwd, 'perf-mock.json'), JSON.stringify({ seconds }))
+  if (runIds.length) writeFileSync(join(cwd, 'perf-mock.json'), JSON.stringify({ seconds }))
   const typed = mock && agents ? [] : floodIds
   await page.evaluate(async ({ ids, file, fixed, seconds }) => {
     const term = await import('/src/tauri/terminal.ts' as string)
@@ -153,27 +210,38 @@ test('flood', async () => {
 
   const waits = room ? runWaiters(room, t0 + seconds * 1000) : undefined
   let switches: SwitchSample[] = []
-  if (many) switches = await switchWorkspaces(page, wsIds, t0, seconds, Number(env('PERF_SWITCH_S', '3')))
+  if (many) switches = await switchWorkspaces(page, wsIds, t0, seconds, Number(env('PERF_SWITCH_S', '3')), caps.rendererStats)
   else await probeLoop(page, { scenario, fixed, agents, seconds, lines, flood, timeoutS, t0, busyId, idleId })
   const waitResults = waits ? await waits : undefined
 
   if (idleId) await page.keyboard.press('Escape')
   await page.waitForTimeout(1500)
   const result = await page.evaluate((lines) => (window as any).__perf.stop(lines), lines)
+  const tRunEnd = Date.now()
   if (process.env.PERF_TRACE) await browser.stopTracing()
+  if (!caps.renderCounter) result.renders = { WorkspaceTabs: 'unsupported', AttentionBadge: 'unsupported' }
+  result.caps = caps; result.notes = notes
   result.scenario = scenario; result.flood = flood; result.idle = idle; result.wallSeconds = (Date.now() - t0) / 1000
   result.hostMode = hostMode; result.host = host; result.mockAgents = mockIds.length
   if (waitResults) result.warRoom = summarizeWaits(waitResults, cwd, peerIds, war, streamN)
-  if (many) result.renderers = summarizeSwitches(switches, ids.length)
+  if (many) result.renderers = summarizeSwitches(switches, ids.length, caps.rendererStats)
   // Epoch window for flood.ps1 to trim its CPU/memory samples to the flood.
   result.windowStartMs = t0; result.windowEndMs = t0 + Math.round((fixed ? seconds : result.floodSeconds) * 1000)
+  // Timing: setup = test start to the run's t0, run = t0 to the probes'
+  // stop, teardown = generators stopped and perf workspaces closed.
+  result.timing = { setupS: (t0 - tStart) / 1000, runS: (tRunEnd - t0) / 1000, teardownS: null as number | null, totalS: null as number | null }
   writeFileSync(env('PERF_OUT'), JSON.stringify(result, null, 2))
+  const tTear = Date.now()
   // Ctrl+C any generator still running so the instance can be closed cleanly.
-  await page.evaluate(async (ids) => { const t = await import('/src/tauri/terminal.ts' as string); for (const id of ids) await t.writeTerminal(id, '\x03') }, [...floodIds, ...mockIds])
-  if (room) await page.evaluate(async (roomId) => { await (await import('/src/tauri/warroom.ts' as string)).warRoomDelete(roomId).catch(() => {}) }, room.roomId)
+  await page.evaluate(async (ids) => { const t = await import('/src/tauri/terminal.ts' as string); for (const id of ids) await t.writeTerminal(id, '\x03') }, [...floodIds, ...runIds])
+  if (room?.roomId) await page.evaluate(async (roomId) => { await (await import('/src/tauri/warroom.ts' as string)).warRoomDelete(roomId).catch(() => {}) }, room.roomId)
+  else if (room) await page.evaluate(async (ids) => { const wr = await import('/src/tauri/warroom.ts' as string); for (const id of ids) await wr.warRoomLeave?.(id).catch(() => {}) }, [...waiterIds, ...peerIds])
   await closePerfWorkspaces(page)
   clearMockFiles(cwd)
-})
+  result.timing.teardownS = (Date.now() - tTear) / 1000
+  result.timing.totalS = (Date.now() - tStart) / 1000
+  writeFileSync(env('PERF_OUT'), JSON.stringify(result, null, 2))
+}
 
 // Keystroke probes into the idle pane, one at a time: press a letter, wait
 // for its echo (or 3 s = unanswered), keep probes >= 250 ms apart. Only one
@@ -232,21 +300,24 @@ function clearMockFiles(cwd: string): void {
 }
 
 // ---------- scenario e: War Room waiters ----------
-type WarRoomRun = { roomId: string; mcpUrl: string; pairs: { waiter: string; peer: string }[] }
+type WarRoomRun = { roomId: string | null; mcpUrl: string; pairs: { waiter: string; peer: string }[] }
 type WaitRecord = { peer: string; calledAt: number; returnedAt: number; outcome: string; state: string; error?: string }
 
 // Puts the waiters and the mock peers into a fresh War Room through the same
 // command the app's drag-and-drop uses (war_room_join), and reads the MCP URL
 // from a waiter's environment. Each waiter's bearer is its pane id, exactly
 // what an agent CLI in that pane would send (SWARMTERM_SESSION).
-async function setupWarRoom(page: Page, cwd: string, waiters: string[], peers: string[]): Promise<WarRoomRun> {
-  const roomId: string = await page.evaluate(async ({ waiters, peers, cwd, MOCK_ID }) => {
+// Builds without named rooms get the default room; without the mock
+// template the peers join as plain terminals.
+async function setupWarRoom(page: Page, cwd: string, waiters: string[], peers: string[], mock: boolean, rooms: boolean): Promise<WarRoomRun> {
+  const roomId: string | null = await page.evaluate(async ({ waiters, peers, cwd, MOCK_ID, mock, rooms }) => {
     const wr = await import('/src/tauri/warroom.ts' as string)
-    const { roomId } = await wr.warRoomCreate(`perf-room-${Date.now()}`)
-    for (const [i, id] of waiters.entries()) await wr.warRoomJoin({ roomId, terminalId: id, cwd, displayName: `perf-waiter-${i}` })
-    for (const [i, id] of peers.entries()) await wr.warRoomJoin({ roomId, terminalId: id, agentId: MOCK_ID, cwd, displayName: `perf-peer-${i}` })
-    return roomId
-  }, { waiters, peers, cwd, MOCK_ID })
+    const roomId: string | undefined = rooms ? (await wr.warRoomCreate(`perf-room-${Date.now()}`)).roomId : undefined
+    const at = roomId ? { roomId } : {}
+    for (const [i, id] of waiters.entries()) await wr.warRoomJoin({ ...at, terminalId: id, cwd, displayName: `perf-waiter-${i}` })
+    for (const [i, id] of peers.entries()) await wr.warRoomJoin({ ...at, terminalId: id, ...(mock ? { agentId: MOCK_ID } : {}), cwd, displayName: `perf-peer-${i}` })
+    return roomId ?? null
+  }, { waiters, peers, cwd, MOCK_ID, mock, rooms })
   // The waiter pane writes its own MCP env to a file (screen text of a narrow
   // pane wraps).
   const envFile = join(cwd, 'perf-mcp.json')
@@ -381,14 +452,15 @@ async function createManyVisible(page: Page, cwd: string, visible: number): Prom
   }, { cwd, visible })
 }
 
-async function switchWorkspaces(page: Page, wsIds: string[], t0: number, seconds: number, periodS: number): Promise<SwitchSample[]> {
+async function switchWorkspaces(page: Page, wsIds: string[], t0: number, seconds: number, periodS: number, stats: boolean): Promise<SwitchSample[]> {
   const out: SwitchSample[] = []
   for (let k = 0; Date.now() - t0 < seconds * 1000; k++) {
     const ws = k % wsIds.length
     await page.evaluate(async (id) => { (await import('/src/store/app-store.ts' as string)).useAppStore.getState().setActiveWorkspace(id) }, wsIds[ws])
     // Sample once the switch has settled (attach, fit, renderer swap).
     await page.waitForTimeout(Math.min(1000, periodS * 500))
-    const s = await page.evaluate(async (REG) => (await import(REG)).perfRendererStats(), REG)
+    // Without the hook only the switches themselves run (frames, long tasks).
+    const s = stats ? await page.evaluate(async (REG) => (await import(REG)).perfRendererStats(), REG) : { webgl: 0, domVisible: 0, visible: 0 }
     out.push({ ws, t: Date.now() - t0, ...s })
     await page.waitForTimeout(Math.max(0, periodS * 1000 - Math.min(1000, periodS * 500)))
   }
@@ -396,7 +468,11 @@ async function switchWorkspaces(page: Page, wsIds: string[], t0: number, seconds
   return out
 }
 
-function summarizeSwitches(s: SwitchSample[], panes: number): unknown {
+function summarizeSwitches(s: SwitchSample[], panes: number, stats: boolean): unknown {
+  if (!stats) {
+    const u = 'unsupported'
+    return { panes, switches: s.length, mainVisible: u, mainWebglMax: u, mainDomFallbackMax: u, webglMax: u, domFallbackMax: u, samples: s.map(x => ({ ws: x.ws, t: x.t })) }
+  }
   const main = s.filter(x => x.ws === 0)
   const max = (a: SwitchSample[], k: 'webgl' | 'domVisible' | 'visible'): number | null => a.length ? Math.max(...a.map(x => x[k])) : null
   return {
@@ -558,6 +634,10 @@ async function installProbes(page: Page): Promise<void> {
     let hiddenAt = 0
     let floodEnd = 0
     let startAt = 0
+    // First non-echo chunk handed to xterm / parsed, last one handed over.
+    let firstData = 0
+    let firstParse = 0
+    let lastWrite = 0
     // rAF is throttled while hidden; report how long that was the case.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') hiddenAt = performance.now()
@@ -582,14 +662,14 @@ async function installProbes(page: Page): Promise<void> {
       ;[st.rTail, st.rLast] = lagScan(st.rTail, text, st.rLast, st.recv, st.recvD, Date.now(), st)
       const focused = this.textarea && this.textarea === document.activeElement
       // Echo in the probed pane must not keep the "flood still running" clock alive.
-      if (!focused) { const t = performance.now(); if (t - lastData > maxGap) maxGap = t - lastData; lastData = t }
+      if (!focused) { const t = performance.now(); if (t - lastData > maxGap) maxGap = t - lastData; lastData = lastWrite = t; if (!firstData) firstData = t }
       return orig.call(this, data, () => {
         st.parsed += text.length
         // The flood window ends at the last parse, so draining xterm's backlog
         // after the writes stop is still inside it.
         // Late callbacks from a previous scenario's closed panes must not
         // move this run's clocks: start() cleared their streams.
-        if (!focused && streams.get(this) === st) { lastParse = performance.now(); floodEnd = lastParse }
+        if (!focused && streams.get(this) === st) { lastParse = performance.now(); floodEnd = lastParse; if (!firstParse) firstParse = lastParse }
         const now = performance.now()
         ;[st.pTail, st.pLast] = lagScan(st.pTail, text, st.pLast, st.parse, st.parseD, Date.now(), st)
         if (focused && pending?.busy) {
@@ -625,7 +705,7 @@ async function installProbes(page: Page): Promise<void> {
       start() {
         streams.clear(); longTasks.length = 0; frames.length = 0; echoes.length = 0; echoesBusy.length = 0
         pending = undefined; unanswered = 0; unansweredBusy = 0; expectBusy = false; lastBusyN = 0; hiddenMs = 0; maxGap = 0
-        recording = true; prev = 0; lastData = lastParse = startAt = floodEnd = performance.now()
+        recording = true; prev = 0; lastData = lastParse = startAt = floodEnd = performance.now(); firstData = firstParse = lastWrite = 0
         // Dev-only render counter (src/lib/perf-render-count.ts) counts while set.
         ;(window as any).__perfRenderCounts = {}
       },
@@ -655,6 +735,13 @@ async function installProbes(page: Page): Promise<void> {
         for (let i = 0; i < lines; i++) expected = FNV(expected, i)
         return {
           floodSeconds: Math.round(floodEnd - startAt) / 1000,
+          // Output timing from start(): first chunk handed to xterm / parsed,
+          // the span of hand-overs (stream duration) and the last parse (all
+          // output parsed). Null when no output came at all.
+          outputTiming: firstData ? {
+            firstOutputMs: Math.round(firstData - startAt), firstParsedMs: firstParse ? Math.round(firstParse - startAt) : null,
+            streamSeconds: Math.round(lastWrite - firstData) / 1000, allParsedMs: firstParse ? Math.round(floodEnd - startAt) : null
+          } : null,
           // Component renders during the window (WorkspaceTabs, AttentionBadge).
           renders,
           hiddenMs: Math.round(hiddenMs),

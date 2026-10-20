@@ -37,7 +37,13 @@
   The running Swarmterm is never touched: only processes descending from the
   npm process started here (and hosts first seen during the run) are sampled
   and, at the end, stopped.
-  Results: test-results/perf-runs/<timestamp>/*.json and summary.md.
+  Builds without the dev-only hooks (release 1.22.1: no perf-mock-agent
+  template, renderer stats or render counter) degrade: d and e use plain-shell
+  panes running the generator, f reports the hook metrics as "unsupported".
+  A failed, skipped or degraded scenario is listed at the top of summary.md
+  with its reason; the Playwright output is kept as playwright-<s>-<n>.log.
+  Results: test-results/perf-runs/<timestamp>/*.json and summary.md; compare
+  two runs with scripts/perf/compare.ps1 -Base <run> -New <run>.
 
 .EXAMPLE
   pwsh scripts/perf/flood.ps1                       # all scenarios x 3 runs, defaults
@@ -305,7 +311,10 @@ try {
   $hostLog = Join-Path $outDir 'hosts.txt'
   $guard = Start-Guard $npm.Id $hostExe $foreignHosts $flag $hostLog
   $results = @()
+  $abort = $null
   foreach ($s in $plan) { foreach ($rep in 1..$Repeat) {
+    # A run aborted by the agent guard skips everything after it, reported.
+    if ($abort) { $results += [pscustomobject]@{ scenario = $s; run = $rep; status = 'skipped'; reason = "run aborted earlier: $abort"; wallSeconds = $null; proc = @(); webview = $null }; continue }
     $cfg = switch ($s) {
       'a' { @{ flood = $Panes; idle = 1; file = $seqFile; lines = $seqLines } }
       'b' { @{ flood = $Panes; idle = 1; file = $tuiFile; lines = 0 } }
@@ -317,7 +326,6 @@ try {
     $env:PERF_HOST = if ($HostMode) { '1' } else { '' }
     $env:PERF_MOCK = if ($MockAgents) { '1' } else { '' }
     $env:PERF_WAR = $WarPairs; $env:PERF_STREAM = $StreamPanes; $env:PERF_VISIBLE = $VisiblePanes; $env:PERF_SWITCH_S = $SwitchSeconds
-    if (Test-Path $flag) { throw "agent CLI detected in the instance, run aborted: $(Get-Content $flag -Raw)" }
     Write-Host "scenario $s run $rep/$Repeat : $($cfg.flood) flooding + $($cfg.idle) idle"
     $csv = Join-Path $outDir "proc-$s-$rep.csv"; $json = Join-Path $outDir "webview-$s-$rep.json"
     $env:PERF_CDP = "http://127.0.0.1:$CdpPort"; $env:PERF_SCENARIO = $s
@@ -325,30 +333,71 @@ try {
     $env:PERF_CWD = $dataDir; $env:PERF_OUT = $json; $env:PERF_TIMEOUT_S = $TimeoutSeconds; $env:PERF_SECONDS = $AgentSeconds
     $env:PERF_TRACE = if ($Trace) { Join-Path $outDir "trace-$s-$rep.json" } else { '' }
     if (Test-Path $json) { Remove-Item $json }
+    $pwLog = Join-Path $outDir "playwright-$s-$rep.log"
     $job = Start-Sampler $npm.Id $csv $hostExe $foreignHosts
+    # Wall time of the whole scenario: Playwright start, setup, run, teardown.
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $exit = 0
     try {
       Push-Location $repo
-      npx playwright test --config playwright.perf.config.ts --reporter=line
-      if ($LASTEXITCODE) { Write-Warning "scenario $s driver failed (exit $LASTEXITCODE)" }
+      npx playwright test --config playwright.perf.config.ts --reporter=line *>&1 | Tee-Object -FilePath $pwLog | ForEach-Object { if ("$_" -match 'error|passed|failed|Timeout') { Write-Host $_ } }
+      $exit = $LASTEXITCODE
+      if ($exit) { Write-Warning "scenario $s driver failed (exit $exit), see $pwLog" }
     } finally {
+      $sw.Stop()
       Pop-Location
       # Surface sampler failures instead of silently reporting empty stats.
       if ($job.State -eq 'Failed' -or $job.ChildJobs[0].Error.Count) { Write-Warning "sampler for scenario $s failed: $($job.ChildJobs[0].Error -join '; ') $($job.ChildJobs[0].JobStateInfo.Reason)" }
       Stop-Job $job; Remove-Job $job -Force
     }
-    if (Test-Path $flag) { throw "agent CLI detected in the instance, run aborted: $(Get-Content $flag -Raw)" }
     $wv = if (Test-Path $json) { Get-Content $json -Raw | ConvertFrom-Json } else { $null }
-    $proc = if ($wv) { @(Get-Stats $csv $wv.windowStartMs $wv.windowEndMs) } else { @() }
-    if ($wv -and -not ($proc | Where-Object group -EQ 'host')) { Write-Host "scenario ${s}: no terminal host sampled (host off in Settings > Terminal, or not at $hostExe)" }
-    $results += [pscustomobject]@{ scenario = $s; run = $rep; proc = $proc; webview = $wv }
+    # Status and reason: the spec writes its error into the result file; a
+    # missing file or a non-zero exit without one falls back to the log.
+    $status = 'ok'; $reason = $null
+    if (Test-Path $flag) { $abort = "agent CLI detected in the instance: $((Get-Content $flag -Raw).Trim())"; $status = 'aborted'; $reason = $abort }
+    elseif ($wv -and $wv.failed) { $status = 'failed'; $reason = (($wv.error -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 3) -join ' | ') }
+    elseif (-not $wv -or $exit) {
+      $status = 'failed'
+      $err = if (Test-Path $pwLog) { @(Select-String -Path $pwLog -Pattern 'Error|error:|Timeout' | Select-Object -First 3 | ForEach-Object { $_.Line.Trim() }) } else { @() }
+      $reason = "driver exit $exit, $(if ($wv) { 'result written' } else { 'no result file' })$(if ($err.Count) { ': ' + ($err -join ' | ') })"
+    }
+    if ($status -ne 'ok') { Write-Warning "scenario $s run ${rep}: $($status.ToUpper()): $reason" }
+    $ok = $wv -and -not $wv.failed -and $null -ne $wv.windowStartMs
+    # A run that failed only in teardown was still measured: keep its process
+    # stats beside the error, but out of the medians (webview stays null).
+    $proc = if ($wv -and $null -ne $wv.windowStartMs) { @(Get-Stats $csv $wv.windowStartMs $wv.windowEndMs) } else { @() }
+    if ($ok -and -not ($proc | Where-Object group -EQ 'host')) { Write-Host "scenario ${s}: no terminal host sampled (host off in Settings > Terminal, or not at $hostExe)" }
+    $results += [pscustomobject]@{ scenario = $s; run = $rep; status = $status; reason = $reason; wallSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 1); proc = $proc; webview = $(if ($ok) { $wv } else { $null }); error = $(if ($wv -and $wv.failed) { $wv } else { $null }) }
   } }
   $results | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $outDir 'summary.json')
 
   function Get-Median([double[]]$v) { if (-not $v.Count) { return $null }; $o = @($v | Sort-Object); if ($o.Count % 2) { $o[[int][math]::Floor($o.Count / 2)] } else { ($o[$o.Count / 2 - 1] + $o[$o.Count / 2]) / 2 } }
-  function Get-Spread([object[]]$v) { $n = @($v | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ }); if (-not $n.Count) { return 'n/a' }; "$(Get-Median $n) ($(($n | Measure-Object -Minimum).Minimum)-$(($n | Measure-Object -Maximum).Maximum))" }
+  # 'unsupported' (a hook this build lacks) wins over n/a: it is not missing data.
+  function Get-Spread([object[]]$v) { if ($v | Where-Object { $_ -is [string] -and $_ -eq 'unsupported' }) { return 'unsupported' }; $n = @($v | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ }); if (-not $n.Count) { return 'n/a' }; "$(Get-Median $n) ($(($n | Measure-Object -Minimum).Minimum)-$(($n | Measure-Object -Maximum).Maximum))" }
 
   $md = @("# Perf run $stamp", '', "Panes: $Panes, seq file: $SizeMB MB ($seqLines lines), TUI file: $TuiSizeMB MB, $Repeat run(s) per scenario", '',
     "Backend: $(if ($HostMode) { 'terminal host (-HostMode)' } else { 'in-process PTY' }); scenario d agents: $(if ($MockAgents) { 'perf-mock-agent template (-MockAgents)' } else { 'plain shells running the generator' }). Simulation only: no agent CLI or AI provider.", '')
+  # Loud first: anything that did not run clean. Medians below only use ok runs.
+  $bad = @($results | Where-Object status -NE 'ok')
+  if ($bad.Count) {
+    $md += "## FAILED / SKIPPED: $($bad.Count) of $($results.Count) run(s)", '', '| scenario | run | status | reason |', '|---|---|---|---|'
+    foreach ($r in $bad) { $md += "| $($r.scenario) | $($r.run) | **$($r.status.ToUpper())** | $(([string]$r.reason) -replace '\|', '/') |" }
+    $md += ''
+  }
+  $notes = @($results | ForEach-Object { $r = $_; @($r.webview.notes) + @($r.error.notes) | Where-Object { $_ } | ForEach-Object { "- scenario $($r.scenario) run $($r.run): $_" } } | Select-Object -Unique)
+  if ($notes.Count) { $md += '## Degraded on this build (fallbacks, unsupported metrics)', '' ; $md += $notes; $md += '' }
+  # Timing of every run: wall = the whole Playwright run as seen here; setup,
+  # run, teardown from the spec; output timing from the in-page probes.
+  $md += '## Timings per run', '',
+    '| scenario | run | status | wall s | setup s | run s | teardown s | stream s | first output ms | first parsed ms | all output parsed ms |',
+    '|---|---|---|---|---|---|---|---|---|---|---|'
+  foreach ($r in $results) {
+    $t = if ($r.webview) { $r.webview.timing } elseif ($r.error) { $r.error.timing } else { $null }
+    $o = if ($r.webview) { $r.webview.outputTiming } else { $null }
+    $c = { param($x) if ($null -eq $x) { 'n/a' } else { $x } }
+    $md += "| $($r.scenario) | $($r.run) | $($r.status) | $(& $c $r.wallSeconds) | $(& $c $t.setupS) | $(& $c $t.runS) | $(& $c $t.teardownS) | $(& $c $o.streamSeconds) | $(& $c $o.firstOutputMs) | $(& $c $o.firstParsedMs) | $(& $c $o.allParsedMs) |"
+  }
+  $md += ''
   if ($results | Where-Object scenario -In 'a', 'b', 'c') {
     $md += '## Summary: median (min-max) over runs', '',
       '| scenario | echo p50 ms | echo p95 ms | echo max ms | frames > 50 ms | long tasks > 50 ms | app CPU avg % | WebView CPU avg % | WebView MB max (cumulative in instance) | lines lost | flood s |',
@@ -438,6 +487,7 @@ try {
   $md -join "`n" | Set-Content (Join-Path $outDir 'summary.md')
   Write-Host ($md -join "`n")
   Write-Host "results in $outDir"
+  if ($abort) { throw "run aborted: $abort" }
 } finally {
   if ($guard) { Stop-Job $guard; Remove-Job $guard -Force }
   if (-not $KeepRunning) {
