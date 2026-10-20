@@ -14,24 +14,6 @@
 export const ACK_CHUNK = 64 * 1024
 
 /**
- * UTF-8 byte length of `s`, the unit Rust counts in. A string's `length` is
- * UTF-16 units: CJK text would be under-acked 3:1 and wedge the gate until
- * its timeout.
- */
-export function utf8Length(s: string): number {
-  let n = s.length
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    if (c < 0x80) continue
-    if (c < 0x800) n += 1
-    // A surrogate pair is 2 units and 4 bytes: +1 per unit.
-    else if (c >= 0xd800 && c <= 0xdfff) n += 1
-    else n += 2
-  }
-  return n
-}
-
-/**
  * Acks for ONE pty generation. Output can arrive before `create_terminal`
  * answers with the generation id, so bytes are held until `setSpawnId`.
  */

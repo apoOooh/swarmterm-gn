@@ -260,7 +260,7 @@ fn connect_once(
         app: app.clone(),
         routes: Mutex::default(),
         conn: std::sync::OnceLock::new(),
-        replays: Mutex::default(),
+        replays: PendingReplays::default(),
     });
     let try_connect = |ep: &launch::Endpoint| {
         tauri::async_runtime::block_on(conn::Conn::connect(&ep.pipe, &ep.token, sink.clone()))
@@ -338,7 +338,7 @@ pub struct AppSink {
     conn: std::sync::OnceLock<std::sync::Arc<conn::Conn>>,
     /// Attached generations whose replay frame has not arrived yet: the
     /// first frame becomes `PtyOut::Replay` with these facts.
-    replays: Mutex<std::collections::HashMap<(String, String), ReplayFacts>>,
+    replays: PendingReplays<ReplayFacts>,
 }
 
 #[cfg(windows)]
@@ -358,6 +358,55 @@ impl ReplayFacts {
             rows: self.rows,
             truncated: self.truncated,
         }
+    }
+}
+
+/// Replay facts awaiting each attached generation's first data frame. The
+/// flag mirrors "map non-empty" so every live data frame skips the lock and
+/// the two key allocations (perf phase 3). Both writers run on the
+/// connection's reader task, and the flag is written under the lock, so it
+/// cannot miss an insert that precedes the frame it belongs to.
+#[cfg_attr(not(windows), allow(dead_code))]
+struct PendingReplays<T> {
+    map: Mutex<std::collections::HashMap<(String, String), T>>,
+    has_pending_replay: std::sync::atomic::AtomicBool,
+}
+
+impl<T> Default for PendingReplays<T> {
+    fn default() -> Self {
+        PendingReplays {
+            map: Mutex::default(),
+            has_pending_replay: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl<T> PendingReplays<T> {
+    fn insert(&self, terminal_id: &str, spawn_id: &str, facts: T) {
+        let mut map = self.map.lock().unwrap();
+        map.insert((terminal_id.to_string(), spawn_id.to_string()), facts);
+        self.has_pending_replay
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    fn take(&self, terminal_id: &str, spawn_id: &str) -> Option<T> {
+        use std::sync::atomic::Ordering;
+        if !self.has_pending_replay.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut map = self.map.lock().unwrap();
+        let facts = map.remove(&(terminal_id.to_string(), spawn_id.to_string()));
+        if map.is_empty() {
+            self.has_pending_replay.store(false, Ordering::Release);
+        }
+        facts
+    }
+
+    #[cfg(test)]
+    fn flagged(&self) -> bool {
+        self.has_pending_replay
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -412,17 +461,14 @@ impl conn::Sink for AppSink {
             truncated: facts["truncated"].as_bool().unwrap_or(false),
         };
         if facts["replayBytes"].as_u64().unwrap_or(0) > 0 {
-            self.replays
-                .lock()
-                .unwrap()
-                .insert((terminal_id.to_string(), spawn_id.to_string()), replay);
+            self.replays.insert(terminal_id, spawn_id, replay);
         } else if let Some(channel) = self.routes.lock().unwrap().route(terminal_id, spawn_id) {
             // Nothing to replay; the renderer still learns the size.
             let _ = channel.send(replay.into_out(String::new()));
         }
     }
 
-    fn data(&self, terminal_id: &str, spawn_id: &str, bytes: &[u8]) {
+    fn data(&self, terminal_id: &str, spawn_id: &str, bytes: Vec<u8>) {
         let Some(channel) = self
             .routes
             .lock()
@@ -433,13 +479,17 @@ impl conn::Sink for AppSink {
             return;
         };
         // The host's flusher only emits whole UTF-8 strings (SWA-54
-        // `take_valid_utf8`), so this never splits a character.
-        let text = String::from_utf8_lossy(bytes).into_owned();
-        let replay = self
-            .replays
-            .lock()
-            .unwrap()
-            .remove(&(terminal_id.to_string(), spawn_id.to_string()));
+        // `take_valid_utf8`), so this never splits a character and takes
+        // the frame's buffer as is. The lossy fallback is practically
+        // unreachable; if it fires, each U+FFFD (3 bytes) replaces 1 bad
+        // byte, so the renderer acks more than the host's gate counted. The
+        // gate saturates at zero unacked, so it only opens early (less
+        // backpressure for that batch), never wedges. Logged.
+        let text = String::from_utf8(bytes).unwrap_or_else(|e| {
+            eprintln!("[host] non-UTF-8 output frame for {terminal_id}, decoded lossily");
+            String::from_utf8_lossy(e.as_bytes()).into_owned()
+        });
+        let replay = self.replays.take(terminal_id, spawn_id);
         match replay {
             Some(r) => {
                 crate::pty::deliver_replay(&self.app, terminal_id, r.into_out(text), &channel)
@@ -661,4 +711,27 @@ pub fn terminal_host_set_settings(
 #[tauri::command]
 pub fn terminal_host_status(hub: tauri::State<'_, HostHub>) -> HostStatus {
     hub.status()
+}
+
+#[cfg(test)]
+mod pending_replay_tests {
+    use super::PendingReplays;
+
+    #[test]
+    fn the_flag_follows_the_map_through_insert_and_take() {
+        let p = PendingReplays::<u8>::default();
+        assert!(!p.flagged());
+        assert_eq!(p.take("t", "g"), None);
+        p.insert("t", "g1", 1);
+        p.insert("u", "g2", 2);
+        assert!(p.flagged());
+        // Another generation's frame takes nothing and keeps the flag.
+        assert_eq!(p.take("t", "other"), None);
+        assert!(p.flagged());
+        assert_eq!(p.take("t", "g1"), Some(1));
+        assert!(p.flagged());
+        assert_eq!(p.take("u", "g2"), Some(2));
+        assert!(!p.flagged());
+        assert_eq!(p.take("u", "g2"), None);
+    }
 }
