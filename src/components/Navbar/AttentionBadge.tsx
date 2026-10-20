@@ -4,6 +4,7 @@ import { collectAttentionPanes } from '@/lib/attention'
 import { attentionCounts } from '@/lib/pane-selectors'
 import { jumpToAttention } from '@/lib/attention-jump'
 import { formatStateAge, longestWaitMs } from '@/lib/state-age'
+import { countRender } from '@/lib/perf-render-count'
 import { cn } from '@/lib/utils'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import { useAppStore } from '@/store/app-store'
@@ -17,6 +18,7 @@ import { useAppStore } from '@/store/app-store'
  * after the click.
  */
 export function AttentionBadge(): ReactElement | null {
+  countRender('AttentionBadge')
   const workspaces = useAppStore((s) => s.workspaces)
   // Only the two counts are subscribed: a pane flipping working ↔ idle (seen)
   // leaves them unchanged and no longer re-renders the badge. The longest

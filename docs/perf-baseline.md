@@ -12,17 +12,46 @@ pwsh scripts/perf/flood.ps1 -Scenario a -Panes 8     # one scenario, more panes
 pwsh scripts/perf/flood.ps1 -SizeMB 200 -TuiSizeMB 50 -Repeat 1   # long soak (memory growth)
 pwsh scripts/perf/flood.ps1 -Trace                   # also save a Chromium perf trace per run
 pwsh scripts/perf/flood.ps1 -Scenario d -Repeat 3     # agents: 15 synthetic agent panes x 150 s (~10 min)
+pwsh scripts/perf/flood.ps1 -Scenario d -MockAgents   # same, as perf-mock-agent panes (detector, badges, renders)
+pwsh scripts/perf/flood.ps1 -Scenario e -AgentSeconds 60   # War Room: wait_peer resolve latency
+pwsh scripts/perf/flood.ps1 -Scenario f -AgentSeconds 60   # 16-20 visible panes + workspace switching
+pwsh scripts/perf/flood.ps1 -Scenario full -HostMode -AgentSeconds 60   # every scenario once, through the terminal host
 ```
+
+`-HostMode` switches the terminal host on (Settings > Terminal) in the
+throwaway perf profile before the panes are created, after building
+`swarmterm-host` (`cargo build -p swarmterm-host`). The run fails if the host
+is not connected, or if a dev host of this worktree already runs. Only the
+host this run started is sampled and stopped (see step 5 below).
+
+### Coverage: which change each scenario exercises
+
+| scenario | P0 harness / probes | P1 PTY I/O threads, flusher | P2 output flow control | P3 binary IPC / host frame decoder | P4 ring size | P5 | detector / badges / renders |
+|---|---|---|---|---|---|---|---|
+| a: sequence flood | yes | yes | yes (backpressure) | with `-HostMode` | with `-HostMode` | see P5 notes | no |
+| b: TUI flood | yes | yes | yes | with `-HostMode` | with `-HostMode` | see P5 notes | no |
+| c: flood + 20 idle | yes | yes | yes | with `-HostMode` | with `-HostMode` | see P5 notes | no |
+| d: agents | yes | yes (echo in busy panes) | yes (tool dumps) | with `-HostMode` | with `-HostMode` | see P5 notes | with `-MockAgents` |
+| e: War Room | yes | yes | yes | with `-HostMode` | with `-HostMode` | see P5 notes | yes (wait_peer path) |
+| f: many visible | yes | yes | yes | with `-HostMode` | with `-HostMode` | see P5 notes | WebGL budget, DOM fallback |
+
+Without `-HostMode` the in-process PTY carries the output, so the host-side
+parts of P2, P3 and P4 are not on the path. Add a column when a phase lands.
 
 A single run is too noisy to compare (see Variance below). Always compare the
 medians of the default 3 runs. The summary prints the median and the min-max
 range per metric.
 
-### Hard rule: no agent, no AI provider
+### Hard rule: only simulations run
 
 The harness never starts an agent CLI (claude, codex, gemini, opencode, ...)
-or anything that uses AI usage. Scenario d's "agents" are a local generator
-script. This is enforced three ways:
+or anything that uses AI usage. Every "agent" is the local generator
+`scripts/perf/agent-stream.mjs`; every War Room waiter is the spec itself
+calling the app's MCP server. The one non-terminal pane type allowed is the
+dev-only `perf-mock-agent` template (scenario d with `-MockAgents`, scenario
+e): it is not in the template catalog, resolves only in dev builds, and its
+command is exactly `node agent-stream.mjs --mock` (the copy in the perf data
+dir). This is enforced three ways:
 
 1. **Fresh empty profile.** The instance runs with its own identifier
    `com.apooooh.swarmterm.gn.perf` (a generated `--config`), and its
@@ -32,7 +61,9 @@ script. This is enforced three ways:
    workspace can restore or resume an agent session.
 2. **Abort on agent panes.** The spec refuses to run, before and after it
    creates its panes, if ANY workspace has a default agent or any pane has an
-   agent other than `terminal`, a session id, a resume or continue session, a
+   agent other than `terminal` (or `perf-mock-agent` where the scenario asks
+   for it, after checking in-page that it resolves to exactly the generator
+   command), a session id, an account, a resume or continue session, a
    start prompt or a startup command. Panes are created as plain terminals.
 3. **Process guard.** A thread polls the instance's process tree (including
    the terminal host) every second. On an agent CLI, by executable name or by
@@ -75,8 +106,41 @@ Output goes to `test-results/perf-runs/<timestamp>/`: `summary.md`, `summary.jso
 | b | `-Panes` (4) | 1 (probed) | `-TuiSizeMB` (20) escape-heavy TUI stream each |
 | c | 4 | 20 (8 visible, 12 in a hidden workspace) | `-SizeMB` (50) sequence file each |
 | d | `-AgentPanes` (15): 11 visible, 4 in a hidden workspace | 1 (probed, first pane) | `scripts/perf/agent-stream.mjs` for `-AgentSeconds` (150) each |
+| e | `-StreamPanes` (4) streaming | `-WarPairs` (4) waiters (first probed) + 4 mock agent peers | generator for `-AgentSeconds` |
+| f | `-VisiblePanes` (16) visible + 2 x 4 in other workspaces | none | generator for `-AgentSeconds` in every pane |
 
-Scenario d is not part of `all`. Run it with `-Scenario d`.
+Scenarios d, e and f are not part of `all`. Run them with `-Scenario <s>`, or
+everything once with `-Scenario full` (d then uses mock agents).
+
+### Scenario d with `-MockAgents`
+
+The agent panes are `perf-mock-agent` panes: the template line starts
+`agent-stream.mjs --mock`, which waits for `perf-mock.json` (the spec's start
+signal), adds idle phases and sets the OSC title to `perf-mock working` /
+`perf-mock idle`. A dev-only manifest maps that to agent states, so the
+detector, the tab dots and the attention badge run. A dev-only counter
+(`src/lib/perf-render-count.ts`, active only while the harness sets
+`window.__perfRenderCounts`) reports WorkspaceTabs and AttentionBadge renders
+in summary.md.
+
+### Scenario e (War Room)
+
+The waiters and the mock peers join a fresh War Room through
+`war_room_join`, the command the app's drag-and-drop uses. Each waiter loops
+`war_room.wait_peer` (`afterChange: true`) over the app's MCP server with its
+own pane token, as an agent's MCP client would. The mock logs every idle flip
+(`perf-mock-<pane>.log`, epoch ms), and the resolve latency is the call's
+return minus the newest idle flip inside the call. It covers generator ->
+ConPTY -> xterm -> detector -> mirror IPC -> peer state -> MCP answer.
+Calls still waiting at the end return `timeout`; they are not failures.
+
+### Scenario f (many visible)
+
+16-20 panes in the visible workspace (12 from the wizard, the rest split) and
+two 4-pane workspaces, every pane streaming the generator. The spec switches
+the active workspace every `-SwitchSeconds` (3) and samples
+`perfRendererStats()` from the terminal registry: live WebGL contexts and
+visible panes on the DOM fallback.
 
 ### Scenario d (agents)
 
@@ -277,8 +341,8 @@ memory, not just MB/s, against the baseline above.
   host row stays empty.
 - **Probe overhead.** The probe adds work to every write: one regex scan per
   chunk (scenario d: three). Compare runs only with runs from the same harness version.
-- **The host path is untested.** Host discovery and stopping by path are
-  implemented, but this baseline ran with the host off.
+- **The host path is not in this baseline.** It ran with the host off; use
+  `-HostMode` for host numbers.
 - **Delivery-lag clock.** The generator and the WebView both use the system
   clock (`Date.now()`), with 1 ms resolution. A tool dump's tokens are stamped
   while its string is built, just before the single write.
