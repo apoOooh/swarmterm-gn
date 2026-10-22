@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createRendererPolicy, type RendererPolicyOptions } from './renderer-policy'
+import { createRendererPolicy, DEFAULT_RENDERER_POLICY, type RendererPolicyOptions } from './renderer-policy'
 
 const OPTS: RendererPolicyOptions = {
   maxWebgl: 2,
@@ -245,6 +245,40 @@ describe('renderer policy', () => {
     p.claimOnOpen('a', 0)
     stream(p, 'a', 900_000, 0, 30_000)
     expect(p.next(30_000)).toBeUndefined()
+  })
+
+  it('defaults: agent tool dumps keep WebGL, a sustained flood goes to DOM', () => {
+    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0 })
+    p.add('a', 0)
+    p.setVisible('a', true, 0)
+    expect(p.claimOnOpen('a', 0).webgl).toBe(true)
+    // Scenario d: 400 KB dumps 4 s apart, between streamed text.
+    for (let t = 0; t < 20_000; t += 4000) {
+      p.recordOutput('a', 400_000, t)
+      stream(p, 'a', 20_000, t, t + 4000)
+      expect(p.next(t + 3999)).toBeUndefined()
+    }
+    // Scenario c: a flood, even one slowed to ~200 KB/s by the parser.
+    stream(p, 'a', 200_000, 20_000, 24_000)
+    expect(p.next(24_000)).toEqual({ key: 'a', to: 'dom' })
+  })
+
+  it('defaults: an agent pane demoted by close dumps gets WebGL back while it streams', () => {
+    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0 })
+    p.add('a', 0)
+    p.setVisible('a', true, 0)
+    p.claimOnOpen('a', 0)
+    // Two 400 KB dumps 1 s apart keep the rate up past the sustain time.
+    p.recordOutput('a', 400_000, 0)
+    p.recordOutput('a', 400_000, 1000)
+    const down = p.next(3000)
+    expect(down).toEqual({ key: 'a', to: 'dom' })
+    p.commit(down!, 3000)
+    // Back to streamed text (~20 KB/s): promoted once the dwell has passed.
+    stream(p, 'a', 20_000, 3000, 12_900)
+    expect(p.next(12_900)).toBeUndefined()
+    stream(p, 'a', 20_000, 12_900, 13_100)
+    expect(p.next(13_100)).toEqual({ key: 'a', to: 'webgl' })
   })
 
   it('demotes only a sustained flood, not a short burst', () => {

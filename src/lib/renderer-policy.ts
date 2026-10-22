@@ -64,8 +64,12 @@ export interface RendererPolicyOptions {
    * …once it has stayed above it this long. Agent panes dump bursts (a diff,
    * a file) that exceed the rate for a moment; a flood is sustained. This is
    * the SMOOTHED rate: one burst of B bytes stays above the threshold for
-   * about tau·ln(B/(tau·threshold)), so a single dump of ~180 KB or more is
-   * demoted too (a 1 MB dump: ~2.7 s). It then re-promotes once quiet.
+   * about tau·ln(B/(tau·threshold)), so only a single dump of ~1.3 MB or
+   * more is demoted too. 3 s, not 1 s: at 1 s every 100-400 KB tool dump of
+   * a busy agent pane sent it to DOM, whose per-row rebuilds doubled scenario
+   * d's dump delivery lag (p95 ~330 ms vs ~160 ms in 1.22.1). A real flood
+   * (scenario c) stays above the rate for its whole run, so the 2 s later
+   * demotion costs it little. A demoted pane re-promotes once quiet.
    */
   demoteSustainMs: number
   /** A DOM pane is promoted only while its rate stays below this… */
@@ -86,8 +90,11 @@ export const DEFAULT_RENDERER_POLICY: RendererPolicyOptions = {
   prefer: 'quiet',
   busyBytesPerSec: 64 * 1024,
   demoteBytesPerSec: 64 * 1024,
-  demoteSustainMs: 1000,
-  promoteBytesPerSec: 2 * 1024,
+  demoteSustainMs: 3000,
+  // Not ~0: an agent pane never goes silent (spinner, streamed text at
+  // ~20 KB/s), so a near-zero bar kept a pane that two close tool dumps had
+  // demoted on DOM for the rest of the run (scenario d, one run in two).
+  promoteBytesPerSec: 32 * 1024,
   promoteQuietMs: 3000,
   minDwellMs: 10_000,
   rateTauMs: 1000
