@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { Film, ImageIcon } from 'lucide-react'
 import { MediaPathView } from '@/components/Files/MediaView'
-import { fileName } from '@/lib/media-gallery'
+import { fileName, samePath } from '@/lib/media-gallery'
 import { useMediaStore } from '@/store/media-store'
 import { unrootedMediaUrl } from '@/tauri/files'
 
@@ -12,7 +12,7 @@ export function MediaPanel(): ReactElement {
   const items = useMediaStore((s) => s.items)
   const selectedPath = useMediaStore((s) => s.selectedPath)
   const open = useMediaStore((s) => s.open)
-  const selected = items.find((i) => i.path === selectedPath) ?? items[0]
+  const selected = items.find((i) => selectedPath !== null && samePath(i.path, selectedPath)) ?? items[0]
   if (!selected) {
     return <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
       <p>Images and videos whose paths appear in a pane, and clipboard images (if enabled), show up here. Nothing here is visible to agents.</p>
@@ -32,7 +32,7 @@ export function MediaPanel(): ReactElement {
     {/* The strip needs no keyboard: hand focus back to the terminal after a click. */}
     <div data-focus-return className="flex shrink-0 gap-2 overflow-x-auto border-t border-border p-2">
       {items.map((item) => {
-        const active = item.path === selected.path
+        const active = samePath(item.path, selected.path)
         return <button
           key={item.path}
           tabIndex={-1}

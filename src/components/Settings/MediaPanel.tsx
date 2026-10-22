@@ -61,7 +61,7 @@ export function MediaSettingsPanel(): ReactElement {
         <h2 className="mb-1 text-sm font-semibold text-foreground">Clipboard</h2>
         <ToggleRow
           label="Clipboard images"
-          description="Add images (and copied image/video files) you copy to the Media panel. Your clipboard can hold private content: images are saved only to a local temp folder, never sent anywhere, and deleted when Swarmterm exits."
+          description="Add images (and copied image/video files) you copy to the Media panel. Your clipboard can hold private content: images are saved only to a local temp folder, never sent anywhere, and deleted when you turn this off or Swarmterm exits."
           checked={prefs.clipboardImages}
           onChange={(on) => update({ clipboardImages: on })}
         />

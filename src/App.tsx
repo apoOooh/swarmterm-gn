@@ -127,7 +127,7 @@ import { onPreviewOpen } from '@/tauri/preview'
 import { onClipboardMedia, setClipboardMediaEnabled } from '@/tauri/files'
 import { useMediaPrefStore } from '@/store/media-pref-store'
 import { MediaOverlay } from '@/components/Media/MediaOverlay'
-import { useMediaStore } from '@/store/media-store'
+import { CLIPBOARD_SOURCE, useMediaStore } from '@/store/media-store'
 import { mediaKind } from '@/lib/media-gallery'
 import { closePreview, openPreview, wirePreviewEvents } from '@/lib/preview-registry'
 import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
@@ -923,13 +923,17 @@ export default function App(): ReactElement {
   const clipboardImages = useMediaPrefStore((s) => s.prefs.clipboardImages)
   useEffect(() => {
     setClipboardMediaEnabled(clipboardImages).catch((err) => console.warn('[media] clipboard watcher:', err))
+    // Off deletes the saved images and withdraws them from serving.
+    if (!clipboardImages) useMediaStore.getState().dropClipboard()
   }, [clipboardImages])
   useEffect(() => {
     const unlisten = onClipboardMedia((e) => {
+      // An event in flight while switching off names a withdrawn file.
+      if (!useMediaPrefStore.getState().prefs.clipboardImages) return
       const kind = mediaKind(e.path)
       if (!kind) return
       // User-originated and already registered by the backend watcher.
-      const item = { path: e.path, kind, terminalId: '', source: 'clipboard', shownAt: Date.now(), opened: true }
+      const item = { path: e.path, kind, terminalId: '', source: CLIPBOARD_SOURCE, shownAt: Date.now(), opened: true }
       useMediaStore.getState().add(item)
       useMediaStore.getState().announce(item, 'clipboard')
     })

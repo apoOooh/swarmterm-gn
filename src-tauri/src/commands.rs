@@ -110,7 +110,8 @@ pub async fn media_open(
 }
 
 /// Settings → Media → Clipboard images (opt-in). Idempotent; the renderer
-/// calls it at startup and on every toggle. Thread start/stop only, no I/O.
+/// calls it at startup and on every toggle. Thread start/stop; switching off
+/// also deletes the saved PNGs (a few small files).
 #[tauri::command]
 pub fn clipboard_media_set_enabled(
     window: tauri::WebviewWindow,

@@ -3,7 +3,8 @@
 //! private temp folder and a copied image/video FILE is used in place; both are
 //! allow-listed for the unrooted media route and announced as
 //! `media:clipboard`. Clipboard contents can be private, so this is off by
-//! default, never leaves the machine, and our PNGs are deleted on exit.
+//! default, never leaves the machine, and our PNGs are deleted (and every
+//! clipboard path withdrawn from the route) when switched off or on exit.
 //!
 //! Threads: the OS delivers `WM_CLIPBOARDUPDATE` to clipboard-win's
 //! message-only window on a watcher thread (`ClipboardWatcherContext`); its
@@ -131,6 +132,11 @@ impl ClipStore {
         self.entries.len()
     }
 
+    /// Accept saves again after `clear` (clipboard images switched back on).
+    pub fn reopen(&mut self) {
+        self.closed = false;
+    }
+
     /// Delete every file we wrote and the instance folder itself.
     pub fn clear(&mut self) {
         self.closed = true;
@@ -223,6 +229,9 @@ mod watch {
     pub struct ClipboardMedia {
         running: Mutex<Option<Running>>,
         store: Arc<Mutex<ClipStore>>,
+        /// Everything the worker allow-listed (saved PNGs and copied files),
+        /// so switching off can withdraw it from the unrooted route.
+        registered: Arc<Mutex<Vec<PathBuf>>>,
     }
 
     impl Default for ClipboardMedia {
@@ -234,6 +243,7 @@ mod watch {
                     MAX_FILES,
                     MAX_BYTES,
                 ))),
+                registered: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -249,14 +259,20 @@ mod watch {
         pub fn set_enabled(&self, app: &AppHandle, enabled: bool) -> Result<(), String> {
             let mut running = self.running.lock().map_err(|e| e.to_string())?;
             if !enabled {
-                // Files already in the gallery stay viewable until exit.
+                // Off means off: stop, delete our PNGs and withdraw every
+                // clipboard path from the unrooted route (the gallery shows
+                // them as missing). Idempotent: a repeat call finds nothing.
                 if let Some(r) = running.take() {
                     r.halt();
                 }
+                self.forget(app);
                 return Ok(());
             }
             if running.is_some() {
                 return Ok(());
+            }
+            if let Ok(mut store) = self.store.lock() {
+                store.reopen();
             }
             let stop = Arc::new(AtomicBool::new(false));
             let (tx, rx) = channel::<()>();
@@ -270,16 +286,29 @@ mod watch {
                 .map_err(|e| e.to_string())?;
             let worker_stop = stop.clone();
             let store = self.store.clone();
+            let registered = self.registered.clone();
             let app = app.clone();
             std::thread::Builder::new()
                 .name("clipboard-media".into())
-                .spawn(move || worker(rx, worker_stop, store, app))
+                .spawn(move || worker(rx, worker_stop, store, registered, app))
                 .map_err(|e| e.to_string())?;
             *running = Some(Running {
                 stop,
                 shutdown: Some(shutdown),
             });
             Ok(())
+        }
+
+        fn forget(&self, app: &AppHandle) {
+            if let Ok(mut store) = self.store.lock() {
+                store.clear();
+            }
+            let paths = self
+                .registered
+                .lock()
+                .map(|mut r| std::mem::take(&mut *r))
+                .unwrap_or_default();
+            app.state::<Arc<FileService>>().unregister_media(&paths);
         }
 
         /// App exit: stop watching and delete every PNG we wrote.
@@ -349,6 +378,7 @@ mod watch {
         rx: Receiver<()>,
         stop: Arc<AtomicBool>,
         store: Arc<Mutex<ClipStore>>,
+        registered: Arc<Mutex<Vec<PathBuf>>>,
         app: AppHandle,
     ) {
         while rx.recv().is_ok() {
@@ -357,21 +387,35 @@ mod watch {
             if stop.load(Ordering::SeqCst) {
                 return;
             }
-            for path in capture(&store) {
+            for path in capture(&store, &stop) {
                 // Capture can take a while (a big bitmap): a switch-off in
                 // the meantime must not still announce clipboard content.
                 if stop.load(Ordering::SeqCst) {
                     return;
                 }
                 let service = app.state::<Arc<FileService>>();
+                // Holding `registered` across the check and the insert means a
+                // concurrent switch-off (`forget` takes this lock after
+                // setting `stop`) either sees this path or we see `stop`.
+                let Ok(mut mine) = registered.lock() else {
+                    return;
+                };
+                if stop.load(Ordering::SeqCst) {
+                    return;
+                }
                 // Re-validates (canonical regular image/video file) and
                 // allow-lists it; capped like passive detection, because
                 // every copy would otherwise grow the allow-list for good.
-                let Some(path) =
-                    service.register_capped_media(&path.to_string_lossy(), Path::new(""))
+                let Some((path, added)) =
+                    service.register_media_tracked(&path.to_string_lossy(), Path::new(""))
                 else {
                     continue;
                 };
+                // Only paths this watcher added are withdrawn on switch-off.
+                if added {
+                    mine.push(path.clone());
+                }
+                drop(mine);
                 let _ = app.emit(
                     "media:clipboard",
                     ClipboardMediaEvent {
@@ -384,7 +428,7 @@ mod watch {
 
     /// Paths to announce for the current clipboard: copied media files as
     /// they are, else a bitmap saved as a NEW png (a duplicate yields none).
-    fn capture(store: &Mutex<ClipStore>) -> Vec<PathBuf> {
+    fn capture(store: &Mutex<ClipStore>, stop: &AtomicBool) -> Vec<PathBuf> {
         if let Ok(files) = crate::files::clipboard::read() {
             let media: Vec<PathBuf> = files
                 .iter()
@@ -405,6 +449,11 @@ mod watch {
         let Ok(mut store) = store.lock() else {
             return Vec::new();
         };
+        // Checked under the store lock: a quick off/on (`clear` + `reopen`)
+        // must not let this stale worker save into the reopened store.
+        if stop.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
         if store.len() == 0 {
             prune_stale(
                 &parent_dir(),
@@ -485,6 +534,8 @@ mod tests {
         assert_eq!(s.len(), 0);
         assert!(s.save(b"late").is_err(), "no write after exit cleanup");
         assert!(!dir.exists());
+        s.reopen();
+        assert!(matches!(s.save(b"again").unwrap(), Saved::New(_)));
     }
 
     #[test]

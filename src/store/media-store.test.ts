@@ -72,3 +72,29 @@ describe('media open (user action)', () => {
     expect(useMediaStore.getState().items).toEqual([])
   })
 })
+
+describe('media gallery store', () => {
+  it('matches paths case-insensitively for select and badge counts', () => {
+    useMediaStore.setState({ items: [], selectedPath: null, unseen: {} })
+    const m = useMediaStore.getState()
+    m.detect({ ...item('C:/a/Shot.png'), terminalId: 't1', source: 'pane' })
+    m.detect({ ...item('c:/A/shot.PNG'), terminalId: 't1', source: 'pane' })
+    expect(useMediaStore.getState().unseen).toEqual({ t1: 1 })
+    m.select('C:/A/SHOT.png')
+    expect(useMediaStore.getState().unseen).toEqual({})
+  })
+
+  it('dropClipboard removes clipboard items and a clipboard selection only', () => {
+    useMediaStore.setState({ items: [], selectedPath: null, unseen: {}, overlayItems: [] })
+    const m = useMediaStore.getState()
+    m.add(item('clip.png'))
+    m.detect({ ...item('pane.png'), terminalId: 't1', source: 'pane' })
+    m.detect({ ...item('named.png'), terminalId: 't2', source: 'clipboard' })
+    useMediaStore.setState({ overlayItems: [item('clip.png')] })
+    m.dropClipboard()
+    const s = useMediaStore.getState()
+    expect(s.items.map((i) => i.path)).toEqual(['named.png', 'pane.png'])
+    expect(s.overlayItems).toEqual([])
+    expect(s.selectedPath).toBeNull()
+  })
+})

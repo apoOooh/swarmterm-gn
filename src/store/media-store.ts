@@ -33,9 +33,14 @@ interface MediaState {
   /** New media arrived; pops the overlay if the user's prefs allow it for this origin. */
   announce: (item: MediaItem, origin: MediaOrigin) => void
   dismissOverlay: () => void
+  /** Clipboard images switched off: the backend deleted/withdrew them, so drop them here too. */
+  dropClipboard: () => void
 }
 
-const has = (items: MediaItem[], path: string): boolean => items.some((i) => i.path.toLowerCase() === path.toLowerCase())
+/** `source` of clipboard items (App.tsx sets it). */
+export const CLIPBOARD_SOURCE = 'clipboard'
+
+const has = (items: MediaItem[], path: string): boolean => items.some((i) => samePath(i.path, path))
 
 /**
  * One timer for the app's single overlay. It lives beside the store, not in
@@ -71,7 +76,7 @@ export const useMediaStore = create<MediaState>((set) => ({
   }),
   // Looking at a pane's detected item counts as having seen that pane's news.
   select: (path) => set((s) => {
-    const item = s.items.find((i) => i.path === path)
+    const item = s.items.find((i) => samePath(i.path, path))
     if (!item || !(item.terminalId in s.unseen)) return { selectedPath: path }
     const unseen = { ...s.unseen }
     delete unseen[item.terminalId]
@@ -109,4 +114,11 @@ export const useMediaStore = create<MediaState>((set) => ({
     overlayAutoHide.stop()
     set({ overlayVisible: false })
   },
+  dropClipboard: () => set((s) => {
+    // Pane items always carry a terminalId, so a pane named "clipboard" stays.
+    const keep = (i: MediaItem): boolean => !(i.terminalId === '' && i.source === CLIPBOARD_SOURCE)
+    const items = s.items.filter(keep)
+    const selectedPath = s.selectedPath !== null && items.some((i) => samePath(i.path, s.selectedPath!)) ? s.selectedPath : null
+    return { items, overlayItems: s.overlayItems.filter(keep), selectedPath }
+  }),
 }))

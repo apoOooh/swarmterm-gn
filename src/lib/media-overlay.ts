@@ -3,7 +3,7 @@
  * Pure logic (no DOM, no stores) so the timer rules are unit-testable with
  * fake timers; `store/media-store.ts` and `MediaOverlay.tsx` wire it up.
  */
-import type { MediaItem } from '@/lib/media-gallery'
+import { samePath, type MediaItem } from '@/lib/media-gallery'
 
 /** Where a new gallery item came from; each origin has its own overlay toggle. */
 export type MediaOrigin = 'agent' | 'clipboard'
@@ -77,7 +77,6 @@ export function overlayAllows(prefs: MediaPrefs, origin: MediaOrigin): boolean {
   return origin === 'agent' ? prefs.overlayAgent : prefs.clipboardImages && prefs.overlayClipboard
 }
 
-const samePath = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
 
 /** Newest first; a re-announced path moves to the front instead of duplicating. */
 export function pushOverlayItem(items: MediaItem[], item: MediaItem, max: number): MediaItem[] {

@@ -59,7 +59,7 @@ pub fn run() {
             let service = context
                 .app_handle()
                 .state::<std::sync::Arc<files::FileService>>();
-            files::media_response(&service, request)
+            files::media_response(&service, context.webview_label(), request)
         })
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())

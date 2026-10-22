@@ -216,13 +216,28 @@ impl FileService {
     /// the unrooted route; the allow-list stops growing at `MAX_UNROOTED_MEDIA`.
     /// Callers are user-originated only (clipboard, `register_user_media`).
     pub fn register_capped_media(&self, raw: &str, cwd: &Path) -> Option<PathBuf> {
+        self.register_media_tracked(raw, cwd).map(|(path, _)| path)
+    }
+
+    /// As `register_capped_media`, plus whether this call added the path (so
+    /// a caller withdrawing "its" paths never drops one opened elsewhere).
+    pub fn register_media_tracked(&self, raw: &str, cwd: &Path) -> Option<(PathBuf, bool)> {
         let path = media::resolve_media(raw, cwd).ok()?;
         let mut set = self.unrooted_media.lock().ok()?;
         if !set.contains(&path) && set.len() >= MAX_UNROOTED_MEDIA {
             return None;
         }
-        set.insert(path.clone());
-        Some(path)
+        let added = set.insert(path.clone());
+        Some((path, added))
+    }
+
+    /// Drop paths from the unrooted allow-list (clipboard images switched off).
+    pub fn unregister_media(&self, paths: &[PathBuf]) {
+        if let Ok(mut set) = self.unrooted_media.lock() {
+            for p in paths {
+                set.remove(p);
+            }
+        }
     }
 
     /// Image/video extension check (the unrooted route's kind rule) for other modules.

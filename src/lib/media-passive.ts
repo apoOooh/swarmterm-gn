@@ -51,9 +51,11 @@ function scan(terminalId: string, state: ScanState): void {
   state.chunks = []
   state.bytes = 0
   // Lines are scanned once complete; a partial last line (a TUI redraw or the
-  // prompt line) is drained one interval after the pane went quiet.
+  // prompt line) is drained one interval after the pane went quiet. Re-arm
+  // only when this round brought new data: a quiet round drains everything,
+  // so an idle pane never keeps a timer ticking.
   const text = quiet ? state.buffer.drain() : state.buffer.take()
-  if (state.buffer.hasPartial) state.timer = setTimeout(() => scan(terminalId, state), SCAN_INTERVAL_MS)
+  if (!quiet && state.buffer.hasPartial) state.timer = setTimeout(() => scan(terminalId, state), SCAN_INTERVAL_MS)
   if (!text) return
   const now = Date.now()
   const offered = detectMediaPaths(text).filter((p) => state.seen.offer(p, now))

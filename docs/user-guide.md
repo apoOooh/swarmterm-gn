@@ -179,8 +179,9 @@ PNG only in a private folder under your Windows temp directory, at most 50
 images / 200 MB (oldest removed first; copying the same image again adds no
 duplicate). Nothing is uploaded or sent anywhere, and the folder is deleted
 when Swarmterm exits (a folder left by a crash is removed on a later run after
-a day). Turning the setting off stops watching at once; images already in the
-Media tab stay viewable until you exit.
+a day). Turning the setting off stops watching at once, deletes the saved images
+and removes all clipboard items from the Media tab; turning it back on starts
+fresh.
 
 **Run** on a supported file starts a separate plain-shell pane in its folder:
 Python files, pytest naming conventions, JavaScript/Node files, Docker Compose
