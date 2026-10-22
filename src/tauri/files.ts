@@ -40,6 +40,13 @@ export function mediaUrl(contextId: string, path: string, revision: string | num
   // convertFileSrc encodes the entire path, so use it for the scheme/host only.
   return `${convertFileSrc(contextId, 'swarmterm-media')}?path=${encodeURIComponent(path)}&revision=${revision}`
 }
+/** Context id of the backend's unrooted media route (`UNROOTED_ID` in `files/media.rs`). */
+export const UNROOTED_MEDIA = 'unrooted'
+/** Media outside every file context; only files an agent registered via `media.show` are served. */
+export const unrootedMediaUrl = (path: string, revision: string | number = 0): string => mediaUrl(UNROOTED_MEDIA, path, revision)
+export interface MediaShowEvent { terminalId: string; path: string }
+/** `media:show` from the MCP `media.show` tool; `path` is canonical and already registered. */
+export const onMediaShow = (cb: (e: MediaShowEvent) => void): Promise<() => void> => listen<MediaShowEvent>('media:show', (e) => cb(e.payload))
 /** Hands a Markdown file to the external MarkText app. `executable` empty = auto-detect. */
 export const openInMarkText = (contextId: string, path: string, executable: string): Promise<void> => request('openMarkText', { contextId, path, executable })
 /** Unsaved HTML buffer the preview frame renders instead of disk; `null` drops it. */

@@ -155,6 +155,10 @@ pub struct FileService {
     /// Keyed by canonical path. Lives only in memory: the preview protocol
     /// serves it so relative assets still resolve from the file's folder.
     drafts: Mutex<HashMap<PathBuf, String>>,
+    /// Canonical media files outside every context root that `media.show`
+    /// registered. The unrooted protocol route serves ONLY these, so the
+    /// webview can never name an arbitrary file on disk.
+    unrooted_media: Mutex<std::collections::HashSet<PathBuf>>,
 }
 
 impl FileService {
@@ -165,11 +169,30 @@ impl FileService {
             watchers: Mutex::new(HashMap::new()),
             history_dir,
             drafts: Mutex::new(HashMap::new()),
+            unrooted_media: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
     pub(crate) fn draft(&self, path: &Path) -> Option<String> {
         self.drafts.lock().ok()?.get(path).cloned()
+    }
+
+    /// Validate (see `media::resolve_media`) and allow-list a media file for the
+    /// unrooted protocol route. Returns the canonical path the renderer uses.
+    pub fn register_unrooted_media(&self, raw: &str, cwd: &Path) -> Result<PathBuf, String> {
+        let path = media::resolve_media(raw, cwd)?;
+        self.unrooted_media
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(path.clone());
+        Ok(path)
+    }
+
+    pub(crate) fn unrooted_registered(&self, path: &Path) -> bool {
+        self.unrooted_media
+            .lock()
+            .map(|set| set.contains(path))
+            .unwrap_or(false)
     }
 
     pub fn open(&self, cwd: &Path) -> Result<FileContext, String> {

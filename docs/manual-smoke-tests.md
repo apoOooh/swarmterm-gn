@@ -300,6 +300,18 @@ Do not mark them passed from the in-memory fixture alone.
       "worktree isolation is not enabled".
 - [ ] Closing a pane or workspace does NOT delete any worktree.
 
+## Media panel (media.show)
+
+- [ ] Have an agent call `media.show` on a PNG in `%TEMP%` while you type in
+      its pane: the Media tab opens with the image, keystrokes keep landing
+      in the shell.
+- [ ] `media.show` on an MP4: it plays and seeking works (range requests).
+- [ ] Overwrite the PNG and call `media.show` again: it moves to the front of
+      the strip and shows the new content.
+- [ ] `media.show` from a background pane adds to the strip without opening
+      the panel; a `.txt`, `.svg`, missing or `\\host\share` path is refused.
+- [ ] Switching from Preview to Media hides the native preview webview.
+
 ## Web preview
 
 - [ ] Preview a framing-hostile site: type `github.com` in the address bar —

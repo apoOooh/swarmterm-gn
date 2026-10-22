@@ -1,4 +1,7 @@
-use super::{path::guarded, FileService};
+use super::{
+    path::{canonical, guarded},
+    FileService,
+};
 use std::{
     fs,
     io::{Read, Seek, SeekFrom},
@@ -46,6 +49,47 @@ pub(super) fn is_media(path: &Path) -> bool {
         extension(path).as_str(),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "mp4" | "m4v" | "mov" | "webm"
     )
+}
+
+/// Context id of the unrooted route: `/unrooted?path=<canonical abs path>`.
+/// Every webview of the app (preview pages included) shares this scheme, so a
+/// registered file is readable by them too; registration is per session and
+/// limited to images/videos an agent showed, which is the accepted exposure.
+/// Must stay in lockstep with `UNROOTED_MEDIA` in `src/tauri/files.ts`.
+pub(super) const UNROOTED_ID: &str = "unrooted";
+
+/// Resolve a path an agent named (absolute, or relative to its terminal cwd)
+/// to a canonical regular media file. Deliberately NO root check (agents
+/// write screenshots to scratch/temp dirs); the safety net is instead the
+/// canonical regular-file + image/video extension rule, so only media can
+/// ever be allow-listed — never HTML/SVG or arbitrary files.
+pub(super) fn resolve_media(raw: &str, cwd: &Path) -> Result<std::path::PathBuf, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("path must not be empty".into());
+    }
+    // UNC shares would make the app open an SMB connection on an agent's
+    // say-so; agents produce local files, so refuse network paths.
+    if (raw.starts_with(r"\\") || raw.starts_with("//")) && !raw.starts_with(r"\\?\") {
+        return Err("network (UNC) paths are not supported".into());
+    }
+    let given = Path::new(raw);
+    let joined = if given.is_absolute() {
+        given.to_path_buf()
+    } else {
+        cwd.join(given)
+    };
+    let path = canonical(&joined)?;
+    if !fs::metadata(&path).map_err(|e| e.to_string())?.is_file() {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    if !is_media(&path) {
+        return Err(format!(
+            "{} is not a supported image or video (png, jpg, jpeg, gif, webp, mp4, m4v, mov, webm)",
+            path.display()
+        ));
+    }
+    Ok(path)
 }
 
 /// Files whose unsaved buffer the preview frame renders (see `FileService::draft`).
@@ -127,7 +171,17 @@ pub fn response(service: &FileService, request: Request<Vec<u8>>) -> Response<Ve
     let result = (|| {
         let url = url::Url::parse(&request.uri().to_string()).map_err(|e| e.to_string())?;
         let (id, path) = target(&url)?;
-        let path = guarded(&service.root(&id)?, &path, false)?;
+        let path = if id == UNROOTED_ID {
+            // Re-canonicalise and re-check: the file may have been swapped
+            // for a link or directory since `media.show` registered it.
+            let path = canonical(Path::new(&path))?;
+            if !service.unrooted_registered(&path) || !is_media(&path) || !path.is_file() {
+                return Err("Media file was not shown by an agent".into());
+            }
+            path
+        } else {
+            guarded(&service.root(&id)?, &path, false)?
+        };
         let mime = mime(&path).ok_or("Unsupported media type")?;
         if previewable(&path) || extension(&path) == "svg" {
             if let Some(draft) = service.draft(&path) {
@@ -235,6 +289,67 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(r.status(), 403);
+    }
+
+    fn unrooted(path: &Path) -> String {
+        let mut url = url::Url::parse("swarmterm-media://localhost/unrooted").unwrap();
+        url.query_pairs_mut()
+            .append_pair("path", &path.to_string_lossy());
+        url.to_string()
+    }
+
+    #[test]
+    fn unrooted_route_serves_only_registered_media_with_ranges() {
+        let t = tempfile::tempdir().unwrap();
+        let service = FileService::new(t.path().join("history"));
+        let shown = t.path().join("shot.mp4");
+        let other = t.path().join("other.png");
+        fs::write(&shown, [1, 2, 3, 4]).unwrap();
+        fs::write(&other, [1]).unwrap();
+        let get = |uri: String, range: Option<&str>| {
+            let mut b = Request::builder().uri(uri);
+            if let Some(r) = range {
+                b = b.header("range", r);
+            }
+            response(&service, b.body(vec![]).unwrap())
+        };
+        assert_eq!(get(unrooted(&shown), None).status(), 403);
+        let path = service
+            .register_unrooted_media("shot.mp4", t.path())
+            .unwrap();
+        let r = get(unrooted(&path), Some("bytes=2-"));
+        assert_eq!(r.status(), 206);
+        assert_eq!(r.body(), &[3, 4]);
+        assert_eq!(get(unrooted(&other), None).status(), 403);
+        // A path spelled differently still resolves to the registered file.
+        let dotted = t.path().join("sub").join("..").join("shot.mp4");
+        fs::create_dir(t.path().join("sub")).unwrap();
+        assert_eq!(get(unrooted(&dotted), None).status(), 200);
+    }
+
+    #[test]
+    fn resolve_media_validates_kind_existence_and_resolves_relative_paths() {
+        let t = tempfile::tempdir().unwrap();
+        let cwd = t.path().join("pane");
+        fs::create_dir(&cwd).unwrap();
+        fs::write(t.path().join("up.PNG"), [0]).unwrap();
+        fs::write(t.path().join("notes.txt"), "x").unwrap();
+        fs::write(t.path().join("page.svg"), "<svg/>").unwrap();
+        fs::create_dir(t.path().join("dir.png")).unwrap();
+        let expected = canonical(&t.path().join("up.PNG")).unwrap();
+        // Relative to the terminal cwd, `..` traversal allowed but canonicalised.
+        assert_eq!(resolve_media("../up.PNG", &cwd).unwrap(), expected);
+        assert_eq!(
+            resolve_media(&expected.to_string_lossy(), Path::new("/elsewhere")).unwrap(),
+            expected
+        );
+        // Traversal onto a non-media file is still refused.
+        assert!(resolve_media("../notes.txt", &cwd).is_err());
+        assert!(resolve_media("../page.svg", &cwd).is_err());
+        assert!(resolve_media("../dir.png", &cwd).is_err());
+        assert!(resolve_media("../missing.png", &cwd).is_err());
+        assert!(resolve_media("  ", &cwd).is_err());
+        assert!(resolve_media(r"\\host\share\x.png", &cwd).is_err());
     }
 
     #[test]

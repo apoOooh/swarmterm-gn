@@ -3,6 +3,7 @@
 //! next task) that delegates into it.
 
 pub mod browser;
+pub mod media;
 pub mod peers;
 pub mod warroom;
 pub mod worktree;

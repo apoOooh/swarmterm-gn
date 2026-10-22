@@ -82,7 +82,8 @@ impl SwarmtermMcpServer {
             tool_router: Self::tool_router_browser()
                 + Self::tool_router_worktree()
                 + Self::tool_router_warroom()
-                + Self::tool_router_peers(),
+                + Self::tool_router_peers()
+                + Self::tool_router_media(),
         }
     }
 
@@ -162,7 +163,10 @@ impl ServerHandler for SwarmtermMcpServer {
                  beside each terminal. Whenever you start a local dev server or otherwise \
                  produce a viewable http(s) URL, call browser.open_preview with that URL so \
                  the page opens right next to your pane — prefer this over only printing the \
-                 URL for the user to copy. When the workspace enables the worktree \
+                 URL for the user to copy. Likewise, whenever you create or update an image or \
+                 video the user should see (screenshot, recording, chart, comparison), call \
+                 media.show with its absolute path so it opens in Swarmterm's Media panel. When the \
+                 workspace enables the worktree \
                  tools: given several independent tasks, or one task worth isolating from \
                  the current checkout, prefer delegating each to a parallel agent via \
                  worktree.spawn (one branch per task) instead of editing in place — the \

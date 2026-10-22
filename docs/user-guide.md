@@ -135,6 +135,17 @@ two matching file-stat samples, preserving video position and active playback.
 Inactive workspaces pause video. **Open in default app** and **Reveal file** are
 explicit buttons available for media; previewing a file does not execute it.
 
+**Media panel.** Agents can show the images and videos they create (screenshots,
+recordings, charts) with the `media.show` tool; the file may be anywhere on
+disk, including temp and scratch folders. It appears in the right panel's
+**Media** tab: a large viewer on top and a strip below with every shown file,
+newest first, with its name, source pane and time. Showing the same file again
+moves it to the front and reloads it. The tab opens by itself only when the
+agent's pane is the one you are working in, and your keyboard stays in the
+terminal. Only PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local
+drives are accepted, and Swarmterm serves only files an agent has shown in this
+session. The list is not saved when Swarmterm closes.
+
 **Run** on a supported file starts a separate plain-shell pane in its folder:
 Python files, pytest naming conventions, JavaScript/Node files, Docker Compose
 YAML, .NET projects and solutions. Dirty files must be saved first. The required

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { mediaVersion, reloadStep, resumeAt, type MediaStat, type ReloadState } from '@/lib/files/media'
-import { mediaUrl, openMediaExternal, revealFile, statMedia } from '@/tauri/files'
+import { mediaUrl, openMediaExternal, revealFile, statMedia, unrootedMediaUrl } from '@/tauri/files'
 import { useDocumentStore } from '@/store/document-store'
 import type { FileDocument } from '@/lib/files/documents'
 import { useAppStore } from '@/store/app-store'
@@ -53,5 +53,20 @@ export function MediaView({ doc, leafId }: { doc: FileDocument; leafId: string }
         }} onError={() => setBroken(true)} /> :
         <img key={url} src={url} alt={doc.path} className="max-h-full max-w-full object-contain" draggable={false} onError={() => setBroken(true)} />}
     </div>
+  </div>
+}
+
+/**
+ * Path-only mode for files outside every file context (agent `media.show`).
+ * No document store and no stat polling: the unrooted route has no stat
+ * command, so `revision` (the show time) is what reloads a re-shown file.
+ */
+export function MediaPathView({ path, kind, revision }: { path: string; kind: 'image' | 'video'; revision: number }): React.ReactElement {
+  const [broken, setBroken] = useState<string | null>(null)
+  const url = unrootedMediaUrl(path, revision)
+  return <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-2">
+    {broken === url ? <p role="alert" className="text-xs text-destructive">This media could not be loaded. Check the file and platform codec support.</p> : kind === 'video' ?
+      <video key={url} controls preload="metadata" src={url} className="max-h-full max-w-full" onError={() => setBroken(url)} /> :
+      <img key={url} src={url} alt={path} className="max-h-full max-w-full object-contain" draggable={false} onError={() => setBroken(url)} />}
   </div>
 }

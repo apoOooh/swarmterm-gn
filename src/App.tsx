@@ -97,7 +97,7 @@ import { useUpdaterStore } from '@/store/updater-store'
 import { PERIODIC_CHECK_INTERVAL_MS, STARTUP_CHECK_DELAY_MS } from '@/lib/updater-flow'
 import { onUpdateCheckRequested } from '@/tauri/updater'
 import { showMessage } from '@/tauri/dialog'
-import { useGitStore } from '@/store/git-store'
+import { useGitStore, type RightPanelMode } from '@/store/git-store'
 import { useRecentsStore } from '@/store/recents-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { useShellAvailabilityStore } from '@/store/shell-availability-store'
@@ -124,6 +124,9 @@ import {
   onWarRoomRooms
 } from '@/tauri/warroom'
 import { onPreviewOpen } from '@/tauri/preview'
+import { onMediaShow } from '@/tauri/files'
+import { useMediaStore } from '@/store/media-store'
+import { mediaKind } from '@/lib/media-gallery'
 import { closePreview, openPreview, wirePreviewEvents } from '@/lib/preview-registry'
 import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
@@ -238,7 +241,7 @@ export default function App(): ReactElement {
   const [draggingLeafId, setDraggingLeafId] = useState<string | null>(null)
   // Restore the right panel exactly as it was when a drag reveals it and the
   // drop lands elsewhere — revealing the zone must not permanently flip tabs.
-  const panelBeforeDragRef = useRef<{ open: boolean; mode: 'browser' | 'git' | 'warroom' } | null>(null)
+  const panelBeforeDragRef = useRef<{ open: boolean; mode: RightPanelMode } | null>(null)
   const dndSensors = useSensors(
     useSensor(GuardedPointerSensor, { activationConstraint: { distance: 5 } })
   )
@@ -253,7 +256,7 @@ export default function App(): ReactElement {
     panelBeforeDragRef.current = null
     if (!prior) return
     const git = useGitStore.getState()
-    git.setMode(prior.mode === 'warroom' ? 'warroom' : prior.mode)
+    git.setMode(prior.mode)
     git.setPanelOpen(prior.open)
   }, [])
 
@@ -904,6 +907,32 @@ export default function App(): ReactElement {
         useGitStore.getState().setMode('browser')
         // Creating a native webview can grab OS focus out from under the
         // pane — same landing-after-everyone defence the drag/menu paths use.
+        deferReturnFocusToTerminal()
+      }
+    })
+    return () => {
+      void unlisten.then((fn) => fn())
+    }
+  }, [deferReturnFocusToTerminal])
+
+  // Wire MCP media:show events into the Media gallery. Like preview:open, the
+  // panel is only revealed for the pane the user is looking at; background
+  // panes just add to the strip. Focus goes back to the terminal (the panel
+  // never takes the keyboard from an agent pane).
+  useEffect(() => {
+    const unlisten = onMediaShow((e) => {
+      const kind = mediaKind(e.path)
+      if (!kind) return
+      const st = useAppStore.getState()
+      let source = 'pane'
+      for (const w of st.workspaces) {
+        const leaf = collectLeaves(w.layout).find((l) => l.terminalId === e.terminalId)
+        if (leaf) { source = leaf.name ?? leaf.agentId ?? 'terminal'; break }
+      }
+      useMediaStore.getState().show({ path: e.path, kind, terminalId: e.terminalId, source, shownAt: Date.now() })
+      const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
+      if (ws && focusedVisibleLeaf(ws)?.terminalId === e.terminalId) {
+        useGitStore.getState().setMode('media')
         deferReturnFocusToTerminal()
       }
     })
