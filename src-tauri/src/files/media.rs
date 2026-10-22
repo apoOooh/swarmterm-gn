@@ -201,6 +201,31 @@ fn open_registered(
     Ok((file, real))
 }
 
+/// Annotate mode needs the image's pixels on a canvas, but the unrooted route
+/// sends no CORS header (see `response`), so drawing the served <img> would
+/// taint the canvas. This hands the same bytes to the app window over IPC
+/// instead, under the same rules as the route: registered (user-opened)
+/// canonical file, validated on the open handle, raster images only (the
+/// renderer decodes with createImageBitmap; animated GIF/WebP give their
+/// first frame), size-capped.
+pub const MAX_ANNOTATE_BYTES: u64 = 128 * 1024 * 1024;
+
+pub fn read_registered_image(service: &FileService, path: &str) -> Result<Vec<u8>, String> {
+    let (file, real) = open_registered(service, path)?;
+    if !mime(&real).is_some_and(|m| m.starts_with("image/") && m != "image/svg+xml") {
+        return Err("Only images can be annotated".into());
+    }
+    let len = file.metadata().map_err(|e| e.to_string())?.len();
+    if len > MAX_ANNOTATE_BYTES {
+        return Err("Image is too large to annotate".into());
+    }
+    let mut bytes = Vec::with_capacity(len as usize);
+    file.take(MAX_ANNOTATE_BYTES)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    Ok(bytes)
+}
+
 fn is_drive_path(path: &str) -> bool {
     if !cfg!(windows) {
         return path.starts_with('/');
@@ -427,6 +452,30 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(r.headers()["access-control-allow-origin"], "*");
+    }
+
+    #[test]
+    fn annotate_read_serves_only_registered_images() {
+        let t = tempfile::tempdir().unwrap();
+        let service = FileService::new(t.path().join("history"));
+        let shot = t.path().join("a.png");
+        let clip = t.path().join("v.mp4");
+        fs::write(&shot, [1, 2, 3]).unwrap();
+        fs::write(&clip, [4]).unwrap();
+        let raw = shot.to_string_lossy().to_string();
+        assert!(
+            read_registered_image(&service, &raw).is_err(),
+            "not opened yet"
+        );
+        let path = service.register_user_media(&raw).unwrap();
+        assert_eq!(
+            read_registered_image(&service, &path.to_string_lossy()).unwrap(),
+            [1, 2, 3]
+        );
+        let video = service
+            .register_user_media(&clip.to_string_lossy())
+            .unwrap();
+        assert!(read_registered_image(&service, &video.to_string_lossy()).is_err());
     }
 
     #[test]

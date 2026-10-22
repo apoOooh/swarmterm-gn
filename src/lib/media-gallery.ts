@@ -14,6 +14,8 @@ export interface MediaItem {
    * UI shows the name and a placeholder and never requests the file.
    */
   opened: boolean
+  /** Display name when the file name on disk is not meaningful (marked copies). */
+  label?: string
 }
 
 /** Agents re-show the same file while iterating; keep the strip bounded. */
@@ -45,3 +47,6 @@ export function markOpened(items: MediaItem[], path: string): MediaItem[] {
 export function fileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path
 }
+
+/** Name shown for an item: its label (marked copies), else the file name. */
+export const itemName = (item: Pick<MediaItem, 'path' | 'label'>): string => item.label ?? fileName(item.path)

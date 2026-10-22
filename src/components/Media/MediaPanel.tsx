@@ -1,7 +1,8 @@
-import type { ReactElement } from 'react'
-import { Film, ImageIcon } from 'lucide-react'
+import { useState, type ReactElement } from 'react'
+import { Film, ImageIcon, PenLine } from 'lucide-react'
 import { MediaPathView } from '@/components/Files/MediaView'
-import { fileName, samePath } from '@/lib/media-gallery'
+import { fileName, itemName, samePath } from '@/lib/media-gallery'
+import { AnnotateView } from '@/components/Media/AnnotateView'
 import { useMediaStore } from '@/store/media-store'
 import { unrootedMediaUrl } from '@/tauri/files'
 import { startMediaDrag } from '@/components/Media/start-media-drag'
@@ -14,16 +15,27 @@ export function MediaPanel(): ReactElement {
   const selectedPath = useMediaStore((s) => s.selectedPath)
   const open = useMediaStore((s) => s.open)
   const selected = items.find((i) => selectedPath !== null && samePath(i.path, selectedPath)) ?? items[0]
+  // Annotate mode belongs to one item: selecting another one leaves it (marks discarded).
+  const [annotating, setAnnotating] = useState<string | null>(null)
   if (!selected) {
     return <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
       <p>Images and videos whose paths appear in a pane, and clipboard images (if enabled), show up here. Nothing here is visible to agents.</p>
     </div>
   }
+  const canAnnotate = selected.opened && selected.kind === 'image'
+  const annotate = canAnnotate && annotating !== null && samePath(annotating, selected.path)
   return <div className="flex min-h-0 flex-1 flex-col">
-    <div className="shrink-0 truncate border-b border-border px-2 py-1 text-xs text-muted-foreground" title={selected.path}>
-      {fileName(selected.path)} · {selected.source} · {time(selected.shownAt)}
+    <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1 text-xs text-muted-foreground">
+      <span className="min-w-0 flex-1 truncate" title={selected.path}>{itemName(selected)} · {selected.source} · {time(selected.shownAt)}</span>
+      {/* Only an opened image: never fetch an unopened item, and videos have no single frame to mark. */}
+      {canAnnotate && !annotate && <button tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => setAnnotating(selected.path)}
+        title="Annotate: draw on a copy of this image" className="flex shrink-0 items-center gap-1 rounded px-1 hover:bg-muted hover:text-foreground">
+        <PenLine className="h-3.5 w-3.5" />Annotate
+      </button>}
     </div>
-    {selected.opened
+    {annotate
+      ? <AnnotateView key={selected.path} item={selected} onClose={() => setAnnotating(null)} />
+      : selected.opened
       ? <MediaPathView path={selected.path} kind={selected.kind} revision={selected.shownAt} />
       // Not registered yet: the file is only served after this explicit click.
       : <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-4 text-xs text-muted-foreground">
@@ -55,7 +67,7 @@ export function MediaPanel(): ReactElement {
                 ? <Film className="h-6 w-6 text-muted-foreground" />
                 : <img src={unrootedMediaUrl(item.path, item.shownAt)} alt="" loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />}
           </div>
-          <span className="truncate text-foreground">{fileName(item.path)}</span>
+          <span className="truncate text-foreground">{itemName(item)}</span>
           <span className="truncate text-muted-foreground">{item.source} · {time(item.shownAt)}</span>
         </button>
       })}

@@ -181,6 +181,24 @@ opens the item. Dragging an item you have not opened only types its path; it
 does not show or open the file. Paths containing a quote or line break cannot
 be inserted.
 
+**Annotate an image.** With an opened image in the Media tab, click
+**Annotate** in the viewer's title bar to draw on it: a pen, a wide
+see-through marker, straight lines, arrows (drag from tail to head),
+rectangles and ellipses (outline, or filled with **Fill**), in six colours with
+a width slider. **Undo** steps back one mark (also after **Clear**). Marks stay
+on the spot they mark when the panel is resized. **Save copy** writes the
+image with your marks as a new PNG (named like `shot (marked).png`, at the
+image's full resolution, at most 8192 px on the longest side; an animated
+GIF or WebP keeps only its first frame) and selects it in
+the gallery, ready to drag into a pane; the original file is never changed.
+You can also drag the grip handle in the toolbar straight onto a pane: the
+marked copy is saved on the way and its path inserted as with any media drag.
+**Cancel** or Esc (while the pointer is over the image) discards the marks.
+Marked copies live in a private folder under your Windows temp directory, at
+most 50 files / 300 MB, and are deleted when Swarmterm exits. Agents cannot
+start, read or change any of this. Copying the marked image to the clipboard is
+not supported; drag or save it instead.
+
 **Clipboard images (opt-in).** Settings → Media → **Clipboard images** (off by
 default) adds images you copy (a screenshot, an image copied in a browser or
 image editor) to the Media tab, tagged `clipboard`; copying image or video

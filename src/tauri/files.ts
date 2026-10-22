@@ -53,6 +53,10 @@ export const setClipboardMediaEnabled = (enabled: boolean): Promise<void> => inv
 export const checkDetectedMedia = (terminalId: string, paths: string[]): Promise<(string | null)[]> => invoke('media_check_detected', { terminalId, paths })
 /** User action only (open click, Ctrl+click): allow-lists one absolute media file for the unrooted route; resolves to its canonical path. */
 export const registerOpenedMedia = (path: string): Promise<string> => invoke('media_open', { path })
+/** Annotate: bytes of an image the user opened (the served <img> would taint the flatten canvas). */
+export const readOpenedImage = (path: string): Promise<ArrayBuffer> => invoke('media_read_opened_image', { path })
+/** Annotate → save: writes the flattened PNG as a new temp file (raw IPC body), allow-listed like a clipboard image; resolves to its canonical path. */
+export const saveMarkedImage = (png: Uint8Array): Promise<string> => invoke('media_save_marked', png)
 /** Hands a Markdown file to the external MarkText app. `executable` empty = auto-detect. */
 export const openInMarkText = (contextId: string, path: string, executable: string): Promise<void> => request('openMarkText', { contextId, path, executable })
 /** Unsaved HTML buffer the preview frame renders instead of disk; `null` drops it. */

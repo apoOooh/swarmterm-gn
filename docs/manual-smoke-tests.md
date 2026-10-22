@@ -324,6 +324,31 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Switching from Preview to Media hides the native preview webview.
 - [ ] `cat` a large log (no media paths): no visible slowdown versus before.
 
+## Media annotate
+
+- [ ] An opened image shows **Annotate** in the viewer title; an unopened item
+      and a video do not.
+- [ ] Draw with pen and marker, a line, an arrow, a rectangle and an ellipse
+      (drag up-left as well as down-right), with Fill on and off and different
+      colours/widths: the live preview follows the pointer and each shape lands
+      where it was drawn. Resize the right panel: the marks stay in place.
+- [ ] Undo removes marks newest first; Clear then Undo brings them all back.
+- [ ] While drawing, and right after moving the width slider or toggling
+      Fill, keystrokes still go to the focused terminal (arrow keys do not
+      move the slider).
+- [ ] Re-print or overwrite the image file while annotating: the marks still
+      sit on the picture you are drawing on, and the saved copy shows it.
+- [ ] While annotating, Esc with the
+      pointer over the image leaves annotate mode; Esc elsewhere reaches the agent.
+- [ ] Save copy: a `<name> (marked).png` item tagged `marked` is selected, shows
+      the marks at full resolution, and the original file is unchanged on disk.
+- [ ] Drag the marked item (or the toolbar grip while annotating) into a Claude
+      Code pane: the agent attaches the image and sees the marks.
+- [ ] A very large image (e.g. 10000 px wide) saves downscaled to 8192 px
+      without freezing the UI.
+- [ ] Quit Swarmterm: `%TEMP%\swarmterm-marked\<pid>` is gone. The MCP server
+      lists no tool for annotating or reading marked images.
+
 ## Media popup and clipboard images
 
 - [ ] Defaults: with a fresh profile, Settings → Media shows the popup and

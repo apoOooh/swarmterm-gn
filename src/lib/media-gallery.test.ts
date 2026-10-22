@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addMediaItem, fileName, markOpened, mediaKind, type MediaItem } from '@/lib/media-gallery'
+import { addMediaItem, fileName, itemName, markOpened, mediaKind, type MediaItem } from '@/lib/media-gallery'
 
 const item = (path: string, shownAt: number): MediaItem => ({ path, kind: 'image', terminalId: 't', source: 'pane', shownAt, opened: true })
 
@@ -31,5 +31,7 @@ describe('media gallery', () => {
     expect(mediaKind('x.txt')).toBeNull()
     expect(fileName('C:\\tmp\\shot.png')).toBe('shot.png')
     expect(fileName('/tmp/clip.webm')).toBe('clip.webm')
+    expect(itemName({ path: 'C:/t/mark-ab.png', label: 'shot (marked).png' })).toBe('shot (marked).png')
+    expect(itemName({ path: 'C:/t/shot.png' })).toBe('shot.png')
   })
 })

@@ -13,7 +13,7 @@
  */
 import { useEffect, useRef, type ReactElement } from 'react'
 import { Film, ImageIcon, X } from 'lucide-react'
-import { fileName } from '@/lib/media-gallery'
+import { itemName } from '@/lib/media-gallery'
 import { overlayAutoHide, useMediaStore } from '@/store/media-store'
 import { useGitStore } from '@/store/git-store'
 import { unrootedMediaUrl } from '@/tauri/files'
@@ -93,7 +93,7 @@ export function MediaOverlay(): ReactElement | null {
                 : <img src={unrootedMediaUrl(item.path, item.shownAt)} alt="" draggable={false} className="max-h-full max-w-full object-contain" />}
             </div>
             <div className="flex min-w-0 flex-col">
-              <span className="truncate text-foreground">{fileName(item.path)}</span>
+              <span className="truncate text-foreground">{itemName(item)}</span>
               <span className="truncate text-muted-foreground">{item.source} · {time(item.shownAt)}</span>
             </div>
           </button>

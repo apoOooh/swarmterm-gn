@@ -109,6 +109,53 @@ pub async fn media_open(
     .map_err(|e| e.to_string())?
 }
 
+/// Media viewer → Annotate: the opened image's bytes for the flatten canvas
+/// (raw IPC response; see `files::media::read_registered_image`).
+#[tauri::command]
+pub async fn media_read_opened_image(
+    window: tauri::WebviewWindow,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
+    files_main_only(&window)?;
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::files::media::read_registered_image(&service, &path).map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Media viewer → Annotate → save: the renderer sends the flattened PNG as the
+/// raw IPC body (no JSON number array for megabytes). We write it as a NEW
+/// file in our temp store (`marked_media`) and allow-list it like a clipboard
+/// image. Main webview only and no MCP counterpart: user-originated only.
+#[tauri::command]
+pub async fn media_save_marked(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    files_main_only(&window)?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected the PNG as a raw body".into());
+    };
+    // Reject before the copy below (the body is borrowed from the request,
+    // and the blocking task needs its own copy of up to MAX_PNG_BYTES).
+    crate::marked_media::validate_png(bytes)?;
+    let bytes = bytes.clone();
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        app.state::<crate::marked_media::MarkedMedia>()
+            .save(&service, &bytes)
+            .map(|p| crate::files::path::display(&p))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Settings → Media → Clipboard images (opt-in). Idempotent; the renderer
 /// calls it at startup and on every toggle. Thread start/stop; switching off
 /// also deletes the saved PNGs (a few small files).

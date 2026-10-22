@@ -2,7 +2,7 @@ pub(crate) mod clipboard;
 mod git;
 mod history;
 mod marktext;
-mod media;
+pub(crate) mod media;
 pub mod path;
 mod watch;
 

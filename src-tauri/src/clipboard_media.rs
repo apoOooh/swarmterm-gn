@@ -26,7 +26,7 @@ const SUFFIX: &str = ".png";
 pub const MAX_FILES: usize = 50;
 pub const MAX_BYTES: u64 = 200 * 1024 * 1024;
 /// Folders a crashed instance left behind are swept after this long.
-const STALE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+pub(crate) const STALE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Parent of every instance's folder; each process owns `<parent>/<pid>` so a
 /// dev instance and the installed app never delete each other's files.
@@ -57,10 +57,15 @@ struct Entry {
 /// without a clipboard.
 pub struct ClipStore {
     dir: PathBuf,
+    /// File-name prefix (`clip-`, `mark-`): names are always ours, never the caller's.
+    prefix: &'static str,
     max_files: usize,
     max_bytes: u64,
     /// Oldest first.
     entries: VecDeque<Entry>,
+    /// Files dropped by the caps since the last `take_evicted` (so a caller
+    /// can withdraw them from the unrooted allow-list).
+    evicted: Vec<PathBuf>,
     /// Set by `clear` (app exit): a capture still in flight on the worker
     /// must not write a private image after the folder was deleted.
     closed: bool,
@@ -68,21 +73,32 @@ pub struct ClipStore {
 
 impl ClipStore {
     pub fn new(dir: PathBuf, max_files: usize, max_bytes: u64) -> Self {
+        Self::with_prefix(dir, PREFIX, max_files, max_bytes)
+    }
+
+    pub fn with_prefix(
+        dir: PathBuf,
+        prefix: &'static str,
+        max_files: usize,
+        max_bytes: u64,
+    ) -> Self {
         Self {
             dir,
+            prefix,
             max_files: max_files.max(1),
             max_bytes,
             entries: VecDeque::new(),
+            evicted: Vec::new(),
             closed: false,
         }
     }
 
     pub fn save(&mut self, png: &[u8]) -> Result<Saved, String> {
         if self.closed {
-            return Err("clipboard store is closed".into());
+            return Err("media store is closed".into());
         }
         if png.len() as u64 > self.max_bytes {
-            return Err("clipboard image exceeds the size cap".into());
+            return Err("image exceeds the size cap".into());
         }
         let hash: String = Sha256::digest(png)
             .iter()
@@ -101,7 +117,9 @@ impl ClipStore {
         }
         std::fs::create_dir_all(&self.dir)
             .map_err(|e| format!("Could not create {}: {e}", self.dir.display()))?;
-        let path = self.dir.join(format!("{PREFIX}{}{SUFFIX}", &hash[..16]));
+        let path = self
+            .dir
+            .join(format!("{}{}{SUFFIX}", self.prefix, &hash[..16]));
         std::fs::write(&path, png)
             .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
         self.entries.push_back(Entry {
@@ -120,12 +138,21 @@ impl ClipStore {
         {
             if let Some(old) = self.entries.pop_front() {
                 let _ = std::fs::remove_file(&old.path);
+                self.evicted.push(old.path);
             }
         }
     }
 
     fn total_bytes(&self) -> u64 {
         self.entries.iter().map(|e| e.bytes).sum()
+    }
+
+    pub fn take_evicted(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.evicted)
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     pub fn len(&self) -> usize {
@@ -181,6 +208,33 @@ pub fn prune_stale(
             let _ = std::fs::remove_dir_all(&path);
         }
     }
+}
+
+#[cfg(windows)]
+/// For `prune_stale`: is the process that owns a clipboard folder alive?
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            // Access denied means it exists; only a missing pid is dead.
+            return windows_sys::Win32::Foundation::GetLastError()
+                == windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code) != 0;
+        CloseHandle(h);
+        !ok || code == STILL_ACTIVE as u32
+    }
+}
+
+/// Elsewhere unsupported: treat every owner as alive, so nothing is swept.
+#[cfg(not(windows))]
+pub(crate) fn pid_alive(_: u32) -> bool {
+    true
 }
 
 #[cfg(windows)]
@@ -324,26 +378,6 @@ mod watch {
         }
     }
 
-    /// For `prune_stale`: is the process that owns a clipboard folder alive?
-    fn pid_alive(pid: u32) -> bool {
-        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-        use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-        unsafe {
-            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if h.is_null() {
-                // Access denied means it exists; only a missing pid is dead.
-                return windows_sys::Win32::Foundation::GetLastError()
-                    == windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
-            }
-            let mut code = 0u32;
-            let ok = GetExitCodeProcess(h, &mut code) != 0;
-            CloseHandle(h);
-            !ok || code == STILL_ACTIVE as u32
-        }
-    }
-
     fn watch_loop(mut ctx: ClipboardWatcherContext<Poke>, tx: Sender<()>, stop: Arc<AtomicBool>) {
         // clipboard-win's Monitor `expect`s on window creation; a panic there
         // must degrade to polling, not kill the feature silently.
@@ -463,7 +497,11 @@ mod watch {
                 pid_alive,
             );
         }
-        match store.save(&png) {
+        // Clipboard paths stay allow-listed until switch-off (`forget`),
+        // which withdraws them all; evictions need no separate bookkeeping.
+        let saved = store.save(&png);
+        let _ = store.take_evicted();
+        match saved {
             Ok(Saved::New(path)) => vec![path],
             Ok(Saved::Known(_)) => Vec::new(),
             Err(e) => {
