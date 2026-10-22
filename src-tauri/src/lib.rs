@@ -3,6 +3,7 @@ mod accounts;
 mod agent_process;
 mod agents;
 mod analytics;
+mod clipboard_media;
 mod commands;
 mod dev_defer;
 mod devlog;
@@ -40,6 +41,7 @@ pub fn run() {
         .manage(AppState::default())
         .manage(host_client::HostHub::default())
         .manage(voice::VoiceHub::default())
+        .manage(clipboard_media_state())
         .manage(voice::tts::TtsHub::default())
         .manage(voice::companion::Companion::default())
         .manage(voice_speech_hub())
@@ -156,6 +158,7 @@ pub fn run() {
             commands::files_request,
             commands::files_watch,
             commands::media_register_detected,
+            commands::clipboard_media_set_enabled,
             commands::files_unwatch,
             commands::create_terminal,
             commands::write_terminal,
@@ -248,6 +251,9 @@ pub fn run() {
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 crate::mcp::shutdown();
+                // Clipboard images are private: delete our PNGs on every exit.
+                #[cfg(windows)]
+                _app.state::<clipboard_media::ClipboardMedia>().shutdown();
             }
             // macOS: clicking the Dock icon while the window is hidden
             // (close-to-tray) fires Reopen — re-show like the tray's "Show".
@@ -258,6 +264,13 @@ pub fn run() {
             }
         });
 }
+
+#[cfg(windows)]
+fn clipboard_media_state() -> clipboard_media::ClipboardMedia {
+    clipboard_media::ClipboardMedia::default()
+}
+#[cfg(not(windows))]
+fn clipboard_media_state() {}
 
 /// Built-in speech source state (SWA-38); Windows-only like the voice pipe.
 #[cfg(windows)]

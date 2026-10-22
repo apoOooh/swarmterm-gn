@@ -124,7 +124,9 @@ import {
   onWarRoomRooms
 } from '@/tauri/warroom'
 import { onPreviewOpen } from '@/tauri/preview'
-import { onMediaShow } from '@/tauri/files'
+import { onClipboardMedia, onMediaShow, setClipboardMediaEnabled } from '@/tauri/files'
+import { useMediaPrefStore } from '@/store/media-pref-store'
+import { MediaOverlay } from '@/components/Media/MediaOverlay'
 import { useMediaStore } from '@/store/media-store'
 import { mediaKind } from '@/lib/media-gallery'
 import { paneSourceLabel } from '@/lib/media-passive'
@@ -926,7 +928,9 @@ export default function App(): ReactElement {
       if (!kind) return
       const st = useAppStore.getState()
       const source = paneSourceLabel(e.terminalId)
-      useMediaStore.getState().show({ path: e.path, kind, terminalId: e.terminalId, source, shownAt: Date.now() })
+      const item = { path: e.path, kind, terminalId: e.terminalId, source, shownAt: Date.now() }
+      useMediaStore.getState().show(item)
+      useMediaStore.getState().announce(item, 'agent')
       const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
       if (ws && focusedVisibleLeaf(ws)?.terminalId === e.terminalId) {
         useGitStore.getState().setMode('media')
@@ -937,6 +941,26 @@ export default function App(): ReactElement {
       void unlisten.then((fn) => fn())
     }
   }, [deferReturnFocusToTerminal])
+
+  // Clipboard images (opt-in): keep the backend watcher in step with the
+  // setting, and add each saved image to the gallery without taking the
+  // viewer or the panel — the overlay (if enabled) is the only announcement.
+  const clipboardImages = useMediaPrefStore((s) => s.prefs.clipboardImages)
+  useEffect(() => {
+    setClipboardMediaEnabled(clipboardImages).catch((err) => console.warn('[media] clipboard watcher:', err))
+  }, [clipboardImages])
+  useEffect(() => {
+    const unlisten = onClipboardMedia((e) => {
+      const kind = mediaKind(e.path)
+      if (!kind) return
+      const item = { path: e.path, kind, terminalId: '', source: 'clipboard', shownAt: Date.now() }
+      useMediaStore.getState().add(item)
+      useMediaStore.getState().announce(item, 'clipboard')
+    })
+    return () => {
+      void unlisten.then((fn) => fn())
+    }
+  }, [])
 
   // Wire native webview navigation/title/loading and denied-popup events into
   // the store — see lib/preview-registry.ts. Mount-once: the registry itself
@@ -1220,6 +1244,7 @@ export default function App(): ReactElement {
       <FileDialog />
       {identityDialogOpen && <Suspense fallback={null}><PaneIdentityDialog /></Suspense>}
       <BuzzkeyUpdateToast />
+      <MediaOverlay />
       <TitleBar fullscreen={isFullscreen} />
       <SavedWorkspaceNotice />
 

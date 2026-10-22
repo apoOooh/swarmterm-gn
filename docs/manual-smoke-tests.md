@@ -320,6 +320,28 @@ Do not mark them passed from the in-memory fixture alone.
       and a quoted `"a b.gif"`: both are picked up; a missing path is not.
 - [ ] `cat` a large log (no media paths): no visible slowdown versus before.
 
+## Media popup and clipboard images
+
+- [ ] Defaults: with a fresh profile, Settings → Media shows the popup and
+      Clipboard images off; `media.show` and copying a screenshot show no popup.
+- [ ] Turn on Show popup, have an agent call `media.show` while you type in a
+      pane: the corner popup lists the item, keystrokes keep landing in the
+      shell, and it hides after ~6 s.
+- [ ] Hover the popup for 15 s: it stays; leave: it hides a full timeout later.
+      Scroll a long list: the countdown restarts.
+- [ ] Press Esc while hovering: the popup closes and the agent does NOT receive
+      the Esc. Esc with the pointer elsewhere goes to the terminal.
+- [ ] Click an item: the Media tab opens on it, the popup closes, typing still
+      goes to the terminal. A video row shows the film icon.
+- [ ] With the web preview open, trigger the popup: the preview hides while the
+      popup is up and comes back after it hides.
+- [ ] Turn on Clipboard images, press Win+Shift+S and snip: a `clipboard` item
+      appears in the Media tab and the popup. Copy the same image again: no new
+      item. Copy a PNG and an MP4 file in Explorer: both appear as the files.
+- [ ] Copy text: nothing happens. Turn Clipboard images off and snip: nothing.
+- [ ] Copy a large (4K) screenshot: the UI does not stutter.
+- [ ] Quit from the tray: `%TEMP%\swarmterm-clipboard\<pid>` is gone.
+
 ## Web preview
 
 - [ ] Preview a framing-hostile site: type `github.com` in the address bar —

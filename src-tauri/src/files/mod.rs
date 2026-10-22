@@ -206,15 +206,28 @@ impl FileService {
                 if i >= MAX_DETECTED_PER_CALL {
                     return None;
                 }
-                let path = media::resolve_media(raw, cwd).ok()?;
-                let mut set = self.unrooted_media.lock().ok()?;
-                if !set.contains(&path) && set.len() >= MAX_UNROOTED_MEDIA {
-                    return None;
-                }
-                set.insert(path.clone());
-                Some(path)
+                self.register_capped_media(raw, cwd)
             })
             .collect()
+    }
+
+    /// One candidate from an automatic source (pane output, clipboard): like
+    /// `register_unrooted_media`, but the allow-list stops growing at
+    /// `MAX_UNROOTED_MEDIA`, since no agent asked for these explicitly.
+    pub fn register_capped_media(&self, raw: &str, cwd: &Path) -> Option<PathBuf> {
+        let path = media::resolve_media(raw, cwd).ok()?;
+        let mut set = self.unrooted_media.lock().ok()?;
+        if !set.contains(&path) && set.len() >= MAX_UNROOTED_MEDIA {
+            return None;
+        }
+        set.insert(path.clone());
+        Some(path)
+    }
+
+    /// Image/video extension check (the unrooted route's kind rule) for other modules.
+    #[cfg(windows)]
+    pub(crate) fn is_media_path(path: &Path) -> bool {
+        media::is_media(path)
     }
 
     pub(crate) fn unrooted_registered(&self, path: &Path) -> bool {

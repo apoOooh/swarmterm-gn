@@ -161,6 +161,30 @@ started in). Note that any printed path counts, also from a `cat` of a file you
 did not write, so an existing image named there joins the strip and can be
 viewed in Swarmterm for the rest of the session.
 
+**New-media popup.** Settings → Media → **Show popup** (off by default) shows a
+small list in the bottom-right corner whenever new media arrives: thumbnail,
+name, source (pane name or `clipboard`) and time, newest first. Click an item
+to open it in the Media tab. The popup hides by itself after a few seconds
+(**Hide after**, default 6 s); pointing at it keeps it open, and scrolling the
+list restarts the countdown. Close it with ✕, or with Esc while the pointer is
+over it (Esc is otherwise left to your terminal, so agents can still be
+interrupted). It never takes the keyboard from your terminal. While it is up,
+an open web preview is hidden, because the preview would otherwise cover it.
+You can choose how many items it lists and turn it off separately for agent
+output and clipboard images.
+
+**Clipboard images (opt-in).** Settings → Media → **Clipboard images** (off by
+default) adds images you copy (a screenshot, an image copied in a browser or
+image editor) to the Media tab, tagged `clipboard`; copying image or video
+files in Explorer adds those files as they are. **Privacy:** your clipboard can
+hold private content, which is why this is opt-in. Copied images are saved as
+PNG only in a private folder under your Windows temp directory, at most 50
+images / 200 MB (oldest removed first; copying the same image again adds no
+duplicate). Nothing is uploaded or sent anywhere, and the folder is deleted
+when Swarmterm exits (a folder left by a crash is removed on a later run after
+a day). Turning the setting off stops watching at once; images already in the
+Media tab stay viewable until you exit.
+
 **Run** on a supported file starts a separate plain-shell pane in its folder:
 Python files, pytest naming conventions, JavaScript/Node files, Docker Compose
 YAML, .NET projects and solutions. Dirty files must be saved first. The required

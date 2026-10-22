@@ -47,6 +47,11 @@ export const unrootedMediaUrl = (path: string, revision: string | number = 0): s
 export interface MediaShowEvent { terminalId: string; path: string }
 /** `media:show` from the MCP `media.show` tool; `path` is canonical and already registered. */
 export const onMediaShow = (cb: (e: MediaShowEvent) => void): Promise<() => void> => listen<MediaShowEvent>('media:show', (e) => cb(e.payload))
+export interface ClipboardMediaEvent { path: string }
+/** `media:clipboard`: a clipboard image saved as PNG (or a copied media file), canonical and already registered. */
+export const onClipboardMedia = (cb: (e: ClipboardMediaEvent) => void): Promise<() => void> => listen<ClipboardMediaEvent>('media:clipboard', (e) => cb(e.payload))
+/** Starts/stops the backend clipboard watcher (opt-in setting). */
+export const setClipboardMediaEnabled = (enabled: boolean): Promise<void> => invoke('clipboard_media_set_enabled', { enabled })
 /** Passive detection: allow-lists the candidates that are existing media files (relative = terminal cwd). One entry per input: its canonical path, or null. */
 export const registerDetectedMedia = (terminalId: string, paths: string[]): Promise<(string | null)[]> => invoke('media_register_detected', { terminalId, paths })
 /** Hands a Markdown file to the external MarkText app. `executable` empty = auto-detect. */

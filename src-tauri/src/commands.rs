@@ -88,6 +88,28 @@ pub async fn media_register_detected(
     .map_err(|e| e.to_string())
 }
 
+/// Settings → Media → Clipboard images (opt-in). Idempotent; the renderer
+/// calls it at startup and on every toggle. Thread start/stop only, no I/O.
+#[tauri::command]
+pub fn clipboard_media_set_enabled(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    files_main_only(&window)?;
+    #[cfg(windows)]
+    {
+        use tauri::Manager;
+        app.state::<crate::clipboard_media::ClipboardMedia>()
+            .set_enabled(&app, enabled)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, enabled);
+        Err("clipboard images are Windows-only".into())
+    }
+}
+
 #[tauri::command]
 pub async fn files_watch(
     window: tauri::WebviewWindow,

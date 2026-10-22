@@ -63,7 +63,10 @@ function scan(terminalId: string, state: ScanState): void {
         if (path === null) return
         state.seen.confirm(offered[i])
         const kind = mediaKind(path)
-        if (kind) useMediaStore.getState().detect({ path, kind, terminalId, source, shownAt: now })
+        if (!kind) return
+        const item = { path, kind, terminalId, source, shownAt: now }
+        useMediaStore.getState().detect(item)
+        useMediaStore.getState().announce(item, 'agent')
       })
     })
     // The terminal may be gone (unknown terminal); detection is best effort.
