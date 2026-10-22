@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-10-23
+
+- Media panel: a new right-panel tab to inspect images and videos while agents
+  work, from any folder (not only the project). Large viewer, thumbnail strip
+  (newest first, source pane and time), wheel zoom toward the cursor (10%–2000%)
+  and pan. It is user-side only: no MCP tool, nothing is passed to agents, and a
+  file is served to the viewer only after you open it.
+- Media detection: image and video paths printed in a pane are listed by name
+  and counted in a pane badge; clicking opens the file. The media routes answer
+  only the main window, never the web-preview webviews.
+- Media: opt-in auto-show popup (Settings → Media) listing the newest items,
+  hides itself unless you interact, never takes the keyboard.
+- Media: opt-in clipboard capture (Windows) saves copied images to a temp
+  folder (capped, deleted on exit and when switched off).
+- Media: drag a thumbnail into a pane to insert its path like Ctrl+V does, so
+  Claude Code and Codex attach the image.
+- Media: Annotate images with pen, marker, line, arrow, rectangle and ellipse,
+  then save a marked copy and drag it into a pane. The original is never
+  modified.
+- Terminal drop: paths with `%` are no longer expanded by cmd panes.
 - Performance: the file watcher stops handling individual events during an
   event storm (a batch of 64+ raw events, e.g. `cargo build` or `npm install`
   under the root) and sends one rescan once the tree has been quiet for
