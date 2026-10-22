@@ -744,6 +744,8 @@ async function installProbes(page: Page): Promise<void> {
     let firstData = 0
     let firstParse = 0
     let lastWrite = 0
+    let decodeMs = 0
+    let decodeCalls = 0
     // rAF is throttled while hidden; report how long that was the case.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') hiddenAt = performance.now()
@@ -763,7 +765,11 @@ async function installProbes(page: Page): Promise<void> {
       let s = streams.get(this)
       if (!s) streams.set(this, s = { dec: new TextDecoder(), written: 0, parsed: 0, tail: '', next: 0, gaps: 0, missing: 0, dupes: 0, seen: 0, hash: 2166136261, lastSeq: -1, rTail: '', pTail: '', rLast: 0, pLast: 0, recv: [], parse: [], recvD: [], parseD: [], tokDupes: 0 })
       const st = s
-      const text = typeof data === 'string' ? data : st.dec.decode(data, { stream: true })
+      // Harness cost asymmetry: only a Uint8Array write pays this decode, so it is
+      // timed and reported (harnessDecodeMs) to keep builds comparable.
+      let text: string
+      if (typeof data === 'string') text = data
+      else { const d0 = performance.now(); text = st.dec.decode(data, { stream: true }); decodeMs += performance.now() - d0; decodeCalls++ }
       st.written += text.length
       ;[st.rTail, st.rLast] = lagScan(st.rTail, text, st.rLast, st.recv, st.recvD, Date.now(), st)
       const focused = this.textarea && this.textarea === document.activeElement
@@ -811,6 +817,7 @@ async function installProbes(page: Page): Promise<void> {
       start() {
         streams.clear(); longTasks.length = 0; frames.length = 0; echoes.length = 0; echoesBusy.length = 0
         pending = undefined; unanswered = 0; unansweredBusy = 0; expectBusy = false; lastBusyN = 0; hiddenMs = 0; maxGap = 0
+        decodeMs = 0; decodeCalls = 0
         recording = true; prev = 0; lastData = lastParse = startAt = floodEnd = performance.now(); firstData = firstParse = lastWrite = 0
         // Dev-only render counter (src/lib/perf-render-count.ts) counts while set.
         ;(window as any).__perfRenderCounts = {}
@@ -846,7 +853,7 @@ async function installProbes(page: Page): Promise<void> {
           // output parsed). Null when no output came at all.
           outputTiming: firstData ? {
             firstOutputMs: Math.round(firstData - startAt), firstParsedMs: firstParse ? Math.round(firstParse - startAt) : null,
-            streamSeconds: Math.round(lastWrite - firstData) / 1000, allParsedMs: firstParse ? Math.round(floodEnd - startAt) : null
+            streamSeconds: Math.round(lastWrite - firstData) / 1000, harnessDecodeMs: Math.round(decodeMs), harnessDecodeCalls: decodeCalls, allParsedMs: firstParse ? Math.round(floodEnd - startAt) : null
           } : null,
           // Component renders during the window (WorkspaceTabs, AttentionBadge).
           renders,
