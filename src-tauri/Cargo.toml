@@ -19,6 +19,10 @@ default-run = "swarmterm"
 # else works, the built-in speech source reports `speech-engine-unavailable`.
 default = ["local-speech"]
 local-speech = ["dep:whisper-rs"]
+# Perf counters (prof.rs): lock wait/hold, flow-gate park, main-thread
+# watchdog, command spans. Off in every normal and A/B build; see
+# docs/perf-profiling.md.
+profiling = []
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -109,3 +113,11 @@ default-members = [".", "host"]
 # Cargo unions features per crate, so tests get the main tokio features plus
 # `test-util`; release builds are unaffected (dev-deps are test-only).
 tokio = { version = "1", features = ["test-util"] }
+
+# Profiling build (docs/perf-profiling.md): release codegen plus line tables
+# so samply/WPA resolve symbols. Output lands in target/profiling, apart
+# from target/release, so A/B binaries are never overwritten.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false
