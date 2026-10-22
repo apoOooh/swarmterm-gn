@@ -50,6 +50,7 @@ import {
   revealInFileManager
 } from '@/tauri/links'
 import { ActivityTracker } from '@/lib/activity-tracker'
+import { utf8Length } from '@/lib/output-ack'
 import { writeReplayHistory } from '@/lib/replay-history'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
@@ -1169,7 +1170,8 @@ function getOrCreate(id: string): Entry {
         activityTracker.notify(id)
         const live = entries.get(id)
         live?.detector?.noteOutput()
-        if (live) rendererPolicy.recordOutput(live, data.length, performance.now())
+        // Bytes on both delivery paths, so the KB/s thresholds mean the same.
+        if (live) rendererPolicy.recordOutput(live, typeof data === 'string' ? utf8Length(data) : data.byteLength, performance.now())
         // The callback acks parsed bytes to Rust's flow gate (perf phase 2):
         // it fires only after xterm parsed this chunk, so a flood is paced
         // by the parser instead of piling up in the write queue.

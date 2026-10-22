@@ -72,7 +72,7 @@ describe('TerminalSession', () => {
     })
     const ackOutput = vi.fn()
     const parsed: (() => void)[] = []
-    const write = vi.fn((_d: Uint8Array, onParsed?: () => void) => { if (onParsed) parsed.push(onParsed) })
+    const write = vi.fn((_d: Uint8Array | string, onParsed?: () => void) => { if (onParsed) parsed.push(onParsed) })
     const session = new TerminalSession('t1', { write }, { ...deps, ackOutput })
     session.start(OPTS)
     const chunk = 'x'.repeat(16 * 1024)
@@ -87,6 +87,27 @@ describe('TerminalSession', () => {
     expect(total).toBe(128 * 1024)
     expect(ackOutput.mock.calls.length).toBeLessThanOrEqual(2)
     expect(ackOutput.mock.calls.every(c => c[0] === 't1' && c[1] === 'gen-1')).toBe(true)
+  })
+
+  it('acks a string payload with its exact UTF-8 size', async () => {
+    const deps = makeDeps()
+    vi.mocked(deps.createTerminal).mockImplementation((_id, _o, cb) => {
+      deps.channels.push(cb)
+      return Promise.resolve({ ok: true, pid: 1, shell: 'sh', spawnId: 'gen-1' })
+    })
+    const ackOutput = vi.fn()
+    const parsed: (() => void)[] = []
+    const write = vi.fn((_d: Uint8Array | string, onParsed?: () => void) => { if (onParsed) parsed.push(onParsed) })
+    const session = new TerminalSession('t1', { write }, { ...deps, ackOutput })
+    session.start(OPTS)
+    await Promise.resolve()
+    // Mixed widths, well past one 64 KB ack chunk.
+    const chunk = 'aé─\u{1F600}'.repeat(8 * 1024)
+    deps.emit({ type: 'data', payload: chunk })
+    for (const p of parsed.splice(0)) p()
+    await Promise.resolve()
+    const total = ackOutput.mock.calls.reduce((n, c) => n + (c[2] as number), 0)
+    expect(total).toBe(new TextEncoder().encode(chunk).byteLength)
   })
 
   it('hands a reattached pane its history through replay, not write', () => {

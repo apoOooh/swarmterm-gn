@@ -44,3 +44,19 @@ export class OutputAcker {
     this.send(this.spawnId, bytes)
   }
 }
+
+/**
+ * UTF-8 size of a string from Rust (always valid UTF-8, so surrogates come
+ * in pairs). Counting beats `TextEncoder.encode`: no allocation per batch.
+ */
+export function utf8Length(s: string): number {
+  let n = s.length
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c < 0x80) continue
+    if (c < 0x800) n += 1
+    else if (c >= 0xd800 && c <= 0xdbff) { n += 2; i++ } // pair: 2 units -> 4 bytes
+    else n += 2
+  }
+  return n
+}

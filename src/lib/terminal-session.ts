@@ -4,7 +4,7 @@ import type {
   PtyOut,
   PtyReplay
 } from '@/tauri/terminal'
-import { OutputAcker } from '@/lib/output-ack'
+import { OutputAcker, utf8Length } from '@/lib/output-ack'
 
 export type TerminalStatus =
   | { kind: 'connecting' }
@@ -15,7 +15,7 @@ export type TerminalStatus =
 /** Where decoded pty output is pumped (the xterm instance, in production). */
 export interface SessionSink {
   /** `onParsed` must run once xterm parsed `data` (flow-control acks). */
-  write: (data: Uint8Array, onParsed?: () => void) => void
+  write: (data: Uint8Array | string, onParsed?: () => void) => void
   /**
    * History of a pane taken over from the terminal host (SWA-56), first
    * message of that generation. Not new output: no activity tick, and
@@ -141,10 +141,10 @@ export class TerminalSession {
     const acker = ackOutput
       ? new OutputAcker((spawnId, bytes) => ackOutput(this.id, spawnId, bytes))
       : null
-    const parsed = (data: Uint8Array): (() => void) | undefined => {
+    const parsed = (data: Uint8Array | string): (() => void) | undefined => {
       if (!acker) return undefined
       // The exact bytes Rust's gate counted for this message.
-      const bytes = data.byteLength
+      const bytes = typeof data === 'string' ? utf8Length(data) : data.byteLength
       return () => acker.parsed(bytes)
     }
 

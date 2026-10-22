@@ -21,7 +21,7 @@ describe('decodePtyOut', () => {
     const text = 'aé─日\u{1F600}\x1b[0m'
     const msg = decodePtyOut(frame(OUT_DATA, text))
     expect(msg.type).toBe('data')
-    if (msg.type !== 'data') return
+    if (msg.type !== 'data' || typeof msg.payload === 'string') throw new Error('expected bytes')
     expect(msg.payload).toEqual(enc.encode(text))
     expect(msg.payload.byteLength).toBe(enc.encode(text).length)
     expect(new TextDecoder().decode(msg.payload)).toBe(text)
@@ -59,7 +59,7 @@ describe('decodePtyOut', () => {
   it('does not copy the body (a view of the message buffer)', () => {
     const buf = frame(OUT_DATA, 'xyz')
     const msg = decodePtyOut(buf)
-    expect(msg.type === 'data' && msg.payload.buffer).toBe(buf)
+    expect(msg.type === 'data' && typeof msg.payload !== 'string' && msg.payload.buffer).toBe(buf)
   })
 
   it('rejects short frames, overrunning headers and unknown tags', () => {
@@ -71,16 +71,8 @@ describe('decodePtyOut', () => {
 })
 
 describe('decodeChannelMessage', () => {
-  it('turns a small JSON data string into its UTF-8 bytes', () => {
-    const msg = decodeChannelMessage('h\u00e9')
-    expect(msg.type).toBe('data')
-    if (msg.type === 'data') expect(Array.from(msg.payload)).toEqual([0x68, 0xc3, 0xa9])
-  })
-
-  it('acks a 4-byte emoji as 4 bytes', () => {
-    const msg = decodeChannelMessage('\u{1F600}')
-    if (msg.type === 'data') expect(msg.payload.byteLength).toBe(4)
-    else throw new Error('expected data')
+  it('passes a small JSON data string through unchanged', () => {
+    expect(decodeChannelMessage('h\u00e9')).toEqual({ type: 'data', payload: 'h\u00e9' })
   })
 
   it('decodes a raw frame', () => {
