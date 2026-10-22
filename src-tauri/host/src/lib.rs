@@ -16,6 +16,7 @@ pub mod job;
 pub mod modes;
 pub mod output;
 pub mod protocol;
+pub mod resize;
 pub mod ring;
 #[cfg(windows)]
 pub mod security;

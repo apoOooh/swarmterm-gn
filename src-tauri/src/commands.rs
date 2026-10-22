@@ -143,30 +143,44 @@ pub fn write_terminal_checked(
     t.send_checked(&expected_spawn_id, data.as_bytes())
 }
 
+/// Clone the pane's I/O handle; the `terminals` lock is held only for the
+/// lookup, never across the gate or the PTY call (perf step C).
+fn io_handle(state: &AppState, lock_name: &'static str, id: &str) -> Option<crate::pty::IoHandle> {
+    crate::prof::lock(lock_name, &state.terminals)
+        .get(id)
+        .map(|t| t.handle())
+}
+
 /// The renderer's xterm parsed `bytes` more of generation `spawn_id`'s
-/// output (perf phase 2 flow control; batched, ~64 KB per call).
-#[tauri::command]
+/// output (perf phase 2 flow control; batched, ACK_CHUNK per call). `async`:
+/// a plain command runs on the main thread, which also serves the IPC of
+/// every pane's output, so thousands of acks under a flood queued there.
+/// Order between acks does not matter (they add up).
+#[tauri::command(async)]
 pub fn ack_output(state: State<'_, AppState>, id: String, spawn_id: String, bytes: u64) {
     let _span = crate::prof::span("cmd.ack_output");
-    if let Some(t) = crate::prof::lock("lock.terminals.ack", &state.terminals).get(&id) {
-        t.ack(&spawn_id, bytes);
+    if let Some(h) = io_handle(&state, "lock.terminals.ack", &id) {
+        h.ack(&spawn_id, bytes);
     }
 }
 
 /// The renderer disposed generation `spawn_id`'s xterm: open its flow gate
-/// now rather than after the no-ack timeout.
-#[tauri::command]
+/// now rather than after the no-ack timeout. Off the main thread like acks.
+#[tauri::command(async)]
 pub fn release_output(state: State<'_, AppState>, id: String, spawn_id: String) {
-    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
-        t.release_output(&spawn_id);
+    if let Some(h) = io_handle(&state, "lock.terminals.release", &id) {
+        h.release_output(&spawn_id);
     }
 }
 
+/// Stays a main-thread command on purpose: it is now O(1) (the resize worker
+/// applies the size), and running resizes on the async pool could reorder
+/// them, so an older size could win.
 #[tauri::command]
 pub fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) {
     let _span = crate::prof::span("cmd.resize_terminal");
-    if let Some(t) = crate::prof::lock("lock.terminals.resize", &state.terminals).get(&id) {
-        t.resize(cols, rows);
+    if let Some(h) = io_handle(&state, "lock.terminals.resize", &id) {
+        h.resize(cols, rows);
     }
 }
 
