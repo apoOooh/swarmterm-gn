@@ -4,6 +4,7 @@ import { MediaPathView } from '@/components/Files/MediaView'
 import { fileName, samePath } from '@/lib/media-gallery'
 import { useMediaStore } from '@/store/media-store'
 import { unrootedMediaUrl } from '@/tauri/files'
+import { startMediaDrag } from '@/components/Media/start-media-drag'
 
 const time = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
@@ -36,8 +37,14 @@ export function MediaPanel(): ReactElement {
         return <button
           key={item.path}
           tabIndex={-1}
-          onClick={() => void open(item.path)}
-          title={`${item.path}\n${item.source} · ${time(item.shownAt)}`}
+          // A press that moves is a drag into a pane (lib/media-drag.ts); a
+          // release in place is the click that opens the item. No onClick or
+          // key handler: the button is tabIndex -1, so nothing else activates
+          // it. mousedown is swallowed so a drag selects no text and parks no
+          // focus on the button (the click still bubbles to focus-return).
+          onMouseDown={(e) => e.preventDefault()}
+          onPointerDown={(e) => startMediaDrag(e, item, () => void open(item.path))}
+          title={`${item.path}\n${item.source} · ${time(item.shownAt)}\nDrag into a pane to insert the path`}
           className={['flex w-24 shrink-0 flex-col gap-0.5 rounded border p-1 text-left text-[10px]', active ? 'border-[#a855f7]' : 'border-border hover:bg-muted'].join(' ')}
         >
           <div className="flex h-14 items-center justify-center overflow-hidden bg-muted/40">

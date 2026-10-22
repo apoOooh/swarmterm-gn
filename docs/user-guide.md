@@ -170,6 +170,17 @@ You can choose how many items it lists and turn it off separately for paths
 printed in a pane and clipboard images. Items not opened yet show a
 placeholder icon instead of a thumbnail.
 
+**Drag media into a pane.** Drag an item from the Media tab's thumbnail strip
+(or from the popup) onto a terminal pane: the pane is outlined while you are
+over it, and releasing types the file's path there, then gives that pane the
+keyboard. Claude Code and Codex panes receive it as a paste, exactly like
+Ctrl+V of a screenshot, so the agent attaches the image; other panes get the
+quoted path, as when you drop a file from Explorer. Releasing anywhere else
+(including over the web preview) or pressing Esc cancels. A short click still
+opens the item. Dragging an item you have not opened only types its path; it
+does not show or open the file. Paths containing a quote or line break cannot
+be inserted.
+
 **Clipboard images (opt-in).** Settings → Media → **Clipboard images** (off by
 default) adds images you copy (a screenshot, an image copied in a browser or
 image editor) to the Media tab, tagged `clipboard`; copying image or video

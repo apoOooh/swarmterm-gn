@@ -347,6 +347,20 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Copy a large (4K) screenshot: the UI does not stutter.
 - [ ] Quit from the tray: `%TEMP%\swarmterm-clipboard\<pid>` is gone.
 
+## Media drag into panes
+
+- [ ] Drag an opened image from the Media strip: after a few pixels a ghost
+      with its thumbnail follows the pointer (film icon for an opened
+      video, image icon for any unopened item) and the pane under it gets the drop ring.
+- [ ] Release over a Claude Code pane: the path arrives as a paste and the
+      CLI shows `[Image #1]` (Codex likewise); the pane has the keyboard.
+- [ ] Release over a PowerShell pane: the quoted path is typed, nothing runs.
+- [ ] Drag an unopened item into a pane: its path is typed, the strip still
+      shows the placeholder and its media URL still answers 404.
+- [ ] Release over the web-preview column, the navbar or the panel, or press
+      Esc mid-drag: nothing is typed. A plain click still opens the item.
+- [ ] With the popup up, drag one of its rows into a pane: same result.
+
 ## Web preview
 
 - [ ] Preview a framing-hostile site: type `github.com` in the address bar —

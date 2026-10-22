@@ -17,6 +17,7 @@ import { fileName } from '@/lib/media-gallery'
 import { overlayAutoHide, useMediaStore } from '@/store/media-store'
 import { useGitStore } from '@/store/git-store'
 import { unrootedMediaUrl } from '@/tauri/files'
+import { startMediaDrag } from '@/components/Media/start-media-drag'
 
 const time = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 const swallow = (e: { preventDefault: () => void }): void => e.preventDefault()
@@ -79,8 +80,9 @@ export function MediaOverlay(): ReactElement | null {
             key={item.path}
             tabIndex={-1}
             onMouseDown={swallow}
-            onClick={() => open(item.path)}
-            title={`${item.path}\nOpen in the Media panel`}
+            // Drag into a pane inserts the path; a release in place opens it.
+            onPointerDown={(e) => startMediaDrag(e, item, () => open(item.path))}
+            title={`${item.path}\nOpen in the Media panel, or drag into a pane`}
             className="flex items-center gap-2 rounded p-1 text-left hover:bg-muted"
           >
             <div className="flex h-10 w-14 shrink-0 items-center justify-center overflow-hidden bg-muted/40">
