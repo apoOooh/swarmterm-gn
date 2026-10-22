@@ -2,6 +2,57 @@
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-10-23
+
+- Media panel: a new right-panel tab to inspect images and videos while agents
+  work, from any folder (not only the project). Large viewer, thumbnail strip
+  (newest first, source pane and time), wheel zoom toward the cursor (10%–2000%)
+  and pan. It is user-side only: no MCP tool, nothing is passed to agents, and a
+  file is served to the viewer only after you open it.
+- Media detection: image and video paths printed in a pane are listed by name
+  and counted in a pane badge; clicking opens the file. The media routes answer
+  only the main window, never the web-preview webviews.
+- Media: opt-in auto-show popup (Settings → Media) listing the newest items,
+  hides itself unless you interact, never takes the keyboard.
+- Media: opt-in clipboard capture (Windows) saves copied images to a temp
+  folder (capped, deleted on exit and when switched off).
+- Media: drag a thumbnail into a pane to insert its path like Ctrl+V does, so
+  Claude Code and Codex attach the image.
+- Media: Annotate images with pen, marker, line, arrow, rectangle and ellipse,
+  then save a marked copy and drag it into a pane. The original is never
+  modified.
+- Terminal drop: paths with `%` are no longer expanded by cmd panes.
+- Performance: the file watcher stops handling individual events during an
+  event storm (a batch of 64+ raw events, e.g. `cargo build` or `npm install`
+  under the root) and sends one rescan once the tree has been quiet for
+  500 ms. With nothing pending it blocks without an idle tick (was a 100 ms
+  poll); stop is a channel message, so unwatching still releases the root at once.
+- Performance: the terminal host's mode tracker skips plain text with
+  `memchr` to the next ESC instead of parsing byte by byte (same results).
+- Performance: end-to-end output flow control. The renderer acks output once
+  xterm parsed it; a pane more than 512 KB behind pauses its output (resumes
+  below 128 KB) and the shell is backpressured, so floods no longer grow
+  WebView memory by GBs. Applies in-process and in the terminal host (new
+  `ack` op, `flow-control` capability; older apps are never gated). The gate
+  opens on detach, exit or 2 s without an ack; input is never gated.
+- Performance: terminal output reaches the renderer as raw bytes instead of
+  JSON strings (no escaping, no copy of the batch) and xterm parses them
+  directly. The host connection decodes many frames per read without
+  shifting its buffer per frame, and the app shares the host's output
+  batching code instead of a copy.
+- Memory: panes hold a WebGL context only while visible (at most 12, least
+  recently shown falls back to DOM first; re-acquired after a context loss).
+  New Settings → Terminal → *Scrollback* (default 5,000 lines). The terminal
+  host keeps 512 KiB of replay history per pane instead of 1 MB.
+- Performance: workspace tabs, the attention badge and the prompt library no
+  longer re-render on every agent state flip, the agent detector skips its
+  screen scan while nothing changed, and `wait_peer` waiters are no longer
+  woken by every output batch.
+- War Room: joining, moving, leaving or deleting a room now wakes pending
+  `wait_peer` calls at once, so a peer that left is reported immediately.
+- Dev: perf benchmark harness (`scripts/perf/flood.ps1`) with an "agents"
+  scenario of synthetic agent-like streams; it never starts an agent CLI.
+
 ## [1.22.1] - 2026-10-19
 
 - Terminal: emoji and other wide characters now measure 2 cells (Unicode 11

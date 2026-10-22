@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
+use swarmterm_host::output::{next_batch, take_valid_utf8, OUTPUT_IDLE, READ_BUF_BYTES};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
 
@@ -109,15 +110,15 @@ pub(crate) mod job {
     }
 }
 
-/// Output streamed to the renderer over a per-terminal channel.
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "type", content = "payload")]
+/// Output streamed to the renderer over a per-terminal channel. Sent as a raw
+/// binary IPC body (perf phase 3, see `PtyOut::encode`), not JSON: a 64 KB
+/// batch would otherwise pay JSON string escaping on every flush.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PtyOut {
     Data(String),
     /// First message of a pane taken over from the terminal host (SWA-56):
     /// its history, rendered at `cols`x`rows`. Not new output — the renderer
     /// writes it without activity ticks and without answering queries in it.
-    #[serde(rename_all = "camelCase")]
     Replay {
         data: String,
         cols: u16,
@@ -126,9 +127,84 @@ pub enum PtyOut {
         truncated: bool,
     },
     Exit {
-        #[serde(rename = "exitCode")]
         exit_code: i32,
     },
+}
+
+/// Trailing tag of an encoded [`PtyOut`] (mirrored in `src/tauri/terminal.ts`).
+pub const OUT_DATA: u8 = 0;
+pub const OUT_REPLAY: u8 = 1;
+pub const OUT_EXIT: u8 = 2;
+
+impl PtyOut {
+    /// Wire layout: `[body][header json][header_len: u16 LE][tag: u8]`.
+    /// The tag goes LAST so a data batch is its own `String` buffer plus
+    /// three pushed bytes: no copy of the body on either side (`into_bytes`
+    /// is free, the renderer reads `subarray`s). `Data` has an empty header,
+    /// `Replay` carries `{cols,rows,truncated}`, `Exit` `{exitCode}` and no
+    /// body. The body is exactly the UTF-8 bytes the flow gate counted.
+    pub fn encode(self) -> Vec<u8> {
+        let (tag, body, header) = match self {
+            PtyOut::Data(text) => (OUT_DATA, text, String::new()),
+            PtyOut::Replay {
+                data,
+                cols,
+                rows,
+                truncated,
+            } => (
+                OUT_REPLAY,
+                data,
+                serde_json::json!({ "cols": cols, "rows": rows, "truncated": truncated })
+                    .to_string(),
+            ),
+            PtyOut::Exit { exit_code } => (
+                OUT_EXIT,
+                String::new(),
+                serde_json::json!({ "exitCode": exit_code }).to_string(),
+            ),
+        };
+        debug_assert!(
+            header.len() <= u16::MAX as usize,
+            "pty output header too long"
+        );
+        let mut out = body.into_bytes();
+        out.reserve_exact(header.len() + 3);
+        out.extend_from_slice(header.as_bytes());
+        out.extend_from_slice(&(header.len() as u16).to_le_bytes());
+        out.push(tag);
+        out
+    }
+
+    /// The IPC body: a JSON string for a `Data` batch that Tauri evaluates
+    /// directly, else [`PtyOut::encode`] as raw bytes.
+    pub fn into_body(self) -> tauri::Result<tauri::ipc::InvokeResponseBody> {
+        if let PtyOut::Data(text) = &self {
+            if text.len() < DIRECT_JSON_LIMIT {
+                let json = serde_json::to_string(text)?;
+                if json.len() < DIRECT_JSON_LIMIT {
+                    return Ok(tauri::ipc::InvokeResponseBody::Json(json));
+                }
+            }
+        }
+        Ok(tauri::ipc::InvokeResponseBody::Raw(self.encode()))
+    }
+}
+
+/// Tauri's direct-eval limit for a JSON channel message (its
+/// `MAX_JSON_DIRECT_EXECUTE_THRESHOLD`). A raw message is evaluated
+/// directly only below 1 KiB (as a JSON number array); from there on every
+/// message costs a separate fetch round trip. Under the flow gate a flood
+/// sends many mid-sized batches, and as raw bodies each became one extra
+/// IPC request on the WebView's main thread, delaying every pane's echo.
+/// So a `Data` batch whose JSON string fits this limit goes as JSON, exactly
+/// as before phase 3; only larger ones (which take the fetch path either
+/// way) go raw and skip the JSON escaping and parse.
+pub const DIRECT_JSON_LIMIT: usize = 8192;
+
+impl tauri::ipc::IpcResponse for PtyOut {
+    fn body(self) -> tauri::Result<tauri::ipc::InvokeResponseBody> {
+        self.into_body()
+    }
 }
 
 /// Options the renderer passes when asking the backend to spawn a pty.
@@ -157,6 +233,8 @@ pub struct CreateTerminalResult {
     pub pid: Option<u32>,
     pub shell: Option<String>,
     pub error: Option<String>,
+    /// The generation the renderer names in `ack_output` (flow control).
+    pub spawn_id: Option<String>,
 }
 
 impl CreateTerminalResult {
@@ -166,6 +244,7 @@ impl CreateTerminalResult {
             pid: None,
             shell: None,
             error: Some(msg.into()),
+            spawn_id: None,
         }
     }
 }
@@ -279,6 +358,9 @@ pub enum TerminalIo {
         killer: Box<dyn ChildKiller + Send + Sync>,
         #[cfg(windows)]
         job: Option<job::JobHandle>,
+        /// Output backpressure (perf phase 2), shared with the flusher. A
+        /// hosted pane's gate lives in the host; its acks are forwarded.
+        flow: std::sync::Arc<swarmterm_host::flow::FlowGate>,
     },
     /// In `swarmterm-host.exe`. Every call only enqueues a frame for the
     /// connection's writer, so it is as cheap under the `terminals` lock as
@@ -321,6 +403,33 @@ impl ManagedTerminal {
         }
     }
 
+    /// The renderer parsed `bytes` of generation `spawn_id`'s output. An ack
+    /// for an older generation is dropped: its gate closed when it ended.
+    pub fn ack(&self, spawn_id: &str, bytes: u64) {
+        if !matches_generation(&self.spawn_id, spawn_id) {
+            return;
+        }
+        match &self.io {
+            TerminalIo::Local { flow, .. } => flow.ack(bytes),
+            #[cfg(windows)]
+            TerminalIo::Host { conn, terminal_id } => conn.ack(terminal_id, spawn_id, bytes),
+        }
+    }
+
+    /// The renderer stopped consuming `spawn_id` (pane disposed). A hosted
+    /// pane's debt is forgiven with a saturating ack; the kill that follows
+    /// a dispose closes the host gate for good.
+    pub fn release_output(&self, spawn_id: &str) {
+        if !matches_generation(&self.spawn_id, spawn_id) {
+            return;
+        }
+        match &self.io {
+            TerminalIo::Local { flow, .. } => flow.release(),
+            #[cfg(windows)]
+            TerminalIo::Host { conn, terminal_id } => conn.ack(terminal_id, spawn_id, u64::MAX),
+        }
+    }
+
     pub fn resize(&self, cols: u16, rows: u16) {
         match &self.io {
             TerminalIo::Local { master, .. } => {
@@ -356,7 +465,10 @@ impl ManagedTerminal {
                 killer,
                 #[cfg(windows)]
                 job,
+                flow,
             } => {
+                // The rest of the output and `Exit` must not wait on acks.
+                flow.close();
                 #[cfg(windows)]
                 let job = job;
                 #[cfg(not(windows))]
@@ -410,6 +522,12 @@ impl ManagedTerminal {
             None
         }
     }
+}
+
+/// Whether an ack/release naming `given` is for the live generation
+/// `current`; one for an older (respawned-over) generation is dropped.
+fn matches_generation(current: &str, given: &str) -> bool {
+    !given.is_empty() && current == given
 }
 
 /// How long a closed pane's process tree may take to exit on its own before
@@ -555,51 +673,6 @@ pub fn utf8_lang_fallback(
         None
     }
 }
-
-/// Drain the largest valid-UTF-8 prefix from `buf`, leaving any incomplete
-/// trailing multibyte sequence behind for the next read. Bytes that cannot begin
-/// or continue a valid sequence are genuinely invalid, so they are flushed
-/// lossily immediately rather than stalling the stream waiting for a completion
-/// that will never come.
-pub fn take_valid_utf8(buf: &mut Vec<u8>) -> Option<String> {
-    if buf.is_empty() {
-        return None;
-    }
-    let valid_up_to = match std::str::from_utf8(buf) {
-        Ok(s) => s.len(),
-        Err(e) => e.valid_up_to(),
-    };
-    if valid_up_to == 0 {
-        // Nothing decodes yet. Wait for more bytes only if the leading byte could
-        // plausibly start a multibyte sequence and we haven't already buffered a
-        // full char's worth (max 4 bytes). Otherwise the bytes are invalid —
-        // flush lossily so the stream never stalls.
-        // The three ranges are the 2-, 3- and 4-byte UTF-8 lead classes. They
-        // happen to be contiguous, but they are kept split so the classes stay
-        // legible next to the UTF-8 spec.
-        #[allow(clippy::manual_range_patterns)]
-        let leads_multibyte = matches!(buf[0], 0xC2..=0xDF | 0xE0..=0xEF | 0xF0..=0xF4);
-        if leads_multibyte && buf.len() < 4 {
-            return None;
-        }
-        let s = String::from_utf8_lossy(buf).into_owned();
-        buf.clear();
-        return Some(s);
-    }
-    let s = std::str::from_utf8(&buf[..valid_up_to])
-        .expect("valid_up_to guarantees valid utf8")
-        .to_owned();
-    buf.drain(..valid_up_to);
-    Some(s)
-}
-
-/// Output coalescing (see read_loop): a burst is batched for up to
-/// OUTPUT_COALESCE or OUTPUT_BATCH_BYTES; output after OUTPUT_IDLE of silence
-/// is sent immediately.
-const OUTPUT_COALESCE: std::time::Duration = std::time::Duration::from_millis(4);
-const OUTPUT_IDLE: std::time::Duration = std::time::Duration::from_millis(16);
-const OUTPUT_BATCH_BYTES: usize = 64 * 1024;
-const READ_BUF_BYTES: usize = 64 * 1024;
 
 pub fn spawn_terminal(
     app: &AppHandle,
@@ -870,6 +943,7 @@ fn spawn_local(
 
     let waiter_spawn_id = spawn_id.clone();
     let reader_spawn_id = spawn_id.clone();
+    let flow = std::sync::Arc::new(swarmterm_host::flow::FlowGate::default());
     state.terminals.lock().unwrap().insert(
         id.clone(),
         ManagedTerminal {
@@ -882,6 +956,7 @@ fn spawn_local(
                 killer,
                 #[cfg(windows)]
                 job,
+                flow: flow.clone(),
             },
             worktree_mode: plan.worktree_mode,
             repo_root: plan.repo_root,
@@ -901,16 +976,20 @@ fn spawn_local(
     let (exit_tx, exit_rx) = std::sync::mpsc::channel::<i32>();
     let waiter_app = app.clone();
     let waiter_id = id.clone();
+    let waiter_flow = flow.clone();
     std::thread::spawn(move || {
         let mut child = child;
         let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
+        // The entry (and with it the ack route) goes away next: the tail of
+        // the output must flow ungated so `Exit` is never held back.
+        waiter_flow.close();
         drop_generation(&waiter_app, &waiter_id, &waiter_spawn_id);
         let _ = exit_tx.send(exit_code);
     });
 
     let app = app.clone();
     std::thread::spawn(move || {
-        read_loop(app, id, reader_spawn_id, reader, exit_rx, on_data);
+        read_loop(app, id, reader_spawn_id, reader, exit_rx, on_data, flow);
     });
 
     CreateTerminalResult {
@@ -918,6 +997,7 @@ fn spawn_local(
         pid,
         shell: Some(plan.shell),
         error: None,
+        spawn_id: Some(spawn_id),
     }
 }
 
@@ -996,6 +1076,7 @@ fn spawn_hosted(
         pid: answer["pid"].as_u64().map(|p| p as u32),
         shell: Some(plan.shell),
         error: None,
+        spawn_id: Some(spawn_id.to_string()),
     }
 }
 
@@ -1057,6 +1138,7 @@ fn attach_hosted(
         pid: facts["pid"].as_u64().map(|p| p as u32),
         shell: None,
         error: None,
+        spawn_id: Some(spawn_id.to_string()),
     })
 }
 
@@ -1113,26 +1195,6 @@ pub fn drop_generation(app: &AppHandle, id: &str, spawn_id: &str) {
     }
 }
 
-/// Join `first` with whatever follows it on `rx`: only what is already queued
-/// after a quiet spell (`idle`), else up to OUTPUT_COALESCE / OUTPUT_BATCH_BYTES.
-/// Order is preserved; a closed channel just ends the batch.
-fn next_batch(rx: &std::sync::mpsc::Receiver<String>, mut text: String, idle: bool) -> String {
-    let deadline = std::time::Instant::now()
-        + if idle {
-            std::time::Duration::ZERO
-        } else {
-            OUTPUT_COALESCE
-        };
-    while text.len() < OUTPUT_BATCH_BYTES {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        match rx.recv_timeout(left) {
-            Ok(more) => text.push_str(&more),
-            Err(_) => break,
-        }
-    }
-    text
-}
-
 /// Remove `id` only if it still belongs to this generation. Returns the removed
 /// entry and whether a different generation now holds the id (superseded).
 fn remove_generation<T>(
@@ -1155,6 +1217,7 @@ fn read_loop(
     mut reader: Box<dyn Read + Send>,
     exit_rx: std::sync::mpsc::Receiver<i32>,
     on_data: Channel<PtyOut>,
+    flow: std::sync::Arc<swarmterm_host::flow::FlowGate>,
 ) {
     // Reader → flusher split. ConPTY reads block, so coalescing needs its own
     // thread: the reader decodes (UTF-8 boundary handling stays HERE, so the
@@ -1165,7 +1228,13 @@ fn read_loop(
     // OUTPUT_COALESCE. The channel closing means EOF with every byte —
     // including the lossy trailing flush — already queued, so `Exit` below
     // can never overtake output.
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    //
+    // Flow control (perf phase 2): the flusher parks while the renderer is
+    // more than FLOW_HIGH behind (`FlowGate`), and the queue is bounded, so
+    // the reader then blocks, stops reading, and ConPTY backpressures the
+    // child instead of the WebView buffering GBs. Input is a separate thread
+    // (`PtyInput`) and never waits on this.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<String>(swarmterm_host::flow::READ_QUEUE_DEPTH);
     std::thread::spawn(move || {
         let mut pending: Vec<u8> = Vec::new();
         let mut chunk = vec![0u8; READ_BUF_BYTES];
@@ -1193,7 +1262,10 @@ fn read_loop(
     let mut last_flush = std::time::Instant::now() - OUTPUT_IDLE;
     while let Ok(first) = rx.recv() {
         let text = next_batch(&rx, first, last_flush.elapsed() >= OUTPUT_IDLE);
+        flow.wait();
+        let n = text.len();
         deliver_output(&app, &id, text, &on_data);
+        flow.sent(n);
         last_flush = std::time::Instant::now();
     }
     // The waiter thread owns the child; EOF means it is dead or about to be
@@ -1214,7 +1286,10 @@ pub fn deliver_output(app: &AppHandle, id: &str, text: String, on_data: &Channel
             .lock()
             .unwrap()
             .push_output(id, &text, crate::warroom::now_ms());
-        state.peer_wake.notify_waiters();
+        // No `peer_wake` here: output only pushes a `wait_peer` stall verdict
+        // later, never produces one, and the loop re-reads the output clock
+        // on its own stall timer (`mcp::tools::peers::wait_loop`). Waking
+        // every waiter per batch only churned locks under a flood.
     }
     let _ = on_data.send(PtyOut::Data(text));
 }
@@ -1298,6 +1373,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn flow_acks_only_reach_the_live_generation() {
+        assert!(matches_generation("gen-2", "gen-2"));
+        assert!(!matches_generation("gen-2", "gen-3"));
+        // A stale id from before a same-id respawn.
+        assert!(!matches_generation("gen-2", "gen-1"));
+        assert!(!matches_generation("gen-2", ""));
+    }
+
+    #[test]
     fn remove_generation_spares_a_respawned_entry() {
         let mut map = HashMap::from([("t".to_string(), "new".to_string())]);
         // Old generation's reader finishing after a same-id respawn.
@@ -1308,40 +1392,6 @@ mod tests {
         assert_eq!(removed.as_deref(), Some("new"));
         assert!(!superseded && map.is_empty());
         assert_eq!(remove_generation(&mut map, "t", |_| true), (None, false));
-    }
-
-    #[test]
-    fn next_batch_joins_queued_chunks_in_order() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        tx.send("b".to_string()).unwrap();
-        tx.send("c".to_string()).unwrap();
-        assert_eq!(next_batch(&rx, "a".into(), false), "abc");
-    }
-
-    #[test]
-    fn next_batch_idle_takes_only_what_is_queued() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        tx.send("b".to_string()).unwrap();
-        let start = std::time::Instant::now();
-        assert_eq!(next_batch(&rx, "a".into(), true), "ab");
-        assert!(start.elapsed() < OUTPUT_COALESCE * 10);
-        drop(tx);
-    }
-
-    #[test]
-    fn next_batch_stops_at_the_byte_cap() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        tx.send("y".to_string()).unwrap();
-        let big = "x".repeat(OUTPUT_BATCH_BYTES);
-        assert_eq!(next_batch(&rx, big.clone(), false), big);
-        assert_eq!(rx.try_recv().unwrap(), "y");
-    }
-
-    #[test]
-    fn next_batch_ends_on_closed_channel() {
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
-        drop(tx);
-        assert_eq!(next_batch(&rx, "a".into(), false), "a");
     }
 
     struct SharedSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
@@ -1496,37 +1546,93 @@ mod tests {
         );
     }
 
-    #[test]
-    fn take_valid_utf8_returns_complete_prefix_and_holds_partial_tail() {
-        // "é" is 0xC3 0xA9; feed only the first byte after an ascii char.
-        let mut buf = vec![b'h', b'i', 0xC3];
-        let out = take_valid_utf8(&mut buf).unwrap();
-        assert_eq!(out, "hi");
-        assert_eq!(buf, vec![0xC3]); // incomplete tail retained
+    /// Split an encoded `PtyOut` the way `src/tauri/terminal.ts` does.
+    fn split(out: &[u8]) -> (u8, &[u8], serde_json::Value) {
+        let tag = out[out.len() - 1];
+        let hlen = u16::from_le_bytes([out[out.len() - 3], out[out.len() - 2]]) as usize;
+        let hstart = out.len() - 3 - hlen;
+        let header = if hlen == 0 {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&out[hstart..out.len() - 3]).unwrap()
+        };
+        (tag, &out[..hstart], header)
     }
 
     #[test]
-    fn take_valid_utf8_completes_across_chunks() {
-        let mut buf = vec![0xC3, 0xA9]; // full "é"
-        let out = take_valid_utf8(&mut buf).unwrap();
-        assert_eq!(out, "é");
-        assert!(buf.is_empty());
+    fn data_encodes_its_utf8_bytes_with_a_trailing_tag() {
+        let text = "h\u{e9}\u{1F600}\x1b[0m".to_string();
+        let out = PtyOut::Data(text.clone()).encode();
+        assert_eq!(
+            split(&out),
+            (OUT_DATA, text.as_bytes(), serde_json::Value::Null)
+        );
+        assert_eq!(out.len(), text.len() + 3);
     }
 
     #[test]
-    fn take_valid_utf8_flushes_long_invalid_runs() {
-        let mut buf = vec![0xFF, 0xFE, 0xFD, 0xFC, 0xFB];
-        let out = take_valid_utf8(&mut buf).unwrap();
-        assert!(!out.is_empty()); // lossy, but does not stall
-        assert!(buf.is_empty());
+    fn replay_encodes_history_and_a_json_header() {
+        let out = PtyOut::Replay {
+            data: "hist\u{2500}".into(),
+            cols: 120,
+            rows: 40,
+            truncated: true,
+        }
+        .encode();
+        let (tag, body, header) = split(&out);
+        assert_eq!((tag, body), (OUT_REPLAY, "hist\u{2500}".as_bytes()));
+        assert_eq!(
+            header,
+            serde_json::json!({"cols":120,"rows":40,"truncated":true})
+        );
     }
 
     #[test]
-    fn take_valid_utf8_flushes_short_invalid_runs() {
-        let mut buf = vec![0xFF, 0xFE, 0xFD]; // 3 invalid bytes, not a multibyte lead
-        let out = take_valid_utf8(&mut buf).unwrap();
-        assert!(!out.is_empty());
-        assert!(buf.is_empty()); // flushed immediately, not stalled
+    fn small_data_goes_as_json_large_as_raw() {
+        use tauri::ipc::InvokeResponseBody as B;
+        match PtyOut::Data("a\u{1b}b".into()).into_body().unwrap() {
+            B::Json(j) => assert_eq!(j, r#""a\u001bb""#),
+            B::Raw(_) => panic!("small data must be json"),
+        }
+        for big in [
+            "x".repeat(DIRECT_JSON_LIMIT),
+            // Fits as text, but its escaped JSON does not.
+            "\u{1b}".repeat(DIRECT_JSON_LIMIT / 4),
+        ] {
+            match PtyOut::Data(big.clone()).into_body().unwrap() {
+                B::Raw(r) => assert_eq!(r, PtyOut::Data(big).encode()),
+                B::Json(_) => panic!("large data must be raw"),
+            }
+        }
+        assert!(matches!(
+            PtyOut::Exit { exit_code: 0 }.into_body().unwrap(),
+            B::Raw(_)
+        ));
+    }
+
+    #[test]
+    fn exit_encodes_an_empty_body_and_its_code() {
+        let out = PtyOut::Exit { exit_code: -1 }.encode();
+        assert_eq!(
+            split(&out),
+            (OUT_EXIT, &b""[..], serde_json::json!({"exitCode":-1}))
+        );
+    }
+
+    #[test]
+    fn empty_replay_still_carries_its_size() {
+        let out = PtyOut::Replay {
+            data: String::new(),
+            cols: 80,
+            rows: 24,
+            truncated: false,
+        }
+        .encode();
+        let (tag, body, header) = split(&out);
+        assert_eq!(
+            (tag, body.len(), header["cols"].as_u64()),
+            (OUT_REPLAY, 0, Some(80))
+        );
     }
 
     #[cfg(not(windows))]

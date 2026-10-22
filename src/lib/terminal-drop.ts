@@ -10,8 +10,27 @@ import { quoteForShell, type ShellFlavor } from '@/lib/agent-spawn-command'
 // same trade-off Terminal.app makes.
 const SAFE_POSIX = /^[A-Za-z0-9_@%+=:,./-]+$/
 // Windows paths carry `\` and may start at `~`; both are inert to PowerShell
-// and cmd inside a bare word.
+// and cmd inside a bare word. `%` is literal in a PowerShell argument, but cmd
+// expands `%NAME%` even inside double quotes, so cmd words go through cmdWord.
 const SAFE_WINDOWS = /^[A-Za-z0-9_@%+=:,./\\~-]+$/
+const SAFE_CMD = /^[A-Za-z0-9_@+=:,./\\~-]+$/
+
+/**
+ * One cmd word for `path`. cmd expands `%NAME%` before it looks at quotes, so
+ * each `%` goes outside the quotes as `^%`: any would-be variable name then
+ * contains `"` or `^`, is never defined and stays literal (interactive cmd
+ * keeps an undefined `%...%` as typed); the caret is removed afterwards.
+ */
+function cmdWord(path: string): string {
+  if (SAFE_CMD.test(path)) return path
+  if (!path.includes('%')) return quoteForShell(path, 'cmd')
+  // Trailing backslashes stay outside the quotes: the target program's argv
+  // parser would read `\"` as an escaped quote. A bare `\` is inert to cmd.
+  return path.split('%').map((part) => {
+    const body = part.replace(/\\+$/, '')
+    return (body === '' ? '' : quoteForShell(body, 'cmd')) + part.slice(body.length)
+  }).join('^%')
+}
 
 /** A point in the coordinate space `document.elementFromPoint` expects (CSS px). */
 export interface CssPoint {
@@ -63,7 +82,7 @@ export function formatDroppedPaths(paths: string[], flavor: ShellFlavor): string
   if (usable.length === 0) return ''
 
   const safe = flavor === 'posix' ? SAFE_POSIX : SAFE_WINDOWS
-  const words = usable.map((path) => (safe.test(path) ? path : quoteForShell(path, flavor)))
+  const words = usable.map((path) => (flavor === 'cmd' ? cmdWord(path) : safe.test(path) ? path : quoteForShell(path, flavor)))
   return `${words.join(' ')} `
 }
 

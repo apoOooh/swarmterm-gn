@@ -286,6 +286,79 @@ fn ring_is_bounded_per_pane() {
     host.shutdown_all();
 }
 
+/// Perf phase 2: a client that announced `flow-control` and never acks
+/// stalls the pane (the host stops reading, so the child blocks on ConPTY);
+/// acking resumes it and every line arrives exactly once, in order.
+#[test]
+fn unacked_output_stops_the_reader_and_acks_resume_it_in_order() {
+    use swarmterm_host::flow::FLOW_HIGH;
+    const LINES: u32 = 150_000;
+    // A long timeout: this test must see the gate hold, not time out.
+    let host = Host::with_flow_timeout(1 << 20, Duration::from_secs(120));
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let c = host.connect_flow_client(tx);
+    let mut inbox = Inbox::new(rx);
+    let loop_cmd = format!("for /l %i in (1,1,{LINES}) do @echo line-%i");
+    let s = host
+        .create(c, spec("t-flow", &["/d", "/q", "/c", &loop_cmd]))
+        .unwrap();
+
+    // Wait for the stall: nothing new for 600 ms.
+    let deadline = Instant::now() + WAIT;
+    let mut seen = 0;
+    let mut quiet_since = Instant::now();
+    while quiet_since.elapsed() < Duration::from_millis(600) {
+        assert!(
+            inbox.pump(deadline),
+            "never stalled: {} bytes",
+            inbox.data.len()
+        );
+        if inbox.data.len() != seen {
+            seen = inbox.data.len();
+            quiet_since = Instant::now();
+        }
+    }
+    assert!(!inbox.has_event("exit"), "the loop must not finish unacked");
+    // At most HIGH plus the batch that crossed it went out, and the ring
+    // stopped with the live stream (it records what the flusher took).
+    let cap = FLOW_HIGH as usize + 64 * 1024;
+    assert!(
+        seen > 0 && seen <= cap,
+        "sent {seen} bytes unacked (cap {cap})"
+    );
+    let total = host.list()[0].output_total as usize;
+    assert_eq!(total, seen, "ring and live stream stop together");
+
+    // Ack what arrived, as a renderer would, until the pane exits.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut acked = 0;
+    while !inbox.has_event("exit") {
+        assert!(
+            inbox.pump(deadline),
+            "timed out after resume: {} bytes",
+            inbox.data.len()
+        );
+        let got = inbox.data.len();
+        if got > acked {
+            host.ack(c, "t-flow", &s.spawn_id, (got - acked) as u64);
+            acked = got;
+        }
+    }
+
+    let mut next = 1u32;
+    for part in inbox.data.split("line-").skip(1) {
+        let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
+        assert_eq!(
+            digits.parse::<u32>().ok(),
+            Some(next),
+            "line {next} out of order"
+        );
+        next += 1;
+    }
+    assert_eq!(next, LINES + 1, "every line delivered");
+    host.shutdown_all();
+}
+
 mod pipe {
     use super::*;
     use swarmterm_host::server;

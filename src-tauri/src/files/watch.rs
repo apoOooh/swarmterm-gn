@@ -8,10 +8,7 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
-    },
+    sync::mpsc,
     time::{Duration, Instant},
 };
 use tauri::Emitter;
@@ -24,15 +21,26 @@ const RESCAN_BURST: usize = 64;
 /// Quiet time after the last burst before the rescan goes out, so a long
 /// `npm install` triggers one rescan at its end instead of one per batch.
 const RESCAN_QUIET: Duration = Duration::from_millis(500);
+/// How long one batch keeps draining after its first event, so an editor save
+/// (write + rename + attrib) coalesces into one change without delaying it.
+const BATCH_WINDOW: Duration = Duration::from_millis(80);
+const BATCH_GAP: Duration = Duration::from_millis(10);
+
+/// Everything the watcher thread reacts to arrives on ONE channel, so with no
+/// storm pending it blocks without any idle tick and still stops at once.
+enum Msg {
+    Event(notify::Result<Event>),
+    Extra(PathBuf),
+    Stop,
+}
 
 pub struct WatchHandle {
     pub leases: usize,
-    stop: Arc<AtomicBool>,
-    extra: mpsc::Sender<PathBuf>,
+    tx: mpsc::Sender<Msg>,
 }
 impl Drop for WatchHandle {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
+        let _ = self.tx.send(Msg::Stop);
     }
 }
 
@@ -149,27 +157,147 @@ impl Filter {
     }
 }
 
-/// Tracks whether a burst may have overflowed the native buffer, and when the
-/// trailing rescan for it is due.
+/// Storm mode. A batch of `RESCAN_BURST` raw events (cargo build, npm install)
+/// may have overflowed the native buffer, so its individual paths are not
+/// trustworthy anyway: from then on batches are only counted, never filtered
+/// or emitted, and one rescan goes out once the tree has been quiet for
+/// `RESCAN_QUIET`. The rescan reloads everything, so no final state is lost.
 #[derive(Default)]
-struct Burst {
+struct Storm {
     since: Option<Instant>,
 }
 
-impl Burst {
-    fn record(&mut self, raw_events: usize, now: Instant) {
-        // Any batch after a burst extends the quiet window: still busy.
+impl Storm {
+    /// Records a batch; true when its events should be processed one by one.
+    fn record(&mut self, raw_events: usize, now: Instant) -> bool {
+        // Any batch during a storm extends the quiet window: still busy.
         if raw_events >= RESCAN_BURST || self.since.is_some() {
             self.since = Some(now);
+            false
+        } else {
+            true
         }
+    }
+    /// How long to wait for the next event: forever when calm, until the
+    /// rescan is due during a storm.
+    fn wait(&self, now: Instant) -> Option<Duration> {
+        self.since
+            .map(|t| RESCAN_QUIET.saturating_sub(now.saturating_duration_since(t)))
     }
     fn due(&mut self, now: Instant) -> bool {
         match self.since {
-            Some(t) if now.duration_since(t) >= RESCAN_QUIET => {
+            Some(t) if now.saturating_duration_since(t) >= RESCAN_QUIET => {
                 self.since = None;
                 true
             }
             _ => false,
+        }
+    }
+}
+
+enum Recv {
+    Msg(Msg),
+    Timeout,
+    Closed,
+}
+
+/// The watcher thread's input, abstracted so tests can script events and time.
+trait Source {
+    /// `None` blocks until a message arrives.
+    fn recv(&mut self, timeout: Option<Duration>) -> Recv;
+}
+
+impl Source for mpsc::Receiver<Msg> {
+    fn recv(&mut self, timeout: Option<Duration>) -> Recv {
+        let got = match timeout {
+            None => mpsc::Receiver::recv(self).map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+            Some(t) => self.recv_timeout(t),
+        };
+        match got {
+            Ok(m) => Recv::Msg(m),
+            Err(mpsc::RecvTimeoutError::Timeout) => Recv::Timeout,
+            Err(mpsc::RecvTimeoutError::Disconnected) => Recv::Closed,
+        }
+    }
+}
+
+/// Watcher thread body: batches events, filters them, and switches to storm
+/// mode under event floods. `emit(paths, rescan, error)`. Returns on `Stop` or
+/// when every sender is gone.
+fn pump(
+    src: &mut impl Source,
+    now: impl Fn() -> Instant,
+    filter: &mut Filter,
+    mut emit: impl FnMut(Vec<String>, bool, Option<String>),
+) {
+    let mut storm = Storm::default();
+    loop {
+        let first = match src.recv(storm.wait(now())) {
+            Recv::Msg(m) => m,
+            Recv::Timeout => {
+                if storm.due(now()) {
+                    emit(Vec::new(), true, None);
+                }
+                continue;
+            }
+            // Every sender is gone: the `WatchHandle` (its drop sends `Stop`
+            // first) and the native watcher closure both hold one, so this
+            // only happens once the watch was torn down. Its subscribers are
+            // gone with it, so a pending rescan is dropped on purpose, exactly
+            // like on `Stop`; a new watch starts from a fresh listing.
+            Recv::Closed => return,
+        };
+        let mut batch = Vec::new();
+        let take = |m: Msg, batch: &mut Vec<_>, filter: &mut Filter| match m {
+            Msg::Event(e) => {
+                batch.push(e);
+                true
+            }
+            Msg::Extra(p) => {
+                filter.explicit.insert(watch_key(&p));
+                true
+            }
+            // Queued behind earlier events; returning drops the rest unread.
+            Msg::Stop => false,
+        };
+        if !take(first, &mut batch, filter) {
+            return;
+        }
+        // Drain a short burst; do not delay an active editor indefinitely under continuous writes.
+        let deadline = now() + BATCH_WINDOW;
+        while now() < deadline {
+            match src.recv(Some(BATCH_GAP)) {
+                Recv::Msg(m) => {
+                    if !take(m, &mut batch, filter) {
+                        return;
+                    }
+                }
+                // Closed: still report this batch; the next recv returns.
+                Recv::Timeout | Recv::Closed => break,
+            }
+        }
+        if batch.is_empty() || !storm.record(batch.len(), now()) {
+            continue;
+        }
+        let mut paths = BTreeSet::new();
+        let mut error = None;
+        for event in batch {
+            match event {
+                Ok(e) => {
+                    if !matches!(e.kind, EventKind::Access(_)) {
+                        paths.extend(
+                            e.paths
+                                .iter()
+                                .filter(|p| filter.passes(p))
+                                .map(|p| display(p)),
+                        );
+                    }
+                }
+                Err(e) => error = Some(e.to_string()),
+            }
+        }
+        if !paths.is_empty() || error.is_some() {
+            emit(paths.into_iter().collect(), false, error);
         }
     }
 }
@@ -184,10 +312,10 @@ impl Burst {
 fn native_watcher(
     root: &Path,
     git: &[(PathBuf, RecursiveMode)],
-    tx: mpsc::Sender<notify::Result<Event>>,
+    tx: mpsc::Sender<Msg>,
 ) -> Result<RecommendedWatcher, String> {
     let mut watcher = notify::recommended_watcher(move |e| {
-        let _ = tx.send(e);
+        let _ = tx.send(Msg::Event(e));
     })
     .map_err(|e| e.to_string())?;
     watcher
@@ -211,7 +339,7 @@ fn lease_existing(
         Some(handle) => {
             handle.leases += 1;
             for path in extra {
-                let _ = handle.extra.send(path);
+                let _ = handle.tx.send(Msg::Extra(path));
             }
             Ok(None)
         }
@@ -234,101 +362,48 @@ impl FileService {
         let Some(extra) = lease_existing(&self.watchers, context_id, extra)? else {
             return Ok(());
         };
-        let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+        let (tx, rx) = mpsc::channel::<Msg>();
         let git = git_watches(&root);
-        let watcher = native_watcher(&root, &git, tx)?;
+        let watcher = native_watcher(&root, &git, tx.clone())?;
         let mut filter = Filter {
             root,
             git,
-            explicit: BTreeSet::new(),
+            explicit: extra.iter().map(|p| watch_key(p)).collect(),
         };
-        let (extra_tx, extra_rx) = mpsc::channel();
-        for path in extra {
-            let _ = extra_tx.send(path);
-        }
         let mut watchers = self.watchers.lock().map_err(|e| e.to_string())?;
         if let Some(handle) = watchers.get_mut(context_id) {
             // Another call registered this context meanwhile; ours is dropped.
             handle.leases += 1;
-            for path in extra_rx.try_iter() {
-                let _ = handle.extra.send(path);
+            for path in extra {
+                let _ = handle.tx.send(Msg::Extra(path));
             }
             return Ok(());
         }
-        let stop = Arc::new(AtomicBool::new(false));
-        let thread_stop = stop.clone();
         let id = context_id.to_owned();
         std::thread::spawn(move || {
             // Owned by the thread: dropping it on stop closes the native handle.
             let _watcher = watcher;
-            let mut burst = Burst::default();
-            let emit = |paths: Vec<String>, rescan: bool, error: Option<String>| {
-                let _ = app.emit_to(
-                    "main",
-                    "files:changed",
-                    Change {
-                        context_id: id.clone(),
-                        paths,
-                        git_changed: true,
-                        rescan,
-                        error,
-                    },
-                );
-            };
-            while !thread_stop.load(Ordering::Acquire) {
-                for path in extra_rx.try_iter() {
-                    filter.explicit.insert(watch_key(&path));
-                }
-                let first = match rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(e) => e,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if burst.due(Instant::now()) {
-                            emit(Vec::new(), true, None);
-                        }
-                        continue;
-                    }
-                    Err(_) => break,
-                };
-                let mut batch = vec![first];
-                // Drain a short burst; do not delay an active editor indefinitely under continuous writes.
-                let deadline = Instant::now() + Duration::from_millis(80);
-                while Instant::now() < deadline {
-                    match rx.recv_timeout(Duration::from_millis(10)) {
-                        Ok(e) => batch.push(e),
-                        Err(_) => break,
-                    }
-                }
-                burst.record(batch.len(), Instant::now());
-                let mut paths = BTreeSet::new();
-                let mut error = None;
-                for event in batch {
-                    match event {
-                        Ok(e) => {
-                            if !matches!(e.kind, EventKind::Access(_)) {
-                                paths.extend(
-                                    e.paths
-                                        .iter()
-                                        .filter(|p| filter.passes(p))
-                                        .map(|p| display(p)),
-                                );
-                            }
-                        }
-                        Err(e) => error = Some(e.to_string()),
-                    }
-                }
-                if !paths.is_empty() || error.is_some() {
-                    emit(paths.into_iter().collect(), false, error);
-                }
-            }
+            let mut rx = rx;
+            pump(
+                &mut rx,
+                Instant::now,
+                &mut filter,
+                |paths, rescan, error| {
+                    let _ = app.emit_to(
+                        "main",
+                        "files:changed",
+                        Change {
+                            context_id: id.clone(),
+                            paths,
+                            git_changed: true,
+                            rescan,
+                            error,
+                        },
+                    );
+                },
+            );
         });
-        watchers.insert(
-            context_id.to_owned(),
-            WatchHandle {
-                leases: 1,
-                stop,
-                extra: extra_tx,
-            },
-        );
+        watchers.insert(context_id.to_owned(), WatchHandle { leases: 1, tx });
         Ok(())
     }
 
@@ -423,17 +498,169 @@ mod tests {
     }
 
     #[test]
-    fn burst_rescans_once_after_quiet() {
+    fn storm_rescans_once_after_quiet() {
         let t0 = Instant::now();
-        let mut b = Burst::default();
-        b.record(3, t0);
+        let mut b = Storm::default();
+        assert!(b.record(3, t0), "small batches are processed");
+        assert_eq!(b.wait(t0), None, "calm: block without an idle tick");
         assert!(!b.due(t0 + RESCAN_QUIET * 2), "small batches never rescan");
-        b.record(RESCAN_BURST, t0);
-        // Smaller follow-up batches keep the burst open.
-        b.record(1, t0 + RESCAN_QUIET / 2);
+        assert!(!b.record(RESCAN_BURST, t0));
+        // Smaller follow-up batches keep the storm open and are skipped.
+        assert!(!b.record(1, t0 + RESCAN_QUIET / 2));
+        assert_eq!(b.wait(t0 + RESCAN_QUIET), Some(RESCAN_QUIET / 2));
         assert!(!b.due(t0 + RESCAN_QUIET));
         assert!(b.due(t0 + RESCAN_QUIET / 2 + RESCAN_QUIET));
         assert!(!b.due(t0 + RESCAN_QUIET * 10), "only once");
+        assert!(b.record(1, t0 + RESCAN_QUIET * 10), "calm again");
+    }
+
+    enum Step {
+        Msg(Msg),
+        Gap(Duration),
+    }
+
+    /// Scripted event source over a fake clock: `Gap`s advance time, messages
+    /// arrive instantly. Records every timeout the pump asked for.
+    struct Fake {
+        steps: std::collections::VecDeque<Step>,
+        clock: std::rc::Rc<std::cell::Cell<Instant>>,
+        waits: Vec<Option<Duration>>,
+    }
+
+    impl Source for Fake {
+        fn recv(&mut self, timeout: Option<Duration>) -> Recv {
+            self.waits.push(timeout);
+            loop {
+                match self.steps.pop_front() {
+                    None => return Recv::Closed,
+                    Some(Step::Msg(m)) => return Recv::Msg(m),
+                    Some(Step::Gap(d)) => match timeout {
+                        Some(t) if t < d => {
+                            self.clock.set(self.clock.get() + t);
+                            self.steps.push_front(Step::Gap(d - t));
+                            return Recv::Timeout;
+                        }
+                        _ => self.clock.set(self.clock.get() + d),
+                    },
+                }
+            }
+        }
+    }
+
+    fn ev(path: &str) -> Step {
+        Step::Msg(Msg::Event(Ok(Event::new(EventKind::Modify(
+            notify::event::ModifyKind::Any,
+        ))
+        .add_path(PathBuf::from(path)))))
+    }
+
+    type Emitted = Vec<(Vec<String>, bool)>;
+
+    fn run(steps: Vec<Step>) -> (Emitted, Vec<Option<Duration>>) {
+        let clock = std::rc::Rc::new(std::cell::Cell::new(Instant::now()));
+        let mut src = Fake {
+            steps: steps.into(),
+            clock: clock.clone(),
+            waits: Vec::new(),
+        };
+        let mut f = filter(Path::new("/p"), Vec::new());
+        let mut out = Vec::new();
+        pump(
+            &mut src,
+            || clock.get(),
+            &mut f,
+            |paths, rescan, _| out.push((paths, rescan)),
+        );
+        (out, src.waits)
+    }
+
+    #[test]
+    fn pump_coalesces_a_batch_into_one_change() {
+        let ms = Duration::from_millis;
+        let (out, waits) = run(vec![
+            ev("/p/a.txt"),
+            Step::Gap(ms(5)),
+            ev("/p/a.txt"),
+            ev("/p/b.txt"),
+            ev("/p/node_modules/x/y.js"),
+            Step::Gap(ms(1000)),
+            ev("/p/c.txt"),
+        ]);
+        let a = display(Path::new("/p/a.txt"));
+        let b = display(Path::new("/p/b.txt"));
+        let c = display(Path::new("/p/c.txt"));
+        assert_eq!(out, vec![(vec![a, b], false), (vec![c], false)]);
+        assert_eq!(waits[0], None, "idle waits block, no tick");
+    }
+
+    #[test]
+    fn pump_skips_storm_events_and_rescans_once_when_quiet() {
+        let ms = Duration::from_millis;
+        let mut steps = Vec::new();
+        // A flood: several full batches back to back, then a lone straggler.
+        for i in 0..(RESCAN_BURST * 3) {
+            steps.push(ev(&format!("/p/src/f{i}.rs")));
+            if i % 100 == 99 {
+                steps.push(Step::Gap(ms(100)));
+            }
+        }
+        steps.push(Step::Gap(ms(300)));
+        steps.push(ev("/p/src/late.rs"));
+        // Quiet: the rescan goes out, then normal processing resumes.
+        steps.push(Step::Gap(RESCAN_QUIET * 3));
+        steps.push(ev("/p/after.txt"));
+        let (out, waits) = run(steps);
+        assert_eq!(
+            out,
+            vec![
+                (Vec::new(), true),
+                (vec![display(Path::new("/p/after.txt"))], false)
+            ],
+            "no per-file changes during the storm, one rescan after it"
+        );
+        assert!(
+            waits.contains(&Some(RESCAN_QUIET)),
+            "a storm waits exactly for the quiet window"
+        );
+    }
+
+    #[test]
+    fn pump_stop_mid_batch_drops_the_batch() {
+        let (out, _) = run(vec![ev("/p/a.txt"), Step::Msg(Msg::Stop), ev("/p/b.txt")]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn pump_closed_during_a_storm_ends_without_rescan() {
+        let steps = (0..RESCAN_BURST).map(|i| ev(&format!("/p/f{i}"))).collect();
+        let (out, _) = run(steps);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn pump_stop_during_a_storm_drops_the_pending_rescan() {
+        let mut steps: Vec<_> = (0..RESCAN_BURST).map(|i| ev(&format!("/p/f{i}"))).collect();
+        // The storm batch ends, a rescan is pending, then the watch stops.
+        steps.push(Step::Gap(BATCH_GAP * 2));
+        steps.push(Step::Msg(Msg::Stop));
+        let (out, _) = run(steps);
+        assert!(out.is_empty(), "no rescan after teardown");
+    }
+
+    #[test]
+    fn pump_tracks_extra_files_and_stops() {
+        let (out, _) = run(vec![
+            Step::Msg(Msg::Extra(PathBuf::from("/p/dist/out.js"))),
+            Step::Gap(Duration::from_secs(1)),
+            ev("/p/dist/out.js"),
+            Step::Gap(Duration::from_secs(1)),
+            Step::Msg(Msg::Stop),
+            ev("/p/never.txt"),
+        ]);
+        assert_eq!(
+            out,
+            vec![(vec![display(Path::new("/p/dist/out.js"))], false)]
+        );
     }
 
     /// Regression for SWA-53: watching must not lock subfolders against
@@ -464,7 +691,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut received = false;
         while Instant::now() < deadline && !received {
-            if let Ok(Ok(event)) = rx.recv_timeout(Duration::from_millis(100)) {
+            if let Ok(Msg::Event(Ok(event))) = rx.recv_timeout(Duration::from_millis(100)) {
                 received = event.paths.iter().any(|p| p.ends_with("created.txt"));
             }
         }

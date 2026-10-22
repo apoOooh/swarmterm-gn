@@ -97,7 +97,7 @@ import { useUpdaterStore } from '@/store/updater-store'
 import { PERIODIC_CHECK_INTERVAL_MS, STARTUP_CHECK_DELAY_MS } from '@/lib/updater-flow'
 import { onUpdateCheckRequested } from '@/tauri/updater'
 import { showMessage } from '@/tauri/dialog'
-import { useGitStore } from '@/store/git-store'
+import { useGitStore, type RightPanelMode } from '@/store/git-store'
 import { useRecentsStore } from '@/store/recents-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { useShellAvailabilityStore } from '@/store/shell-availability-store'
@@ -124,6 +124,11 @@ import {
   onWarRoomRooms
 } from '@/tauri/warroom'
 import { onPreviewOpen } from '@/tauri/preview'
+import { onClipboardMedia, setClipboardMediaEnabled } from '@/tauri/files'
+import { useMediaPrefStore } from '@/store/media-pref-store'
+import { MediaOverlay } from '@/components/Media/MediaOverlay'
+import { CLIPBOARD_SOURCE, useMediaStore } from '@/store/media-store'
+import { mediaKind } from '@/lib/media-gallery'
 import { closePreview, openPreview, wirePreviewEvents } from '@/lib/preview-registry'
 import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
@@ -238,7 +243,7 @@ export default function App(): ReactElement {
   const [draggingLeafId, setDraggingLeafId] = useState<string | null>(null)
   // Restore the right panel exactly as it was when a drag reveals it and the
   // drop lands elsewhere — revealing the zone must not permanently flip tabs.
-  const panelBeforeDragRef = useRef<{ open: boolean; mode: 'browser' | 'git' | 'warroom' } | null>(null)
+  const panelBeforeDragRef = useRef<{ open: boolean; mode: RightPanelMode } | null>(null)
   const dndSensors = useSensors(
     useSensor(GuardedPointerSensor, { activationConstraint: { distance: 5 } })
   )
@@ -253,7 +258,7 @@ export default function App(): ReactElement {
     panelBeforeDragRef.current = null
     if (!prior) return
     const git = useGitStore.getState()
-    git.setMode(prior.mode === 'warroom' ? 'warroom' : prior.mode)
+    git.setMode(prior.mode)
     git.setPanelOpen(prior.open)
   }, [])
 
@@ -912,6 +917,31 @@ export default function App(): ReactElement {
     }
   }, [deferReturnFocusToTerminal])
 
+  // Clipboard images (opt-in): keep the backend watcher in step with the
+  // setting, and add each saved image to the gallery without taking the
+  // viewer or the panel — the overlay (if enabled) is the only announcement.
+  const clipboardImages = useMediaPrefStore((s) => s.prefs.clipboardImages)
+  useEffect(() => {
+    setClipboardMediaEnabled(clipboardImages).catch((err) => console.warn('[media] clipboard watcher:', err))
+    // Off deletes the saved images and withdraws them from serving.
+    if (!clipboardImages) useMediaStore.getState().dropClipboard()
+  }, [clipboardImages])
+  useEffect(() => {
+    const unlisten = onClipboardMedia((e) => {
+      // An event in flight while switching off names a withdrawn file.
+      if (!useMediaPrefStore.getState().prefs.clipboardImages) return
+      const kind = mediaKind(e.path)
+      if (!kind) return
+      // User-originated and already registered by the backend watcher.
+      const item = { path: e.path, kind, terminalId: '', source: CLIPBOARD_SOURCE, shownAt: Date.now(), opened: true }
+      useMediaStore.getState().add(item)
+      useMediaStore.getState().announce(item, 'clipboard')
+    })
+    return () => {
+      void unlisten.then((fn) => fn())
+    }
+  }, [])
+
   // Wire native webview navigation/title/loading and denied-popup events into
   // the store — see lib/preview-registry.ts. Mount-once: the registry itself
   // is a module singleton, this just attaches its listeners for the app's life.
@@ -1194,6 +1224,7 @@ export default function App(): ReactElement {
       <FileDialog />
       {identityDialogOpen && <Suspense fallback={null}><PaneIdentityDialog /></Suspense>}
       <BuzzkeyUpdateToast />
+      <MediaOverlay />
       <TitleBar fullscreen={isFullscreen} />
       <SavedWorkspaceNotice />
 

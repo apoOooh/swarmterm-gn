@@ -2,12 +2,13 @@ import { Terminal, type ILink, type ILinkHandler, type ITheme } from '@xterm/xte
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
+import { createWebglBudget, WEBGL_CONTEXT_BUDGET } from '@/lib/webgl-budget'
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
 import { enableUnicode11 } from './terminal-unicode'
 import { terminalTheme } from '@/lib/theme-adapter'
 import { useAppearanceStore } from '@/store/appearance-store'
 import '@xterm/xterm/css/xterm.css'
-import { createTerminal, killTerminal, resizeTerminal, writeTerminal } from '@/tauri/terminal'
+import { ackOutput, createTerminal, releaseOutput, killTerminal, resizeTerminal, writeTerminal } from '@/tauri/terminal'
 import { TerminalSession, type TerminalStatus } from '@/lib/terminal-session'
 import { createFrameTaskQueue } from '@/lib/frame-task-queue'
 import { describeFocusedElement, OVERLAY_SELECTOR, shouldReturnFocus } from '@/lib/terminal-focus'
@@ -49,6 +50,8 @@ import {
   revealInFileManager
 } from '@/tauri/links'
 import { ActivityTracker } from '@/lib/activity-tracker'
+import { forgetMediaOutput, noteMediaOutput, showClickedMedia } from '@/lib/media-passive'
+import { writeReplayHistory } from '@/lib/replay-history'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
 import { displayPath } from '@/lib/files/paths'
@@ -149,6 +152,12 @@ interface Entry {
   opened: boolean
   pendingFocus?: boolean
   observer?: ResizeObserver
+  /** Live GPU renderer, only while the pane is visible — see syncWebgl. */
+  webgl?: WebglAddon
+  /** Context losses since the pane was last shown; caps re-acquire attempts. */
+  webglLosses?: number
+  /** Lost its slot to a more recently shown pane; cleared when next hidden. */
+  webglEvicted?: boolean
   /** Pty-side size: observer ticks are coalesced, attach/spawn flush at once. */
   ptyResize: ResizeDebouncer
   /**
@@ -253,32 +262,100 @@ const activityTracker = new ActivityTracker<string>(
 const NO_STATUS: TerminalStatus = { kind: 'connecting' }
 
 /**
- * Switch the terminal to the GPU (WebGL) renderer. xterm's default DOM renderer
- * rebuilds per-cell spans and reflows on every frame; the WebGL renderer offloads
- * drawing to the GPU and is markedly cheaper per frame under heavy output, which
- * is why every serious terminal (VS Code, Hyper) uses it.
+ * GPU (WebGL) renderer, held only while the pane is visible. xterm's default DOM
+ * renderer rebuilds per-cell spans and reflows on every frame; the WebGL
+ * renderer is markedly cheaper per frame under heavy output, which is why every
+ * serious terminal (VS Code, Hyper) uses it. But each addon pins a WebGL2
+ * context and a glyph texture atlas, and the browser caps live contexts at ~16
+ * per page — so contexts follow visibility instead of pane lifetime:
  *
- * Must run AFTER `term.open()` (the addon needs a live render surface). Degrades
- * gracefully: if WebGL2 is unavailable, the browser hits its live-context limit
- * (~16 per page), or the GPU context is later lost, we dispose the addon and
- * xterm falls back to the DOM renderer — slower, but always functional.
+ * - acquired when an opened pane has a laid-out size (attach, observer refit);
+ * - released when the pane is detached, disposed, or its host collapses to 0×0
+ *   (hidden workspace, `display:none`) — a hidden pane draws nothing anyway;
+ * - capped by `webglBudget`: past WEBGL_CONTEXT_BUDGET, the least recently
+ *   visible holder falls back to the DOM renderer rather than letting the
+ *   browser kill an arbitrary context;
+ * - after a context loss the addon is disposed and re-acquired once, a moment
+ *   later, if the pane is still visible (a pane that keeps losing its context
+ *   stays on DOM until it is next hidden and shown; so does an evicted one).
+ *
+ * Disposing the addon swaps xterm back to the DOM renderer, which measures cells
+ * with its own metrics — every swap ends in a refit.
  */
-function loadWebglRenderer(entry: Entry): void {
+const webglBudget = createWebglBudget<Entry>(WEBGL_CONTEXT_BUDGET, (entry) => {
+  // Stays on DOM until next hidden and shown, or two panes would evict each
+  // other on every refit.
+  entry.webglEvicted = true
+  dropWebgl(entry, true)
+})
+const WEBGL_RETRY_MS = 1000
+const WEBGL_MAX_LOSSES = 2
+/** Set once WebglAddon fails to load (no WebGL2, GPU blocklisted): every pane
+ *  stays on DOM instead of retrying — and evicting a holder — on each refit. */
+let webglUnavailable = false
+
+function isPaneVisible(entry: Entry): boolean {
+  return entry.opened && entry.host.isConnected
+    && entry.host.clientWidth > 0 && entry.host.clientHeight > 0
+}
+
+/** Bring the pane's renderer in line with its visibility. Cheap when unchanged. */
+function syncWebgl(entry: Entry): void {
+  if (!isPaneVisible(entry)) {
+    releaseWebgl(entry)
+    return
+  }
+  if (entry.webgl) {
+    webglBudget.acquire(entry) // refresh its LRU position
+    return
+  }
+  if (webglUnavailable || entry.webglEvicted || (entry.webglLosses ?? 0) >= WEBGL_MAX_LOSSES) return
+  if (!webglBudget.acquire(entry)) return
+  let addon: WebglAddon | undefined
   try {
-    const addon = new WebglAddon()
+    addon = new WebglAddon()
+    const live = addon
     addon.onContextLoss(() => {
-      addon.dispose()
-      // The DOM renderer that takes over measures cells with its own metrics,
-      // and a fit that raced the context loss (alt-tab/occlusion on Windows can
-      // drop the GPU context mid-layout) may have collapsed cols/rows against
-      // garbage dimensions. Re-measure once the swap has settled so the pane —
-      // and the pty — match the renderer that's actually drawing now.
-      setTimeout(() => refitEntry(entry), 0)
+      if (entry.webgl !== live) return
+      entry.webglLosses = (entry.webglLosses ?? 0) + 1
+      dropWebgl(entry, true)
+      // A fit that raced the loss (alt-tab/occlusion on Windows can drop the
+      // GPU context mid-layout) may have collapsed cols/rows; the refit above
+      // re-measures, and the retry re-acquires once the GPU is back.
+      setTimeout(() => {
+        if (entry.observer !== undefined) syncWebgl(entry)
+      }, WEBGL_RETRY_MS)
     })
     entry.term.loadAddon(addon)
+    entry.webgl = addon
   } catch {
-    // WebGL2 unavailable — stay on the DOM renderer.
+    // WebGL2 unavailable — stay on the DOM renderer, for good.
+    webglUnavailable = true
+    webglBudget.release(entry)
+    try { addon?.dispose() } catch { /* half-loaded */ }
   }
+}
+
+/** Free the pane's context (hidden, detached, disposed). Resets the loss count:
+ *  the next show is a fresh attempt. */
+function releaseWebgl(entry: Entry): void {
+  entry.webglLosses = 0
+  entry.webglEvicted = false
+  if (entry.webgl) dropWebgl(entry, false)
+}
+
+function dropWebgl(entry: Entry, refit: boolean): void {
+  webglBudget.release(entry)
+  const addon = entry.webgl
+  entry.webgl = undefined
+  if (!addon) return
+  try {
+    addon.dispose()
+  } catch {
+    // Disposing after a lost context can throw inside the addon; the renderer
+    // swap has already happened by then.
+  }
+  if (refit) setTimeout(() => refitEntry(entry), 0)
 }
 
 /** Fit the terminal to its host, skipping when the host has no laid-out size. */
@@ -306,6 +383,9 @@ function refitEntry(entry: Entry): void {
   // garbage (FitAddon's 2×1 floor) and would be pushed to the pty, making a
   // running TUI redraw at 2 columns. The focus/visibility refit in App.tsx
   // re-measures the moment the window is visible again.
+  // Before the hidden-window return: a workspace switched away while the
+  // window is minimised still frees its contexts on this tick.
+  syncWebgl(entry)
   if (document.visibilityState === 'hidden') return
   const { cols, rows } = entry.term
   if (safeFit(entry) && (entry.term.cols !== cols || entry.term.rows !== rows)) {
@@ -438,7 +518,7 @@ function getOrCreate(id: string): Entry {
     fontFamily: text.fontFamily,
     fontSize: text.fontSize,
     lineHeight: text.lineHeight,
-    scrollback: 5000,
+    scrollback: text.scrollback,
     windowsPty: windowsPtyOption(isWindowsPlatform(), windowsBuild),
     theme: { ...VSCODE_DARK_THEME, ...terminalTheme(useAppearanceStore.getState().style) }
   })
@@ -876,6 +956,9 @@ function getOrCreate(id: string): Entry {
           await useDocumentStore.getState().open(leaf.id, context, resolved, { line: line ?? 1, column: col ?? 1 })
           return
         }
+        // Media outside the project opens in the Media panel. The Ctrl+click
+        // is the user action that registers it for serving (never the output).
+        if (await showClickedMedia(id, resolved)) return
         return openPathLocation(linkDeps, resolved, line, col)
       })
       .catch(console.warn)
@@ -1040,15 +1123,20 @@ function getOrCreate(id: string): Entry {
   const session = new TerminalSession(
     id,
     {
-      write: (data) => {
+      write: (data, onParsed) => {
         // Every decoded pty chunk is one activity tick: the pane is "working"
         // while bytes flow (including agent spinner redraws) and goes idle after
         // ACTIVITY_IDLE_MS of silence.
         activityTracker.notify(id)
         entries.get(id)?.detector?.noteOutput()
-        term.write(data)
+        // Passive media detection: append-only here, scanned on a timer.
+        noteMediaOutput(id, data)
+        // The callback acks parsed bytes to Rust's flow gate (perf phase 2):
+        // it fires only after xterm parsed this chunk, so a flood is paced
+        // by the parser instead of piling up in the write queue.
+        term.write(data, onParsed)
       },
-      replay: ({ data, cols, rows, truncated }) => {
+      replay: ({ data, cols, rows, truncated }, onParsed) => {
         // The history was rendered at the host pane's size: parse it at that
         // size, so wrapped lines and cursor positions land where the program
         // put them, then fit to this pane. The pty goes one column narrower
@@ -1057,8 +1145,9 @@ function getOrCreate(id: string): Entry {
         // tick: none of this is new output.
         replaying += 1
         try { term.resize(Math.max(2, cols), Math.max(1, rows)) } catch { /* disposed */ }
-        const note = truncated ? '\x1b[2m[older output is not available]\x1b[0m\r\n' : ''
-        term.write(note + data, () => {
+        // Only the history is acked; the note is never counted (see helper).
+        writeReplayHistory(term, data, truncated, () => {
+          onParsed?.()
           replaying -= 1
           const entry = entries.get(id)
           if (!entry) return
@@ -1070,7 +1159,7 @@ function getOrCreate(id: string): Entry {
         })
       }
     },
-    { createTerminal, killTerminal }
+    { createTerminal, killTerminal, ackOutput, releaseOutput }
   )
   // Mirror pty death into the detector: the session is the source of truth for
   // exit/error, and the detector has no pty visibility of its own.
@@ -1160,8 +1249,8 @@ export function attachTerminal(id: string, container: HTMLElement, config: Attac
     terminalInitializers.enqueue(id, () => {
       if (entries.get(id) !== entry || !entry.host.isConnected || entry.host.parentElement !== container) return
       entry.term.open(entry.mount)
-      loadWebglRenderer(entry)
       entry.opened = true
+      syncWebgl(entry)
       finishTerminalAttach(entry, container)
       const app = useAppStore.getState()
       if (entry.pendingFocus && !app.welcomeFocused && selectFocusedTerminalId(app) === id
@@ -1202,6 +1291,7 @@ export function detachTerminal(id: string): void {
   entry.observer = undefined
   refitBatch.cancel(entry)
   entry.ptyResize.cancel()
+  releaseWebgl(entry)
   entry.host.remove()
 }
 
@@ -1210,12 +1300,14 @@ export function disposeTerminal(id: string): void {
   terminalInitializers.cancel(id)
   hoveredPaths.delete(id)
   pathFollowers.delete(id)
+  forgetMediaOutput(id)
   const entry = entries.get(id)
   if (!entry) return
   entry.observer?.disconnect()
   entry.observer = undefined
   refitBatch.cancel(entry)
   entry.ptyResize.cancel()
+  releaseWebgl(entry)
   entry.session.dispose()
   entry.term.dispose()
   entry.host.remove()
@@ -1246,7 +1338,11 @@ export function focusTerminal(id: string): void {
   const entry = entries.get(id)
   if (!entry) return
   if (!entry.opened) entry.pendingFocus = true
-  else entry.term.focus()
+  else {
+    entry.term.focus()
+    // Focus counts as "seen": keeps the pane in use off the eviction end.
+    if (entry.webgl) webglBudget.acquire(entry)
+  }
 }
 
 /**
@@ -1481,6 +1577,21 @@ export function getTerminalStatus(id: string): TerminalStatus {
 }
 
 /** The terminal's live cwd — OSC 7 if the shell reports it, else the spawn cwd. */
+/** Perf harness hook (tests/perf/flood.perf.ts, scenario f) only: live WebGL
+ *  contexts and visible panes that render with the DOM fallback instead. */
+export function perfRendererStats(): { webgl: number; domVisible: number; visible: number } {
+  let webgl = 0
+  let domVisible = 0
+  let visible = 0
+  for (const entry of entries.values()) {
+    if (entry.webgl) webgl++
+    if (!isPaneVisible(entry)) continue
+    visible++
+    if (!entry.webgl) domVisible++
+  }
+  return { webgl, domVisible, visible }
+}
+
 /** Last `lines` rows of a terminal's buffer as text — for the dev test hook (testlab) only. */
 export function readTerminalText(id: string, lines = 40): string {
   const buffer = entries.get(id)?.term.buffer.active
@@ -1693,6 +1804,8 @@ export function applyTerminalText(pref: TerminalTextPref): void {
     if (pref.wheelZoom !== 'pane') entry.zoomOffset = 0
     entry.term.options.fontSize = paneFontSize(pref.fontSize, entry.zoomOffset)
     entry.term.options.lineHeight = pref.lineHeight
+    // Shrinking trims the buffer at once — the cheap way to hand memory back.
+    if (entry.term.options.scrollback !== pref.scrollback) entry.term.options.scrollback = pref.scrollback
     entry.host.style.fontFeatureSettings = ligatureFeatureSettings(pref.ligatures)
     refitEntry(entry)
   }

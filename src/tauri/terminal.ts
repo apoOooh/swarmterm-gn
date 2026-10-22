@@ -2,9 +2,12 @@ import { invoke, Channel } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { ShellId } from '@/lib/terminal-pref'
 
-/** Output streamed from a pty: decoded text, then a final exit. */
+/**
+ * Output streamed from a pty: UTF-8 bytes, then a final exit. Arrives as a
+ * raw binary IPC body (perf phase 3), decoded by `decodePtyOut`.
+ */
 export type PtyOut =
-  | { type: 'data'; payload: string }
+  | { type: 'data'; payload: Uint8Array }
   | { type: 'replay'; payload: PtyReplay }
   | { type: 'exit'; payload: { exitCode: number } }
 
@@ -13,7 +16,8 @@ export type PtyOut =
  * at `cols`×`rows`. `truncated` = the host's ring dropped older output.
  */
 export interface PtyReplay {
-  data: string
+  /** UTF-8 bytes of the history. */
+  data: Uint8Array
   cols: number
   rows: number
   truncated: boolean
@@ -36,6 +40,68 @@ export interface CreateTerminalResult {
   pid?: number
   shell?: string
   error?: string
+  /** The pty generation, named by `ackOutput` (flow control). */
+  spawnId?: string
+}
+
+/** Trailing tags of an encoded `PtyOut` (mirror of `pty.rs` `OUT_*`). */
+export const OUT_DATA = 0
+export const OUT_REPLAY = 1
+export const OUT_EXIT = 2
+
+const headerDecoder = new TextDecoder()
+
+/**
+ * Decode one channel message. Wire layout (`PtyOut::encode` in `pty.rs`):
+ * `[body][header json][header_len: u16 LE][tag: u8]`. The body is returned
+ * as a view, never copied: it is exactly the bytes Rust's flow gate counted,
+ * so acking its `byteLength` keeps the gate in step.
+ */
+export function decodePtyOut(raw: ArrayBuffer | Uint8Array): PtyOut {
+  const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw)
+  const n = bytes.length
+  if (n < 3) throw new Error(`pty output frame too short (${n} bytes)`)
+  const tag = bytes[n - 1]
+  const headerLen = bytes[n - 3] | (bytes[n - 2] << 8)
+  const bodyEnd = n - 3 - headerLen
+  if (bodyEnd < 0) throw new Error('pty output header overruns frame')
+  const body = bytes.subarray(0, bodyEnd)
+  const header = (): Record<string, unknown> =>
+    JSON.parse(headerDecoder.decode(bytes.subarray(bodyEnd, n - 3))) as Record<string, unknown>
+  switch (tag) {
+    case OUT_DATA:
+      return { type: 'data', payload: body }
+    case OUT_REPLAY: {
+      const h = header()
+      return {
+        type: 'replay',
+        payload: {
+          data: body,
+          cols: Number(h.cols),
+          rows: Number(h.rows),
+          truncated: h.truncated === true
+        }
+      }
+    }
+    case OUT_EXIT:
+      return { type: 'exit', payload: { exitCode: Number(header().exitCode) } }
+    default:
+      throw new Error(`unknown pty output tag ${tag}`)
+  }
+}
+
+const smallEncoder = new TextEncoder()
+
+/**
+ * Decode one channel message: a small data batch arrives as a JSON string
+ * (`DIRECT_JSON_LIMIT` in `pty.rs`: Tauri evaluates it directly, while a
+ * raw body of 1 KiB or more costs a fetch per message), everything else as
+ * a raw frame for `decodePtyOut`. The string is re-encoded so the acked
+ * `byteLength` is its exact UTF-8 size.
+ */
+export function decodeChannelMessage(raw: ArrayBuffer | Uint8Array | string): PtyOut {
+  if (typeof raw === 'string') return { type: 'data', payload: smallEncoder.encode(raw) }
+  return decodePtyOut(raw)
 }
 
 /** Spawn a pty; `onOutput` receives every data chunk and the final exit. */
@@ -44,8 +110,8 @@ export function createTerminal(
   options: CreateTerminalOptions,
   onOutput: (msg: PtyOut) => void
 ): Promise<CreateTerminalResult> {
-  const onData = new Channel<PtyOut>()
-  onData.onmessage = onOutput
+  const onData = new Channel<ArrayBuffer | string>()
+  onData.onmessage = (raw) => onOutput(decodeChannelMessage(raw))
   return invoke<CreateTerminalResult>('create_terminal', { id, options, onData })
 }
 
@@ -79,6 +145,20 @@ export const resizeTerminal = (id: string, cols: number, rows: number): Promise<
   invoke('resize_terminal', { id, cols, rows })
 
 export const killTerminal = (id: string): Promise<void> => invoke('kill_terminal', { id })
+
+/**
+ * xterm parsed `bytes` more of generation `spawnId`'s output (perf phase 2
+ * flow control, batched by `lib/output-ack.ts`). Fire and forget: a lost ack
+ * only makes Rust's gate time out open.
+ */
+export const ackOutput = (id: string, spawnId: string, bytes: number): void => {
+  invoke('ack_output', { id, spawnId, bytes }).catch(() => undefined)
+}
+
+/** The renderer stopped consuming generation `spawnId` (pane disposed). */
+export const releaseOutput = (id: string, spawnId: string): void => {
+  invoke('release_output', { id, spawnId }).catch(() => undefined)
+}
 
 /**
  * Screen-independent liveness proof: true only if a process matching the

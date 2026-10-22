@@ -27,6 +27,7 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::flow::{FlowGate, READ_QUEUE_DEPTH};
 use crate::frame;
 use crate::input::PtyInput;
 use crate::modes::ModeTracker;
@@ -46,6 +47,10 @@ pub type FrameTx = UnboundedSender<Vec<u8>>;
 struct Client {
     id: u64,
     tx: FrameTx,
+    /// Announced the `flow-control` capability in hello: it acks parsed
+    /// output, so its panes' flushers are gated (`flow.rs`). Older clients
+    /// never ack and must never be gated.
+    flow_control: bool,
     /// Dropped when a newer client replaces this one. The server's
     /// connection task holds its own frame sender (for answers), so dropping
     /// `tx` alone would leave the replaced pipe open and silent; the kick
@@ -108,6 +113,8 @@ struct Entry {
     #[cfg(windows)]
     job: Option<crate::job::JobHandle>,
     output: Arc<Mutex<Output>>,
+    /// Backpressure toward the attached client; shared with the flusher.
+    flow: Arc<FlowGate>,
 }
 
 impl Entry {
@@ -171,6 +178,8 @@ pub struct Host {
     client: Mutex<Option<Client>>,
     next_client: std::sync::atomic::AtomicU64,
     ring_cap: usize,
+    /// `FlowGate` ack timeout (`flow::FLOW_ACK_TIMEOUT`; tests stretch it).
+    flow_timeout: std::time::Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -182,7 +191,12 @@ pub struct Spawned {
 
 impl Host {
     pub fn new(ring_cap: usize) -> Arc<Self> {
+        Self::with_flow_timeout(ring_cap, crate::flow::FLOW_ACK_TIMEOUT)
+    }
+
+    pub fn with_flow_timeout(ring_cap: usize, flow_timeout: std::time::Duration) -> Arc<Self> {
         Arc::new(Host {
+            flow_timeout,
             terminals: Mutex::new(HashMap::new()),
             app_state: Mutex::default(),
             client: Mutex::new(None),
@@ -194,7 +208,12 @@ impl Host {
     /// Make `tx` the current client. The previous client's sender is dropped,
     /// which ends its writer and closes that connection.
     pub fn connect_client(&self, tx: FrameTx) -> u64 {
-        self.register(tx, None)
+        self.register(tx, None, false)
+    }
+
+    /// `connect_client` for a client that acks output (`flow-control`).
+    pub fn connect_flow_client(&self, tx: FrameTx) -> u64 {
+        self.register(tx, None, true)
     }
 
     /// `connect_client` for a pipe connection: the receiver resolves (with
@@ -202,21 +221,46 @@ impl Host {
     pub fn connect_client_kickable(
         &self,
         tx: FrameTx,
+        flow_control: bool,
     ) -> (u64, tokio::sync::oneshot::Receiver<()>) {
         let (kick, kicked) = tokio::sync::oneshot::channel();
-        (self.register(tx, Some(kick)), kicked)
+        (self.register(tx, Some(kick), flow_control), kicked)
     }
 
-    fn register(&self, tx: FrameTx, kick: Option<tokio::sync::oneshot::Sender<()>>) -> u64 {
+    fn register(
+        &self,
+        tx: FrameTx,
+        kick: Option<tokio::sync::oneshot::Sender<()>>,
+        flow_control: bool,
+    ) -> u64 {
         let id = self
             .next_client
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         *self.client.lock().unwrap() = Some(Client {
             id,
             tx,
+            flow_control,
             _kick: kick,
         });
+        // The replaced client's debt is not the new one's; its panes stay
+        // ungated until the new client attaches them (`attach` resets).
+        self.release_gates();
         id
+    }
+
+    /// Open every pane's gate: nobody acks the old debt any more, the ring
+    /// is the sink until a client attaches again.
+    fn release_gates(&self) {
+        let gates: Vec<Arc<FlowGate>> = self
+            .terminals
+            .lock()
+            .unwrap()
+            .values()
+            .map(|t| t.flow.clone())
+            .collect();
+        for g in gates {
+            g.release();
+        }
     }
 
     /// Forget `client` if it is still the current one; panes keep running.
@@ -224,6 +268,8 @@ impl Host {
         let mut c = self.client.lock().unwrap();
         if c.as_ref().is_some_and(|c| c.id == client) {
             *c = None;
+            drop(c);
+            self.release_gates();
         }
     }
 
@@ -257,6 +303,15 @@ impl Host {
             if only.is_none_or(|id| id == c.id) {
                 let _ = c.tx.send(frame);
             }
+        }
+    }
+
+    /// Live output to `client`. True when it went to a client that acks,
+    /// i.e. the bytes count against the pane's gate.
+    fn send_data(&self, frame: Vec<u8>, client: u64) -> bool {
+        match self.client.lock().unwrap().as_ref() {
+            Some(c) if c.id == client => c.tx.send(frame).is_ok() && c.flow_control,
+            _ => false,
         }
     }
 
@@ -322,6 +377,7 @@ impl Host {
         let job = pid.and_then(crate::job::JobHandle::capturing);
 
         let output = Arc::new(Mutex::new(Output::new(self.ring_cap, Some(client))));
+        let flow = Arc::new(FlowGate::with_timeout(self.flow_timeout));
         let id = spec.terminal_id.clone();
         {
             let mut map = self.terminals.lock().unwrap();
@@ -349,6 +405,7 @@ impl Host {
                     #[cfg(windows)]
                     job,
                     output: output.clone(),
+                    flow: flow.clone(),
                 },
             );
             if let Some(line) = &spec.initial_input {
@@ -372,16 +429,20 @@ impl Host {
         let host = self.clone();
         let waiter_id = id.clone();
         let waiter_spawn = spawn_id.clone();
+        let waiter_flow = flow.clone();
         std::thread::spawn(move || {
             let mut child = child;
             let code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
+            // The rest of the output (and `exit`) must not wait on acks: the
+            // entry is gone, so a client cannot address this gate any more.
+            waiter_flow.close();
             drop(host.remove_generation(&waiter_id, &waiter_spawn));
             let _ = exit_tx.send(code);
         });
 
         let host = self.clone();
         let reader_spawn = spawn_id.clone();
-        std::thread::spawn(move || host.read_loop(id, reader_spawn, reader, exit_rx, output));
+        std::thread::spawn(move || host.read_loop(id, reader_spawn, reader, exit_rx, output, flow));
 
         Ok(Spawned { spawn_id, pid })
     }
@@ -413,11 +474,14 @@ impl Host {
         mut reader: Box<dyn Read + Send>,
         exit_rx: std::sync::mpsc::Receiver<i32>,
         output: Arc<Mutex<Output>>,
+        flow: Arc<FlowGate>,
     ) {
         // Reader → flusher split as in the app: ConPTY reads block, so the
         // coalescing needs its own thread. UTF-8 boundary handling stays in
         // the reader, so the flusher (and the ring) only see whole strings.
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        // Bounded: while the gate parks the flusher the reader blocks here
+        // and stops reading, so ConPTY backpressures the child.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(READ_QUEUE_DEPTH);
         std::thread::spawn(move || {
             let mut pending: Vec<u8> = Vec::new();
             let mut chunk = vec![0u8; READ_BUF_BYTES];
@@ -444,16 +508,19 @@ impl Host {
         let mut last_flush = std::time::Instant::now() - OUTPUT_IDLE;
         while let Ok(first) = rx.recv() {
             let text = next_batch(&rx, first, last_flush.elapsed() >= OUTPUT_IDLE);
+            // Park BEFORE the output lock: `attach` and `list` take it, and
+            // the ring records the batch once the client caught up.
+            flow.wait();
             // Ring and live send under one lock: `attach` snapshots under the
             // same lock, so a batch lands either in the replay or in the live
             // stream, never in both and never in neither.
             let mut out = output.lock().unwrap();
             out.push(text.as_bytes());
             if let Some(client) = out.attached {
-                self.send(
-                    frame::encode_data(&id, &spawn_id, text.as_bytes()),
-                    Some(client),
-                );
+                let frame = frame::encode_data(&id, &spawn_id, text.as_bytes());
+                if self.send_data(frame, client) {
+                    flow.sent(text.len());
+                }
             }
             drop(out);
             last_flush = std::time::Instant::now();
@@ -468,6 +535,31 @@ impl Host {
             spawn_id,
             exit_code,
         });
+    }
+
+    /// The client's renderer parsed `bytes` of `id`'s output. Acks for an
+    /// older generation (or a gone pane) are dropped: that gate is closed.
+    pub fn ack(&self, client: u64, id: &str, spawn_id: &str, bytes: u64) {
+        // A replaced connection's queued acks must not pay down the new
+        // client's account (its gate was reset on attach).
+        if self
+            .client
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_none_or(|c| c.id != client)
+        {
+            return;
+        }
+        let map = self.terminals.lock().unwrap();
+        if let Some(t) = map.get(id).filter(|t| t.spawn_id == spawn_id) {
+            t.flow.ack(bytes);
+        }
+    }
+
+    /// Bytes `id`'s flusher sent past an open gate (diagnostics).
+    pub fn flow_bypassed(&self, id: &str) -> Option<u64> {
+        Some(self.terminals.lock().unwrap().get(id)?.flow.bypassed())
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
@@ -505,7 +597,9 @@ impl Host {
     /// gracefully. Unknown ids are not an error: the pane may have exited.
     pub fn kill(&self, id: &str) -> Option<std::thread::JoinHandle<()>> {
         let spawn_id = self.terminals.lock().unwrap().get(id)?.spawn_id.clone();
-        self.remove_generation(id, &spawn_id)?.shutdown()
+        let entry = self.remove_generation(id, &spawn_id)?;
+        entry.flow.close();
+        entry.shutdown()
     }
 
     pub fn list(&self) -> Vec<TerminalInfo> {
@@ -538,10 +632,18 @@ impl Host {
         id: &str,
         answer: impl FnOnce(&Attached) -> Vec<u8>,
     ) -> Result<(), String> {
-        let (output, spawn_id, pid, cols, rows) = {
+        let (output, flow, spawn_id, pid, cols, rows) = {
             let map = self.terminals.lock().unwrap();
             let t = map.get(id).ok_or("target-gone")?;
-            (t.output.clone(), t.spawn_id.clone(), t.pid, t.cols, t.rows)
+            let flow = t.flow.clone();
+            (
+                t.output.clone(),
+                flow,
+                t.spawn_id.clone(),
+                t.pid,
+                t.cols,
+                t.rows,
+            )
         };
         let mut out = output.lock().unwrap();
         let (replay, truncated) = out.replay();
@@ -556,8 +658,14 @@ impl Host {
             truncated,
         };
         self.send(answer(&facts), Some(client));
-        if !replay.is_empty() {
-            self.send(frame::encode_data(id, &spawn_id, &replay), Some(client));
+        // A new reader: start its account from zero. The replay is output
+        // it parses and acks like any other. The renderer counts the decoded
+        // string's UTF-8 length; a lossy decode at a cut ring edge can differ
+        // by a few bytes, which is far below a chunk and harmless.
+        flow.reset();
+        if !replay.is_empty() && self.send_data(frame::encode_data(id, &spawn_id, &replay), client)
+        {
+            flow.sent(replay.len());
         }
         Ok(())
     }
@@ -668,7 +776,7 @@ mod tests {
         use tokio::sync::oneshot::error::TryRecvError;
         let host = Host::new(1024);
         let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel();
-        let (_c1, mut kicked) = host.connect_client_kickable(tx1);
+        let (_c1, mut kicked) = host.connect_client_kickable(tx1, false);
         assert_eq!(kicked.try_recv(), Err(TryRecvError::Empty));
         let (tx2, _rx2) = tokio::sync::mpsc::unbounded_channel();
         host.connect_client(tx2);

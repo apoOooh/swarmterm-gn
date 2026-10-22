@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { collectLeaves, updateLeaf } from './layout-tree'
-import { autoOpenList, fromSaved, moveAutoOpen, readSaved, setAutoOpen, toSaved, upsertSaved, SAVED_WORKSPACES_KEY, type SavedLeaf, type SavedNode, type SavedWorkspace } from './saved-workspaces'
+import { autoOpenList, fromSaved, MAX_AUTO_PINNED, moveAutoOpen, pinIfNew, readSaved, setAutoOpen, toSaved, upsertSaved, SAVED_WORKSPACES_KEY, type SavedLeaf, type SavedNode, type SavedWorkspace } from './saved-workspaces'
 import type { Workspace } from '@/store/app-store'
 
 const session = '018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f'
@@ -117,6 +117,22 @@ it('keeps the workspace account choice across storage and drops malformed entrie
 
 describe('open on startup', () => {
   const entry = (id: string, updatedAt: number): SavedWorkspace => ({ ...saved(), id, updatedAt })
+  it('pinIfNew pins a first-seen entry at the end and leaves known ones alone', () => {
+    const list = setAutoOpen([entry('a', 2), entry('b', 1)], 'a', true)
+    expect(pinIfNew(list, entry('c', 3)).autoOpen).toBe(1)
+    expect(pinIfNew(list, entry('b', 3)).autoOpen).toBeUndefined()
+    expect(pinIfNew(list, { ...entry('d', 3), autoOpen: 7 }).autoOpen).toBe(7)
+  })
+  it('pinIfNew skips ids already seen this run (evicted or forgotten) and stops at the cap', () => {
+    expect(pinIfNew([], entry('gone', 1), new Set(['gone'])).autoOpen).toBeUndefined()
+    let list: SavedWorkspace[] = []
+    for (let i = 0; i < MAX_AUTO_PINNED + 3; i++) list = upsertSaved(list, pinIfNew(list, entry(`w${i}`, i)))
+    expect(autoOpenList(list)).toHaveLength(MAX_AUTO_PINNED)
+  })
+  it('pinIfNew numbers past gaps with max+1', () => {
+    const list = [{ ...entry('a', 2), autoOpen: 0 }, { ...entry('b', 1), autoOpen: 5 }]
+    expect(pinIfNew(list, entry('c', 3)).autoOpen).toBe(6)
+  })
   it('appends switched-on entries in order and renumbers on removal', () => {
     let list = [entry('a', 3), entry('b', 2), entry('c', 1)]
     list = setAutoOpen(list, 'c', true)

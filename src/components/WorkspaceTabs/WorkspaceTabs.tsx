@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Plus, Sparkles, X } from 'lucide-react'
 import {
   DndContext,
@@ -20,10 +21,12 @@ import { CSS } from '@dnd-kit/utilities'
 import { GuardedPointerSensor } from '@/lib/dnd-sensors'
 import { useAppStore, type Workspace } from '@/store/app-store'
 import { cn } from '@/lib/utils'
+import { countRender } from '@/lib/perf-render-count'
 import { collectLeaves } from '@/lib/layout-tree'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useAgentStateStore } from '@/store/agent-state-store'
-import { displayState, workspaceDot, type DotState } from '@/lib/agent-state/rollup'
+import { workspaceDot, type DotState } from '@/lib/agent-state/rollup'
+import { paneDisplays, paneOutputs } from '@/lib/pane-selectors'
 import { ActivityDot } from '@/components/ActivityDot'
 import { StateDot } from '@/components/StateDot'
 
@@ -48,6 +51,7 @@ function tabStateClass(active: boolean): string {
  * the Welcome tab stays pinned first. Stays in sync with the navbar list.
  */
 export function WorkspaceTabs({ onNewWorkspace }: WorkspaceTabsProps): ReactElement {
+  countRender('WorkspaceTabs')
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
@@ -58,8 +62,6 @@ export function WorkspaceTabs({ onNewWorkspace }: WorkspaceTabsProps): ReactElem
   const welcomeFocused = useAppStore((s) => s.welcomeFocused)
   const focusWelcome = useAppStore((s) => s.focusWelcome)
   const closeWelcome = useAppStore((s) => s.closeWelcome)
-  const activity = useTerminalActivityStore((s) => s.active)
-  const agentStates = useAgentStateStore((s) => s.byId)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
 
@@ -111,20 +113,11 @@ export function WorkspaceTabs({ onNewWorkspace }: WorkspaceTabsProps): ReactElem
           >
             {workspaces.map((ws) => {
               const isActive = !welcomeFocused && ws.id === activeWorkspaceId
-              const dot = isActive
-                ? null
-                : workspaceDot(
-                    collectLeaves(ws.layout).map((l) => ({
-                      display: displayState(agentStates[l.terminalId]),
-                      outputActive: activity[l.terminalId] === true
-                    }))
-                  )
               return (
                 <SortableWorkspaceTab
                   key={ws.id}
                   workspace={ws}
                   active={isActive}
-                  dot={dot}
                   renaming={renamingId === ws.id}
                   onSelect={() => setActiveWorkspace(ws.id)}
                   onStartRename={() => setRenamingId(ws.id)}
@@ -203,7 +196,6 @@ function WelcomeTab({ active, closable, onSelect, onClose }: WelcomeTabProps): R
 interface WorkspaceTabProps {
   workspace: Workspace
   active: boolean
-  dot: DotState | null
   renaming: boolean
   onSelect: () => void
   onStartRename: () => void
@@ -212,11 +204,32 @@ interface WorkspaceTabProps {
   onClose: () => void
 }
 
+/**
+ * The tab's rollup dot, subscribed per tab: each store is narrowed to this
+ * workspace's panes as primitive arrays (`useShallow`), so a state or output
+ * flip in one pane re-renders only the tab that contains it — not the whole
+ * strip, as subscribing to `byId` / `active` in the parent did. The active tab
+ * shows no dot and subscribes to nothing.
+ */
+function useWorkspaceDot(workspace: Workspace, active: boolean): DotState | null {
+  const ids = useMemo(
+    () => collectLeaves(workspace.layout).map((l) => l.terminalId),
+    [workspace.layout]
+  )
+  const displays = useAgentStateStore(
+    useShallow((s) => paneDisplays(ids, s.byId, active))
+  )
+  const outputs = useTerminalActivityStore(
+    useShallow((s) => paneOutputs(ids, s.active, active))
+  )
+  if (active) return null
+  return workspaceDot(ids.map((_, i) => ({ display: displays[i], outputActive: outputs[i] })))
+}
+
 /** A draggable, sortable workspace tab. Click selects, double-click renames, X closes. */
 function SortableWorkspaceTab({
   workspace,
   active,
-  dot,
   renaming,
   onSelect,
   onStartRename,
@@ -229,6 +242,7 @@ function SortableWorkspaceTab({
     disabled: renaming
   })
   const style = { transform: CSS.Transform.toString(transform), transition }
+  const dot = useWorkspaceDot(workspace, active)
 
   return (
     <div

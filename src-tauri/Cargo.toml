@@ -1,6 +1,6 @@
 [package]
 name = "swarmterm"
-version = "1.22.1"
+version = "1.23.0"
 description = "One window for a whole swarm of AI coding agents — split terminals, per-agent git worktrees, live web previews, and a War Room where agents collaborate"
 authors = ["Duong Duc Nguyen"]
 license = "GPL-3.0-only"
@@ -96,6 +96,8 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_Storage_FileSystem",
+  # Clipboard sequence-number poll (clipboard_media.rs fallback).
+  "Win32_System_DataExchange",
 ] }
 
 # Terminal host sidecar (ADR 0001). A workspace member so `cargo test` /
@@ -103,3 +105,9 @@ windows-sys = { version = "0.59", features = [
 [workspace]
 members = ["host"]
 default-members = [".", "host"]
+
+[dev-dependencies]
+# Paused-clock tests for the `wait_peer` loop (stall/deadline timers).
+# Cargo unions features per crate, so tests get the main tokio features plus
+# `test-util`; release builds are unaffected (dev-deps are test-only).
+tokio = { version = "1", features = ["test-util"] }

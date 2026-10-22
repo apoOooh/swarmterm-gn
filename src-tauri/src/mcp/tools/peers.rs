@@ -13,8 +13,8 @@
 //! without a hand-typed `read_inbox` round-trip through the peer.
 //!
 //! The wait loop is event-driven over `AppState.peer_wake`, a broadcast
-//! `tokio::sync::Notify`. Every mutation of `peer_states` (state report,
-//! output chunk, forget on pty death) calls `notify_waiters`, never
+//! `tokio::sync::Notify`. Every verdict-relevant mutation (state report,
+//! room membership, forget on pty death) calls `notify_waiters`, never
 //! `notify_one`: several orchestrators may wait on the same peer, and
 //! `notify_one` would wake exactly one of them and strand the rest until the
 //! next mutation. `notify_waiters` has no permit semantics, which forces the
@@ -148,6 +148,74 @@ pub fn wait_verdict(i: &WaitInput) -> Option<Outcome> {
         return Some(Outcome::Stalled);
     }
     None
+}
+
+/// One look at the peer, taken by `wait_loop` after arming the wake.
+pub struct Look {
+    pub pty_live: bool,
+    pub snapshot: Option<PeerSnapshot>,
+    pub in_room: bool,
+}
+
+/// The `wait_peer` loop, generic over the look and the clock so tests can
+/// drive it without an `AppState`. Arms the listener BEFORE each look
+/// (lost-wakeup rule, see module doc): `notify_waiters` carries no permit, so
+/// a wake that fires before `enable()` would otherwise vanish.
+///
+/// `wake` fires on state reports, membership changes and pty death only —
+/// NOT on output. Output can only move `last_output_ms` forward, which only
+/// pushes the stall verdict later; no verdict can flip TO a result because of
+/// a chunk. So the loop sleeps until the stall deadline computed from the
+/// last look, re-reads `last_output_ms` there and re-arms if output arrived
+/// meanwhile. Waking every waiter per output batch (hundreds per second
+/// under a flood) bought nothing but lock traffic.
+#[allow(clippy::too_many_arguments)]
+pub async fn wait_loop(
+    wake: &tokio::sync::Notify,
+    mut look: impl FnMut() -> Look,
+    clock: impl Fn() -> u64,
+    initial_state: &str,
+    until: &[String],
+    after_change: bool,
+    start: u64,
+    deadline: u64,
+) -> (Outcome, Option<PeerSnapshot>) {
+    loop {
+        let mut notified = std::pin::pin!(wake.notified());
+        notified.as_mut().enable();
+        let Look {
+            pty_live,
+            snapshot,
+            in_room,
+        } = look();
+        let now = clock();
+        let verdict = wait_verdict(&WaitInput {
+            initial_state,
+            current: snapshot.as_ref(),
+            pty_live,
+            in_room,
+            until,
+            after_change,
+            start_ms: start,
+            now_ms: now,
+            deadline_ms: deadline,
+        });
+        if let Some(o) = verdict {
+            return (o, snapshot);
+        }
+        // The stall timer is only armed with `afterChange` and is measured
+        // from the later of the wait start and the last output chunk — the
+        // same clock `wait_verdict` judges by, so the forced re-check lands
+        // exactly when the verdict can flip.
+        let stall_deadline = after_change.then(|| {
+            let last_output = snapshot.as_ref().map_or(start, |s| s.last_output_ms);
+            start.max(last_output) + STALL_MS
+        });
+        let wait = Duration::from_millis(next_wake_ms(now, deadline, stall_deadline));
+        // Either a mutation woke us or the timer fired; both just mean "look
+        // again", so the result is irrelevant.
+        let _ = tokio::time::timeout(wait, notified).await;
+    }
 }
 
 /// `None` → default; capped at `MAX_TIMEOUT_MS`; floored at 1 so a caller
@@ -408,14 +476,9 @@ impl SwarmtermMcpServer {
             .snapshot(&args.peer)
             .map(|s| s.state)
             .unwrap_or_else(|| "unknown".to_string());
-        let (outcome, snapshot) = loop {
-            // Arm the listener BEFORE the three reads (lost-wakeup rule, see
-            // module doc). `notify_waiters` carries no permit, so a wake that
-            // fires before `enable()` would otherwise vanish.
-            let mut notified = std::pin::pin!(state.peer_wake.notified());
-            notified.as_mut().enable();
+        let look = || {
             // Three sequential scoped locks; each guard is dropped at the end
-            // of its statement so nothing is held across the `.await` below.
+            // of its statement so nothing is held across the `.await`.
             let pty_live = state
                 .terminals
                 .lock()
@@ -432,34 +495,23 @@ impl SwarmtermMcpServer {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .find_room_of(&terminal.0)
                 .is_some_and(|e| e.room.is_member(&args.peer));
-            let now = now_ms();
-            let verdict = wait_verdict(&WaitInput {
-                initial_state: &initial,
-                current: snapshot.as_ref(),
+            Look {
                 pty_live,
+                snapshot,
                 in_room,
-                until: &until,
-                after_change,
-                start_ms: start,
-                now_ms: now,
-                deadline_ms: deadline,
-            });
-            if let Some(o) = verdict {
-                break (o, snapshot);
             }
-            // The stall timer is only armed with `afterChange` and is measured
-            // from the later of the wait start and the last output chunk —
-            // the same clock `wait_verdict` judges by, so the forced re-check
-            // lands exactly when the verdict can flip.
-            let stall_deadline = after_change.then(|| {
-                let last_output = snapshot.as_ref().map_or(start, |s| s.last_output_ms);
-                start.max(last_output) + STALL_MS
-            });
-            let wake = Duration::from_millis(next_wake_ms(now, deadline, stall_deadline));
-            // Either a mutation woke us or the timer fired; both just mean
-            // "look again", so the result is irrelevant.
-            let _ = tokio::time::timeout(wake, notified).await;
         };
+        let (outcome, snapshot) = wait_loop(
+            &state.peer_wake,
+            look,
+            now_ms,
+            &initial,
+            &until,
+            after_change,
+            start,
+            deadline,
+        )
+        .await;
         let peer_state = snapshot
             .map(|s| s.state)
             .unwrap_or_else(|| "unknown".to_string());
@@ -529,6 +581,145 @@ mod tests {
             now_ms,
             deadline_ms: 61_000,
         }
+    }
+
+    // --- wait_loop (paused tokio clock; output never notifies) ---
+
+    use std::sync::{Arc, Mutex};
+
+    /// Shared fake peer the tests mutate the way the real mutators do:
+    /// state/exit changes call `notify_waiters`, output only stamps
+    /// `last_output_ms` (exactly what `deliver_output` now does).
+    struct Fake {
+        epoch: tokio::time::Instant,
+        live: Mutex<bool>,
+        snap: Mutex<Option<PeerSnapshot>>,
+        wake: tokio::sync::Notify,
+    }
+
+    impl Fake {
+        fn new(state: &str) -> Arc<Fake> {
+            Arc::new(Fake {
+                epoch: tokio::time::Instant::now(),
+                live: Mutex::new(true),
+                snap: Mutex::new(Some(snap(state, 0, 0))),
+                wake: tokio::sync::Notify::new(),
+            })
+        }
+        fn now(&self) -> u64 {
+            self.epoch.elapsed().as_millis() as u64
+        }
+        fn set_state(&self, state: &str) {
+            let now = self.now();
+            let mut g = self.snap.lock().unwrap();
+            let last = g.as_ref().map_or(0, |s| s.last_output_ms);
+            *g = Some(snap(state, now, last));
+            drop(g);
+            self.wake.notify_waiters();
+        }
+        fn output(&self) {
+            let now = self.now();
+            if let Some(s) = self.snap.lock().unwrap().as_mut() {
+                s.last_output_ms = now;
+            }
+        }
+        fn exit(&self) {
+            *self.live.lock().unwrap() = false;
+            *self.snap.lock().unwrap() = None;
+            self.wake.notify_waiters();
+        }
+    }
+
+    async fn run(
+        f: Arc<Fake>,
+        until: Vec<String>,
+        after_change: bool,
+        timeout: u64,
+    ) -> (Outcome, u64) {
+        let look = || Look {
+            pty_live: *f.live.lock().unwrap(),
+            snapshot: f.snap.lock().unwrap().clone(),
+            in_room: true,
+        };
+        let (o, _) = wait_loop(
+            &f.wake,
+            look,
+            || f.now(),
+            "working",
+            &until,
+            after_change,
+            0,
+            timeout,
+        )
+        .await;
+        (o, f.now())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_loop_resolves_on_idle_without_output_wakes() {
+        let f = Fake::new("working");
+        let g = f.clone();
+        tokio::spawn(async move {
+            // Output keeps flowing (no wakes), then the state report wakes.
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                g.output();
+            }
+            g.set_state("idle");
+        });
+        let (o, at) = run(f, until(&["idle"]), true, 60_000).await;
+        assert_eq!(o, Outcome::Reached);
+        assert_eq!(at, 3_000);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_loop_stall_counts_from_last_output_seen_on_timer() {
+        let f = Fake::new("working");
+        let g = f.clone();
+        tokio::spawn(async move {
+            // Output at 4 s with no wake: the 5 s re-check must see it and
+            // re-arm instead of reporting a stall.
+            tokio::time::sleep(Duration::from_millis(4_000)).await;
+            g.output();
+        });
+        let (o, at) = run(f, until(&["idle"]), true, 60_000).await;
+        assert_eq!(o, Outcome::Stalled);
+        assert_eq!(at, 4_000 + STALL_MS);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_loop_stalls_on_silence() {
+        let (o, at) = run(Fake::new("working"), until(&["idle"]), true, 60_000).await;
+        assert_eq!(o, Outcome::Stalled);
+        assert_eq!(at, STALL_MS);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_loop_resolves_on_exit() {
+        let f = Fake::new("working");
+        let g = f.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1_234)).await;
+            g.exit();
+        });
+        let (o, at) = run(f, until(&["idle"]), false, 60_000).await;
+        assert_eq!(o, Outcome::PeerLeft);
+        assert_eq!(at, 1_234);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_loop_times_out_under_output_only() {
+        let f = Fake::new("working");
+        let g = f.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                g.output();
+            }
+        });
+        let (o, at) = run(f, until(&["idle"]), true, 20_000).await;
+        assert_eq!(o, Outcome::Timeout);
+        assert_eq!(at, 20_000);
     }
 
     // --- wait_verdict ---
