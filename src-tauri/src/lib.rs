@@ -155,6 +155,7 @@ pub fn run() {
             commands::save_clipboard_image,
             commands::files_request,
             commands::files_watch,
+            commands::media_register_detected,
             commands::files_unwatch,
             commands::create_terminal,
             commands::write_terminal,

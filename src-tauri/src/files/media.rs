@@ -328,6 +328,29 @@ mod tests {
     }
 
     #[test]
+    fn detected_media_registers_only_existing_media_and_dedupes() {
+        let t = tempfile::tempdir().unwrap();
+        let service = FileService::new(t.path().join("history"));
+        fs::write(t.path().join("a.png"), [0]).unwrap();
+        fs::write(t.path().join("b.txt"), "x").unwrap();
+        let abs = t.path().join("a.png").to_string_lossy().into_owned();
+        let raws: Vec<String> = vec!["a.png".into(), abs, "b.txt".into(), "gone.gif".into()];
+        let got = service.register_detected_media(&raws, t.path());
+        let a = canonical(&t.path().join("a.png")).unwrap();
+        assert_eq!(got, vec![Some(a.clone()), Some(a.clone()), None, None]);
+        assert!(service.unrooted_registered(&a));
+        // Over the cap: entries past MAX_DETECTED_PER_CALL are not looked at.
+        let many: Vec<String> = (0..super::super::MAX_DETECTED_PER_CALL)
+            .map(|i| format!("missing{i}.png"))
+            .chain(std::iter::once("a.png".to_string()))
+            .collect();
+        assert!(service
+            .register_detected_media(&many, t.path())
+            .iter()
+            .all(Option::is_none));
+    }
+
+    #[test]
     fn resolve_media_validates_kind_existence_and_resolves_relative_paths() {
         let t = tempfile::tempdir().unwrap();
         let cwd = t.path().join("pane");

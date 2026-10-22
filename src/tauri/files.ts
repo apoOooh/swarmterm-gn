@@ -47,6 +47,8 @@ export const unrootedMediaUrl = (path: string, revision: string | number = 0): s
 export interface MediaShowEvent { terminalId: string; path: string }
 /** `media:show` from the MCP `media.show` tool; `path` is canonical and already registered. */
 export const onMediaShow = (cb: (e: MediaShowEvent) => void): Promise<() => void> => listen<MediaShowEvent>('media:show', (e) => cb(e.payload))
+/** Passive detection: allow-lists the candidates that are existing media files (relative = terminal cwd). One entry per input: its canonical path, or null. */
+export const registerDetectedMedia = (terminalId: string, paths: string[]): Promise<(string | null)[]> => invoke('media_register_detected', { terminalId, paths })
 /** Hands a Markdown file to the external MarkText app. `executable` empty = auto-detect. */
 export const openInMarkText = (contextId: string, path: string, executable: string): Promise<void> => request('openMarkText', { contextId, path, executable })
 /** Unsaved HTML buffer the preview frame renders instead of disk; `null` drops it. */

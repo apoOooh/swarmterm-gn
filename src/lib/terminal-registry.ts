@@ -50,6 +50,7 @@ import {
   revealInFileManager
 } from '@/tauri/links'
 import { ActivityTracker } from '@/lib/activity-tracker'
+import { forgetMediaOutput, noteMediaOutput } from '@/lib/media-passive'
 import { writeReplayHistory } from '@/lib/replay-history'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
@@ -1125,6 +1126,8 @@ function getOrCreate(id: string): Entry {
         // ACTIVITY_IDLE_MS of silence.
         activityTracker.notify(id)
         entries.get(id)?.detector?.noteOutput()
+        // Passive media detection: append-only here, scanned on a timer.
+        noteMediaOutput(id, data)
         // The callback acks parsed bytes to Rust's flow gate (perf phase 2):
         // it fires only after xterm parsed this chunk, so a flood is paced
         // by the parser instead of piling up in the write queue.
@@ -1294,6 +1297,7 @@ export function disposeTerminal(id: string): void {
   terminalInitializers.cancel(id)
   hoveredPaths.delete(id)
   pathFollowers.delete(id)
+  forgetMediaOutput(id)
   const entry = entries.get(id)
   if (!entry) return
   entry.observer?.disconnect()

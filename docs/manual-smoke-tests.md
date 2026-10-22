@@ -311,6 +311,14 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] `media.show` from a background pane adds to the strip without opening
       the panel; a `.txt`, `.svg`, missing or `\\host\share` path is refused.
 - [ ] Switching from Preview to Media hides the native preview webview.
+- [ ] Run `echo C:\path with spaces\shot.png` (existing file) in a pane:
+      a "1 new image/video" pill appears in the pane, the Media panel does
+      not open, typing continues in the shell.
+- [ ] Click the pill: the Media tab opens on that image, the pill is gone and
+      keystrokes still land in the terminal.
+- [ ] Print the same path again: no new pill. Print a relative `out/x.webp`
+      and a quoted `"a b.gif"`: both are picked up; a missing path is not.
+- [ ] `cat` a large log (no media paths): no visible slowdown versus before.
 
 ## Web preview
 

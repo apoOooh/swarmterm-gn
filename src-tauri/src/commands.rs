@@ -56,6 +56,38 @@ pub async fn files_request(
         .map_err(|e| e.to_string())?
 }
 
+/// Passive media detection: the renderer found image/video paths in a pane's
+/// output. Relative paths resolve against that terminal's cwd; only existing
+/// media files are allow-listed for the unrooted route; the answer has one
+/// entry per input (canonical display path, or null). Disk work runs off the async executor.
+#[tauri::command]
+pub async fn media_register_detected(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    terminal_id: String,
+    paths: Vec<String>,
+) -> Result<Vec<Option<String>>, String> {
+    files_main_only(&window)?;
+    let cwd = state
+        .terminals
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(&terminal_id)
+        .map(|t| t.cwd.clone())
+        .ok_or("unknown terminal")?;
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        service
+            .register_detected_media(&paths, std::path::Path::new(&cwd))
+            .iter()
+            .map(|p| p.as_deref().map(crate::files::path::display))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn files_watch(
     window: tauri::WebviewWindow,

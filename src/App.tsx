@@ -127,6 +127,7 @@ import { onPreviewOpen } from '@/tauri/preview'
 import { onMediaShow } from '@/tauri/files'
 import { useMediaStore } from '@/store/media-store'
 import { mediaKind } from '@/lib/media-gallery'
+import { paneSourceLabel } from '@/lib/media-passive'
 import { closePreview, openPreview, wirePreviewEvents } from '@/lib/preview-registry'
 import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
@@ -924,11 +925,7 @@ export default function App(): ReactElement {
       const kind = mediaKind(e.path)
       if (!kind) return
       const st = useAppStore.getState()
-      let source = 'pane'
-      for (const w of st.workspaces) {
-        const leaf = collectLeaves(w.layout).find((l) => l.terminalId === e.terminalId)
-        if (leaf) { source = leaf.name ?? leaf.agentId ?? 'terminal'; break }
-      }
+      const source = paneSourceLabel(e.terminalId)
       useMediaStore.getState().show({ path: e.path, kind, terminalId: e.terminalId, source, shownAt: Date.now() })
       const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
       if (ws && focusedVisibleLeaf(ws)?.terminalId === e.terminalId) {

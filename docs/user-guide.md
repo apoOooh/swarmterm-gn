@@ -146,6 +146,21 @@ terminal. Only PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local
 drives are accepted, and Swarmterm serves only files an agent has shown in this
 session. The list is not saved when Swarmterm closes.
 
+Swarmterm also notices media paths a pane prints, without the agent calling
+`media.show`: absolute paths (`C:\...\shot.png`, spaces included), quoted
+paths and paths relative to the pane's starting folder. Existing files join the
+Media strip quietly, and the pane shows a **N new images/videos** pill in its
+top-right corner; click it to open the Media tab on the newest one (the panel
+never opens by itself for these, and your keyboard stays in the terminal).
+Selecting a pane's item in the strip also clears its pill. A path printed just
+before the file is written is retried a few times when printed again within
+seconds; otherwise ask the agent to call `media.show`. Not detected: newly
+created files that are never printed, POSIX-style paths (`/c/...`, `~/...`),
+and relative paths after a `cd` (they resolve against the folder the pane
+started in). Note that any printed path counts, also from a `cat` of a file you
+did not write, so an existing image named there joins the strip and can be
+viewed in Swarmterm for the rest of the session.
+
 **Run** on a supported file starts a separate plain-shell pane in its folder:
 Python files, pytest naming conventions, JavaScript/Node files, Docker Compose
 YAML, .NET projects and solutions. Dirty files must be saved first. The required

@@ -147,6 +147,11 @@ pub enum FileRequest {
     },
 }
 
+/// Upper bound of candidates one `media_register_detected` call resolves.
+pub const MAX_DETECTED_PER_CALL: usize = 20;
+/// Upper bound of the session's unrooted allow-list growth through passive detection.
+pub const MAX_UNROOTED_MEDIA: usize = 2000;
+
 pub struct FileService {
     contexts: Mutex<HashMap<String, PathBuf>>,
     operation: Mutex<()>,
@@ -186,6 +191,30 @@ impl FileService {
             .map_err(|e| e.to_string())?
             .insert(path.clone());
         Ok(path)
+    }
+
+    /// Passive detection (paths a pane printed): one answer per candidate,
+    /// the canonical path of an existing media file (now allow-listed) or
+    /// `None` — most printed names are not files, which is not an error here.
+    /// Bounded twice: per call, so one output line cannot make the backend
+    /// stat thousands of paths, and in total, because any text a pane prints
+    /// (a `cat` of an untrusted file included) can name a file here.
+    pub fn register_detected_media(&self, raws: &[String], cwd: &Path) -> Vec<Option<PathBuf>> {
+        raws.iter()
+            .enumerate()
+            .map(|(i, raw)| {
+                if i >= MAX_DETECTED_PER_CALL {
+                    return None;
+                }
+                let path = media::resolve_media(raw, cwd).ok()?;
+                let mut set = self.unrooted_media.lock().ok()?;
+                if !set.contains(&path) && set.len() >= MAX_UNROOTED_MEDIA {
+                    return None;
+                }
+                set.insert(path.clone());
+                Some(path)
+            })
+            .collect()
     }
 
     pub(crate) fn unrooted_registered(&self, path: &Path) -> bool {
