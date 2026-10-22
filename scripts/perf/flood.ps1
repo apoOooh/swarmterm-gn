@@ -25,7 +25,14 @@
     f  -VisiblePanes (16-20) streaming panes visible in one workspace plus two
        4-pane workspaces, switching every -SwitchSeconds; reports live WebGL
        contexts and visible DOM-fallback panes
-    full  a, b, c, d (mock agents), e and f, once each
+    g  -ToolPanes (6) panes each running scripts/perf/tool-agent.mjs for
+       -ToolSeconds (75): tool-heavy agent work (many short cmd/pwsh child
+       processes, bursty small output, file create/read/write/delete storms
+       of 80 files in perf-tool-ws\<n> under the data dir, appends, a ~200 KB
+       type now and then) plus -ToolIdle (2) idle panes, the first probed;
+       reports spawn round trips and, where the files API exists, the
+       watcher's file events and storm-to-event latency
+    full  a, b, c, d (mock agents), e, f and g, once each
   -HostMode switches the terminal host on in the throwaway perf profile
   (builds swarmterm-host first), so output runs through the host path.
   HARD RULE: no agent CLI or AI provider is ever started. Every pane is a
@@ -49,12 +56,13 @@
   pwsh scripts/perf/flood.ps1                       # all scenarios x 3 runs, defaults
   pwsh scripts/perf/flood.ps1 -Scenario a -Panes 4 -SizeMB 50
   pwsh scripts/perf/flood.ps1 -Scenario d -AgentPanes 15 -AgentSeconds 150
+  pwsh scripts/perf/flood.ps1 -Scenario g -ToolPanes 6 -ToolSeconds 75
 #>
 [CmdletBinding()]
 param(
   # 'all' is a, b and c; d (agents, ~3 min per run), e and f are run on their
-  # own; 'full' runs a, b, c, d (mock agents), e and f once each.
-  [ValidateSet('a', 'b', 'c', 'd', 'e', 'f', 'all', 'full')] [string]$Scenario = 'all',
+  # own; 'full' runs a, b, c, d (mock agents), e, f and g once each.
+  [ValidateSet('a', 'b', 'c', 'd', 'e', 'f', 'g', 'all', 'full')] [string]$Scenario = 'all',
   [switch]$HostMode,
   [switch]$MockAgents,
   [ValidateRange(1, 5)] [int]$WarPairs = 4,
@@ -64,6 +72,9 @@ param(
   [ValidateRange(1, 11)] [int]$Panes = 4,
   [ValidateRange(1, 40)] [int]$AgentPanes = 15,
   [ValidateRange(10, 1800)] [int]$AgentSeconds = 150,
+  [ValidateRange(1, 11)] [int]$ToolPanes = 6,
+  [ValidateRange(1, 4)] [int]$ToolIdle = 2,
+  [ValidateRange(10, 600)] [int]$ToolSeconds = 75,
   # Defaults keep a full a+b+c x 3 run to a few minutes; single runs are too
   # noisy to compare (see docs/perf-baseline.md), so each scenario repeats.
   [int]$SizeMB = 50,
@@ -341,6 +352,7 @@ $agentScript = Join-Path $PSScriptRoot 'agent-stream.mjs'
 # The perf-mock-agent template runs `node agent-stream.mjs --mock` in the pane's
 # cwd (the data dir): refresh that copy from this checkout every run.
 Copy-Item $agentScript (Join-Path $dataDir 'agent-stream.mjs') -Force
+$toolScript = Join-Path $PSScriptRoot 'tool-agent.mjs'
 if ($Scenario -eq 'full') { $Repeat = 1; $MockAgents = $true }
 if ($HostMode) {
   # tauri dev builds only the app; the host binary is a separate package.
@@ -411,7 +423,7 @@ try {
   if (-not $ok) { throw "CDP endpoint did not come up; see $log" }
   Start-Sleep 5
 
-  $plan = switch ($Scenario) { 'all' { 'a', 'b', 'c' } 'full' { 'a', 'b', 'c', 'd', 'e', 'f' } default { $Scenario } }
+  $plan = switch ($Scenario) { 'all' { 'a', 'b', 'c' } 'full' { 'a', 'b', 'c', 'd', 'e', 'f', 'g' } default { $Scenario } }
   $flag = Join-Path $outDir 'AGENT-DETECTED.txt'
   $hostLog = Join-Path $outDir 'hosts.txt'
   $guard = Start-Guard $npm.Id $hostExe $foreignHosts $flag $hostLog
@@ -427,6 +439,7 @@ try {
       'd' { @{ flood = $AgentPanes; idle = 1; file = $agentScript; lines = 0 } }
       'e' { @{ flood = $StreamPanes; idle = 2 * $WarPairs; file = $agentScript; lines = 0 } }
       'f' { @{ flood = $VisiblePanes + 8; idle = 0; file = $agentScript; lines = 0 } }
+      'g' { @{ flood = $ToolPanes; idle = $ToolIdle; file = $toolScript; lines = 0 } }
     }
     $env:PERF_HOST = if ($HostMode) { '1' } else { '' }
     $env:PERF_MOCK = if ($MockAgents) { '1' } else { '' }
@@ -435,7 +448,7 @@ try {
     $csv = Join-Path $outDir "proc-$s-$rep.csv"; $json = Join-Path $outDir "webview-$s-$rep.json"
     $env:PERF_CDP = "http://127.0.0.1:$CdpPort"; $env:PERF_SCENARIO = $s
     $env:PERF_FLOOD = $cfg.flood; $env:PERF_IDLE = $cfg.idle; $env:PERF_FILE = $cfg.file; $env:PERF_LINES = $cfg.lines
-    $env:PERF_CWD = $dataDir; $env:PERF_OUT = $json; $env:PERF_TIMEOUT_S = $TimeoutSeconds; $env:PERF_SECONDS = $AgentSeconds
+    $env:PERF_CWD = $dataDir; $env:PERF_OUT = $json; $env:PERF_TIMEOUT_S = $TimeoutSeconds; $env:PERF_SECONDS = $(if ($s -eq 'g') { $ToolSeconds } else { $AgentSeconds })
     $env:PERF_TRACE = if ($Trace) { Join-Path $outDir "trace-$s-$rep.json" } else { '' }
     if (Test-Path $json) { Remove-Item $json }
     $pwLog = Join-Path $outDir "playwright-$s-$rep.log"
@@ -525,7 +538,7 @@ try {
       '| scenario | echo p50 ms | echo p95 ms | echo max ms | frames > 50 ms | long tasks > 50 ms | app CPU avg % | WebView CPU avg % | WebView MB max (cumulative in instance) | lines lost | flood s |',
       '|---|---|---|---|---|---|---|---|---|---|---|'
   }
-  foreach ($g in ($results | Group-Object scenario | Where-Object Name -NotIn 'd', 'e', 'f')) {
+  foreach ($g in ($results | Group-Object scenario | Where-Object Name -NotIn 'd', 'e', 'f', 'g')) {
     $w = @($g.Group | ForEach-Object { $_.webview } | Where-Object { $_ })
     $pa = @($g.Group | ForEach-Object { $_.proc | Where-Object group -EQ 'app' })
     $pw = @($g.Group | ForEach-Object { $_.proc | Where-Object group -EQ 'webview' })
@@ -588,6 +601,25 @@ try {
       "| switches | $(Get-Spread ($w | % { $_.renderers.switches })) |",
       "| frames > 50 ms / long tasks > 50 ms | $(Get-Spread ($w | % { $_.frames.over50 })) / $(Get-Spread ($w | % { $_.longTasks.over50 })) |",
       "| WebView CPU avg % / MB max | $(Get-Spread ($pw | % { $_.cpuAvg })) / $(Get-Spread ($pw | % { $_.memMaxMB })) |", ''
+  }
+  $gr = @($results | Where-Object scenario -EQ 'g')
+  if ($gr.Count) {
+    $w = @($gr | ForEach-Object { $_.webview } | Where-Object { $_ })
+    $pa = @($gr | ForEach-Object { $_.proc | Where-Object group -EQ 'app' })
+    $pw = @($gr | ForEach-Object { $_.proc | Where-Object group -EQ 'webview' })
+    $md += "## Scenario g (tool-heavy agents): $ToolPanes tool panes + $ToolIdle idle, $ToolSeconds s", '',
+      '| metric | value |', '|---|---|',
+      "| echo idle pane p50 / p95 / max ms | $(Get-Spread ($w | % { $_.echo.p50 })) / $(Get-Spread ($w | % { $_.echo.p95 })) / $(Get-Spread ($w | % { $_.echo.max })) |",
+      "| cmd spawns / round trip p50 / p95 / max ms | $(Get-Spread ($w | % { $_.tools.spawnCmd.count })) / $(Get-Spread ($w | % { $_.tools.spawnCmd.p50 })) / $(Get-Spread ($w | % { $_.tools.spawnCmd.p95 })) / $(Get-Spread ($w | % { $_.tools.spawnCmd.max })) |",
+      "| pwsh spawns / round trip p50 / p95 ms | $(Get-Spread ($w | % { $_.tools.spawnPwsh.count })) / $(Get-Spread ($w | % { $_.tools.spawnPwsh.p50 })) / $(Get-Spread ($w | % { $_.tools.spawnPwsh.p95 })) |",
+      "| 200 KB type spawns / round trip p50 / p95 ms | $(Get-Spread ($w | % { $_.tools.spawnBigOutput.count })) / $(Get-Spread ($w | % { $_.tools.spawnBigOutput.p50 })) / $(Get-Spread ($w | % { $_.tools.spawnBigOutput.p95 })) |",
+      "| failed spawns / file ops / storms | $(Get-Spread ($w | % { $_.tools.spawnFailed })) / $(Get-Spread ($w | % { $_.tools.fileOps })) / $(Get-Spread ($w | % { $_.tools.storms })) |",
+      "| file events / rescans | $(Get-Spread ($w | % { $_.tools.fileEvents })) / $(Get-Spread ($w | % { $_.tools.rescans })) |",
+      "| storm-to-event latency p50 / p95 / max ms | $(Get-Spread ($w | % { $_.tools.fileEventLatency.p50 })) / $(Get-Spread ($w | % { $_.tools.fileEventLatency.p95 })) / $(Get-Spread ($w | % { $_.tools.fileEventLatency.max })) |",
+      "| storms seen / via rescan / missed (5 s) | $(Get-Spread ($w | % { $_.tools.fileEventLatency.samples })) / $(Get-Spread ($w | % { $_.tools.fileEventLatency.viaRescan })) / $(Get-Spread ($w | % { $_.tools.fileEventLatency.missed })) |",
+      "| frame p95 / p99 ms / frames > 50 ms / long tasks > 50 ms | $(Get-Spread ($w | % { $_.frames.p95 })) / $(Get-Spread ($w | % { $_.frames.p99 })) / $(Get-Spread ($w | % { $_.frames.over50 })) / $(Get-Spread ($w | % { $_.longTasks.over50 })) |",
+      "| app CPU avg % | $(Get-Spread ($pa | % { $_.cpuAvg })) |",
+      "| WebView CPU avg / p95 % / MB max | $(Get-Spread ($pw | % { $_.cpuAvg })) / $(Get-Spread ($pw | % { $_.cpuP95 })) / $(Get-Spread ($pw | % { $_.memMaxMB })) |", ''
   }
   foreach ($r in $results) {
     $w = $r.webview

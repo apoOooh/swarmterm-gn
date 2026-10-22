@@ -3,7 +3,7 @@
 // remote debugging on, generates the data files and samples process CPU and
 // memory while this spec drives the real app over CDP.
 //
-// Inputs (env): PERF_CDP (http://127.0.0.1:9333), PERF_SCENARIO (a|b|c|d|e|f),
+// Inputs (env): PERF_CDP (http://127.0.0.1:9333), PERF_SCENARIO (a|b|c|d|e|f|g),
 // PERF_FLOOD (flooding panes), PERF_IDLE (idle panes), PERF_FILE (data file),
 // PERF_LINES (sequence lines in the file, scenario a/c), PERF_CWD,
 // PERF_OUT (result JSON), PERF_TRACE (optional Chromium trace path),
@@ -12,7 +12,8 @@
 // PERF_CWD), PERF_HOST (1 = switch the terminal host on before creating
 // panes), PERF_MOCK (1 = scenario d's agent panes use the perf-mock-agent
 // template), PERF_WAR (scenario e: War Room peer/waiter pairs), PERF_STREAM
-// (scenario e: extra streaming panes), PERF_VISIBLE (scenario f: visible panes
+// (scenario e: extra streaming panes; scenario g: PERF_FILE is
+// scripts/perf/tool-agent.mjs, PERF_FLOOD tool panes, PERF_IDLE idle panes), PERF_VISIBLE (scenario f: visible panes
 // in the main workspace), PERF_SWITCH_S (scenario f: workspace switch period).
 //
 // Hard rule: no agent CLI or AI provider, ever. Panes are plain shells, except
@@ -92,9 +93,11 @@ async function runScenario(tStart: number): Promise<void> {
   const agents = scenario === 'd'
   const warRoom = scenario === 'e'
   const many = scenario === 'f'
+  // Scenario g: tool-heavy agents (scripts/perf/tool-agent.mjs in plain shells).
+  const tools = scenario === 'g'
   // Fixed-duration scenarios: they run PERF_SECONDS instead of until the
   // flood is complete or quiet.
-  const fixed = agents || warRoom || many
+  const fixed = agents || warRoom || many || tools
   const wantMock = (agents && process.env.PERF_MOCK === '1') || warRoom
   if (!fixed && flood > 11) throw new Error('PERF_FLOOD must be <= 11')
   const seconds = Number(env('PERF_SECONDS', '150'))
@@ -144,6 +147,10 @@ async function runScenario(tStart: number): Promise<void> {
     ids = await createPanes(page, cwd, kinds)
     waiterIds = ids.slice(0, war); peerIds = ids.slice(war, 2 * war)
     floodIds = ids.slice(2 * war, 2 * war + streamN); idleId = waiterIds[0]
+  } else if (tools) {
+    // Idle panes first (the first is probed), then the tool agents.
+    ids = await createPanes(page, cwd, Array(idle + flood).fill('terminal'))
+    floodIds = ids.slice(idle); idleId = ids[0]
   } else {
     const kinds = agents ? ['terminal', ...Array(flood).fill(mock ? MOCK_ID : 'terminal')] : Array(flood + idle).fill('terminal')
     ids = await createPanes(page, cwd, kinds)
@@ -184,6 +191,36 @@ async function runScenario(tStart: number): Promise<void> {
     if (!(host as any).connected) throw new Error('PERF_HOST: terminal host is not connected: ' + JSON.stringify(host))
   }
 
+  // ---- scenario g: file watcher on the panes' cwd (the perf data dir) ----
+  // Opens a file context for a tool pane and watches its root, as the file
+  // explorer would, and timestamps every files:changed event in-page. Builds
+  // without the files API (1.22.1) skip it with a note.
+  // Each event keeps only its time, the rescan flag and the storm folders
+  // (<pane>/storm-<round>) its paths touch, so the other file traffic in the
+  // data dir cannot pass for a storm's event.
+  let watching = false
+  if (tools) {
+    const err: string = await page.evaluate(async (id) => {
+      try {
+        const f = await import('/src/tauri/files.ts' as string)
+        if (!f.openFileContext || !f.watchFiles || !f.onFileChange) return 'openFileContext/watchFiles/onFileChange missing'
+        const ctx = await f.openFileContext(id)
+        const w = window as any
+        w.__perfFileEvents = [] as { t: number; rescan: boolean; keys: string[] }[]
+        w.__perfFileUnlisten = await f.onFileChange((c: any) => {
+          const keys = new Set<string>()
+          for (const p of c.paths ?? []) { const m = /perf-tool-ws[\\/](\d+)[\\/](storm-\d+)/.exec(p); if (m) keys.add(`${m[1]}/${m[2]}`) }
+          w.__perfFileEvents.push({ t: Date.now(), rescan: !!c.rescan, keys: [...keys] })
+        })
+        await f.watchFiles(ctx.id)
+        w.__perfFileCtx = ctx.id
+        return ''
+      } catch (e) { return String(e) }
+    }, floodIds[0])
+    watching = !err
+    if (!watching) notes.push(`unsupported: file watcher not measurable on this build (${err}); file-event counts and latency not measured`)
+  }
+
   // ---- scenario e: War Room setup ----
   let room: WarRoomRun | undefined
   if (warRoom) room = await setupWarRoom(page, cwd, waiterIds, peerIds, mock, caps.warRoomRooms)
@@ -217,6 +254,22 @@ async function runScenario(tStart: number): Promise<void> {
   if (many) switches = await switchWorkspaces(page, wsIds, t0, seconds, Number(env('PERF_SWITCH_S', '3')), caps.rendererStats)
   else await probeLoop(page, { scenario, fixed, agents, seconds, lines, flood, timeoutS, t0, busyId, idleId })
   const waitResults = waits ? await waits : undefined
+  let toolSummary: unknown
+  if (tools) {
+    // Stop listening at the run's end, before the generators write their
+    // summaries and clean up, so only the run's own events count.
+    const events: FileEvent[] = watching ? await page.evaluate(async () => {
+      const w = window as any
+      try { w.__perfFileUnlisten?.(); await (await import('/src/tauri/files.ts' as string)).unwatchFiles(w.__perfFileCtx) } catch { /* teardown only */ }
+      return w.__perfFileEvents ?? []
+    }) : []
+    // The generators stop on their own after PERF_SECONDS; a spawn still
+    // running then delays the summary file a little.
+    const files = floodIds.map((_, i) => join(cwd, `perf-tool-${i + 1}.json`))
+    const until = Date.now() + 15_000
+    while (Date.now() < until && !files.every((f) => existsSync(f))) await page.waitForTimeout(250)
+    toolSummary = summarizeTools(files, watching ? events : null)
+  }
 
   if (idleId) await page.keyboard.press('Escape')
   await page.waitForTimeout(1500)
@@ -230,6 +283,7 @@ async function runScenario(tStart: number): Promise<void> {
   result.hostMode = hostMode; result.host = host; result.mockAgents = mockIds.length
   if (waitResults) result.warRoom = summarizeWaits(waitResults, cwd, peerIds, war, streamN)
   if (many) result.renderers = summarizeSwitches(switches, ids.length, caps.rendererStats)
+  if (tools) result.tools = toolSummary
   // Epoch window for flood.ps1 to trim its CPU/memory samples to the flood.
   result.windowStartMs = t0; result.windowEndMs = t0 + Math.round((fixed ? seconds : result.floodSeconds) * 1000)
   // Timing: setup = test start to the run's t0, run = t0 to the probes'
@@ -301,7 +355,54 @@ async function probeLoop(page: Page, o: { scenario: string; fixed: boolean; agen
 
 function clearMockFiles(cwd: string): void {
   if (!existsSync(cwd)) return
-  for (const f of readdirSync(cwd)) if (f === 'perf-mock.json' || f === 'perf-mcp.json' || /^perf-mock-.*\.log$/.test(f)) rmSync(join(cwd, f), { force: true })
+  for (const f of readdirSync(cwd)) if (f === 'perf-mock.json' || f === 'perf-mcp.json' || /^perf-mock-.*\.log$/.test(f) || /^perf-tool-\d+\.json$/.test(f)) rmSync(join(cwd, f), { force: true })
+  // Scenario g's workspace (the generators remove their own folder; this
+  // catches one killed mid-run).
+  rmSync(join(cwd, 'perf-tool-ws'), { recursive: true, force: true })
+}
+
+// ---------- scenario g: tool-heavy agents ----------
+// Merges the generators' summaries: spawn round trips per kind (total count,
+// median over panes of each pane's p50 / p95, overall max) and the storm
+// latency: from a storm's start to the first files:changed event that names
+// its folder, or the first rescan at or after its end (storm mode skips the
+// later batches and sends one rescan after RESCAN_QUIET without raw events,
+// which other panes' file traffic can delay). Within 5 s, else missed.
+// `events` null = not measured.
+type FileEvent = { t: number; rescan: boolean; keys: string[] }
+type Storm = { key: string; start: number; end: number }
+function summarizeTools(files: string[], events: FileEvent[] | null): unknown {
+  const per = files.filter((f) => existsSync(f)).map((f) => JSON.parse(readFileSync(f, 'utf8')))
+  const kind = (k: string) => {
+    const xs = per.map((p) => p[k]).filter((x) => x && x.count)
+    const med = (a: number[]) => pctl(a, 0.5)
+    return { count: xs.reduce((n, x) => n + x.count, 0), p50: med(xs.map((x) => x.p50)), p95: med(xs.map((x) => x.p95)), max: xs.length ? Math.max(...xs.map((x) => x.max)) : null }
+  }
+  const lat: number[] = []
+  let stormsMissed = 0
+  let viaRescan = 0
+  const storms: Storm[] = per.flatMap((p) => p.storms ?? [])
+  if (events) {
+    const ev = [...events].sort((a, b) => a.t - b.t)
+    for (const s of storms) {
+      const e = ev.find((x) => x.t >= s.start && (x.keys.includes(s.key) || (x.rescan && x.t >= s.end)))
+      if (e !== undefined && e.t - s.start <= 5000) { lat.push(e.t - s.start); if (!e.keys.includes(s.key)) viaRescan++ } else stormsMissed++
+    }
+  }
+  const na = 'unsupported'
+  return {
+    panesReported: per.length, panes: files.length,
+    spawnCmd: kind('cmd'), spawnPwsh: kind('pwsh'), spawnBigOutput: kind('big'),
+    spawnFailed: per.reduce((n, p) => n + (p.spawnFailed ?? 0), 0),
+    fileOps: per.reduce((n, p) => n + (p.fileOps ?? 0), 0),
+    storms: storms.length,
+    fileEvents: events ? events.length : na,
+    rescans: events ? events.filter((e) => e.rescan).length : na,
+    // Same leaves either way, so compare.ps1 lines up a build without the API.
+    fileEventLatency: events
+      ? { samples: lat.length, viaRescan, missed: stormsMissed, p50: pctl(lat, 0.5), p95: pctl(lat, 0.95), max: lat.length ? Math.max(...lat) : null }
+      : { samples: na, viaRescan: na, missed: na, p50: na, p95: na, max: na },
+  }
 }
 
 // ---------- scenario e: War Room waiters ----------
