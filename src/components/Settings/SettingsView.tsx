@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react'
-import { Bell, FileText, Keyboard, LayoutGrid, Mic, Palette, PanelTop, Terminal, Users, Plug, X } from 'lucide-react'
+import { Bell, FileText, Images, Keyboard, LayoutGrid, Mic, Palette, PanelTop, Terminal, Users, Plug, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { AppearancePanel } from './AppearancePanel'
@@ -12,8 +12,9 @@ import { MCPPanel } from './MCPPanel'
 import { VoicePanel } from './VoicePanel'
 import { TitleBarPanel } from './TitleBarPanel'
 import { WorkspacesPanel } from './WorkspacesPanel'
+import { MediaSettingsPanel } from './MediaPanel'
 
-export type CategoryId = 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts' | 'accounts' | 'mcp' | 'voice' | 'title-bar' | 'workspaces'
+export type CategoryId = 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts' | 'accounts' | 'mcp' | 'voice' | 'title-bar' | 'workspaces' | 'media'
 
 interface Category {
   id: CategoryId
@@ -30,6 +31,7 @@ const CATEGORIES: Category[] = [
   { id: 'title-bar', label: 'Title bar', Icon: PanelTop },
   { id: 'files', label: 'Files', Icon: FileText },
   { id: 'notifications', label: 'Notifications', Icon: Bell },
+  { id: 'media', label: 'Media', Icon: Images },
   { id: 'voice', label: 'Voice', Icon: Mic },
   { id: 'shortcuts', label: 'Keyboard Shortcuts', Icon: Keyboard },
 ]
@@ -116,6 +118,7 @@ export function SettingsView({ onClose, initialCategory }: SettingsViewProps): R
               {activeCategory === 'terminal' && <TerminalPanel />}
               {activeCategory === 'files' && <FilesPanel />}
               {activeCategory === 'notifications' && <NotificationsPanel />}
+              {activeCategory === 'media' && <MediaSettingsPanel />}
               {activeCategory === 'shortcuts' && <KeyboardShortcutsPanel />}
               {activeCategory === 'mcp' && <MCPPanel />}
               {activeCategory === 'voice' && <VoicePanel />}

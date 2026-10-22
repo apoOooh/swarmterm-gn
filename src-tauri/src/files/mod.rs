@@ -2,7 +2,7 @@ pub(crate) mod clipboard;
 mod git;
 mod history;
 mod marktext;
-mod media;
+pub(crate) mod media;
 pub mod path;
 mod watch;
 
@@ -147,6 +147,11 @@ pub enum FileRequest {
     },
 }
 
+/// Upper bound of candidates one `media_check_detected` call resolves.
+pub const MAX_DETECTED_PER_CALL: usize = 20;
+/// Upper bound of the session's unrooted allow-list (user-opened and clipboard media).
+pub const MAX_UNROOTED_MEDIA: usize = 2000;
+
 pub struct FileService {
     contexts: Mutex<HashMap<String, PathBuf>>,
     operation: Mutex<()>,
@@ -155,6 +160,10 @@ pub struct FileService {
     /// Keyed by canonical path. Lives only in memory: the preview protocol
     /// serves it so relative assets still resolve from the file's folder.
     drafts: Mutex<HashMap<PathBuf, String>>,
+    /// Canonical media files outside every context root that the user opened
+    /// (or copied to the clipboard). The unrooted protocol route serves ONLY these, so the
+    /// webview can never name an arbitrary file on disk.
+    unrooted_media: Mutex<std::collections::HashSet<PathBuf>>,
 }
 
 impl FileService {
@@ -165,11 +174,83 @@ impl FileService {
             watchers: Mutex::new(HashMap::new()),
             history_dir,
             drafts: Mutex::new(HashMap::new()),
+            unrooted_media: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
     pub(crate) fn draft(&self, path: &Path) -> Option<String> {
         self.drafts.lock().ok()?.get(path).cloned()
+    }
+
+    /// Passive detection (paths a pane printed): one answer per candidate,
+    /// the canonical path of an existing media file or `None` (most printed
+    /// names are not files, which is not an error here). Validation ONLY:
+    /// nothing is allow-listed, because pane output is agent-controlled and
+    /// must never decide what the webview may read. The user opening an item
+    /// registers it (`register_user_media`). Bounded per call so one output
+    /// line cannot make the backend stat thousands of paths.
+    pub fn check_detected_media(&self, raws: &[String], cwd: &Path) -> Vec<Option<PathBuf>> {
+        raws.iter()
+            .enumerate()
+            .map(|(i, raw)| {
+                if i >= MAX_DETECTED_PER_CALL {
+                    return None;
+                }
+                media::resolve_media(raw, cwd).ok()
+            })
+            .collect()
+    }
+
+    /// A user action (opening a detected item, Ctrl+click on a printed path)
+    /// allow-lists one media file. Absolute paths only: the renderer passes
+    /// the canonical path `check_detected_media` or the link resolver returned.
+    pub fn register_user_media(&self, raw: &str) -> Result<PathBuf, String> {
+        if !Path::new(raw.trim()).is_absolute() {
+            return Err("path must be absolute".into());
+        }
+        self.register_capped_media(raw, Path::new(""))
+            .ok_or_else(|| "not an existing image/video, or too many opened this session".into())
+    }
+
+    /// Validate (see `media::resolve_media`) and allow-list one media file for
+    /// the unrooted route; the allow-list stops growing at `MAX_UNROOTED_MEDIA`.
+    /// Callers are user-originated only (clipboard, `register_user_media`).
+    pub fn register_capped_media(&self, raw: &str, cwd: &Path) -> Option<PathBuf> {
+        self.register_media_tracked(raw, cwd).map(|(path, _)| path)
+    }
+
+    /// As `register_capped_media`, plus whether this call added the path (so
+    /// a caller withdrawing "its" paths never drops one opened elsewhere).
+    pub fn register_media_tracked(&self, raw: &str, cwd: &Path) -> Option<(PathBuf, bool)> {
+        let path = media::resolve_media(raw, cwd).ok()?;
+        let mut set = self.unrooted_media.lock().ok()?;
+        if !set.contains(&path) && set.len() >= MAX_UNROOTED_MEDIA {
+            return None;
+        }
+        let added = set.insert(path.clone());
+        Some((path, added))
+    }
+
+    /// Drop paths from the unrooted allow-list (clipboard images switched off).
+    pub fn unregister_media(&self, paths: &[PathBuf]) {
+        if let Ok(mut set) = self.unrooted_media.lock() {
+            for p in paths {
+                set.remove(p);
+            }
+        }
+    }
+
+    /// Image/video extension check (the unrooted route's kind rule) for other modules.
+    #[cfg(windows)]
+    pub(crate) fn is_media_path(path: &Path) -> bool {
+        media::is_media(path)
+    }
+
+    pub(crate) fn unrooted_registered(&self, path: &Path) -> bool {
+        self.unrooted_media
+            .lock()
+            .map(|set| set.contains(path))
+            .unwrap_or(false)
     }
 
     pub fn open(&self, cwd: &Path) -> Result<FileContext, String> {

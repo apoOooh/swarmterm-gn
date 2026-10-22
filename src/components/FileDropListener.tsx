@@ -43,13 +43,24 @@ function typeInto(target: DropPane, text: string): void {
 
 /** Types explorer-dragged paths into a pane (pointer drag, see lib/pointer-drag.ts). */
 export function insertExplorerPaths(terminalId: string, paths: string[]): void {
+  const target = paneById(terminalId)
+  if (!target) return
+  const text = paneDropText(paths, target, isWindowsPlatform())
+  if (text !== '') typeInto(target, text)
+}
+
+/** Pastes ready-made text (a media drag, see lib/media-drag.ts) into a pane and focuses it. */
+export function insertIntoPane(terminalId: string, text: string): void {
+  const target = paneById(terminalId)
+  if (target && text !== '') typeInto(target, text)
+}
+
+function paneById(terminalId: string): DropPane | null {
   const el = document.querySelector<HTMLElement>(`[data-terminal-id="${CSS.escape(terminalId)}"]`)
   const leafId = el?.dataset.leafId
   const flavor = el?.dataset.shellFlavor as ShellFlavor | undefined
-  if (!el || !leafId || !flavor) return
-  const target: DropPane = { terminalId, leafId, flavor, agentId: el.dataset.agentId, cwd: getTerminalCwd(terminalId) ?? el.dataset.cwd ?? '' }
-  const text = paneDropText(paths, target, isWindowsPlatform())
-  if (text !== '') typeInto(target, text)
+  if (!el || !leafId || !flavor) return null
+  return { terminalId, leafId, flavor, agentId: el.dataset.agentId, cwd: getTerminalCwd(terminalId) ?? el.dataset.cwd ?? '' }
 }
 
 /**

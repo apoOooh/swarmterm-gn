@@ -96,6 +96,8 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_Storage_FileSystem",
+  # Clipboard sequence-number poll (clipboard_media.rs fallback).
+  "Win32_System_DataExchange",
 ] }
 
 # Terminal host sidecar (ADR 0001). A workspace member so `cargo test` /

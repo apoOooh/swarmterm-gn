@@ -135,6 +135,96 @@ two matching file-stat samples, preserving video position and active playback.
 Inactive workspaces pause video. **Open in default app** and **Reveal file** are
 explicit buttons available for media; previewing a file does not execute it.
 
+**Media panel.** The right panel's **Media** tab lets you look at images and
+videos that come up while you work: a large viewer on top and a strip below,
+newest first, with each file's name, source pane and time. It is a viewer for
+you only. Agents get no tool for it, cannot open it or put anything into it,
+and nothing in it is passed to an agent. The list is not saved when Swarmterm
+closes.
+
+Swarmterm notices media paths a pane prints: absolute paths
+(`C:\...\shot.png`, spaces included), quoted paths and paths relative to the
+pane's starting folder. If such a file exists, its **name** joins the Media
+strip with a placeholder icon, and the pane shows a **N new images/videos** pill
+in its top-right corner. Swarmterm does not load the file until you open it:
+click the pill (opens the newest), the strip item, the popup item, or
+Ctrl+click the path in the terminal. Only then is that one file shown. Ctrl+click
+on a media path outside the project opens it straight in the Media tab. The panel
+never opens by itself, and your keyboard stays in the terminal. Only
+PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local drives are
+accepted. A path printed just before the file is written is retried a few times
+when printed again within seconds. Not detected: newly created files that are
+never printed, POSIX-style paths (`/c/...`, `~/...`), and relative paths after a
+`cd` (they resolve against the folder the pane started in).
+
+**New-media popup.** Settings → Media → **Show popup** (off by default) shows a
+small list in the bottom-right corner whenever new media arrives: thumbnail,
+name, source (pane name or `clipboard`) and time, newest first. Click an item
+to open it in the Media tab. The popup hides by itself after a few seconds
+(**Hide after**, default 6 s); pointing at it keeps it open, and scrolling the
+list restarts the countdown. Close it with ✕, or with Esc while the pointer is
+over it (Esc is otherwise left to your terminal, so agents can still be
+interrupted). It never takes the keyboard from your terminal. While it is up,
+an open web preview is hidden, because the preview would otherwise cover it.
+You can choose how many items it lists and turn it off separately for paths
+printed in a pane and clipboard images. Items not opened yet show a
+placeholder icon instead of a thumbnail.
+
+**Zoom an image.** With the pointer over an image in the Media tab (or an
+image opened as a file, or while annotating), the mouse wheel zooms in and out
+around the pointer, from 10% to 2000% of the image's real size; a touchpad
+pinch works too. Scrolling anywhere else, such as over the thumbnail strip,
+scrolls as usual. When zoomed in, drag the image to move it; while annotating,
+drag with the middle mouse button or hold Space and drag, so the pen keeps the
+left button (Space is taken only while the pointer is over the image). The
+corner control shows the zoom level: **Fit** (or a double-click on the image
+outside annotate mode) fits it back to the panel, **1:1** shows real pixels.
+Zoom only changes the view: marks stay on their spot and the saved copy is the
+same at any zoom. Opening another file, or the shown file changing on disk,
+returns to Fit. Videos are not zoomed.
+
+**Drag media into a pane.** Drag an item from the Media tab's thumbnail strip
+(or from the popup) onto a terminal pane: the pane is outlined while you are
+over it, and releasing types the file's path there, then gives that pane the
+keyboard. Claude Code and Codex panes receive it as a paste, exactly like
+Ctrl+V of a screenshot, so the agent attaches the image; other panes get the
+quoted path, as when you drop a file from Explorer. Releasing anywhere else
+(including over the web preview) or pressing Esc cancels. A short click still
+opens the item. Dragging an item you have not opened only types its path; it
+does not show or open the file. Paths containing a quote or line break cannot
+be inserted.
+
+**Annotate an image.** With an opened image in the Media tab, click
+**Annotate** in the viewer's title bar to draw on it: a pen, a wide
+see-through marker, straight lines, arrows (drag from tail to head),
+rectangles and ellipses (outline, or filled with **Fill**), in six colours with
+a width slider. **Undo** steps back one mark (also after **Clear**). Marks stay
+on the spot they mark when the panel is resized. **Save copy** writes the
+image with your marks as a new PNG (named like `shot (marked).png`, at the
+image's full resolution, at most 8192 px on the longest side; an animated
+GIF or WebP keeps only its first frame) and selects it in
+the gallery, ready to drag into a pane; the original file is never changed.
+You can also drag the grip handle in the toolbar straight onto a pane: the
+marked copy is saved on the way and its path inserted as with any media drag.
+**Cancel** or Esc (while the pointer is over the image) discards the marks.
+Marked copies live in a private folder under your Windows temp directory, at
+most 50 files / 300 MB, and are deleted when Swarmterm exits. Agents cannot
+start, read or change any of this. Copying the marked image to the clipboard is
+not supported; drag or save it instead.
+
+**Clipboard images (opt-in).** Settings → Media → **Clipboard images** (off by
+default) adds images you copy (a screenshot, an image copied in a browser or
+image editor) to the Media tab, tagged `clipboard`; copying image or video
+files in Explorer adds those files as they are. **Privacy:** your clipboard can
+hold private content, which is why this is opt-in. Copied images are saved as
+PNG only in a private folder under your Windows temp directory, at most 50
+images / 200 MB (oldest removed first; copying the same image again adds no
+duplicate). Nothing is uploaded or sent anywhere, and the folder is deleted
+when Swarmterm exits (a folder left by a crash is removed on a later run after
+a day). Turning the setting off stops watching at once, deletes the saved images
+and removes all clipboard items from the Media tab; turning it back on starts
+fresh.
+
 **Run** on a supported file starts a separate plain-shell pane in its folder:
 Python files, pytest naming conventions, JavaScript/Node files, Docker Compose
 YAML, .NET projects and solutions. Dirty files must be saved first. The required
