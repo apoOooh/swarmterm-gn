@@ -162,6 +162,23 @@ export function upsertSaved(list: SavedWorkspace[], entry: SavedWorkspace): Save
   return capSaved([entry, ...list.filter(w => w.id !== entry.id)])
 }
 
+export const PIN_NEW_WORKSPACES_KEY = 'swarmterm-pin-new-workspaces'
+export function readPinNew(storage: Pick<SavedStorage, 'getItem'>): boolean {
+  try { return storage.getItem(PIN_NEW_WORKSPACES_KEY) === '1' } catch { return false }
+}
+export function storePinNew(storage: Pick<SavedStorage, 'setItem'>, on: boolean): void {
+  storage.setItem(PIN_NEW_WORKSPACES_KEY, on ? '1' : '0')
+}
+/** Auto-pinning stops here: pinned entries are never evicted, so an unbounded pin set would defeat the saved-workspace cap. */
+export const MAX_AUTO_PINNED = 8
+/** A workspace seen for the first time (`seen` = ids stored or snapshotted this run, so an evicted or forgotten one is not "new") joins the end of the startup list. */
+export function pinIfNew(list: SavedWorkspace[], entry: SavedWorkspace, seen: ReadonlySet<string> = new Set()): SavedWorkspace {
+  if (seen.has(entry.id) || list.some(w => w.id === entry.id) || entry.autoOpen !== undefined) return entry
+  const pinned = autoOpenList(list)
+  if (pinned.length >= MAX_AUTO_PINNED) return entry
+  return { ...entry, autoOpen: Math.max(-1, ...pinned.map(w => w.autoOpen!)) + 1 }
+}
+
 /** Workspaces opened on app start, in their startup order. */
 export function autoOpenList(list: SavedWorkspace[]): SavedWorkspace[] {
   return list.filter(w => w.autoOpen !== undefined).sort((a, b) => a.autoOpen! - b.autoOpen!)

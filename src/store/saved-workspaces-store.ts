@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { autoOpenList, moveAutoOpen, readSaved, setAutoOpen, storeSaved, upsertSaved, type SavedWorkspace } from '@/lib/saved-workspaces'
+import { autoOpenList, moveAutoOpen, pinIfNew, readPinNew, readSaved, setAutoOpen, storePinNew, storeSaved, upsertSaved, type SavedWorkspace } from '@/lib/saved-workspaces'
 import { startSavedWorkspaceSync } from '@/lib/saved-workspace-sync'
 import { prepareSavedWorkspace, savedLeaves } from '@/lib/saved-workspace-restore'
 import { inspectSavedWorkspace } from '@/tauri/sessions'
@@ -19,6 +19,9 @@ interface SavedState {
   writable: boolean
   /** True while the startup workspaces open — keeps Welcome from flashing. */
   autostarting: boolean
+  /** Settings → Workspaces: every newly created workspace is pinned to open on startup. */
+  pinNew: boolean
+  setPinNew: (on: boolean) => void
   hydrate: () => void
   save: (entries: SavedWorkspace[]) => void
   open: (id: string) => Promise<void>
@@ -51,15 +54,32 @@ function takeDetached(ids: string[]): void {
 function startupPending(): boolean {
   try { return typeof window !== 'undefined' && autoOpenList(readSaved(window.localStorage)).length > 0 } catch { return false }
 }
+function initialPinNew(): boolean {
+  try { return typeof window !== 'undefined' && readPinNew(window.localStorage) } catch { return false }
+}
+// Ids stored or snapshotted in this process: only an id never seen is a new workspace.
+const seenIds = new Set<string>()
+/** Test hook: forget which workspace ids this process has seen. */
+export function resetSeenWorkspaceIds(): void { seenIds.clear() }
 export const useSavedWorkspacesStore = create<SavedState>((set, get) => ({
   entries: [], opening: [], error: null, notice: null, writable: true, autostarting: startupPending(),
+  pinNew: initialPinNew(),
+  setPinNew: (on) => {
+    set({ pinNew: on })
+    try { storePinNew(window.localStorage, on) } catch { set({ notice: 'The startup default could not be saved and will reset on restart.' }) }
+  },
   hydrate: () => {
-    try { set({ entries: readSaved(window.localStorage), writable: true, error: null }) }
+    try { const entries = readSaved(window.localStorage); entries.forEach(w => seenIds.add(w.id)); set({ entries, writable: true, error: null }) }
     catch (e) { set({ writable: false, error: e instanceof Error ? e.message : 'Saved workspaces could not be read.' }) }
   },
   save: (entries) => {
     if (!get().writable) return
-    const next = entries.reduce(upsertSaved, get().entries)
+    const pin = get().pinNew
+    const next = entries.reduce((list, entry) => {
+      const pinned = pin ? pinIfNew(list, entry, seenIds) : entry
+      seenIds.add(entry.id)
+      return upsertSaved(list, pinned)
+    }, get().entries)
     set({ entries: next }); persist(next)
   },
   open: async (id) => {

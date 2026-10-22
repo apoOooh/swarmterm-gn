@@ -215,7 +215,9 @@ the card and stops saving that open instance; its terminals keep running.
 **Open on startup:** pin a card (pin icon), choose **Open on startup** in an
 open workspace's **⋯** menu in the navbar, or tick it under **Settings →
 Workspaces → Open on startup** to open it automatically every time Swarmterm
-starts — in the navbar, in the order set there, with agents resuming their
+starts. Tick **Open new workspaces on startup by default** in the same place
+to pin every newly created workspace automatically (existing ones are not
+changed). They open in the navbar, in the order set there, with agents resuming their
 sessions. While at least one workspace opens on startup, Welcome is skipped;
 **New workspace** still brings it up. If none of them can be opened, Welcome
 appears with the reason. Startup workspaces are never pushed out of the
