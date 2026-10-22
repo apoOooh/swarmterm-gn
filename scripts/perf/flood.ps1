@@ -289,16 +289,21 @@ function Start-Sampler([int]$rootPid, [string]$csv, [string]$hostExe, [int[]]$fo
     param($rootPid, $csv, $treeSrc, $hostExe, $foreignHosts)
     ${function:Get-Tree} = [ScriptBlock]::Create($treeSrc)
     $cores = [Environment]::ProcessorCount
+    if (-not ('PerfSys.Times' -as [type])) {
+      Add-Type -Namespace PerfSys -Name Times -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool GetSystemTimes(out long idle, out long kernel, out long user);'
+    }
     "epochMs,group,cpuPct,privateMB" | Set-Content $csv
     $prev = @{}
     $i = 0
     while ($true) {
       # The WMI walk is the slow part; the tree only changes when panes spawn.
       if ($i++ % 10 -eq 0) { $tree = Get-Tree $rootPid $hostExe $foreignHosts }
-      $groups = @{ app = @(); host = @(); webview = @() }
+      $groups = @{ app = @(); host = @(); webview = @(); children = @() }
       foreach ($p in $tree) {
-        $g = switch -regex ($p.Name) { '^swarmterm\.exe$' { 'app' } '^swarmterm-host\.exe$' { 'host' } '^msedgewebview2\.exe$' { 'webview' } default { $null } }
-        if ($g) { $groups[$g] += [int]$p.ProcessId }
+        $g = switch -regex ($p.Name) { '^swarmterm\.exe$' { 'app' } '^swarmterm-host\.exe$' { 'host' } '^msedgewebview2\.exe$' { 'webview' } default { 'children' } }
+        # Everything else in the tree (root npm/cmd, dev server, cargo, conhost,
+        # shells) is 'children' on purpose: the whole instance's footprint.
+        $groups[$g] += [int]$p.ProcessId
       }
       $now = Get-Date
       $epoch = [DateTimeOffset]::new($now).ToUnixTimeMilliseconds()
@@ -321,6 +326,19 @@ function Start-Sampler([int]$rootPid, [string]$csv, [string]$hostExe, [int[]]$fo
         $cpuCell = if ($complete) { $cpu.ToString('F1', [Globalization.CultureInfo]::InvariantCulture) } else { '' }
         [string]::Format([Globalization.CultureInfo]::InvariantCulture, "{0},{1},{2},{3:F1}", $epoch, $g, $cpuCell, ($mem / 1MB)) | Add-Content $csv
       }
+      # Whole machine (every process, ours included): a scenario that runs
+      # 2-3x slower with more CPU per MB (bimodal c) must show whether
+      # something else loaded the machine at the time.
+      # GetSystemTimes: kernel time includes idle, so busy = kernel + user - idle.
+      $now = Get-Date; $epoch = [DateTimeOffset]::new($now).ToUnixTimeMilliseconds()
+      $si = 0L; $sk = 0L; $su = 0L; [void][PerfSys.Times]::GetSystemTimes([ref]$si, [ref]$sk, [ref]$su)
+      $all = ($sk + $su - $si) / 1e4
+      if ($prev.ContainsKey('machine')) {
+        $dt = ($now - $prev['machine'].t).TotalMilliseconds
+        $m = if ($dt -gt 0) { [Math]::Max(0, 100 * ($all - $prev['machine'].cpu) / $dt / $cores) } else { 0 }
+        [string]::Format([Globalization.CultureInfo]::InvariantCulture, "{0},machine,{1:F1},", $epoch, $m) | Add-Content $csv
+      }
+      $prev['machine'] = @{ t = $now; cpu = $all }
       Start-Sleep -Milliseconds 1000
     }
   }
@@ -329,11 +347,11 @@ function Start-Sampler([int]$rootPid, [string]$csv, [string]$hostExe, [int[]]$fo
 # Stats over the flood window only (epoch ms from the driver's result).
 function Get-Stats([string]$csv, [long]$startMs, [long]$endMs) {
   $rows = @(Import-Csv $csv | Where-Object { [long]$_.epochMs -ge $startMs -and [long]$_.epochMs -le $endMs })
-  foreach ($g in 'app', 'host', 'webview') {
+  foreach ($g in 'app', 'host', 'webview', 'children', 'machine') {
     $r = @($rows | Where-Object group -EQ $g)
     if (-not $r.Count) { continue }
     $cpu = @($r | Where-Object cpuPct -NE '' | ForEach-Object { [double]$_.cpuPct } | Sort-Object)
-    $mem = @($r | ForEach-Object { [double]$_.privateMB })
+    $mem = @($r | Where-Object privateMB -NE '' | ForEach-Object { [double]$_.privateMB })
     [pscustomobject]@{
       group = $g; samples = $r.Count
       cpuAvg = if ($cpu.Count) { [math]::Round(($cpu | Measure-Object -Average).Average, 1) } else { $null }

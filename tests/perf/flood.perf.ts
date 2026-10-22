@@ -711,6 +711,24 @@ async function installProbes(page: Page): Promise<void> {
     let lastData = performance.now()
     const longTasks: number[] = []
     const frames: number[] = []
+    // Nested setTimeout(0) delay, the way xterm's write loop yields between
+    // parse slices: past nesting level 5 it depends on the timer resolution
+    // the renderer gets (1 ms vs 15.6 ms), which throttles parse throughput
+    // without showing as CPU or long frames. Every 100 ms: 8 nested hops,
+    // the last 3 recorded. Cost: ~10 extra 4 ms+ wakeups/s on the main thread,
+    // and a pending short timer may itself raise the timer resolution, so it
+    // runs the same on both builds and also outside the window (the chain
+    // stays warm); compare probe-on runs only with probe-on runs.
+    const timerDelays: number[] = []
+    const timerBurst = (depth: number, t: number): void => {
+      setTimeout(() => {
+        const now = performance.now()
+        if (recording && depth >= 5) timerDelays.push(now - t)
+        if (depth < 7) timerBurst(depth + 1, now)
+        else setTimeout(() => timerBurst(0, performance.now()), 100)
+      }, 0)
+    }
+    timerBurst(0, performance.now())
     const echoes: number[] = []
     let pending: { ch: string; t: number; busy: boolean } | undefined
     let expectBusy = false
@@ -815,7 +833,7 @@ async function installProbes(page: Page): Promise<void> {
     const pct = (a: number[], p: number): number | null => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y); return Math.round(b[Math.min(b.length - 1, Math.floor(p * b.length))] * 10) / 10 }
     ;(window as any).__perf = {
       start() {
-        streams.clear(); longTasks.length = 0; frames.length = 0; echoes.length = 0; echoesBusy.length = 0
+        streams.clear(); longTasks.length = 0; frames.length = 0; timerDelays.length = 0; echoes.length = 0; echoesBusy.length = 0
         pending = undefined; unanswered = 0; unansweredBusy = 0; expectBusy = false; lastBusyN = 0; hiddenMs = 0; maxGap = 0
         decodeMs = 0; decodeCalls = 0
         recording = true; prev = 0; lastData = lastParse = startAt = floodEnd = performance.now(); firstData = firstParse = lastWrite = 0
@@ -874,7 +892,8 @@ async function installProbes(page: Page): Promise<void> {
             perPane: lagged.map(s => ({ parse: lagStats(s.parse), recvP95: pct(s.recv, 0.95) }))
           } : null,
           longTasks: { count: longTasks.length, over50: longTasks.filter(d => d > 50).length, totalMs: Math.round(longTasks.reduce((a, b) => a + b, 0)), max: pct(longTasks, 1) },
-          frames: { count: frames.length, p50: pct(frames, 0.5), p95: pct(frames, 0.95), p99: pct(frames, 0.99), max: pct(frames, 1), over50: frames.filter(f => f > 50).length }
+          frames: { count: frames.length, p50: pct(frames, 0.5), p95: pct(frames, 0.95), p99: pct(frames, 0.99), max: pct(frames, 1), over50: frames.filter(f => f > 50).length },
+          timerDelay: { samples: timerDelays.length, p50: pct(timerDelays, 0.5), p95: pct(timerDelays, 0.95), max: pct(timerDelays, 1) }
         }
       }
     }
