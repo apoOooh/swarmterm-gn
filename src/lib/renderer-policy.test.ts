@@ -275,10 +275,36 @@ describe('renderer policy', () => {
     expect(down).toEqual({ key: 'a', to: 'dom' })
     p.commit(down!, 3000)
     // Back to streamed text (~20 KB/s): promoted once the dwell has passed.
-    stream(p, 'a', 20_000, 3000, 12_900)
-    expect(p.next(12_900)).toBeUndefined()
-    stream(p, 'a', 20_000, 12_900, 13_100)
-    expect(p.next(13_100)).toEqual({ key: 'a', to: 'webgl' })
+    const due = 3000 + DEFAULT_RENDERER_POLICY.minDwellMs
+    stream(p, 'a', 20_000, 3000, due - 100)
+    expect(p.next(due - 100)).toBeUndefined()
+    stream(p, 'a', 20_000, due - 100, due + 100)
+    expect(p.next(due + 100)).toEqual({ key: 'a', to: 'webgl' })
+  })
+
+  it('defaults: a pane streaming ~50 KB/s after a demotion stays on DOM', () => {
+    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0 })
+    p.add('a', 0)
+    p.setVisible('a', true, 0)
+    p.commit({ key: 'a', to: 'dom' }, 0)
+    stream(p, 'a', 50_000, 0, 40_000)
+    expect(p.next(40_000)).toBeUndefined()
+  })
+
+  it('defaults: an oscillating rate switches at most once per dwell', () => {
+    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0 })
+    p.add('a', 0)
+    p.setVisible('a', true, 0)
+    p.claimOnOpen('a', 0)
+    const switches: number[] = []
+    for (let t = 0; t < 60_000; t += 1000) {
+      stream(p, 'a', (t / 1000) % 16 < 8 ? 200_000 : 10_000, t, t + 1000)
+      for (let s = p.next(t + 1000); s; s = p.next(t + 1000)) { p.commit(s, t + 1000); switches.push(t + 1000) }
+    }
+    expect(switches.length).toBeGreaterThan(0)
+    for (let i = 1; i < switches.length; i++) {
+      expect(switches[i] - switches[i - 1]).toBeGreaterThanOrEqual(DEFAULT_RENDERER_POLICY.minDwellMs)
+    }
   })
 
   it('demotes only a sustained flood, not a short burst', () => {
