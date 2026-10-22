@@ -124,12 +124,11 @@ import {
   onWarRoomRooms
 } from '@/tauri/warroom'
 import { onPreviewOpen } from '@/tauri/preview'
-import { onClipboardMedia, onMediaShow, setClipboardMediaEnabled } from '@/tauri/files'
+import { onClipboardMedia, setClipboardMediaEnabled } from '@/tauri/files'
 import { useMediaPrefStore } from '@/store/media-pref-store'
 import { MediaOverlay } from '@/components/Media/MediaOverlay'
 import { useMediaStore } from '@/store/media-store'
 import { mediaKind } from '@/lib/media-gallery'
-import { paneSourceLabel } from '@/lib/media-passive'
 import { closePreview, openPreview, wirePreviewEvents } from '@/lib/preview-registry'
 import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
@@ -918,30 +917,6 @@ export default function App(): ReactElement {
     }
   }, [deferReturnFocusToTerminal])
 
-  // Wire MCP media:show events into the Media gallery. Like preview:open, the
-  // panel is only revealed for the pane the user is looking at; background
-  // panes just add to the strip. Focus goes back to the terminal (the panel
-  // never takes the keyboard from an agent pane).
-  useEffect(() => {
-    const unlisten = onMediaShow((e) => {
-      const kind = mediaKind(e.path)
-      if (!kind) return
-      const st = useAppStore.getState()
-      const source = paneSourceLabel(e.terminalId)
-      const item = { path: e.path, kind, terminalId: e.terminalId, source, shownAt: Date.now() }
-      useMediaStore.getState().show(item)
-      useMediaStore.getState().announce(item, 'agent')
-      const ws = st.workspaces.find((w) => w.id === st.activeWorkspaceId)
-      if (ws && focusedVisibleLeaf(ws)?.terminalId === e.terminalId) {
-        useGitStore.getState().setMode('media')
-        deferReturnFocusToTerminal()
-      }
-    })
-    return () => {
-      void unlisten.then((fn) => fn())
-    }
-  }, [deferReturnFocusToTerminal])
-
   // Clipboard images (opt-in): keep the backend watcher in step with the
   // setting, and add each saved image to the gallery without taking the
   // viewer or the panel — the overlay (if enabled) is the only announcement.
@@ -953,7 +928,8 @@ export default function App(): ReactElement {
     const unlisten = onClipboardMedia((e) => {
       const kind = mediaKind(e.path)
       if (!kind) return
-      const item = { path: e.path, kind, terminalId: '', source: 'clipboard', shownAt: Date.now() }
+      // User-originated and already registered by the backend watcher.
+      const item = { path: e.path, kind, terminalId: '', source: 'clipboard', shownAt: Date.now(), opened: true }
       useMediaStore.getState().add(item)
       useMediaStore.getState().announce(item, 'clipboard')
     })

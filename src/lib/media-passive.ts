@@ -1,6 +1,8 @@
 /**
  * Wiring of passive media detection (see media-detect.ts) between the
- * terminal registry's output path, the backend allow-list and the gallery.
+ * terminal registry's output path, the backend existence check and the
+ * gallery. Detection only records paths: nothing is registered for serving
+ * (pane output is agent-controlled); the user opening an item does that.
  *
  * Hot-path contract: `noteMediaOutput` only keeps a reference to the raw
  * chunk (no decode, no copy) and arms a
@@ -13,7 +15,8 @@ import { mediaKind } from '@/lib/media-gallery'
 import { collectLeaves } from '@/lib/layout-tree'
 import { useAppStore } from '@/store/app-store'
 import { useMediaStore } from '@/store/media-store'
-import { registerDetectedMedia } from '@/tauri/files'
+import { useGitStore } from '@/store/git-store'
+import { checkDetectedMedia, registerOpenedMedia } from '@/tauri/files'
 
 export const SCAN_INTERVAL_MS = 400
 
@@ -55,7 +58,7 @@ function scan(terminalId: string, state: ScanState): void {
   const now = Date.now()
   const offered = detectMediaPaths(text).filter((p) => state.seen.offer(p, now))
   if (offered.length === 0) return
-  registerDetectedMedia(terminalId, offered)
+  checkDetectedMedia(terminalId, offered)
     .then((results) => {
       if (states.get(terminalId) !== state) return
       const source = paneSourceLabel(terminalId)
@@ -64,7 +67,7 @@ function scan(terminalId: string, state: ScanState): void {
         state.seen.confirm(offered[i])
         const kind = mediaKind(path)
         if (!kind) return
-        const item = { path, kind, terminalId, source, shownAt: now }
+        const item = { path, kind, terminalId, source, shownAt: now, opened: false }
         useMediaStore.getState().detect(item)
         useMediaStore.getState().announce(item, 'agent')
       })
@@ -99,4 +102,26 @@ export function forgetMediaOutput(terminalId: string): void {
   if (state?.timer) clearTimeout(state.timer)
   states.delete(terminalId)
   useMediaStore.getState().clearUnseen(terminalId)
+}
+
+/**
+ * Ctrl+click on a media path in a pane (outside the project): registers the
+ * file (the click is the user action) and shows it in the Media panel.
+ * Resolves false for non-media paths or a refused registration, so the
+ * caller falls back to its usual open-path handling.
+ */
+export async function showClickedMedia(terminalId: string, path: string): Promise<boolean> {
+  const kind = mediaKind(path)
+  if (!kind) return false
+  let canonical: string
+  try {
+    canonical = await registerOpenedMedia(path)
+  } catch {
+    return false
+  }
+  const item = { path: canonical, kind, terminalId, source: paneSourceLabel(terminalId), shownAt: Date.now(), opened: true }
+  useMediaStore.getState().show(item)
+  useMediaStore.getState().clearUnseen(terminalId)
+  useGitStore.getState().setMode('media')
+  return true
 }

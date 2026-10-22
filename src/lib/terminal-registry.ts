@@ -50,7 +50,7 @@ import {
   revealInFileManager
 } from '@/tauri/links'
 import { ActivityTracker } from '@/lib/activity-tracker'
-import { forgetMediaOutput, noteMediaOutput } from '@/lib/media-passive'
+import { forgetMediaOutput, noteMediaOutput, showClickedMedia } from '@/lib/media-passive'
 import { writeReplayHistory } from '@/lib/replay-history'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
@@ -956,6 +956,9 @@ function getOrCreate(id: string): Entry {
           await useDocumentStore.getState().open(leaf.id, context, resolved, { line: line ?? 1, column: col ?? 1 })
           return
         }
+        // Media outside the project opens in the Media panel. The Ctrl+click
+        // is the user action that registers it for serving (never the output).
+        if (await showClickedMedia(id, resolved)) return
         return openPathLocation(linkDeps, resolved, line, col)
       })
       .catch(console.warn)

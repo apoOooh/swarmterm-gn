@@ -1,7 +1,8 @@
 import { create } from 'zustand'
-import { addMediaItem, type MediaItem } from '@/lib/media-gallery'
+import { addMediaItem, markOpened, samePath, type MediaItem } from '@/lib/media-gallery'
 import { createAutoHide, overlayAllows, pushOverlayItem, type MediaOrigin } from '@/lib/media-overlay'
 import { useMediaPrefStore } from '@/store/media-pref-store'
+import { registerOpenedMedia } from '@/tauri/files'
 
 interface MediaState {
   /** Newest first, across all panes (each item names its source pane). */
@@ -23,6 +24,12 @@ interface MediaState {
   add: (item: MediaItem) => void
   clearUnseen: (terminalId: string) => void
   select: (path: string) => void
+  /**
+   * User action on an item (strip, overlay, pane badge): registers it for
+   * serving if needed, then selects it. Resolves false when the file can no
+   * longer be opened (gone, replaced by a non-media file, cap reached).
+   */
+  open: (path: string) => Promise<boolean>
   /** New media arrived; pops the overlay if the user's prefs allow it for this origin. */
   announce: (item: MediaItem, origin: MediaOrigin) => void
   dismissOverlay: () => void
@@ -70,6 +77,28 @@ export const useMediaStore = create<MediaState>((set) => ({
     delete unseen[item.terminalId]
     return { selectedPath: path, unseen }
   }),
+  open: async (path) => {
+    const { items, overlayItems } = useMediaStore.getState()
+    // An overlay row may outlive its strip entry (strip cap): register unless known opened.
+    const known = [...items, ...overlayItems].some((i) => i.opened && samePath(i.path, path))
+    if (!known) {
+      try {
+        await registerOpenedMedia(path)
+      } catch (err) {
+        // Gone or no longer media: drop it so it is not offered again.
+        console.warn('[media] open:', err)
+        useMediaStore.setState((s) => ({
+          items: s.items.filter((i) => !samePath(i.path, path)),
+          overlayItems: s.overlayItems.filter((i) => !samePath(i.path, path)),
+          selectedPath: s.selectedPath !== null && samePath(s.selectedPath, path) ? null : s.selectedPath,
+        }))
+        return false
+      }
+      useMediaStore.setState((s) => ({ items: markOpened(s.items, path), overlayItems: markOpened(s.overlayItems, path) }))
+    }
+    useMediaStore.getState().select(path)
+    return true
+  },
   announce: (item, origin) => {
     const prefs = useMediaPrefStore.getState().prefs
     if (!overlayAllows(prefs, origin)) return

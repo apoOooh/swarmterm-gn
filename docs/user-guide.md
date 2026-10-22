@@ -135,31 +135,27 @@ two matching file-stat samples, preserving video position and active playback.
 Inactive workspaces pause video. **Open in default app** and **Reveal file** are
 explicit buttons available for media; previewing a file does not execute it.
 
-**Media panel.** Agents can show the images and videos they create (screenshots,
-recordings, charts) with the `media.show` tool; the file may be anywhere on
-disk, including temp and scratch folders. It appears in the right panel's
-**Media** tab: a large viewer on top and a strip below with every shown file,
-newest first, with its name, source pane and time. Showing the same file again
-moves it to the front and reloads it. The tab opens by itself only when the
-agent's pane is the one you are working in, and your keyboard stays in the
-terminal. Only PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local
-drives are accepted, and Swarmterm serves only files an agent has shown in this
-session. The list is not saved when Swarmterm closes.
+**Media panel.** The right panel's **Media** tab lets you look at images and
+videos that come up while you work: a large viewer on top and a strip below,
+newest first, with each file's name, source pane and time. It is a viewer for
+you only. Agents get no tool for it, cannot open it or put anything into it,
+and nothing in it is passed to an agent. The list is not saved when Swarmterm
+closes.
 
-Swarmterm also notices media paths a pane prints, without the agent calling
-`media.show`: absolute paths (`C:\...\shot.png`, spaces included), quoted
-paths and paths relative to the pane's starting folder. Existing files join the
-Media strip quietly, and the pane shows a **N new images/videos** pill in its
-top-right corner; click it to open the Media tab on the newest one (the panel
-never opens by itself for these, and your keyboard stays in the terminal).
-Selecting a pane's item in the strip also clears its pill. A path printed just
-before the file is written is retried a few times when printed again within
-seconds; otherwise ask the agent to call `media.show`. Not detected: newly
-created files that are never printed, POSIX-style paths (`/c/...`, `~/...`),
-and relative paths after a `cd` (they resolve against the folder the pane
-started in). Note that any printed path counts, also from a `cat` of a file you
-did not write, so an existing image named there joins the strip and can be
-viewed in Swarmterm for the rest of the session.
+Swarmterm notices media paths a pane prints: absolute paths
+(`C:\...\shot.png`, spaces included), quoted paths and paths relative to the
+pane's starting folder. If such a file exists, its **name** joins the Media
+strip with a placeholder icon, and the pane shows a **N new images/videos** pill
+in its top-right corner. Swarmterm does not load the file until you open it:
+click the pill (opens the newest), the strip item, the popup item, or
+Ctrl+click the path in the terminal. Only then is that one file shown. Ctrl+click
+on a media path outside the project opens it straight in the Media tab. The panel
+never opens by itself, and your keyboard stays in the terminal. Only
+PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local drives are
+accepted. A path printed just before the file is written is retried a few times
+when printed again within seconds. Not detected: newly created files that are
+never printed, POSIX-style paths (`/c/...`, `~/...`), and relative paths after a
+`cd` (they resolve against the folder the pane started in).
 
 **New-media popup.** Settings → Media → **Show popup** (off by default) shows a
 small list in the bottom-right corner whenever new media arrives: thumbnail,
@@ -170,8 +166,9 @@ list restarts the countdown. Close it with ✕, or with Esc while the pointer is
 over it (Esc is otherwise left to your terminal, so agents can still be
 interrupted). It never takes the keyboard from your terminal. While it is up,
 an open web preview is hidden, because the preview would otherwise cover it.
-You can choose how many items it lists and turn it off separately for agent
-output and clipboard images.
+You can choose how many items it lists and turn it off separately for paths
+printed in a pane and clipboard images. Items not opened yet show a
+placeholder icon instead of a thumbnail.
 
 **Clipboard images (opt-in).** Settings → Media → **Clipboard images** (off by
 default) adds images you copy (a screenshot, an image copied in a browser or

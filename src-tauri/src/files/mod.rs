@@ -147,9 +147,9 @@ pub enum FileRequest {
     },
 }
 
-/// Upper bound of candidates one `media_register_detected` call resolves.
+/// Upper bound of candidates one `media_check_detected` call resolves.
 pub const MAX_DETECTED_PER_CALL: usize = 20;
-/// Upper bound of the session's unrooted allow-list growth through passive detection.
+/// Upper bound of the session's unrooted allow-list (user-opened and clipboard media).
 pub const MAX_UNROOTED_MEDIA: usize = 2000;
 
 pub struct FileService {
@@ -160,8 +160,8 @@ pub struct FileService {
     /// Keyed by canonical path. Lives only in memory: the preview protocol
     /// serves it so relative assets still resolve from the file's folder.
     drafts: Mutex<HashMap<PathBuf, String>>,
-    /// Canonical media files outside every context root that `media.show`
-    /// registered. The unrooted protocol route serves ONLY these, so the
+    /// Canonical media files outside every context root that the user opened
+    /// (or copied to the clipboard). The unrooted protocol route serves ONLY these, so the
     /// webview can never name an arbitrary file on disk.
     unrooted_media: Mutex<std::collections::HashSet<PathBuf>>,
 }
@@ -182,38 +182,39 @@ impl FileService {
         self.drafts.lock().ok()?.get(path).cloned()
     }
 
-    /// Validate (see `media::resolve_media`) and allow-list a media file for the
-    /// unrooted protocol route. Returns the canonical path the renderer uses.
-    pub fn register_unrooted_media(&self, raw: &str, cwd: &Path) -> Result<PathBuf, String> {
-        let path = media::resolve_media(raw, cwd)?;
-        self.unrooted_media
-            .lock()
-            .map_err(|e| e.to_string())?
-            .insert(path.clone());
-        Ok(path)
-    }
-
     /// Passive detection (paths a pane printed): one answer per candidate,
-    /// the canonical path of an existing media file (now allow-listed) or
-    /// `None` — most printed names are not files, which is not an error here.
-    /// Bounded twice: per call, so one output line cannot make the backend
-    /// stat thousands of paths, and in total, because any text a pane prints
-    /// (a `cat` of an untrusted file included) can name a file here.
-    pub fn register_detected_media(&self, raws: &[String], cwd: &Path) -> Vec<Option<PathBuf>> {
+    /// the canonical path of an existing media file or `None` (most printed
+    /// names are not files, which is not an error here). Validation ONLY:
+    /// nothing is allow-listed, because pane output is agent-controlled and
+    /// must never decide what the webview may read. The user opening an item
+    /// registers it (`register_user_media`). Bounded per call so one output
+    /// line cannot make the backend stat thousands of paths.
+    pub fn check_detected_media(&self, raws: &[String], cwd: &Path) -> Vec<Option<PathBuf>> {
         raws.iter()
             .enumerate()
             .map(|(i, raw)| {
                 if i >= MAX_DETECTED_PER_CALL {
                     return None;
                 }
-                self.register_capped_media(raw, cwd)
+                media::resolve_media(raw, cwd).ok()
             })
             .collect()
     }
 
-    /// One candidate from an automatic source (pane output, clipboard): like
-    /// `register_unrooted_media`, but the allow-list stops growing at
-    /// `MAX_UNROOTED_MEDIA`, since no agent asked for these explicitly.
+    /// A user action (opening a detected item, Ctrl+click on a printed path)
+    /// allow-lists one media file. Absolute paths only: the renderer passes
+    /// the canonical path `check_detected_media` or the link resolver returned.
+    pub fn register_user_media(&self, raw: &str) -> Result<PathBuf, String> {
+        if !Path::new(raw.trim()).is_absolute() {
+            return Err("path must be absolute".into());
+        }
+        self.register_capped_media(raw, Path::new(""))
+            .ok_or_else(|| "not an existing image/video, or too many opened this session".into())
+    }
+
+    /// Validate (see `media::resolve_media`) and allow-list one media file for
+    /// the unrooted route; the allow-list stops growing at `MAX_UNROOTED_MEDIA`.
+    /// Callers are user-originated only (clipboard, `register_user_media`).
     pub fn register_capped_media(&self, raw: &str, cwd: &Path) -> Option<PathBuf> {
         let path = media::resolve_media(raw, cwd).ok()?;
         let mut set = self.unrooted_media.lock().ok()?;

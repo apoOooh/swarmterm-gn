@@ -300,31 +300,35 @@ Do not mark them passed from the in-memory fixture alone.
       "worktree isolation is not enabled".
 - [ ] Closing a pane or workspace does NOT delete any worktree.
 
-## Media panel (media.show)
+## Media panel
 
-- [ ] Have an agent call `media.show` on a PNG in `%TEMP%` while you type in
-      its pane: the Media tab opens with the image, keystrokes keep landing
-      in the shell.
-- [ ] `media.show` on an MP4: it plays and seeking works (range requests).
-- [ ] Overwrite the PNG and call `media.show` again: it moves to the front of
-      the strip and shows the new content.
-- [ ] `media.show` from a background pane adds to the strip without opening
-      the panel; a `.txt`, `.svg`, missing or `\\host\share` path is refused.
-- [ ] Switching from Preview to Media hides the native preview webview.
+- [ ] The Swarmterm MCP server lists no `media.*` tool, and its instructions do
+      not mention the Media panel.
 - [ ] Run `echo C:\path with spaces\shot.png` (existing file) in a pane:
-      a "1 new image/video" pill appears in the pane, the Media panel does
-      not open, typing continues in the shell.
-- [ ] Click the pill: the Media tab opens on that image, the pill is gone and
-      keystrokes still land in the terminal.
+      a "1 new image/video" pill appears, the strip shows `shot.png` with a
+      placeholder icon (no thumbnail), the Media panel does not open, typing
+      continues in the shell.
+- [ ] Before opening it, the devtools network log shows no request for the
+      file; requesting its `swarmterm-media://localhost/unrooted?path=...` URL
+      is refused (403).
+- [ ] Click the pill: the Media tab opens on that image and shows it, the pill
+      is gone and keystrokes still land in the terminal.
+- [ ] Click a second, unopened strip item: it loads and shows. An MP4 plays
+      and seeking works (range requests).
+- [ ] Ctrl+click a media path outside the project in the terminal: the Media
+      tab opens on it. Ctrl+click a `.txt` path still opens the editor/file
+      manager as before.
 - [ ] Print the same path again: no new pill. Print a relative `out/x.webp`
-      and a quoted `"a b.gif"`: both are picked up; a missing path is not.
+      and a quoted `"a b.gif"`: both are picked up; a missing, `.svg` or
+      `\\host\share` path is not.
+- [ ] Switching from Preview to Media hides the native preview webview.
 - [ ] `cat` a large log (no media paths): no visible slowdown versus before.
 
 ## Media popup and clipboard images
 
 - [ ] Defaults: with a fresh profile, Settings → Media shows the popup and
-      Clipboard images off; `media.show` and copying a screenshot show no popup.
-- [ ] Turn on Show popup, have an agent call `media.show` while you type in a
+      Clipboard images off; a printed media path and copying a screenshot show no popup.
+- [ ] Turn on Show popup, `echo` an existing image path while you type in a
       pane: the corner popup lists the item, keystrokes keep landing in the
       shell, and it hides after ~6 s.
 - [ ] Hover the popup for 15 s: it stays; leave: it hides a full timeout later.
@@ -332,7 +336,8 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Press Esc while hovering: the popup closes and the agent does NOT receive
       the Esc. Esc with the pointer elsewhere goes to the terminal.
 - [ ] Click an item: the Media tab opens on it, the popup closes, typing still
-      goes to the terminal. A video row shows the film icon.
+      goes to the terminal and the image loads. Unopened rows show the
+      placeholder icon; an opened video row shows the film icon.
 - [ ] With the web preview open, trigger the popup: the preview hides while the
       popup is up and comes back after it hides.
 - [ ] Turn on Clipboard images, press Win+Shift+S and snip: a `clipboard` item

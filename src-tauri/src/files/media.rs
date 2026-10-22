@@ -54,13 +54,13 @@ pub(super) fn is_media(path: &Path) -> bool {
 /// Context id of the unrooted route: `/unrooted?path=<canonical abs path>`.
 /// Every webview of the app (preview pages included) shares this scheme, so a
 /// registered file is readable by them too; registration is per session and
-/// limited to images/videos an agent showed, which is the accepted exposure.
+/// limited to images/videos the user opened (or copied), the accepted exposure.
 /// Must stay in lockstep with `UNROOTED_MEDIA` in `src/tauri/files.ts`.
 pub(super) const UNROOTED_ID: &str = "unrooted";
 
-/// Resolve a path an agent named (absolute, or relative to its terminal cwd)
-/// to a canonical regular media file. Deliberately NO root check (agents
-/// write screenshots to scratch/temp dirs); the safety net is instead the
+/// Resolve a path a pane printed or the user opened (absolute, or relative to
+/// the terminal cwd) to a canonical regular media file. Deliberately NO root
+/// check (screenshots land in scratch/temp dirs); the safety net is instead the
 /// canonical regular-file + image/video extension rule, so only media can
 /// ever be allow-listed — never HTML/SVG or arbitrary files.
 pub(super) fn resolve_media(raw: &str, cwd: &Path) -> Result<std::path::PathBuf, String> {
@@ -68,8 +68,8 @@ pub(super) fn resolve_media(raw: &str, cwd: &Path) -> Result<std::path::PathBuf,
     if raw.is_empty() {
         return Err("path must not be empty".into());
     }
-    // UNC shares would make the app open an SMB connection on an agent's
-    // say-so; agents produce local files, so refuse network paths.
+    // UNC shares would make the app open an SMB connection because of
+    // printed text; screenshots are local files, so refuse network paths.
     if (raw.starts_with(r"\\") || raw.starts_with("//")) && !raw.starts_with(r"\\?\") {
         return Err("network (UNC) paths are not supported".into());
     }
@@ -173,10 +173,10 @@ pub fn response(service: &FileService, request: Request<Vec<u8>>) -> Response<Ve
         let (id, path) = target(&url)?;
         let path = if id == UNROOTED_ID {
             // Re-canonicalise and re-check: the file may have been swapped
-            // for a link or directory since `media.show` registered it.
+            // for a link or directory since the user opened it.
             let path = canonical(Path::new(&path))?;
             if !service.unrooted_registered(&path) || !is_media(&path) || !path.is_file() {
-                return Err("Media file was not shown by an agent".into());
+                return Err("Media file was not opened by the user".into());
             }
             path
         } else {
@@ -315,7 +315,7 @@ mod tests {
         };
         assert_eq!(get(unrooted(&shown), None).status(), 403);
         let path = service
-            .register_unrooted_media("shot.mp4", t.path())
+            .register_user_media(&shown.to_string_lossy())
             .unwrap();
         let r = get(unrooted(&path), Some("bytes=2-"));
         assert_eq!(r.status(), 206);
@@ -328,26 +328,41 @@ mod tests {
     }
 
     #[test]
-    fn detected_media_registers_only_existing_media_and_dedupes() {
+    fn detected_media_is_checked_but_never_registered() {
         let t = tempfile::tempdir().unwrap();
         let service = FileService::new(t.path().join("history"));
         fs::write(t.path().join("a.png"), [0]).unwrap();
         fs::write(t.path().join("b.txt"), "x").unwrap();
         let abs = t.path().join("a.png").to_string_lossy().into_owned();
         let raws: Vec<String> = vec!["a.png".into(), abs, "b.txt".into(), "gone.gif".into()];
-        let got = service.register_detected_media(&raws, t.path());
+        let got = service.check_detected_media(&raws, t.path());
         let a = canonical(&t.path().join("a.png")).unwrap();
         assert_eq!(got, vec![Some(a.clone()), Some(a.clone()), None, None]);
-        assert!(service.unrooted_registered(&a));
+        // Pane output (agent-controlled) never widens what the webview may read.
+        assert!(!service.unrooted_registered(&a));
         // Over the cap: entries past MAX_DETECTED_PER_CALL are not looked at.
         let many: Vec<String> = (0..super::super::MAX_DETECTED_PER_CALL)
             .map(|i| format!("missing{i}.png"))
             .chain(std::iter::once("a.png".to_string()))
             .collect();
         assert!(service
-            .register_detected_media(&many, t.path())
+            .check_detected_media(&many, t.path())
             .iter()
             .all(Option::is_none));
+    }
+
+    #[test]
+    fn user_media_registration_requires_absolute_existing_media() {
+        let t = tempfile::tempdir().unwrap();
+        let service = FileService::new(t.path().join("history"));
+        fs::write(t.path().join("a.webp"), [0]).unwrap();
+        fs::write(t.path().join("a.html"), "<p>").unwrap();
+        let abs = |n: &str| t.path().join(n).to_string_lossy().into_owned();
+        let a = service.register_user_media(&abs("a.webp")).unwrap();
+        assert!(service.unrooted_registered(&a));
+        assert!(service.register_user_media("a.webp").is_err());
+        assert!(service.register_user_media(&abs("a.html")).is_err());
+        assert!(service.register_user_media(&abs("nope.png")).is_err());
     }
 
     #[test]

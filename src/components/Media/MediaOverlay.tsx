@@ -12,7 +12,7 @@
  * - Videos get the film icon, not a <video> per row.
  */
 import { useEffect, useRef, type ReactElement } from 'react'
-import { Film, X } from 'lucide-react'
+import { Film, ImageIcon, X } from 'lucide-react'
 import { fileName } from '@/lib/media-gallery'
 import { overlayAutoHide, useMediaStore } from '@/store/media-store'
 import { useGitStore } from '@/store/git-store'
@@ -48,9 +48,9 @@ export function MediaOverlay(): ReactElement | null {
 
   const open = (path: string): void => {
     const media = useMediaStore.getState()
-    media.select(path)
-    useGitStore.getState().setMode('media')
     media.dismissOverlay()
+    useGitStore.getState().setMode('media')
+    void media.open(path)
   }
 
   return (
@@ -84,7 +84,9 @@ export function MediaOverlay(): ReactElement | null {
             className="flex items-center gap-2 rounded p-1 text-left hover:bg-muted"
           >
             <div className="flex h-10 w-14 shrink-0 items-center justify-center overflow-hidden bg-muted/40">
-              {item.kind === 'video'
+              {!item.opened
+                ? <ImageIcon className="h-5 w-5 text-muted-foreground" />
+                : item.kind === 'video'
                 ? <Film className="h-5 w-5 text-muted-foreground" />
                 : <img src={unrootedMediaUrl(item.path, item.shownAt)} alt="" draggable={false} className="max-h-full max-w-full object-contain" />}
             </div>

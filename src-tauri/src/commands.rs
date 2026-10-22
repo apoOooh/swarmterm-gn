@@ -57,11 +57,12 @@ pub async fn files_request(
 }
 
 /// Passive media detection: the renderer found image/video paths in a pane's
-/// output. Relative paths resolve against that terminal's cwd; only existing
-/// media files are allow-listed for the unrooted route; the answer has one
-/// entry per input (canonical display path, or null). Disk work runs off the async executor.
+/// output. Relative paths resolve against that terminal's cwd; the answer has
+/// one entry per input (canonical display path of an existing media file, or
+/// null). Validation only, nothing is allow-listed here (see
+/// `FileService::check_detected_media`). Disk work runs off the async executor.
 #[tauri::command]
-pub async fn media_register_detected(
+pub async fn media_check_detected(
     window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     service: State<'_, std::sync::Arc<crate::files::FileService>>,
@@ -79,13 +80,33 @@ pub async fn media_register_detected(
     let service = service.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         service
-            .register_detected_media(&paths, std::path::Path::new(&cwd))
+            .check_detected_media(&paths, std::path::Path::new(&cwd))
             .iter()
             .map(|p| p.as_deref().map(crate::files::path::display))
             .collect()
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// The user opened a media item (gallery/overlay/badge click, Ctrl+click on a
+/// printed path): allow-list that one absolute file for the unrooted route.
+/// Returns the canonical display path.
+#[tauri::command]
+pub async fn media_open(
+    window: tauri::WebviewWindow,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    path: String,
+) -> Result<String, String> {
+    files_main_only(&window)?;
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        service
+            .register_user_media(&path)
+            .map(|p| crate::files::path::display(&p))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Settings → Media → Clipboard images (opt-in). Idempotent; the renderer

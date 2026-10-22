@@ -57,7 +57,7 @@ export function MediaView({ doc, leafId }: { doc: FileDocument; leafId: string }
 }
 
 /**
- * Path-only mode for files outside every file context (agent `media.show`).
+ * Path-only mode for files outside every file context (user-opened gallery items).
  * No document store and no stat polling: the unrooted route has no stat
  * command, so `revision` (the show time) is what reloads a re-shown file.
  */

@@ -10,7 +10,7 @@ import {
 } from './media-overlay'
 import type { MediaItem } from './media-gallery'
 
-const item = (path: string, shownAt = 1): MediaItem => ({ path, kind: 'image', terminalId: 't', source: 'pane', shownAt })
+const item = (path: string, shownAt = 1): MediaItem => ({ path, kind: 'image', terminalId: 't', source: 'pane', shownAt, opened: true })
 
 describe('media prefs', () => {
   it('defaults keep both the overlay and clipboard watching off', () => {

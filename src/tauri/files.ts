@@ -42,18 +42,17 @@ export function mediaUrl(contextId: string, path: string, revision: string | num
 }
 /** Context id of the backend's unrooted media route (`UNROOTED_ID` in `files/media.rs`). */
 export const UNROOTED_MEDIA = 'unrooted'
-/** Media outside every file context; only files an agent registered via `media.show` are served. */
+/** Media outside every file context; only files the user opened (or copied) are served. */
 export const unrootedMediaUrl = (path: string, revision: string | number = 0): string => mediaUrl(UNROOTED_MEDIA, path, revision)
-export interface MediaShowEvent { terminalId: string; path: string }
-/** `media:show` from the MCP `media.show` tool; `path` is canonical and already registered. */
-export const onMediaShow = (cb: (e: MediaShowEvent) => void): Promise<() => void> => listen<MediaShowEvent>('media:show', (e) => cb(e.payload))
 export interface ClipboardMediaEvent { path: string }
 /** `media:clipboard`: a clipboard image saved as PNG (or a copied media file), canonical and already registered. */
 export const onClipboardMedia = (cb: (e: ClipboardMediaEvent) => void): Promise<() => void> => listen<ClipboardMediaEvent>('media:clipboard', (e) => cb(e.payload))
 /** Starts/stops the backend clipboard watcher (opt-in setting). */
 export const setClipboardMediaEnabled = (enabled: boolean): Promise<void> => invoke('clipboard_media_set_enabled', { enabled })
-/** Passive detection: allow-lists the candidates that are existing media files (relative = terminal cwd). One entry per input: its canonical path, or null. */
-export const registerDetectedMedia = (terminalId: string, paths: string[]): Promise<(string | null)[]> => invoke('media_register_detected', { terminalId, paths })
+/** Passive detection: which candidates are existing media files (relative = terminal cwd). Registers nothing. One entry per input: its canonical path, or null. */
+export const checkDetectedMedia = (terminalId: string, paths: string[]): Promise<(string | null)[]> => invoke('media_check_detected', { terminalId, paths })
+/** User action only (open click, Ctrl+click): allow-lists one absolute media file for the unrooted route; resolves to its canonical path. */
+export const registerOpenedMedia = (path: string): Promise<string> => invoke('media_open', { path })
 /** Hands a Markdown file to the external MarkText app. `executable` empty = auto-detect. */
 export const openInMarkText = (contextId: string, path: string, executable: string): Promise<void> => request('openMarkText', { contextId, path, executable })
 /** Unsaved HTML buffer the preview frame renders instead of disk; `null` drops it. */

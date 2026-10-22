@@ -53,7 +53,7 @@ export function MediaSettingsPanel(): ReactElement {
         <ToggleRow label="Show popup" description="Corner list of the newest items; click one to open it in the Media panel." checked={prefs.overlay} onChange={(on) => update({ overlay: on })} />
         <NumberRow label="Hide after (seconds)" description="Pointing at the popup keeps it open." value={prefs.overlayTimeoutSec} range={OVERLAY_TIMEOUT_RANGE} disabled={!prefs.overlay} onChange={(n) => update({ overlayTimeoutSec: n })} />
         <NumberRow label="Items in the popup" description="Older items stay in the Media panel." value={prefs.overlayMaxItems} range={OVERLAY_MAX_ITEMS_RANGE} disabled={!prefs.overlay} onChange={(n) => update({ overlayMaxItems: n })} />
-        <ToggleRow label="Agent output" description="media.show calls and media paths printed in a pane." checked={prefs.overlayAgent} onChange={(on) => update({ overlayAgent: on })} />
+        <ToggleRow label="Agent output" description="Media paths printed in a pane (shown as names until you open them)." checked={prefs.overlayAgent} onChange={(on) => update({ overlayAgent: on })} />
         <ToggleRow label="Clipboard images" description="Needs Clipboard images below." checked={prefs.overlayClipboard} onChange={(on) => update({ overlayClipboard: on })} />
       </section>
 

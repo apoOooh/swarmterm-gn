@@ -1,6 +1,6 @@
 /**
  * Passive media detection: finds image/video paths an agent prints in a pane
- * so the Media gallery can offer them without the agent calling media.show.
+ * so the Media gallery can offer them (as names; the user opens them).
  *
  * Runs off the pty hot path: the registry only appends raw chunks to a
  * `MediaOutputBuffer` and scans it on a debounce timer. The scan itself

@@ -13,7 +13,7 @@ export interface MediaPrefs {
   overlay: boolean
   overlayTimeoutSec: number
   overlayMaxItems: number
-  /** Overlay for `media.show` and paths found in pane output. */
+  /** Overlay for media paths found in pane output. */
   overlayAgent: boolean
   /** Overlay for clipboard images (only matters while `clipboardImages` is on). */
   overlayClipboard: boolean

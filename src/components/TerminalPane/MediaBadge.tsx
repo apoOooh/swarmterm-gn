@@ -23,9 +23,10 @@ export function MediaBadge({ terminalId }: { terminalId: string }): ReactElement
       onClick={() => {
         const media = useMediaStore.getState()
         const newest = media.items.find((i) => i.terminalId === terminalId)
-        if (newest) media.select(newest.path)
         media.clearUnseen(terminalId)
         useGitStore.getState().setMode('media')
+        // The click is the user action that registers the file for serving.
+        if (newest) void media.open(newest.path)
       }}
       title="Open in the Media panel"
       className="absolute right-3 top-2 z-10 flex items-center gap-1.5 rounded-full border border-[#a855f7]/50 bg-card/95 px-2.5 py-1 text-[11px] text-muted-foreground shadow-lg transition-colors hover:text-foreground"
