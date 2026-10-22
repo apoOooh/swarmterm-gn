@@ -10,14 +10,17 @@ import { drawMark, flattenSize, type Mark, type Size } from '@/lib/media-annotat
  * `natural` is the <img>'s natural size, the space the marks were drawn in.
  */
 export async function flattenMarked(image: Blob, natural: Size, marks: Mark[]): Promise<Uint8Array> {
-  const bitmap = await createImageBitmap(image)
+  // Decode straight to the capped output size, so a huge image never has a
+  // full-resolution bitmap (AnnotateView also refuses oversized headers).
+  const target = flattenSize(natural)
+  const bitmap = await createImageBitmap(image, { resizeWidth: target.width, resizeHeight: target.height, resizeQuality: 'high' })
   try {
-    const out = flattenSize({ width: bitmap.width, height: bitmap.height })
+    const out = { width: bitmap.width, height: bitmap.height }
     const canvas = new OffscreenCanvas(out.width, out.height)
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('2D canvas unavailable')
     ctx.drawImage(bitmap, 0, 0, out.width, out.height)
-    // Marks are in <img> natural pixels; normally the bitmap has the same size.
+    // Marks are in <img> natural pixels; scale them onto the (capped) output.
     ctx.setTransform(out.width / Math.max(1, natural.width), 0, 0, out.height / Math.max(1, natural.height), 0, 0)
     for (const m of marks) drawMark(ctx, m)
     const blob = await canvas.convertToBlob({ type: 'image/png' })

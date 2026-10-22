@@ -212,3 +212,60 @@ export function drawMark(ctx: Ctx2D, m: Mark): void {
   }
   ctx.restore()
 }
+
+/**
+ * Largest image (in pixels) the annotate view decodes. A small, highly
+ * compressed PNG can declare 40000x40000: decoding that needs GBs and freezes
+ * the renderer, so such files are refused before any decode.
+ */
+export const ANNOTATE_MAX_PIXELS = 100_000_000
+
+/**
+ * Pixel size declared in an image header (PNG, JPEG, GIF, WebP, BMP), read
+ * without decoding. `null` when the format is unknown or the header is cut;
+ * such files are let through, so the cap is best-effort (common formats only).
+ * EXIF orientation is ignored: harmless, the pixel product is the same.
+ */
+export function imageHeaderSize(bytes: Uint8Array): Size | null {
+  const b = bytes
+  const n = b.length
+  const u16be = (i: number): number => (b[i] << 8) | b[i + 1]
+  const u16le = (i: number): number => b[i] | (b[i + 1] << 8)
+  const u24le = (i: number): number => b[i] | (b[i + 1] << 8) | (b[i + 2] << 16)
+  const u32be = (i: number): number => ((b[i] << 24) >>> 0) + ((b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3])
+  const i32le = (i: number): number => b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)
+  const ascii = (i: number, s: string): boolean => i + s.length <= n && [...s].every((c, k) => b[i + k] === c.charCodeAt(0))
+  // PNG: signature, then IHDR width/height (big-endian u32).
+  if (n >= 24 && b[0] === 0x89 && ascii(1, 'PNG') && ascii(12, 'IHDR')) return { width: u32be(16), height: u32be(20) }
+  if (n >= 10 && (ascii(0, 'GIF87a') || ascii(0, 'GIF89a'))) return { width: u16le(6), height: u16le(8) }
+  if (n >= 26 && ascii(0, 'BM')) return { width: Math.abs(i32le(18)), height: Math.abs(i32le(22)) }
+  if (n >= 30 && ascii(0, 'RIFF') && ascii(8, 'WEBP')) {
+    if (ascii(12, 'VP8X')) return { width: u24le(24) + 1, height: u24le(27) + 1 }
+    if (ascii(12, 'VP8L') && b[20] === 0x2f) {
+      const bits = (b[21] | (b[22] << 8) | (b[23] << 16) | (b[24] << 24)) >>> 0
+      return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 }
+    }
+    if (ascii(12, 'VP8 ')) return { width: u16le(26) & 0x3fff, height: u16le(28) & 0x3fff }
+    return null
+  }
+  // JPEG: walk the segments to the first SOFn frame header.
+  if (n >= 4 && b[0] === 0xff && b[1] === 0xd8) {
+    let i = 2
+    while (i + 8 < n) {
+      if (b[i] !== 0xff) return null
+      const marker = b[i + 1]
+      if (marker === 0xff) { i++; continue }
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { i += 2; continue }
+      const isSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc
+      if (isSof) return { width: u16be(i + 7), height: u16be(i + 5) }
+      i += 2 + u16be(i + 2)
+    }
+  }
+  return null
+}
+
+/** Why the annotate view refuses `size`, or `null` when it may be decoded. */
+export function annotateSizeError(size: Size | null): string | null {
+  if (!size || size.width * size.height <= ANNOTATE_MAX_PIXELS) return null
+  return `This image is too large to annotate (${size.width} x ${size.height} px; the limit is ${ANNOTATE_MAX_PIXELS / 1_000_000} megapixels).`
+}

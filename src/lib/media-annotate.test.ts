@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addMark, addPoint, arrowHead, clearMarks, drawMark, emptyMarks, flattenSize, imagePerScreen, isVisibleMark,
-  markedName, normRect, toImage, undoMark, type Ctx2D, type Mark,
+  markedName, normRect, toImage, undoMark, annotateSizeError, imageHeaderSize, ANNOTATE_MAX_PIXELS, type Ctx2D, type Mark,
 } from '@/lib/media-annotate'
 
 const pen = (n: number): Mark => ({ tool: 'pen', color: '#f00', width: 4, points: [{ x: n, y: n }] })
@@ -121,5 +121,40 @@ describe('drawMark', () => {
     const a = recorder()
     drawMark(a.ctx, { tool: 'arrow', color: 'r', width: 2, points: [{ x: 0, y: 0 }, { x: 50, y: 0 }] })
     expect(a.calls.filter((c) => c === 'closePath()')).toHaveLength(1)
+  })
+})
+
+describe('imageHeaderSize', () => {
+  const png = (w: number, h: number): Uint8Array => {
+    const b = new Uint8Array(33)
+    b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52])
+    new DataView(b.buffer).setUint32(16, w)
+    new DataView(b.buffer).setUint32(20, h)
+    return b
+  }
+  it('reads PNG IHDR, including huge declared sizes', () => {
+    expect(imageHeaderSize(png(640, 480))).toEqual({ width: 640, height: 480 })
+    expect(imageHeaderSize(png(40000, 40000))).toEqual({ width: 40000, height: 40000 })
+  })
+  it('walks JPEG segments to the SOF frame', () => {
+    const b = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 11, 8, 0x01, 0x2c, 0x02, 0x58, 3, 0, 0, 0])
+    expect(imageHeaderSize(b)).toEqual({ width: 600, height: 300 })
+  })
+  it('reads GIF, BMP and WebP VP8X', () => {
+    expect(imageHeaderSize(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 10, 0, 20, 0]))).toEqual({ width: 10, height: 20 })
+    const bmp = new Uint8Array(26); bmp.set([0x42, 0x4d]); new DataView(bmp.buffer).setInt32(18, 7, true); new DataView(bmp.buffer).setInt32(22, -9, true)
+    expect(imageHeaderSize(bmp)).toEqual({ width: 7, height: 9 })
+    const webp = new Uint8Array(30); webp.set([...'RIFF'].map((c) => c.charCodeAt(0))); webp.set([...'WEBPVP8X'].map((c) => c.charCodeAt(0)), 8)
+    webp.set([99, 0, 0, 49, 0, 0], 24)
+    expect(imageHeaderSize(webp)).toEqual({ width: 100, height: 50 })
+  })
+  it('returns null for unknown or truncated data', () => {
+    expect(imageHeaderSize(new Uint8Array([1, 2, 3]))).toBeNull()
+    expect(imageHeaderSize(png(1, 1).slice(0, 20))).toBeNull()
+  })
+  it('annotateSizeError refuses only above the pixel cap', () => {
+    expect(annotateSizeError(null)).toBeNull()
+    expect(annotateSizeError({ width: 10000, height: ANNOTATE_MAX_PIXELS / 10000 })).toBeNull()
+    expect(annotateSizeError({ width: 40000, height: 40000 })).toMatch(/too large to annotate/)
   })
 })

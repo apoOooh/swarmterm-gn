@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react'
 import { Circle, GripVertical, Highlighter, Minus, MoveUpRight, Pencil, Save, Square, Trash2, Undo2, X } from 'lucide-react'
 import {
-  ANNOTATE_COLORS, addMark, addPoint, clearMarks, drawMark, emptyMarks, imagePerScreen, isFreehand, markedName, toImage, undoMark,
+  ANNOTATE_COLORS, addMark, addPoint, annotateSizeError, imageHeaderSize, clearMarks, drawMark, emptyMarks, imagePerScreen, isFreehand, markedName, toImage, undoMark,
   type AnnotateTool, type Mark, type MarkState, type Size,
 } from '@/lib/media-annotate'
 import { mediaDropPane, mediaDropText } from '@/lib/media-drag'
@@ -109,6 +109,10 @@ export function AnnotateView({ item, onClose }: { item: MediaItem; onClose: () =
     let live = true
     readOpenedImage(item.path).then((bytes) => {
       if (!live) return
+      // Refuse decompression bombs before the <img> (or the flatten) decodes them.
+      // `bytes` is an ArrayBuffer, so this is a view, not a copy.
+      const tooLarge = annotateSizeError(imageHeaderSize(new Uint8Array(bytes)))
+      if (tooLarge) { setError(tooLarge); return }
       const blob = new Blob([bytes])
       url = URL.createObjectURL(blob)
       setImage({ blob, url })
