@@ -170,6 +170,19 @@ You can choose how many items it lists and turn it off separately for paths
 printed in a pane and clipboard images. Items not opened yet show a
 placeholder icon instead of a thumbnail.
 
+**Zoom an image.** With the pointer over an image in the Media tab (or an
+image opened as a file, or while annotating), the mouse wheel zooms in and out
+around the pointer, from 10% to 2000% of the image's real size; a touchpad
+pinch works too. Scrolling anywhere else, such as over the thumbnail strip,
+scrolls as usual. When zoomed in, drag the image to move it; while annotating,
+drag with the middle mouse button or hold Space and drag, so the pen keeps the
+left button (Space is taken only while the pointer is over the image). The
+corner control shows the zoom level: **Fit** (or a double-click on the image
+outside annotate mode) fits it back to the panel, **1:1** shows real pixels.
+Zoom only changes the view: marks stay on their spot and the saved copy is the
+same at any zoom. Opening another file, or the shown file changing on disk,
+returns to Fit. Videos are not zoomed.
+
 **Drag media into a pane.** Drag an item from the Media tab's thumbnail strip
 (or from the popup) onto a terminal pane: the pane is outlined while you are
 over it, and releasing types the file's path there, then gives that pane the

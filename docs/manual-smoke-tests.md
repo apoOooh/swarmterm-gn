@@ -324,6 +324,22 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Switching from Preview to Media hides the native preview webview.
 - [ ] `cat` a large log (no media paths): no visible slowdown versus before.
 
+## Media zoom
+
+- [ ] Wheel over an opened image in the Media tab: it zooms in/out around the
+      pointer (the spot under it stays put), stopping at 10% and 2000%; the
+      corner shows the percentage. A touchpad pinch zooms too.
+- [ ] Wheel over the thumbnail strip, or over the viewer outside the image:
+      the strip scrolls / nothing zooms. A video does not zoom.
+- [ ] Zoomed in: left-drag pans, the image cannot be dragged out of the panel;
+      double-click or **Fit** returns to fit, **1:1** shows real pixels.
+- [ ] Keystrokes still reach the focused terminal after zooming, panning and
+      clicking Fit/1:1.
+- [ ] While annotating: zoom in, draw a pen stroke and a rectangle; they land
+      under the pointer. Middle-drag and Space+drag pan without drawing; Space
+      with the pointer elsewhere types a space in the terminal. Marks stay sharp
+      after zooming; Save copy is identical to an unzoomed save.
+
 ## Media annotate
 
 - [ ] An opened image shows **Annotate** in the viewer title; an unopened item

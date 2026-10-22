@@ -5,6 +5,7 @@ import { useDocumentStore } from '@/store/document-store'
 import type { FileDocument } from '@/lib/files/documents'
 import { useAppStore } from '@/store/app-store'
 import { collectLeaves } from '@/lib/layout-tree'
+import { ZoomableImage } from '@/components/Media/use-zoom-pan'
 const positions = new Map<string, number>()
 
 export function MediaView({ doc, leafId }: { doc: FileDocument; leafId: string }): React.ReactElement {
@@ -45,14 +46,13 @@ export function MediaView({ doc, leafId }: { doc: FileDocument; leafId: string }
       <button className="rounded px-2 py-1 hover:bg-accent" onClick={() => void openMediaExternal(doc.context.id, doc.path).catch(fail)}>Open in default app</button>
       <button className="rounded px-2 py-1 hover:bg-accent" onClick={() => void revealFile(doc.context.id, doc.path).catch(fail)}>Reveal file</button>
     </div>
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
-      {stat === null || broken ? <p role="alert" className="text-xs text-destructive">This media could not be loaded. Check the file, project scope, and platform codec support.</p> : !url ? <p className="text-xs text-muted-foreground">Loading media…</p> : doc.kind === 'video' ?
+    {url && !broken && doc.kind !== 'video' ? <ZoomableImage src={url} alt={doc.path} className="p-4" onError={() => setBroken(true)} /> : <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+      {stat === null || broken ? <p role="alert" className="text-xs text-destructive">This media could not be loaded. Check the file, project scope, and platform codec support.</p> : !url ? <p className="text-xs text-muted-foreground">Loading media…</p> : 
         <video key={url} ref={video} controls preload="metadata" src={url} className="max-h-full max-w-full" onTimeUpdate={(e) => { positions.set(doc.key, e.currentTarget.currentTime); if (positions.size > 128) positions.delete(positions.keys().next().value!) }} onLoadedMetadata={(e) => {
           const old = resume.current; resume.current = null
           if (old) { e.currentTarget.currentTime = resumeAt(old.time, e.currentTarget.duration); if (old.playing && activeRef.current) void e.currentTarget.play().catch(() => {}) }
-        }} onError={() => setBroken(true)} /> :
-        <img key={url} src={url} alt={doc.path} className="max-h-full max-w-full object-contain" draggable={false} onError={() => setBroken(true)} />}
-    </div>
+        }} onError={() => setBroken(true)} />}
+    </div>}
   </div>
 }
 
@@ -64,9 +64,9 @@ export function MediaView({ doc, leafId }: { doc: FileDocument; leafId: string }
 export function MediaPathView({ path, kind, revision }: { path: string; kind: 'image' | 'video'; revision: number }): React.ReactElement {
   const [broken, setBroken] = useState<string | null>(null)
   const url = unrootedMediaUrl(path, revision)
+  if (kind === 'image' && broken !== url) return <ZoomableImage src={url} alt={path} className="p-2" onError={() => setBroken(url)} />
   return <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-2">
-    {broken === url ? <p role="alert" className="text-xs text-destructive">This media could not be loaded. Check the file and platform codec support.</p> : kind === 'video' ?
-      <video key={url} controls preload="metadata" src={url} className="max-h-full max-w-full" onError={() => setBroken(url)} /> :
-      <img key={url} src={url} alt={path} className="max-h-full max-w-full object-contain" draggable={false} onError={() => setBroken(url)} />}
+    {broken === url ? <p role="alert" className="text-xs text-destructive">This media could not be loaded. Check the file and platform codec support.</p> : 
+      <video key={url} controls preload="metadata" src={url} className="max-h-full max-w-full" onError={() => setBroken(url)} />}
   </div>
 }

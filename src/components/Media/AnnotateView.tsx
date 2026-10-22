@@ -21,6 +21,8 @@ import type { MediaItem } from '@/lib/media-gallery'
 import { startPointerDrag } from '@/lib/pointer-drag-session'
 import { insertIntoPane } from '@/components/FileDropListener'
 import { flattenMarked } from '@/components/Media/flatten-marked'
+import { ZoomControls, useZoomPan } from '@/components/Media/use-zoom-pan'
+import { canvasQuality } from '@/lib/media-zoom'
 import { useMediaStore } from '@/store/media-store'
 import { readOpenedImage, saveMarkedImage } from '@/tauri/files'
 import { focusTerminal } from '@/lib/terminal-registry'
@@ -74,6 +76,10 @@ export function AnnotateView({ item, onClose }: { item: MediaItem; onClose: () =
   const [error, setError] = useState<string | null>(null)
   const imgRef = useRef<HTMLImageElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
+  /** Canvas backing multiplier while zoomed (marks stay sharp); set after the zoom settles. */
+  const [quality, setQuality] = useState(1)
+  const qualityTimer = useRef(0)
   const hovered = useRef(false)
   /** The last saved copy, reused while the marks are unchanged (drag twice = one file). */
   const saved = useRef<{ marks: Mark[]; path: Promise<string> } | null>(null)
@@ -86,7 +92,7 @@ export function AnnotateView({ item, onClose }: { item: MediaItem; onClose: () =
     const w = img.clientWidth
     const h = img.clientHeight
     Object.assign(canvas.style, { left: `${img.offsetLeft}px`, top: `${img.offsetTop}px`, width: `${w}px`, height: `${h}px` })
-    const dpr = window.devicePixelRatio || 1
+    const dpr = (window.devicePixelRatio || 1) * quality
     const cw = Math.max(1, Math.round(w * dpr))
     const ch = Math.max(1, Math.round(h * dpr))
     // Assigning width/height reallocates the backing store: only on resize,
@@ -102,7 +108,7 @@ export function AnnotateView({ item, onClose }: { item: MediaItem; onClose: () =
     ctx.setTransform((dpr * w) / natural.width, 0, 0, (dpr * h) / natural.height, 0, 0)
     for (const m of state.marks) drawMark(ctx, m)
     if (draft) drawMark(ctx, draft)
-  }, [natural, state, draft])
+  }, [natural, state, draft, quality])
 
   useEffect(() => {
     let url: string | null = null
@@ -149,6 +155,22 @@ export function AnnotateView({ item, onClose }: { item: MediaItem; onClose: () =
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
+  // The canvas shares the image's box and transform, so marks follow the zoom
+  // for free; only its resolution is raised, debounced so a wheel burst does
+  // not reallocate the backing store every frame.
+  const zoom = useZoomPan({
+    container: stageRef, img: imgRef, extra: canvasRef, enabled: !!image, mode: 'annotate', resetKey: image?.url ?? '',
+    onChange: (v) => {
+      clearTimeout(qualityTimer.current)
+      qualityTimer.current = window.setTimeout(() => {
+        const img = imgRef.current
+        if (img) setQuality(canvasQuality(v.s, { width: img.clientWidth, height: img.clientHeight }, window.devicePixelRatio || 1))
+      }, 150)
+    },
+  })
+  useEffect(() => () => clearTimeout(qualityTimer.current), [])
+
+  // getBoundingClientRect includes the zoom transform, so this maps through it.
   const pointAt = (e: { clientX: number; clientY: number }): { p: { x: number; y: number }; ips: number } | null => {
     const img = imgRef.current
     if (!img || !natural) return null
@@ -279,12 +301,13 @@ export function AnnotateView({ item, onClose }: { item: MediaItem; onClose: () =
       <button tabIndex={-1} onMouseDown={swallow} onClick={onClose} title="Cancel (Esc while over the image)" className={btn}><X className="h-3.5 w-3.5" /></button>
     </div>
     {error && <p role="alert" className="shrink-0 px-2 py-1 text-xs text-destructive">{error}</p>}
-    <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2">
+    <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2">
       {image && <img ref={imgRef} src={image.url} alt={item.path} draggable={false}
         onLoad={(e) => setNatural({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
         className="max-h-full max-w-full select-none object-contain" />}
       <canvas ref={canvasRef} className="absolute cursor-crosshair touch-none"
         onMouseDown={swallow} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={() => setDraft(null)} />
+      {image && <ZoomControls zoom={zoom} />}
     </div>
   </div>
 }
