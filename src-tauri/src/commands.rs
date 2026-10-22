@@ -82,6 +82,30 @@ pub fn files_unwatch(
     Ok(())
 }
 
+/// Ids whose `create_terminal` is in flight (see there).
+static SPAWNING: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+struct SpawnReservation(String);
+
+impl SpawnReservation {
+    fn take(id: &str) -> Option<Self> {
+        let mut set = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
+        set.get_or_insert_with(Default::default)
+            .insert(id.to_string())
+            .then(|| SpawnReservation(id.to_string()))
+    }
+}
+
+impl Drop for SpawnReservation {
+    fn drop(&mut self) {
+        let mut set = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(set) = set.as_mut() {
+            set.remove(&self.0);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn create_terminal(
     app: AppHandle,
@@ -91,15 +115,17 @@ pub async fn create_terminal(
 ) -> CreateTerminalResult {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Preserve serialized creation/duplicate-id checks while keeping config
-        // reads, profile enrollment and OS process startup off the UI thread.
-        static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        // Only the id is reserved, not the whole spawn: config reads, profile
+        // enrollment and the OS process start of different panes overlap, so
+        // a workspace of N agents no longer starts them one after another.
+        // Two creates of the SAME id still exclude each other (the second
+        // gets the duplicate error, as it did after waiting before).
         let _span = crate::prof::span("cmd.create_terminal");
         let t0 = crate::prof::now();
-        let Ok(_guard) = SPAWN_LOCK.lock() else {
-            return CreateTerminalResult::err("Terminal creation interrupted");
+        let Some(_reservation) = SpawnReservation::take(&id) else {
+            return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
         };
-        crate::prof::since("lock.spawn.wait", t0);
+        crate::prof::since("spawn.reserve", t0);
         let state = app.state::<AppState>();
         crate::pty::spawn_terminal(&app, &state, id, options, on_data)
     })

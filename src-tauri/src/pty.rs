@@ -773,6 +773,20 @@ struct SpawnPlan {
     claude_config_dir: Option<std::path::PathBuf>,
 }
 
+/// One lock per account id for `accounts::enroll` (see `plan_spawn`).
+fn enroll_lock(account_id: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
+    static LOCKS: std::sync::Mutex<
+        Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
+    > = std::sync::Mutex::new(None);
+    LOCKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .entry(account_id.to_string())
+        .or_default()
+        .clone()
+}
+
 fn plan_spawn(
     app: &AppHandle,
     state: &AppState,
@@ -782,6 +796,12 @@ fn plan_spawn(
     let account = match options.account_id.as_deref() {
         Some(id) => {
             let account = crate::accounts::resolve(app, id, options.agent_id.as_deref())?;
+            // Enrollment merge-writes the profile's config files: two panes
+            // of one account starting together must not interleave those
+            // read-modify-writes now that creates run concurrently. Keyed
+            // per account, so different accounts enroll in parallel.
+            let lock = enroll_lock(id);
+            let _enroll = lock.lock().unwrap_or_else(|e| e.into_inner());
             crate::accounts::enroll(&account, state.mcp_url.get().map(|url| url.as_ref()))?;
             Some(account)
         }
@@ -1202,7 +1222,8 @@ pub fn register_hosted(
         return;
     };
     let mut map = state.terminals.lock().unwrap();
-    // `spawn_terminal` refused a live duplicate under SPAWN_LOCK already;
+    // `create_terminal` reserved the id and `spawn_terminal` refused a live
+    // duplicate already;
     // never replace a live generation from an event.
     if map.contains_key(id) {
         eprintln!("[host] spawned {id} while a generation is live; closing it");

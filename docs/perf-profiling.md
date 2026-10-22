@@ -61,7 +61,7 @@ ETL files are deleted after summarizing.
   `host-sweep`) are set in every build; the tokio runtime is replaced by a
   named one (`tokio-rt`) only in profiling builds.
 - Histograms: count, total, max, log2-µs buckets (p50/p99 are bucket upper
-  bounds). Names: `lock.<lock>.<site>[.wait]`, `lock.spawn.wait`, `flow.park`,
+  bounds). Names: `lock.<lock>.<site>[.wait]`, `spawn.reserve` (create_terminal id reservation), `flow.park`,
   `chan.read_queue.send_block` (time the reader blocked on the full
   `sync_channel` = flusher/flow gate behind; true send→recv latency and queue
   length are not measured), `cmd.*`, `ipc.channel_send`, `main.dispatch_delay`.
