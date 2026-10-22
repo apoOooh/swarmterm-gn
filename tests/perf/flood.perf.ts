@@ -26,6 +26,7 @@
 import { chromium, test, type Page } from '@playwright/test'
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { startProfile, type ProfileMode } from './profile-capture'
 
 const env = (k: string, d?: string): string => {
   const v = process.env[k] ?? d
@@ -198,6 +199,9 @@ async function runScenario(tStart: number): Promise<void> {
   }
 
   if (process.env.PERF_TRACE) await browser.startTracing(page, { path: process.env.PERF_TRACE, screenshots: false, categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline.frame'] })
+  // Profile runs only (flood.ps1 -Profile): captures start with the window.
+  const profMode = process.env.PERF_PROFILE as ProfileMode | undefined
+  const stopProfile = profMode ? await startProfile(browser, page, profMode, env('PERF_PROFILE_DIR')) : undefined
   await page.evaluate(() => (window as any).__perf.start())
   const t0 = Date.now()
   // Start signal for the mock agents (their template line already runs).
@@ -218,6 +222,7 @@ async function runScenario(tStart: number): Promise<void> {
   await page.waitForTimeout(1500)
   const result = await page.evaluate((lines) => (window as any).__perf.stop(lines), lines)
   const tRunEnd = Date.now()
+  if (stopProfile) await stopProfile()
   if (process.env.PERF_TRACE) await browser.stopTracing()
   if (!caps.renderCounter) result.renders = { WorkspaceTabs: 'unsupported', AttentionBadge: 'unsupported' }
   result.caps = caps; result.notes = notes

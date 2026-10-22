@@ -282,7 +282,7 @@ impl PtyInput {
         let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
         let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let drained = queued.clone();
-        std::thread::spawn(move || {
+        crate::prof::spawn_named("pty-writer", move || {
             while let Ok(mut bytes) = rx.recv() {
                 // Coalesce whatever queued behind a slow write into one write.
                 while let Ok(more) = rx.try_recv() {
@@ -495,7 +495,7 @@ impl ManagedTerminal {
             // detach, so the close runs off the caller's (command/quit) thread
             // and can never delay the hard kill past KILL_GRACE.
             let deadline = std::time::Instant::now() + KILL_GRACE;
-            std::thread::spawn(move || {
+            crate::prof::spawn_named("pty-close", move || {
                 // Dropping the sender ends the writer thread once it is idle;
                 // one parked in write_all is released by the master close.
                 drop(input);
@@ -503,7 +503,7 @@ impl ManagedTerminal {
                 // output pipe, so the reader sees EOF and emits Exit as before.
                 drop(master);
             });
-            Some(std::thread::spawn(move || {
+            Some(crate::prof::spawn_named("pty-killer", move || {
                 while std::time::Instant::now() < deadline
                     && job.active_processes().is_some_and(|n| n > 0)
                 {
@@ -977,7 +977,7 @@ fn spawn_local(
     let waiter_app = app.clone();
     let waiter_id = id.clone();
     let waiter_flow = flow.clone();
-    std::thread::spawn(move || {
+    crate::prof::spawn_named(format!("pty-waiter-{waiter_id}"), move || {
         let mut child = child;
         let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
         // The entry (and with it the ack route) goes away next: the tail of
@@ -988,7 +988,7 @@ fn spawn_local(
     });
 
     let app = app.clone();
-    std::thread::spawn(move || {
+    crate::prof::spawn_named(format!("pty-flusher-{id}"), move || {
         read_loop(app, id, reader_spawn_id, reader, exit_rx, on_data, flow);
     });
 
@@ -1235,7 +1235,7 @@ fn read_loop(
     // child instead of the WebView buffering GBs. Input is a separate thread
     // (`PtyInput`) and never waits on this.
     let (tx, rx) = std::sync::mpsc::sync_channel::<String>(swarmterm_host::flow::READ_QUEUE_DEPTH);
-    std::thread::spawn(move || {
+    crate::prof::spawn_named(format!("pty-reader-{id}"), move || {
         let mut pending: Vec<u8> = Vec::new();
         let mut chunk = vec![0u8; READ_BUF_BYTES];
         loop {
@@ -1246,9 +1246,13 @@ fn read_loop(
                 Ok(n) => {
                     pending.extend_from_slice(&chunk[..n]);
                     if let Some(text) = take_valid_utf8(&mut pending) {
+                        // Time blocked here = the bounded queue was full,
+                        // i.e. the flusher (or the flow gate) is behind.
+                        let t0 = crate::prof::now();
                         if tx.send(text).is_err() {
                             return;
                         }
+                        crate::prof::since("chan.read_queue.send_block", t0);
                     }
                 }
             }
@@ -1262,7 +1266,9 @@ fn read_loop(
     let mut last_flush = std::time::Instant::now() - OUTPUT_IDLE;
     while let Ok(first) = rx.recv() {
         let text = next_batch(&rx, first, last_flush.elapsed() >= OUTPUT_IDLE);
+        let t0 = crate::prof::now();
         flow.wait();
+        crate::prof::since("flow.park", t0);
         let n = text.len();
         deliver_output(&app, &id, text, &on_data);
         flow.sent(n);
@@ -1281,16 +1287,14 @@ pub fn deliver_output(app: &AppHandle, id: &str, text: String, on_data: &Channel
     // Lock scope is the one statement — never held across the send. `None`
     // only during teardown, when there is nobody left to read the tail.
     if let Some(state) = app.try_state::<AppState>() {
-        state
-            .peer_states
-            .lock()
-            .unwrap()
+        crate::prof::lock("lock.peer_states.output", &state.peer_states)
             .push_output(id, &text, crate::warroom::now_ms());
         // No `peer_wake` here: output only pushes a `wait_peer` stall verdict
         // later, never produces one, and the loop re-reads the output clock
         // on its own stall timer (`mcp::tools::peers::wait_loop`). Waking
         // every waiter per batch only churned locks under a flood.
     }
+    let _span = crate::prof::span("ipc.channel_send");
     let _ = on_data.send(PtyOut::Data(text));
 }
 

@@ -75,13 +75,107 @@ param(
   # no LLVM). tauri:dev:isolated works too where LLVM is available.
   [ValidateSet('tauri:dev:no-speech', 'tauri:dev:isolated')] [string]$DevScript = 'tauri:dev:no-speech',
   [switch]$Trace,
-  [switch]$KeepRunning
+  [switch]$KeepRunning,
+  # Profile run (docs/perf-profiling.md): `profiling` cargo profile + feature,
+  # renderer capture (-ProfileMode), 1 Hz per-process CPU, optional ETW via
+  # the admin broker (-Etw). Results go to test-results/perf-profile/, never
+  # perf-runs/: profiled numbers are perturbed and must not enter A/B tables.
+  # (`$Profile` is a PowerShell automatic variable, hence the alias.)
+  [Alias('Profile')] [switch]$ProfileRun,
+  [ValidateSet('cpu', 'trace', 'mem')] [string]$ProfileMode = 'cpu',
+  [ValidateSet('none', 'spawn', 'cpu', 'wait')] [string]$Etw = 'none'
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot/../..").Path
 $dataDir = Join-Path $env:TEMP 'swarmterm-perf'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $outDir = Join-Path $repo "test-results/perf-runs/$stamp"
+if ($ProfileRun) {
+  if ($Trace -and $ProfileMode -eq 'trace') { throw '-Trace and -ProfileMode trace both trace; pick one' }
+  $outDir = Join-Path $repo "test-results/perf-profile/$stamp"
+  $profRustDir = Join-Path $outDir 'rust'
+  New-Item -ItemType Directory -Force $profRustDir | Out-Null
+  $banner = "PROFILE RUN ($ProfileMode, etw $Etw): instrumented build, perturbed timings. NEVER mix these results into A/B tables (perf-runs/compare.ps1)."
+  Set-Content (Join-Path $outDir 'PROFILE-RUN.txt') $banner
+  Write-Host ('=' * 78) -ForegroundColor Yellow; Write-Host $banner -ForegroundColor Yellow; Write-Host ('=' * 78) -ForegroundColor Yellow
+  # The broker lives in the project folder, beside repo\ and worktrees\.
+  $broker = if ($env:SWARMTERM_ADMIN_BROKER) { $env:SWARMTERM_ADMIN_BROKER } else {
+    @((Join-Path $repo '..\admin-broker'), (Join-Path $repo '..\..\admin-broker')) | Where-Object { Test-Path $_ } | Select-Object -First 1
+  }
+  if (-not $broker) { $broker = Join-Path $repo '..\admin-broker' }
+  if ($Etw -ne 'none' -and -not (Test-Path (Join-Path $broker 'ready'))) {
+    Write-Warning "admin broker not running ($broker\ready missing): ETW capture skipped. The lead starts it with start-broker.ps1."
+    $Etw = 'none'
+  }
+}
+
+# ETW through the elevated admin broker (whitelisted logman/wpr actions only;
+# this script never elevates). Returns $true when the broker acknowledged.
+function Invoke-Broker([string]$action, [string]$name) {
+  $r = & pwsh -NoProfile -File (Join-Path $broker 'request.ps1') -Action $action -Name $name 2>&1
+  if ($LASTEXITCODE) { Write-Warning "broker $action $name failed: $r"; return $false }
+  return $true
+}
+
+# Non-elevated ETL readers: Get-WinEvent for the Kernel-Process trace,
+# tracerpt's summary for WPR traces (per-stack CPU/wait analysis needs WPA or
+# wpaexporter from the Windows Performance Toolkit, not installed here). The
+# .etl is deleted after summarizing.
+function Save-EtwSummary([string]$etl, [string]$kind, [string]$dir) {
+  if (-not (Test-Path $etl)) { Write-Warning "no ETL at $etl"; return }
+  try {
+    if ($kind -eq 'spawn') {
+      $ev = @(Get-WinEvent -Path $etl -Oldest -ErrorAction Stop)
+      # Kernel-Process: 1 = process start, 2 = process stop.
+      $rows = foreach ($e in $ev | Where-Object { $_.Id -in 1, 2 }) {
+        $x = [xml]$e.ToXml(); $d = @{}; foreach ($n in $x.Event.EventData.Data) { $d[$n.Name] = $n.'#text' }
+        [pscustomobject]@{ time = $e.TimeCreated.ToString('HH:mm:ss.fff'); event = if ($e.Id -eq 1) { 'start' } else { 'stop' }; pid = $d.ProcessID; ppid = $d.ParentProcessID; image = $d.ImageName }
+      }
+      $rows | Export-Csv (Join-Path $dir 'etw-spawn.csv') -NoTypeInformation
+      Write-Host "etw spawn: $(@($rows | Where-Object event -EQ 'start').Count) starts, $(@($rows | Where-Object event -EQ 'stop').Count) stops -> etw-spawn.csv"
+    } else {
+      tracerpt $etl -summary (Join-Path $dir "etw-$kind-summary.txt") -o (Join-Path $dir "etw-$kind-dump.xml") -of XML -y *> $null
+      Remove-Item (Join-Path $dir "etw-$kind-dump.xml") -ErrorAction SilentlyContinue
+      Write-Host "etw ${kind}: tracerpt summary -> etw-$kind-summary.txt (per-stack CPU/wait needs WPA, not installed)"
+    }
+  } catch { Write-Warning "ETL summary failed: $_" }
+  finally {
+    Remove-Item $etl -Force -ErrorAction SilentlyContinue
+    if (Test-Path $etl) { Write-Warning "could not delete $etl (broker-owned ACL?); delete it by hand, ETLs are large" }
+  }
+}
+
+# End of one profiled scenario: stop ETW and the process sampler, have the app
+# dump its Rust counters into the scenario folder, print the top-N summary.
+# Reads $profDir, $profRustDir, $procJob, $procStop, $etwOn, $etwName from the
+# scenario loop.
+function Complete-ProfileScenario {
+  if ($etwOn) {
+    $stopAction = if ($Etw -eq 'spawn') { 'spawn-stop' } else { 'cpu-stop' }
+    if (Invoke-Broker $stopAction $etwName) { Save-EtwSummary (Join-Path $broker "out\$etwName.etl") $Etw $profDir }
+    elseif ($Etw -ne 'spawn') { Invoke-Broker 'cancel' $etwName | Out-Null }
+  }
+  Remove-Item Env:PERF_PROFILE, Env:PERF_PROFILE_DIR -ErrorAction SilentlyContinue
+  Set-Content $procStop ''
+  Wait-Job $procJob -Timeout 5 | Out-Null; Stop-Job $procJob; Remove-Job $procJob -Force
+  $before = @(Get-ChildItem $profRustDir -Filter 'prof-*.json' -ErrorAction SilentlyContinue)
+  Set-Content (Join-Path $profRustDir 'dump.request') ''
+  $deadline = (Get-Date).AddSeconds(5)
+  do { Start-Sleep -Milliseconds 200; $new = @(Get-ChildItem $profRustDir -Filter 'prof-*-trigger.json' | Where-Object { $_.Name -notin $before.Name }) } until ($new.Count -or (Get-Date) -gt $deadline)
+  # Completion time and work done, so the summary can show CPU per unit of
+  # work: more CPU that finishes sooner is a win, not a regression.
+  if (Test-Path $json) { Copy-Item $json (Join-Path $profDir 'result.json') -Force }
+  $work = switch ($s) {
+    'a' { @{ units = $cfg.flood * $SizeMB; unit = 'MB' } }
+    'b' { @{ units = $cfg.flood * $TuiSizeMB; unit = 'MB' } }
+    'c' { @{ units = $cfg.flood * $SizeMB; unit = 'MB' } }
+    default { @{ units = $cfg.flood * $AgentSeconds; unit = 'pane-s' } }
+  }
+  $work | ConvertTo-Json | Set-Content (Join-Path $profDir 'work.json')
+  if ($new.Count) { Move-Item $new[0].FullName (Join-Path $profDir 'rust.json') -Force }
+  else { Write-Warning "no Rust counter dump (not a profiling build? see $profRustDir)" }
+  node (Join-Path $PSScriptRoot 'profile-summary.mjs') $profDir | Tee-Object -FilePath (Join-Path $profDir 'summary.txt') | Write-Host
+}
 New-Item -ItemType Directory -Force $dataDir, $outDir | Out-Null
 
 # ---------- data generation ----------
@@ -251,7 +345,10 @@ if ($Scenario -eq 'full') { $Repeat = 1; $MockAgents = $true }
 if ($HostMode) {
   # tauri dev builds only the app; the host binary is a separate package.
   Push-Location $repo
-  try { cargo build -p swarmterm-host --manifest-path src-tauri/Cargo.toml 2>&1 | Select-Object -Last 1 | Write-Host; if ($LASTEXITCODE) { throw "cargo build -p swarmterm-host failed" } } finally { Pop-Location }
+  # The app looks for the host next to its own exe: a profiling app lives in
+  # target\profiling, so the host must be built there too.
+  $hostProfile = if ($ProfileRun) { @('--profile', 'profiling') } else { @() }
+  try { cargo build -p swarmterm-host @hostProfile --manifest-path src-tauri/Cargo.toml 2>&1 | Select-Object -Last 1 | Write-Host; if ($LASTEXITCODE) { throw "cargo build -p swarmterm-host failed" } } finally { Pop-Location }
 }
 
 if (Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue) {
@@ -274,9 +371,14 @@ foreach ($d in (Join-Path $env:APPDATA $perfId), (Join-Path $env:LOCALAPPDATA $p
   if (Test-Path $d) { throw "could not clear perf profile $d (instance still running?)" }
 }
 $features = if ($DevScript -eq 'tauri:dev:no-speech') { ' -- --no-default-features' } else { '' }
+if ($ProfileRun) {
+  # Release codegen + line tables (Cargo.toml [profile.profiling]); its
+  # output dir target/profiling never overwrites a debug/release A/B binary.
+  $features = if ($features) { "$features --features profiling --profile profiling" } else { ' -- --features profiling --profile profiling' }
+}
 
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo 'src-tauri\target' }
-$hostExe = Join-Path $targetDir 'debug\swarmterm-host.exe'
+$hostExe = Join-Path $targetDir "$(if ($ProfileRun) { 'profiling' } else { 'debug' })\swarmterm-host.exe"
 # Dev hosts of this worktree that already run belong to someone else: never
 # sample or stop them.
 $foreignHosts = Get-DevHostPids $hostExe
@@ -288,10 +390,13 @@ if ($foreignHosts.Count) { Write-Warning "dev host(s) $($foreignHosts -join ', '
 $prevWv2Args = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = (@($prevWv2Args, "--remote-debugging-port=$CdpPort") | Where-Object { $_ }) -join ' '
 $log = Join-Path $outDir 'dev.log'
+$prevProfDir = $env:SWARMTERM_PROFILE_DIR
+if ($ProfileRun) { $env:SWARMTERM_PROFILE_DIR = $profRustDir }
 try {
   $npm = Start-Process -FilePath 'cmd.exe' -ArgumentList '/d', '/c', "npx tauri dev --config `"$perfConf`"$features > `"$log`" 2>&1" -WorkingDirectory $repo -PassThru -WindowStyle Hidden
 } finally {
   if ($null -eq $prevWv2Args) { Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue } else { $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $prevWv2Args }
+  if ($null -eq $prevProfDir) { Remove-Item Env:SWARMTERM_PROFILE_DIR -ErrorAction SilentlyContinue } else { $env:SWARMTERM_PROFILE_DIR = $prevProfDir }
 }
 $npmStart = $npm.StartTime
 Write-Host "dev instance starting (pid $($npm.Id)), log $log"
@@ -334,6 +439,22 @@ try {
     $env:PERF_TRACE = if ($Trace) { Join-Path $outDir "trace-$s-$rep.json" } else { '' }
     if (Test-Path $json) { Remove-Item $json }
     $pwLog = Join-Path $outDir "playwright-$s-$rep.log"
+    if ($ProfileRun) {
+      $profDir = Join-Path $outDir "$s-$rep"
+      New-Item -ItemType Directory -Force $profDir | Out-Null
+      $env:PERF_PROFILE = $ProfileMode; $env:PERF_PROFILE_DIR = $profDir
+      # Rust counters restart with the scenario (the watchdog polls the file every 50 ms).
+      Set-Content (Join-Path $profRustDir 'reset.request') ''
+      $procStop = Join-Path $profDir 'procs.stop'
+      $procJob = Start-Job -FilePath (Join-Path $PSScriptRoot 'profile-procs.ps1') -ArgumentList (Join-Path $profDir 'procs.csv'), $npm.Id, $procStop, 3600, $hostExe
+      $etwName = "p$stamp-$s-$rep"
+      $etwOn = $false
+      if ($Etw -ne 'none') {
+        $etwOn = Invoke-Broker $(if ($Etw -eq 'wait') { 'wait-start' } else { "$Etw-start" }) $etwName
+        # A half-started session must not keep tracing: stop/cancel it.
+        if (-not $etwOn) { if ($Etw -eq 'spawn') { Invoke-Broker 'spawn-stop' $etwName | Out-Null } else { Invoke-Broker 'cancel' $etwName | Out-Null } }
+      }
+    }
     $job = Start-Sampler $npm.Id $csv $hostExe $foreignHosts
     # Wall time of the whole scenario: Playwright start, setup, run, teardown.
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -349,6 +470,7 @@ try {
       # Surface sampler failures instead of silently reporting empty stats.
       if ($job.State -eq 'Failed' -or $job.ChildJobs[0].Error.Count) { Write-Warning "sampler for scenario $s failed: $($job.ChildJobs[0].Error -join '; ') $($job.ChildJobs[0].JobStateInfo.Reason)" }
       Stop-Job $job; Remove-Job $job -Force
+      if ($ProfileRun) { Complete-ProfileScenario }
     }
     $wv = if (Test-Path $json) { Get-Content $json -Raw | ConvertFrom-Json } else { $null }
     # Status and reason: the spec writes its error into the result file; a

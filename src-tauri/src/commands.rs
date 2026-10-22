@@ -94,9 +94,12 @@ pub async fn create_terminal(
         // Preserve serialized creation/duplicate-id checks while keeping config
         // reads, profile enrollment and OS process startup off the UI thread.
         static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _span = crate::prof::span("cmd.create_terminal");
+        let t0 = crate::prof::now();
         let Ok(_guard) = SPAWN_LOCK.lock() else {
             return CreateTerminalResult::err("Terminal creation interrupted");
         };
+        crate::prof::since("lock.spawn.wait", t0);
         let state = app.state::<AppState>();
         crate::pty::spawn_terminal(&app, &state, id, options, on_data)
     })
@@ -110,7 +113,8 @@ pub fn write_terminal(state: State<'_, AppState>, id: String, data: String) -> R
     // thread (pty::PtyInput), so a full input pipe can't freeze the UI. An
     // unknown id stays a silent no-op (a pane racing its own close); a full
     // queue is returned so the renderer can tell the user input was dropped.
-    match state.terminals.lock().unwrap().get(&id) {
+    let _span = crate::prof::span("cmd.write_terminal");
+    match crate::prof::lock("lock.terminals.write", &state.terminals).get(&id) {
         Some(t) => t.send(data.as_bytes()).inspect_err(|e| {
             eprintln!("[pty] write to {id} dropped: {e}");
         }),
@@ -143,7 +147,8 @@ pub fn write_terminal_checked(
 /// output (perf phase 2 flow control; batched, ~64 KB per call).
 #[tauri::command]
 pub fn ack_output(state: State<'_, AppState>, id: String, spawn_id: String, bytes: u64) {
-    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
+    let _span = crate::prof::span("cmd.ack_output");
+    if let Some(t) = crate::prof::lock("lock.terminals.ack", &state.terminals).get(&id) {
         t.ack(&spawn_id, bytes);
     }
 }
@@ -159,7 +164,8 @@ pub fn release_output(state: State<'_, AppState>, id: String, spawn_id: String) 
 
 #[tauri::command]
 pub fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) {
-    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
+    let _span = crate::prof::span("cmd.resize_terminal");
+    if let Some(t) = crate::prof::lock("lock.terminals.resize", &state.terminals).get(&id) {
         t.resize(cols, rows);
     }
 }
@@ -180,7 +186,8 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     //
     // The `let` binding releases the map lock BEFORE the kill/drop, so the reader
     // thread can re-lock the map to clear the id without deadlocking.
-    let removed = state.terminals.lock().unwrap().remove(&id);
+    let _span = crate::prof::span("cmd.kill_terminal");
+    let removed = crate::prof::lock("lock.terminals.kill", &state.terminals).remove(&id);
     if let Some(t) = removed {
         // Closes the master PTY (forcing the reader's EOF) and lets the tree
         // exit cleanly before terminating it; the deadline runs off-thread.
