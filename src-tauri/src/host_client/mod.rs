@@ -720,7 +720,7 @@ fn decode_same_len(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
         out.push_str(chunk.valid());
-        out.extend(std::iter::repeat('?').take(chunk.invalid().len()));
+        out.extend(std::iter::repeat_n('?', chunk.invalid().len()));
     }
     out
 }
