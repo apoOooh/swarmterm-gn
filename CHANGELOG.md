@@ -22,6 +22,13 @@
   then save a marked copy and drag it into a pane. The original is never
   modified.
 - Terminal drop: paths with `%` are no longer expanded by cmd panes.
+- Workspaces: new setting *Open new workspaces on startup by default*
+  (Settings → Workspaces → Open on startup, off by default). Newly created
+  workspaces are pinned to the startup list; existing ones are untouched, and
+  auto-pinning stops at 8 because pinned entries are never evicted.
+- Accounts: switching subscription on a pane whose session has no transcript
+  yet now starts fresh instead of running `--resume` on an unknown id (Claude
+  exited with "No conversation found" when session sharing was on).
 - Performance: the file watcher stops handling individual events during an
   event storm (a batch of 64+ raw events, e.g. `cargo build` or `npm install`
   under the root) and sends one rescan once the tree has been quiet for
