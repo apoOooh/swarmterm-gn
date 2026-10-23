@@ -860,7 +860,13 @@ pub(crate) fn leave_war_rooms(
 pub(crate) fn delete_war_room(
     state: &AppState,
     room_id: &str,
-) -> Result<(Vec<crate::warroom::WarRoomEvent>, Vec<crate::warroom::RoomMeta>), String> {
+) -> Result<
+    (
+        Vec<crate::warroom::WarRoomEvent>,
+        Vec<crate::warroom::RoomMeta>,
+    ),
+    String,
+> {
     let (leaves, rooms) = {
         let mut reg = state.war_rooms.lock().unwrap();
         let leaves = reg.delete(room_id, crate::warroom::now_ms())?;
@@ -882,15 +888,27 @@ mod war_room_wake_tests {
         let mut n = std::pin::pin!(state.peer_wake.notified());
         n.as_mut().enable();
         f(state);
-        tokio::time::timeout(Duration::from_millis(50), n).await.is_ok()
+        tokio::time::timeout(Duration::from_millis(50), n)
+            .await
+            .is_ok()
     }
 
     fn room(state: &AppState) -> String {
-        state.war_rooms.lock().unwrap().rooms_meta()[0].room_id.clone()
+        state.war_rooms.lock().unwrap().rooms_meta()[0]
+            .room_id
+            .clone()
     }
 
     fn join(state: &AppState, room: &str, id: &str) {
-        join_war_room(state, room, id.into(), Some("claude-code".into()), "C:/".into(), id.into()).unwrap();
+        join_war_room(
+            state,
+            room,
+            id.into(),
+            Some("claude-code".into()),
+            "C:/".into(),
+            id.into(),
+        )
+        .unwrap();
     }
 
     #[tokio::test]
@@ -904,7 +922,13 @@ mod war_room_wake_tests {
     async fn move_between_rooms_wakes_waiters() {
         let s = AppState::default();
         let r1 = room(&s);
-        let r2 = s.war_rooms.lock().unwrap().create("Second").unwrap().room_id;
+        let r2 = s
+            .war_rooms
+            .lock()
+            .unwrap()
+            .create("Second")
+            .unwrap()
+            .room_id;
         join(&s, &r1, "t1");
         assert!(wakes(&s, |s| join(s, &r2, "t1")).await);
     }
@@ -921,9 +945,21 @@ mod war_room_wake_tests {
     #[tokio::test]
     async fn delete_with_members_wakes_waiters() {
         let s = AppState::default();
-        let r2 = s.war_rooms.lock().unwrap().create("Second").unwrap().room_id;
+        let r2 = s
+            .war_rooms
+            .lock()
+            .unwrap()
+            .create("Second")
+            .unwrap()
+            .room_id;
         join(&s, &r2, "t1");
-        assert!(wakes(&s, |s| assert_eq!(delete_war_room(s, &r2).unwrap().0.len(), 1)).await);
+        assert!(
+            wakes(&s, |s| assert_eq!(
+                delete_war_room(s, &r2).unwrap().0.len(),
+                1
+            ))
+            .await
+        );
     }
 }
 
