@@ -508,7 +508,7 @@ mod tests {
         fs::write(&secret, [7]).unwrap();
         assert_eq!(get(&secret).status(), 403);
         assert_eq!(get(&t.path().join("missing.png")).status(), 403);
-        service.unregister_media(&[path.clone()]);
+        service.unregister_media(std::slice::from_ref(&path));
         assert_eq!(get(&path).status(), 403);
     }
 

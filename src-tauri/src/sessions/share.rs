@@ -581,8 +581,13 @@ mod tests {
         fs::create_dir_all(&a).unwrap();
         assert_eq!(transfer("codex", ID, &a, &a.join(".")), Ok(false));
         let rel = format!("sessions/2026/10/17/rollout-2026-10-17T10-00-00-{ID}.jsonl");
-        write(&a.join(rel), &format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ID}\",\"cwd\":\"C:/x\"}}}}
-"));
+        write(
+            &a.join(rel),
+            &format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ID}\",\"cwd\":\"C:/x\"}}}}
+"
+            ),
+        );
         assert_eq!(transfer("codex", ID, &a, &a.join(".")), Ok(true));
     }
 
