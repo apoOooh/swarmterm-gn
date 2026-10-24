@@ -32,7 +32,12 @@
        type now and then) plus -ToolIdle (2) idle panes, the first probed;
        reports spawn round trips and, where the files API exists, the
        watcher's file events and storm-to-event latency
-    full  a, b, c, d (mock agents), e, f and g, once each
+    i  idle: -IdlePanes (10) plain shells (-MockAgents: mock agents at their
+       prompt) in workspaces of which -IdleVisible (2) panes are visible,
+       NO input and NO output; after -IdleWarmup (10 s) the CPU of every
+       process type is sampled for -IdleSeconds (10). No in-page probes (their
+       rAF loop would itself keep the WebView busy). Guards idle CPU.
+    full  a, b, c, d (mock agents), e, f, g and i, once each
   -HostMode switches the terminal host on in the throwaway perf profile
   (builds swarmterm-host first), so output runs through the host path.
   HARD RULE: no agent CLI or AI provider is ever started. Every pane is a
@@ -62,7 +67,7 @@
 param(
   # 'all' is a, b and c; d (agents, ~3 min per run), e and f are run on their
   # own; 'full' runs a, b, c, d (mock agents), e, f and g once each.
-  [ValidateSet('a', 'b', 'c', 'd', 'e', 'f', 'g', 'all', 'full')] [string]$Scenario = 'all',
+  [ValidateSet('a', 'b', 'c', 'd', 'e', 'f', 'g', 'i', 'all', 'full')] [string]$Scenario = 'all',
   [switch]$HostMode,
   [switch]$MockAgents,
   [ValidateRange(1, 5)] [int]$WarPairs = 4,
@@ -75,6 +80,11 @@ param(
   [ValidateRange(1, 11)] [int]$ToolPanes = 6,
   [ValidateRange(1, 4)] [int]$ToolIdle = 2,
   [ValidateRange(10, 600)] [int]$ToolSeconds = 75,
+  [ValidateRange(1, 36)] [int]$IdlePanes = 10,
+  [ValidateSet(1, 2, 4)] [int]$IdleVisible = 2,
+  [ValidateRange(5, 600)] [int]$IdleSeconds = 10,
+  [ValidateRange(0, 300)] [int]$IdleWarmup = 10,
+  [ValidateSet('pwsh', 'powershell', 'cmd', 'default')] [string]$IdleShell = 'pwsh',
   # Defaults keep a full a+b+c x 3 run to a few minutes; single runs are too
   # noisy to compare (see docs/perf-baseline.md), so each scenario repeats.
   [int]$SizeMB = 50,
@@ -298,12 +308,16 @@ function Start-Sampler([int]$rootPid, [string]$csv, [string]$hostExe, [int[]]$fo
     while ($true) {
       # The WMI walk is the slow part; the tree only changes when panes spawn.
       if ($i++ % 10 -eq 0) { $tree = Get-Tree $rootPid $hostExe $foreignHosts }
-      $groups = @{ app = @(); host = @(); webview = @(); children = @() }
+      $groups = @{ app = @(); host = @(); webview = @(); children = @(); 'wv-browser' = @(); 'wv-renderer' = @(); 'wv-gpu' = @(); 'wv-utility' = @(); console = @() }
       foreach ($p in $tree) {
         $g = switch -regex ($p.Name) { '^swarmterm\.exe$' { 'app' } '^swarmterm-host\.exe$' { 'host' } '^msedgewebview2\.exe$' { 'webview' } default { 'children' } }
         # Everything else in the tree (root npm/cmd, dev server, cargo, conhost,
         # shells) is 'children' on purpose: the whole instance's footprint.
         $groups[$g] += [int]$p.ProcessId
+        # Overlapping detail rows (already inside webview/children): which WebView2
+        # process type, and the console hosts, burn the CPU.
+        if ($g -eq 'webview') { $wt = if ($p.CommandLine -match '--type=(renderer|gpu-process)') { @{ renderer = 'wv-renderer'; 'gpu-process' = 'wv-gpu' }[$Matches[1]] } elseif ($p.CommandLine -match '--type=') { 'wv-utility' } else { 'wv-browser' }; $groups[$wt] += [int]$p.ProcessId }
+        if ($p.Name -match '^(conhost|OpenConsole)\.exe$') { $groups['console'] += [int]$p.ProcessId }
       }
       $now = Get-Date
       $epoch = [DateTimeOffset]::new($now).ToUnixTimeMilliseconds()
@@ -347,14 +361,14 @@ function Start-Sampler([int]$rootPid, [string]$csv, [string]$hostExe, [int[]]$fo
 # Stats over the flood window only (epoch ms from the driver's result).
 function Get-Stats([string]$csv, [long]$startMs, [long]$endMs) {
   $rows = @(Import-Csv $csv | Where-Object { [long]$_.epochMs -ge $startMs -and [long]$_.epochMs -le $endMs })
-  foreach ($g in 'app', 'host', 'webview', 'children', 'machine') {
+  foreach ($g in 'app', 'host', 'webview', 'wv-browser', 'wv-renderer', 'wv-gpu', 'wv-utility', 'console', 'children', 'machine') {
     $r = @($rows | Where-Object group -EQ $g)
     if (-not $r.Count) { continue }
     $cpu = @($r | Where-Object cpuPct -NE '' | ForEach-Object { [double]$_.cpuPct } | Sort-Object)
     $mem = @($r | Where-Object privateMB -NE '' | ForEach-Object { [double]$_.privateMB })
     [pscustomobject]@{
       group = $g; samples = $r.Count
-      cpuAvg = if ($cpu.Count) { [math]::Round(($cpu | Measure-Object -Average).Average, 1) } else { $null }
+      cpuAvg = if ($cpu.Count) { [math]::Round(($cpu | Measure-Object -Average).Average, 2) } else { $null }
       cpuP95 = if ($cpu.Count) { $cpu[[math]::Min($cpu.Count - 1, [int][math]::Floor(0.95 * $cpu.Count))] } else { $null }
       memStartMB = [math]::Round($mem[0], 0); memMaxMB = [math]::Round(($mem | Measure-Object -Maximum).Maximum, 0); memEndMB = [math]::Round($mem[-1], 0)
     }
@@ -441,7 +455,7 @@ try {
   if (-not $ok) { throw "CDP endpoint did not come up; see $log" }
   Start-Sleep 5
 
-  $plan = switch ($Scenario) { 'all' { 'a', 'b', 'c' } 'full' { 'a', 'b', 'c', 'd', 'e', 'f', 'g' } default { $Scenario } }
+  $plan = switch ($Scenario) { 'all' { 'a', 'b', 'c' } 'full' { 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'i' } default { $Scenario } }
   $flag = Join-Path $outDir 'AGENT-DETECTED.txt'
   $hostLog = Join-Path $outDir 'hosts.txt'
   $guard = Start-Guard $npm.Id $hostExe $foreignHosts $flag $hostLog
@@ -458,6 +472,7 @@ try {
       'e' { @{ flood = $StreamPanes; idle = 2 * $WarPairs; file = $agentScript; lines = 0 } }
       'f' { @{ flood = $VisiblePanes + 8; idle = 0; file = $agentScript; lines = 0 } }
       'g' { @{ flood = $ToolPanes; idle = $ToolIdle; file = $toolScript; lines = 0 } }
+      'i' { @{ flood = $IdleVisible; idle = $IdlePanes; file = ''; lines = 0 } }
     }
     $env:PERF_HOST = if ($HostMode) { '1' } else { '' }
     $env:PERF_MOCK = if ($MockAgents) { '1' } else { '' }
@@ -466,7 +481,7 @@ try {
     $csv = Join-Path $outDir "proc-$s-$rep.csv"; $json = Join-Path $outDir "webview-$s-$rep.json"
     $env:PERF_CDP = "http://127.0.0.1:$CdpPort"; $env:PERF_SCENARIO = $s
     $env:PERF_FLOOD = $cfg.flood; $env:PERF_IDLE = $cfg.idle; $env:PERF_FILE = $cfg.file; $env:PERF_LINES = $cfg.lines
-    $env:PERF_CWD = $dataDir; $env:PERF_OUT = $json; $env:PERF_TIMEOUT_S = $TimeoutSeconds; $env:PERF_SECONDS = $(if ($s -eq 'g') { $ToolSeconds } else { $AgentSeconds })
+    $env:PERF_CWD = $dataDir; $env:PERF_OUT = $json; $env:PERF_TIMEOUT_S = $TimeoutSeconds; $env:PERF_SECONDS = $(switch ($s) { 'g' { $ToolSeconds } 'i' { $IdleSeconds } default { $AgentSeconds } }); $env:PERF_WARMUP_S = $IdleWarmup; $env:PERF_SHELL = $IdleShell
     $env:PERF_TRACE = if ($Trace) { Join-Path $outDir "trace-$s-$rep.json" } else { '' }
     if (Test-Path $json) { Remove-Item $json }
     $pwLog = Join-Path $outDir "playwright-$s-$rep.log"
@@ -556,7 +571,7 @@ try {
       '| scenario | echo p50 ms | echo p95 ms | echo max ms | frames > 50 ms | long tasks > 50 ms | app CPU avg % | WebView CPU avg % | WebView MB max (cumulative in instance) | lines lost | flood s |',
       '|---|---|---|---|---|---|---|---|---|---|---|'
   }
-  foreach ($g in ($results | Group-Object scenario | Where-Object Name -NotIn 'd', 'e', 'f', 'g')) {
+  foreach ($g in ($results | Group-Object scenario | Where-Object Name -NotIn 'd', 'e', 'f', 'g', 'i')) {
     $w = @($g.Group | ForEach-Object { $_.webview } | Where-Object { $_ })
     $pa = @($g.Group | ForEach-Object { $_.proc | Where-Object group -EQ 'app' })
     $pw = @($g.Group | ForEach-Object { $_.proc | Where-Object group -EQ 'webview' })
@@ -639,11 +654,30 @@ try {
       "| app CPU avg % | $(Get-Spread ($pa | % { $_.cpuAvg })) |",
       "| WebView CPU avg / p95 % / MB max | $(Get-Spread ($pw | % { $_.cpuAvg })) / $(Get-Spread ($pw | % { $_.cpuP95 })) / $(Get-Spread ($pw | % { $_.memMaxMB })) |", ''
   }
+  $ir = @($results | Where-Object scenario -EQ 'i')
+  if ($ir.Count) {
+    $w = @($ir | ForEach-Object { $_.webview } | Where-Object { $_ })
+    $md += "## Scenario i (idle): $((@($w | % { $_.panes }) | Select-Object -First 1)) $IdleShell panes$(if ($MockAgents) { ' (mock agents)' }), $IdleVisible visible, $IdleWarmup s warmup + $IdleSeconds s window, median (min-max) over runs", '',
+      '| process | CPU avg % | CPU p95 % |', '|---|---|---|'
+    foreach ($g in 'app', 'host', 'webview', 'wv-browser', 'wv-renderer', 'wv-gpu', 'wv-utility', 'console', 'children', 'machine') {
+      $p = @($ir | ForEach-Object { $_.proc | Where-Object group -EQ $g })
+      if ($p.Count) { $md += "| $g | $(Get-Spread ($p | % { $_.cpuAvg })) | $(Get-Spread ($p | % { $_.cpuP95 })) |" }
+    }
+    # Ours = the exclusive groups; the rest of the machine is everything else.
+    $ours = @($ir | ForEach-Object { ($_.proc | Where-Object group -In 'app', 'host', 'webview', 'children' | Measure-Object cpuAvg -Sum).Sum })
+    $outside = @($ir | ForEach-Object { $r = $_; $m = ($r.proc | Where-Object group -EQ 'machine').cpuAvg; if ($null -ne $m) { [math]::Round($m - ($r.proc | Where-Object group -In 'app', 'host', 'webview', 'children' | Measure-Object cpuAvg -Sum).Sum, 1) } })
+    $md += "| **instance total** | $(Get-Spread $ours) | |", "| machine outside the instance | $(Get-Spread $outside) | |", ''
+    foreach ($x in $w) {
+      $c = $x.idleCounters
+      $md += "- in-page over the window: xterm writes $($c.writeCalls) ($($c.writeChars) chars), rAF $($c.raf), setTimeout $($c.timeout), setInterval $($c.interval)$(if (-not $c.writeHooked) { ' (xterm write hook unavailable: writes n/a)' })"
+    }
+    $md += ''
+  }
   foreach ($r in $results) {
     $w = $r.webview
     $md += "## Scenario $($r.scenario), run $($r.run)", '', '| process | CPU avg % | CPU p95 % | private MB start / max / end |', '|---|---|---|---|'
     foreach ($p in $r.proc) { $md += "| $($p.group) | $($p.cpuAvg) | $($p.cpuP95) | $($p.memStartMB) / $($p.memMaxMB) / $($p.memEndMB) |" }
-    if ($w) {
+    if ($w -and $r.scenario -ne 'i') {
       $md += '', "- flood: $($w.floodSeconds) s (wall $([math]::Round($w.wallSeconds)) s, window hidden $($w.hiddenMs) ms, longest output gap $($w.maxOutputGapMs) ms)",
         "- echo latency ms: p50 $($w.echo.p50), p95 $($w.echo.p95), max $($w.echo.max) ($($w.echo.samples) samples, $($w.echo.unanswered) unanswered)",
         "- long tasks: $($w.longTasks.count) (over 50 ms: $($w.longTasks.over50), total $($w.longTasks.totalMs) ms, max $($w.longTasks.max) ms)",
