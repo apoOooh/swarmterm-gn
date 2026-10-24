@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use swarmterm_host::output::{next_batch, take_valid_utf8, OUTPUT_IDLE, READ_BUF_BYTES};
 use tauri::ipc::Channel;
@@ -348,13 +348,13 @@ pub struct ManagedTerminal {
 
 /// Where a pane's PTY lives (SWA-55, ADR 0001).
 pub enum TerminalIo {
-    /// In this process. `master` is kept for resize; `input` for input;
+    /// In this process. `resizer` owns the master (resize + close); `input` for input;
     /// `killer` to terminate the child from the command thread. On Windows
     /// `job` (when set) owns the shell's whole process tree so closing the
     /// terminal frees every descendant, not just the shell.
     Local {
         input: PtyInput,
-        master: Box<dyn MasterPty + Send>,
+        resizer: std::sync::Arc<swarmterm_host::resize::Resizer>,
         killer: Box<dyn ChildKiller + Send + Sync>,
         #[cfg(windows)]
         job: Option<job::JobHandle>,
@@ -403,48 +403,92 @@ impl ManagedTerminal {
         }
     }
 
-    /// The renderer parsed `bytes` of generation `spawn_id`'s output. An ack
-    /// for an older generation is dropped: its gate closed when it ended.
-    pub fn ack(&self, spawn_id: &str, bytes: u64) {
-        if !matches_generation(&self.spawn_id, spawn_id) {
-            return;
-        }
+    /// What the hot commands (ack/release/resize) need, cloned so they can
+    /// drop the `terminals` lock before touching the gate or the PTY.
+    pub fn handle(&self) -> IoHandle {
         match &self.io {
-            TerminalIo::Local { flow, .. } => flow.ack(bytes),
+            TerminalIo::Local { flow, resizer, .. } => IoHandle::Local {
+                spawn_id: self.spawn_id.clone(),
+                flow: flow.clone(),
+                resizer: resizer.clone(),
+            },
             #[cfg(windows)]
-            TerminalIo::Host { conn, terminal_id } => conn.ack(terminal_id, spawn_id, bytes),
+            TerminalIo::Host { conn, terminal_id } => IoHandle::Host {
+                spawn_id: self.spawn_id.clone(),
+                conn: conn.clone(),
+                terminal_id: terminal_id.clone(),
+            },
+        }
+    }
+}
+
+/// A pane's I/O endpoints outside the `terminals` lock (perf step C). Every
+/// call here is non-blocking: gates only signal, the resizer only stores the
+/// size for its worker, a hosted pane only enqueues a frame. Acks re-check
+/// the generation the handle was cloned from, so a respawn racing the
+/// unlocked call never pays down the new generation's gate.
+#[derive(Clone)]
+pub enum IoHandle {
+    Local {
+        spawn_id: String,
+        flow: std::sync::Arc<swarmterm_host::flow::FlowGate>,
+        resizer: std::sync::Arc<swarmterm_host::resize::Resizer>,
+    },
+    #[cfg(windows)]
+    Host {
+        spawn_id: String,
+        conn: std::sync::Arc<crate::host_client::conn::Conn>,
+        terminal_id: String,
+    },
+}
+
+impl IoHandle {
+    fn spawn_id(&self) -> &str {
+        match self {
+            IoHandle::Local { spawn_id, .. } => spawn_id,
+            #[cfg(windows)]
+            IoHandle::Host { spawn_id, .. } => spawn_id,
         }
     }
 
-    /// The renderer stopped consuming `spawn_id` (pane disposed). A hosted
-    /// pane's debt is forgiven with a saturating ack; the kill that follows
-    /// a dispose closes the host gate for good.
-    pub fn release_output(&self, spawn_id: &str) {
-        if !matches_generation(&self.spawn_id, spawn_id) {
+    pub fn ack(&self, spawn_id: &str, bytes: u64) {
+        if !matches_generation(self.spawn_id(), spawn_id) {
             return;
         }
-        match &self.io {
-            TerminalIo::Local { flow, .. } => flow.release(),
+        match self {
+            IoHandle::Local { flow, .. } => flow.ack(bytes),
             #[cfg(windows)]
-            TerminalIo::Host { conn, terminal_id } => conn.ack(terminal_id, spawn_id, u64::MAX),
+            IoHandle::Host {
+                conn, terminal_id, ..
+            } => conn.ack(terminal_id, spawn_id, bytes),
+        }
+    }
+
+    pub fn release_output(&self, spawn_id: &str) {
+        if !matches_generation(self.spawn_id(), spawn_id) {
+            return;
+        }
+        match self {
+            IoHandle::Local { flow, .. } => flow.release(),
+            #[cfg(windows)]
+            IoHandle::Host {
+                conn, terminal_id, ..
+            } => conn.ack(terminal_id, spawn_id, u64::MAX),
         }
     }
 
     pub fn resize(&self, cols: u16, rows: u16) {
-        match &self.io {
-            TerminalIo::Local { master, .. } => {
-                let _ = master.resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                });
-            }
+        match self {
+            IoHandle::Local { resizer, .. } => resizer.request(cols, rows),
             #[cfg(windows)]
-            TerminalIo::Host { conn, terminal_id } => conn.resize(terminal_id, cols, rows),
+            IoHandle::Host {
+                conn, terminal_id, ..
+            } => conn.resize(terminal_id, cols, rows),
         }
     }
+}
 
+impl ManagedTerminal {
     /// Close the terminal the way a regular terminal window does, then make
     /// sure nothing survives. Returns the thread enforcing the deadline, if any.
     ///
@@ -461,7 +505,7 @@ impl ManagedTerminal {
         let (input, master, killer, job) = match self.io {
             TerminalIo::Local {
                 input,
-                master,
+                resizer,
                 killer,
                 #[cfg(windows)]
                 job,
@@ -473,7 +517,7 @@ impl ManagedTerminal {
                 let job = job;
                 #[cfg(not(windows))]
                 let job = ();
-                (input, master, killer, job)
+                (input, resizer, killer, job)
             }
             // The host closes gracefully and enforces KILL_GRACE itself; the
             // id is free here as soon as the entry left the map.
@@ -501,7 +545,9 @@ impl ManagedTerminal {
                 drop(input);
                 // ClosePseudoConsole: delivers CTRL_CLOSE_EVENT and closes the
                 // output pipe, so the reader sees EOF and emits Exit as before.
-                drop(master);
+                // Waits for a resize in flight (it cannot stay stuck: the
+                // gate closed above, so the reader drains the pipe).
+                drop(master.close());
             });
             Some(crate::prof::spawn_named("pty-killer", move || {
                 while std::time::Instant::now() < deadline
@@ -516,7 +562,7 @@ impl ManagedTerminal {
         }
         #[cfg(not(windows))]
         {
-            let _ = (input, master, job);
+            let _ = (input, master.close(), job);
             let mut killer = killer;
             let _ = killer.kill();
             None
@@ -727,6 +773,20 @@ struct SpawnPlan {
     claude_config_dir: Option<std::path::PathBuf>,
 }
 
+/// One lock per account id for `accounts::enroll` (see `plan_spawn`).
+fn enroll_lock(account_id: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
+    static LOCKS: std::sync::Mutex<
+        Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
+    > = std::sync::Mutex::new(None);
+    LOCKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .entry(account_id.to_string())
+        .or_default()
+        .clone()
+}
+
 fn plan_spawn(
     app: &AppHandle,
     state: &AppState,
@@ -736,6 +796,12 @@ fn plan_spawn(
     let account = match options.account_id.as_deref() {
         Some(id) => {
             let account = crate::accounts::resolve(app, id, options.agent_id.as_deref())?;
+            // Enrollment merge-writes the profile's config files: two panes
+            // of one account starting together must not interleave those
+            // read-modify-writes now that creates run concurrently. Keyed
+            // per account, so different accounts enroll in parallel.
+            let lock = enroll_lock(id);
+            let _enroll = lock.lock().unwrap_or_else(|e| e.into_inner());
             crate::accounts::enroll(&account, state.mcp_url.get().map(|url| url.as_ref()))?;
             Some(account)
         }
@@ -952,7 +1018,7 @@ fn spawn_local(
             agent_id: plan.agent_id,
             io: TerminalIo::Local {
                 input: PtyInput::spawn(writer),
-                master: pair.master,
+                resizer: swarmterm_host::resize::Resizer::new(pair.master),
                 killer,
                 #[cfg(windows)]
                 job,
@@ -1156,7 +1222,8 @@ pub fn register_hosted(
         return;
     };
     let mut map = state.terminals.lock().unwrap();
-    // `spawn_terminal` refused a live duplicate under SPAWN_LOCK already;
+    // `create_terminal` reserved the id and `spawn_terminal` refused a live
+    // duplicate already;
     // never replace a live generation from an event.
     if map.contains_key(id) {
         eprintln!("[host] spawned {id} while a generation is live; closing it");

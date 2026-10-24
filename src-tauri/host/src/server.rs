@@ -185,6 +185,8 @@ async fn serve(
     let hello_deadline = tokio::time::Instant::now() + HELLO_TIMEOUT;
     let mut chunk = vec![0u8; 64 * 1024];
     let mut client: Option<u64> = None;
+    // Creates of this connection still in flight (see `Op::Create`).
+    let mut creates: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     // Resolves when a newer client replaced this one (see `Client::_kick`).
     let mut kicked: Option<tokio::sync::oneshot::Receiver<()>> = None;
     'conn: loop {
@@ -224,7 +226,7 @@ async fn serve(
                     }
                     None => break 'conn,
                 },
-                Some(cid) => dispatch(&host, cid, &tx, req).await,
+                Some(cid) => dispatch(&host, cid, &tx, &mut creates, req).await,
             }
         }
         let read = async {
@@ -304,6 +306,16 @@ fn hello(
     Some(host.connect_client_kickable(tx.clone(), flow_control))
 }
 
+/// Creates in flight across all connections (see `Op::Create`).
+const MAX_CREATES_IN_FLIGHT: usize = 6;
+
+fn create_permits() -> Arc<tokio::sync::Semaphore> {
+    static PERMITS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    PERMITS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CREATES_IN_FLIGHT)))
+        .clone()
+}
+
 /// Requests of one connection run strictly in order (the keystroke FIFO), so
 /// this is awaited by the reader. `create` (openpty + process spawn, tens of
 /// ms) runs on the blocking pool: it still holds back later requests of the
@@ -313,8 +325,26 @@ async fn dispatch(
     host: &Arc<Host>,
     client: u64,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
+    creates: &mut Vec<tokio::task::JoinHandle<()>>,
     req: Request,
 ) {
+    // Only the hot per-pane ops may overtake a pending create. Everything
+    // else (kill, list, attach, app state) waits for them, as before: `list`
+    // feeds `reap_orphans`, which must see a create whose answer timed out,
+    // and a `kill` must find the pane it names.
+    creates.retain(|c| !c.is_finished());
+    if !matches!(
+        req.op,
+        Op::Create(_)
+            | Op::Write { .. }
+            | Op::WriteChecked { .. }
+            | Op::Resize { .. }
+            | Op::Ack { .. }
+    ) {
+        for c in creates.drain(..) {
+            let _ = c.await;
+        }
+    }
     let id = req.id;
     let answer = |r: Result<serde_json::Value, String>| {
         let body = match r {
@@ -326,11 +356,30 @@ async fn dispatch(
     match req.op {
         Op::Hello { .. } => answer(Err("already-hello".into())),
         Op::Create(spec) => {
+            // Answered from its own task: a create (openpty + process spawn,
+            // tens of ms) must not hold back the connection's other requests
+            // — keystrokes, acks and resizes of every other pane. Requests
+            // for the pane being created cannot overtake it: the app only
+            // addresses a pane after its `spawned` event, which `create`
+            // sends once the entry is in the map. Capped so a workspace
+            // restore cannot fork dozens of shells at once.
             let h = host.clone();
-            let r = tokio::task::spawn_blocking(move || h.create(client, spec))
-                .await
-                .unwrap_or_else(|_| Err("spawn-failed: panic".into()));
-            answer(r.map(|s| serde_json::to_value(s).expect("serialises")))
+            let tx = tx.clone();
+            let permits = create_permits();
+            creates.push(tokio::spawn(async move {
+                // Never closed, so this cannot fail. The app's create timeout
+                // (10 s) also covers the wait here; at tens of ms per create
+                // that leaves room for well over a hundred queued panes.
+                let _permit = permits.acquire_owned().await.ok();
+                let r = tokio::task::spawn_blocking(move || h.create(client, spec))
+                    .await
+                    .unwrap_or_else(|_| Err("spawn-failed: panic".into()));
+                let body = match r {
+                    Ok(s) => protocol::ok(id, serde_json::to_value(s).expect("serialises")),
+                    Err(reason) => protocol::err(Some(id), &reason),
+                };
+                let _ = tx.send(frame::encode_json(&body));
+            }));
         }
         Op::Write { terminal_id, data } => {
             answer(host.write(&terminal_id, data.as_bytes()).map(|_| json!({})))

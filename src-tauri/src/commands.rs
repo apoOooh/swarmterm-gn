@@ -82,6 +82,30 @@ pub fn files_unwatch(
     Ok(())
 }
 
+/// Ids whose `create_terminal` is in flight (see there).
+static SPAWNING: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+struct SpawnReservation(String);
+
+impl SpawnReservation {
+    fn take(id: &str) -> Option<Self> {
+        let mut set = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
+        set.get_or_insert_with(Default::default)
+            .insert(id.to_string())
+            .then(|| SpawnReservation(id.to_string()))
+    }
+}
+
+impl Drop for SpawnReservation {
+    fn drop(&mut self) {
+        let mut set = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(set) = set.as_mut() {
+            set.remove(&self.0);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn create_terminal(
     app: AppHandle,
@@ -91,15 +115,17 @@ pub async fn create_terminal(
 ) -> CreateTerminalResult {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Preserve serialized creation/duplicate-id checks while keeping config
-        // reads, profile enrollment and OS process startup off the UI thread.
-        static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        // Only the id is reserved, not the whole spawn: config reads, profile
+        // enrollment and the OS process start of different panes overlap, so
+        // a workspace of N agents no longer starts them one after another.
+        // Two creates of the SAME id still exclude each other (the second
+        // gets the duplicate error, as it did after waiting before).
         let _span = crate::prof::span("cmd.create_terminal");
         let t0 = crate::prof::now();
-        let Ok(_guard) = SPAWN_LOCK.lock() else {
-            return CreateTerminalResult::err("Terminal creation interrupted");
+        let Some(_reservation) = SpawnReservation::take(&id) else {
+            return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
         };
-        crate::prof::since("lock.spawn.wait", t0);
+        crate::prof::since("spawn.reserve", t0);
         let state = app.state::<AppState>();
         crate::pty::spawn_terminal(&app, &state, id, options, on_data)
     })
@@ -143,30 +169,44 @@ pub fn write_terminal_checked(
     t.send_checked(&expected_spawn_id, data.as_bytes())
 }
 
+/// Clone the pane's I/O handle; the `terminals` lock is held only for the
+/// lookup, never across the gate or the PTY call (perf step C).
+fn io_handle(state: &AppState, lock_name: &'static str, id: &str) -> Option<crate::pty::IoHandle> {
+    crate::prof::lock(lock_name, &state.terminals)
+        .get(id)
+        .map(|t| t.handle())
+}
+
 /// The renderer's xterm parsed `bytes` more of generation `spawn_id`'s
-/// output (perf phase 2 flow control; batched, ~64 KB per call).
-#[tauri::command]
+/// output (perf phase 2 flow control; batched, ACK_CHUNK per call). `async`:
+/// a plain command runs on the main thread, which also serves the IPC of
+/// every pane's output, so thousands of acks under a flood queued there.
+/// Order between acks does not matter (they add up).
+#[tauri::command(async)]
 pub fn ack_output(state: State<'_, AppState>, id: String, spawn_id: String, bytes: u64) {
     let _span = crate::prof::span("cmd.ack_output");
-    if let Some(t) = crate::prof::lock("lock.terminals.ack", &state.terminals).get(&id) {
-        t.ack(&spawn_id, bytes);
+    if let Some(h) = io_handle(&state, "lock.terminals.ack", &id) {
+        h.ack(&spawn_id, bytes);
     }
 }
 
 /// The renderer disposed generation `spawn_id`'s xterm: open its flow gate
-/// now rather than after the no-ack timeout.
-#[tauri::command]
+/// now rather than after the no-ack timeout. Off the main thread like acks.
+#[tauri::command(async)]
 pub fn release_output(state: State<'_, AppState>, id: String, spawn_id: String) {
-    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
-        t.release_output(&spawn_id);
+    if let Some(h) = io_handle(&state, "lock.terminals.release", &id) {
+        h.release_output(&spawn_id);
     }
 }
 
+/// Stays a main-thread command on purpose: it is now O(1) (the resize worker
+/// applies the size), and running resizes on the async pool could reorder
+/// them, so an older size could win.
 #[tauri::command]
 pub fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) {
     let _span = crate::prof::span("cmd.resize_terminal");
-    if let Some(t) = crate::prof::lock("lock.terminals.resize", &state.terminals).get(&id) {
-        t.resize(cols, rows);
+    if let Some(h) = io_handle(&state, "lock.terminals.resize", &id) {
+        h.resize(cols, rows);
     }
 }
 
