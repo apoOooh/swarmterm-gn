@@ -13,6 +13,7 @@
 //! for an in-flight resize, so it must run on a thread that may block (the
 //! shutdown's close thread), never under the `terminals` lock.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use portable_pty::{MasterPty, PtySize};
@@ -25,13 +26,34 @@ pub trait Resize: Send {
 
 impl Resize for Box<dyn MasterPty + Send> {
     fn resize_to(&self, cols: u16, rows: u16) {
-        let _ = self.resize(PtySize {
+        if let Err(e) = self.resize(PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
-        });
+        }) {
+            // Nobody waits for the result (the caller only queued it), so a
+            // persistently failing ConPTY resize would otherwise be silent.
+            if log_allowed(&LAST_RESIZE_ERR_LOG) {
+                eprintln!("[host] pty resize to {cols}x{rows} failed: {e} (further failures muted for 10 s)");
+            }
+        }
     }
+}
+
+static LAST_RESIZE_ERR_LOG: AtomicU64 = AtomicU64::new(0);
+static LAST_SPAWN_ERR_LOG: AtomicU64 = AtomicU64::new(0);
+
+/// At most one log line per `slot` every 10 s, process-wide.
+fn log_allowed(slot: &AtomicU64) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |d| d.as_secs().max(1));
+    let last = slot.load(Ordering::Relaxed);
+    (last == 0 || now >= last + 10)
+        && slot
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
 }
 
 #[derive(Default)]
@@ -67,13 +89,17 @@ impl<M: Resize + 'static> Resizer<M> {
         let spawned = std::thread::Builder::new()
             .name("pty-resize".into())
             .spawn(move || me.drain());
-        if spawned.is_err() {
-            // No thread (resource exhaustion): drop the size rather than
-            // resize inline, which could block the caller on a stuck
-            // conhost. The next resize retries.
-            let mut p = lock(&self.pending);
-            p.size = None;
-            p.running = false;
+        if let Err(e) = spawned {
+            // No thread (resource exhaustion): never resize inline, which
+            // could block the caller on a stuck conhost. The size STAYS
+            // pending, so the next request applies the latest size; until
+            // then the engine's stored dims (used for replay) are ahead of
+            // the PTY by this one resize, and the renderer's post-replay fit
+            // re-sends its size anyway.
+            lock(&self.pending).running = false;
+            if log_allowed(&LAST_SPAWN_ERR_LOG) {
+                eprintln!("[host] pty resize worker spawn failed: {e}; size kept pending");
+            }
         }
     }
 
