@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- War Room: messages now reach real agent panes whose status line or cursor
+  keeps repainting (they stayed held before), and never get typed into an
+  unsent draft in the agent's input box. The ⏸ badge explains why a message
+  is held, with "Deliver now" for a busy pane.
+
 - Performance: one pane's slow resize, creation or flood no longer stalls
   the others. Keystrokes, acks and resizes skip the app-wide terminals lock,
   acks run off the UI thread, and a per-pane worker applies only the latest
