@@ -216,6 +216,12 @@ export function createRendererPolicy<K>(
       if (webgl >= opts.maxWebgl) {
         if (!opts.evictOnOpen) return no
         // Sets iterate in insertion order: the first holder is the oldest.
+        // Oldest even if it is visible and the new pane is hidden, on
+        // purpose: it matches 1.22.1 (Chromium drops the oldest context),
+        // which in scenario c puts the early flood panes on DOM. Evicting
+        // the oldest HIDDEN holder first was screened (2026-10-24) and
+        // regressed c (echo p95 41-47 vs 36 ms, frame p99 14 vs 9 ms) and
+        // f (WebView CPU 1.8-1.9 vs 1.6 %) against 1.22.1.
         const oldest = holders.values().next()
         if (oldest.done === true) return no
         evicted = oldest.value
