@@ -210,7 +210,13 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   while focused. A held queue is never dropped — it re-arms every
   `HOLD_RECHECK_MS`, shows an in-pane pill plus a panel badge, and both
   "Deliver now" affordances release it by clearing the typing signal rather
-  than bypassing the scheduler. There is deliberately no maximum hold.
+  than bypassing the scheduler. There is deliberately no maximum hold for
+  blocked/working/typing, nor for `draft` (Claude Code input box shows
+  unsent non-dim text, read from the screen at flush time, `prompt-draft.ts`).
+  A pane that keeps printing is not held forever: `busyPaneReady` releases
+  it once the detector says idle (1.5 s dwell) and the smoothed output rate
+  (renderer-policy EWMA) is below 512 B/s, or after 20 s idle anyway; the
+  `pane-busy` hold's "Deliver now" waives only that output gate.
 - **Worktree-per-agent.** The composer's "Isolate features in git worktrees"
   toggle now provisions isolation upfront: every agent pane is created inside
   its own `<repo>.worktrees/<slug>` worktree on branch `swarm/<agent>-<n>`

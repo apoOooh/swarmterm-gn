@@ -74,6 +74,7 @@ import {
   type SuppressState
 } from '@/lib/terminal-input-client'
 import { AgentStateDetector, type DetectorDeps } from '@/lib/agent-state/detector'
+import { promptBoxHasDraft } from '@/lib/prompt-draft'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import type { BufferView } from '@/lib/agent-state/snapshot'
@@ -1493,6 +1494,45 @@ export function deliverPromptToTerminal(id: string, text: string): void {
   const normalized = sanitizePromptText(text).replace(/\r?\n/g, '\r')
   const body = entry.term.modes.bracketedPasteMode ? `\x1b[200~${normalized}\x1b[201~` : normalized
   void writeTerminal(id, body)
+}
+
+/**
+ * Smoothed output rate (bytes/s) of a pane — the renderer policy's EWMA,
+ * already fed on every output batch, so the War Room scheduler reads it at
+ * recheck time without any extra hot-path work. 0 for an unknown pane.
+ */
+export function paneOutputRate(id: string): number {
+  const entry = entries.get(id)
+  return entry ? rendererPolicy.rate(entry, performance.now()) : 0
+}
+
+/**
+ * Does this pane's agent input box show unsent text? Read from the screen
+ * (see prompt-draft.ts) only when a War Room flush is about to type — never
+ * on the output path. Dim cells are blanked first: Claude Code's empty-box
+ * placeholder is dim. Claude Code only; false for anything else.
+ */
+export function paneHasPromptDraft(id: string): boolean {
+  const entry = entries.get(id)
+  if (!entry || !entry.opened || entry.config.agentId !== 'claude-code') return false
+  const buffer = entry.term.buffer.active
+  const end = buffer.length
+  const start = Math.max(0, end - entry.term.rows)
+  const lines: string[] = []
+  const cell = buffer.getNullCell()
+  for (let y = start; y < end; y++) {
+    const line = buffer.getLine(y)
+    if (!line) continue
+    let text = ''
+    for (let x = 0; x < line.length; x++) {
+      line.getCell(x, cell)
+      const ch = cell.getChars()
+      if (cell.getWidth() === 0) continue
+      text += ch === '' || cell.isDim() ? ' ' : ch
+    }
+    lines.push(text.trimEnd())
+  }
+  return promptBoxHasDraft(lines.join('\n'))
 }
 
 /**
