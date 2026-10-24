@@ -346,6 +346,9 @@ Small echo-sized batches therefore cost the same as before.
 The host keeps 512 KiB of replay history per pane (was 1 MiB). Scrollback is a
 setting (Settings > Terminal, default 5,000 lines, 500-50,000), and at most 12
 visible panes hold a WebGL context; the rest use the DOM renderer (scenario f).
+Superseded by the renderer policy (`src/lib/renderer-policy.ts`): WebGL at
+pane open for up to 16 panes, kept while hidden (up to 16 hidden contexts,
+traded for instant workspace switches), oldest evicted first.
 
 ## Phase 5 note: file watcher
 

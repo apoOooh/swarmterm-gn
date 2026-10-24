@@ -2,34 +2,55 @@
 
 ## [Unreleased]
 
-- Performance: the file watcher stops handling individual events during an
-  event storm (a batch of 64+ raw events, e.g. `cargo build` or `npm install`
-  under the root) and sends one rescan once the tree has been quiet for
-  500 ms. With nothing pending it blocks without an idle tick (was a 100 ms
-  poll); stop is a channel message, so unwatching still releases the root at once.
-- Performance: the terminal host's mode tracker skips plain text with
+- No avoidable stalls: output, keystrokes, acks and resizes of one pane no
+  longer wait behind another pane's slow resize, creation or flood, and
+  opening a workspace starts its panes in parallel.
+- Performance: the file watcher handles an event storm (64+ raw events in
+  one batch, e.g. `cargo build` or `npm install` under the root) with a
+  leading rescan at once, then sends the changed paths at most every 16 ms
+  (more than 1,024 pending paths become one rescan instead), and one
+  trailing rescan after 500 ms of quiet, so the explorer stays current
+  during a long build. With nothing pending it blocks without an idle tick
+  (was a 100 ms poll); unwatching still releases the root at once.- Performance: the terminal host's mode tracker skips plain text with
   `memchr` to the next ESC instead of parsing byte by byte (same results).
 - Performance: end-to-end output flow control. The renderer acks output once
-  xterm parsed it; a pane more than 2 MB behind pauses its output (resumes
-  below 512 KB) and the shell is backpressured, so floods no longer grow
-  WebView memory by GBs. Applies in-process and in the terminal host (new
-  `ack` op, `flow-control` capability; older apps are never gated). The gate
-  opens on detach, exit or 2 s without an ack; input is never gated.
-- Performance: terminal output reaches the renderer as raw bytes instead of
+  xterm parsed it (in 256 KB steps, off the UI thread); a pane more than
+  2 MB behind pauses its output (resumes below 512 KB) and the shell is
+  backpressured, so floods no longer grow WebView memory by GBs. Applies
+  in-process and in the terminal host (new `ack` op, `flow-control`
+  capability; older apps are never gated). The gate opens on close,
+  respawn, detach, exit or 2 s without an ack; input is never gated.- Performance: terminal output reaches the renderer as raw bytes instead of
   JSON strings (no escaping, no copy of the batch) and xterm parses them
   directly. The host connection decodes many frames per read without
   shifting its buffer per frame, and the app shares the host's output
   batching code instead of a copy.
-- Memory: panes hold a WebGL context only while visible (at most 12, least
-  recently shown falls back to DOM first; re-acquired after a context loss).
+- Rendering: every pane gets a WebGL renderer when it opens, as in 1.22.1,
+  up to 16 contexts; the 17th pane takes the slot of the oldest one, which
+  falls back to the DOM renderer (Chromium itself drops the oldest beyond
+  its limit). Panes keep their renderer while hidden, so switching
+  workspaces never re-creates contexts; this trades up to 16 live WebGL
+  contexts (GPU memory) for instant switches. A lost WebGL context leaves
+  the pane on the DOM renderer. When at least 8 panes are visible and 4 or
+  more flood (over 64 KB/s for 3 s), the floods move to the DOM renderer to
+  keep frames smooth, and return to WebGL once below 32 KB/s for 3 s.
   New Settings → Terminal → *Scrollback* (default 5,000 lines). The terminal
   host keeps 512 KiB of replay history per pane instead of 1 MB.
-- Performance: workspace tabs, the attention badge and the prompt library no
+- Performance: keystrokes, acks and resizes no longer take the app-wide
+  terminals lock for the PTY work, and acks run off the UI thread. A resize
+  is applied by a per-pane worker that only keeps the latest size, so a
+  pane whose output is stalled can no longer block other panes; a failed
+  resize is logged instead of reported back to the UI.
+- Performance: panes are created concurrently (up to 6 at a time in the
+  terminal host) instead of one after another, so restoring a workspace of
+  many agents is faster. Creating the same pane twice still waits for the
+  first.- Performance: workspace tabs, the attention badge and the prompt library no
   longer re-render on every agent state flip, the agent detector skips its
   screen scan while nothing changed, and `wait_peer` waiters are no longer
   woken by every output batch.
 - War Room: joining, moving, leaving or deleting a room now wakes pending
   `wait_peer` calls at once, so a peer that left is reported immediately.
+- Dev: optional profiling build feature (dev only, not in releases) with
+  lock, flow-gate and IPC counters for lood.ps1 -Profile.
 - Dev: perf benchmark harness (`scripts/perf/flood.ps1`) with an "agents"
   scenario of synthetic agent-like streams; it never starts an agent CLI.
 
