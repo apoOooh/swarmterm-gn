@@ -443,6 +443,18 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     state.peer_wake.notify_waiters();
 }
 
+/// Settings → Terminal "Lower build priority" plus the per-workspace opt-outs,
+/// flattened by the renderer into the exempt panes' terminal ids. Cheap (one
+/// short lock), so sync is fine.
+#[tauri::command]
+pub fn child_priority_set(
+    state: State<'_, crate::child_priority::ChildPriority>,
+    enabled: bool,
+    exempt: Vec<String>,
+) {
+    state.set(enabled, exempt);
+}
+
 /// Screen-independent proof that the pane's agent CLI is still running: a
 /// process matching its agent id lives below the pane's shell. Used by the
 /// handoff delivery right before paste and before Enter. Any doubt (unknown

@@ -182,3 +182,11 @@ export const isTerminalAgentAlive = (id: string): Promise<boolean> =>
  */
 export const writeTerminalChecked = (id: string, expectedSpawnId: string, data: string): Promise<void> =>
   invoke('write_terminal_checked', { id, expectedSpawnId, data })
+
+/**
+ * Lower-build-priority watcher settings: on/off plus the terminal ids of panes
+ * whose workspace opted out (see `child_priority.rs`).
+ */
+export function setChildPriority(enabled: boolean, exempt: string[]): Promise<void> {
+  return invoke('child_priority_set', { enabled, exempt })
+}

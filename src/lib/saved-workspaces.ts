@@ -38,7 +38,7 @@ export interface SavedLeaf {
 export interface ReattachLeaf { terminalId: string; agentId?: string; cwd?: string }
 export type SavedNode = SavedLeaf | { type: 'split'; direction: 'horizontal' | 'vertical'; sizes: [number, number]; children: [SavedNode, SavedNode] }
 /** `accountSelections`: the workspace's account choice for split panes. */
-export interface SavedWorkspace { id: string; name: string; cwd: string; layout: SavedNode; worktreeMode: boolean; updatedAt: number; autoOpen?: number; accountSelections?: Record<string, AccountSelection> }
+export interface SavedWorkspace { id: string; name: string; cwd: string; layout: SavedNode; worktreeMode: boolean; updatedAt: number; autoOpen?: number; accountSelections?: Record<string, AccountSelection>; normalBuildPriority?: true }
 export interface SavedStorage { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void }
 
 function validSession(agent: string, id: string | undefined): string | undefined {
@@ -68,7 +68,7 @@ export function toSaved(ws: Workspace, shell: ShellId, now: number, paneIds = fa
       ...(validSession(agentId, node.sessionId ?? node.resumeSessionId) ? { sessionId: validSession(agentId, node.sessionId ?? node.resumeSessionId) } : {})
     }
   }
-  return { id: ws.savedId, name: ws.name, cwd: ws.cwd, layout: convert(ws.layout), worktreeMode: ws.worktreeMode, updatedAt: now, ...(ws.accountSelections ? { accountSelections: ws.accountSelections } : {}) }
+  return { id: ws.savedId, name: ws.name, cwd: ws.cwd, layout: convert(ws.layout), worktreeMode: ws.worktreeMode, updatedAt: now, ...(ws.accountSelections ? { accountSelections: ws.accountSelections } : {}), ...(ws.normalBuildPriority ? { normalBuildPriority: true as const } : {}) }
 }
 
 function validTerminalId(id: unknown): id is string {
@@ -87,7 +87,7 @@ export function fromSaved(saved: SavedWorkspace, uid: () => string, reattach?: (
     return { type: 'leaf', id: uid(), terminalId: live?.terminalId ?? uid(), agentId, accountId: node.accountId, shellId: node.shellId, cwd: live?.cwd || node.cwd, launchMode: agentId === savedAgent ? node.launchMode : undefined, worktreeBranch: node.worktreeBranch, ...(node.name ? { name: node.name } : {}), ...(node.icon ? { icon: node.icon } : {}), ...(node.color ? { color: node.color } : {}), ...(node.headerTint && node.color ? { headerTint: true } : {}), ...(sessionId ? { resumeSessionId: sessionId, sessionId } : {}) }
   }
   const layout = convert(saved.layout)
-  return { id: uid(), savedId: saved.id, name: saved.name, cwd: saved.cwd, layout, focusedLeafId: collectLeaves(layout)[0].id, broadcastActive: false, broadcastLeafIds: [], worktreeMode: saved.worktreeMode, ...(saved.accountSelections ? { accountSelections: saved.accountSelections } : {}) }
+  return { id: uid(), savedId: saved.id, name: saved.name, cwd: saved.cwd, layout, focusedLeafId: collectLeaves(layout)[0].id, broadcastActive: false, broadcastLeafIds: [], worktreeMode: saved.worktreeMode, ...(saved.accountSelections ? { accountSelections: saved.accountSelections } : {}), ...(saved.normalBuildPriority ? { normalBuildPriority: true } : {}) }
 }
 
 function object(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
@@ -140,7 +140,7 @@ export function readSaved(storage: Pick<SavedStorage, 'getItem'>): SavedWorkspac
     seen.add(item.id)
     const autoOpen = typeof item.autoOpen === 'number' && Number.isInteger(item.autoOpen) && item.autoOpen >= 0 ? { autoOpen: item.autoOpen } : {}
     const accountSelections = parseSelections(item.accountSelections)
-    list.push({ id: item.id, name: item.name, cwd: item.cwd, worktreeMode: item.worktreeMode, updatedAt: item.updatedAt, layout, ...autoOpen, ...(accountSelections ? { accountSelections } : {}) })
+    list.push({ id: item.id, name: item.name, cwd: item.cwd, worktreeMode: item.worktreeMode, updatedAt: item.updatedAt, layout, ...autoOpen, ...(accountSelections ? { accountSelections } : {}), ...(item.normalBuildPriority === true ? { normalBuildPriority: true as const } : {}) })
   }
   return capSaved(list)
 }

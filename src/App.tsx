@@ -40,7 +40,9 @@ import { templateById } from '@/lib/templates'
 import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
 import { ClearGuard, clearInputSequence } from '@/lib/clear-input'
 import { shellFlavor } from '@/lib/agent-spawn-command'
-import { setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
+import { setChildPriority, setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
+import { exemptTerminalIds } from '@/lib/build-priority'
+import { useBuildPriorityStore } from '@/store/build-priority-store'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
 
@@ -916,6 +918,17 @@ export default function App(): ReactElement {
       void unlisten.then((fn) => fn())
     }
   }, [deferReturnFocusToTerminal])
+
+  // Lower build priority: keep the Rust watcher in step with the setting and
+  // the panes of opted-out workspaces. The selector returns a JSON string so
+  // a workspace change that leaves the set alone neither re-renders nor pushes.
+  const lowerBuildPriority = useBuildPriorityStore((s) => s.lowerBuildPriority)
+  const exemptKey = useAppStore((s) => JSON.stringify(exemptTerminalIds(s.workspaces)))
+  useEffect(() => {
+    setChildPriority(lowerBuildPriority, JSON.parse(exemptKey) as string[]).catch((err) =>
+      console.warn('[priority] watcher settings:', err)
+    )
+  }, [lowerBuildPriority, exemptKey])
 
   // Clipboard images (opt-in): keep the backend watcher in step with the
   // setting, and add each saved image to the gallery without taking the

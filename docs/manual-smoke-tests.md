@@ -734,3 +734,12 @@ It restores previous shortcut settings and removes only its own workspaces.
       "Transcribing…", the sentence arrives as a draft (no Enter).
 - [ ] Start again, click the pill's Stop: nothing is typed.
 - [ ] Windows microphone access off for desktop apps: the bell reports "no microphone available".
+
+## Lower build priority
+
+- [ ] Agent pane: let the agent run `cargo build -j 8`; Task Manager → Details → Base priority shows
+      cargo/rustc "Below normal", the agent CLI, its shell and Swarmterm "Normal". Typing in another pane stays smooth.
+- [ ] Terminal pane: `cargo build` directly in the shell → cargo is "Below normal", the shell "Normal".
+- [ ] Workspace ⋮ → untick **Lower build priority**, start a new build there → "Normal".
+      Reopen the saved workspace: still unticked.
+- [ ] Settings → Terminal → Responsiveness: switch off → new builds in every workspace stay "Normal".

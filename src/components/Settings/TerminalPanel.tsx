@@ -16,6 +16,8 @@ import {
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useStatuslineStore } from '@/store/statusline-store'
+import { useBuildPriorityStore } from '@/store/build-priority-store'
+import { ToggleRow } from './NotificationsPanel'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { setSavedPaneIds } from '@/store/saved-workspaces-store'
@@ -121,6 +123,7 @@ export function TerminalPanel(): ReactElement {
 
       <DefaultLaunchModeSettings />
 
+      <BuildPrioritySettings />
       <StatusLineSettings />
       <TerminalHostSettings />
     </div>
@@ -693,5 +696,22 @@ function TextPreview({ text }: { text: TerminalTextPref }): ReactElement {
         <span className="text-muted-foreground">{PREVIEW_GLYPHS}</span>
       </div>
     </div>
+  )
+}
+
+/** "Lower build priority" — processes an agent starts run at BelowNormal. */
+function BuildPrioritySettings(): ReactElement {
+  const on = useBuildPriorityStore((s) => s.lowerBuildPriority)
+  const setOn = useBuildPriorityStore((s) => s.setLowerBuildPriority)
+  return (
+    <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+      <h2 className="text-sm font-semibold text-foreground">Responsiveness</h2>
+      <ToggleRow
+        label="Lower build priority"
+        description="Builds and tools an agent starts run at below-normal CPU priority, so typing and the agent stay responsive. Swarmterm, the shell and the agent itself keep normal priority. A workspace can opt out from its ⋮ menu."
+        checked={on}
+        onChange={setOn}
+      />
+    </section>
   )
 }
