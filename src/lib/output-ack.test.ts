@@ -2,36 +2,63 @@ import { describe, expect, it, vi } from 'vitest'
 import { ACK_CHUNK, OutputAcker, utf8Length } from './output-ack'
 
 describe('OutputAcker', () => {
-  it('batches acks per chunk instead of one per write', () => {
+  /** Writes `sizes`, running each handed-out callback at once (parsed). */
+  const feed = (a: OutputAcker, sizes: number[]): number => {
+    let callbacks = 0
+    for (const n of sizes) {
+      const cb = a.write(n)
+      if (cb) { callbacks++; cb() }
+    }
+    return callbacks
+  }
+
+  it('batches acks and parse callbacks per chunk instead of one per write', () => {
     const send = vi.fn()
     const a = new OutputAcker(send, 100)
     a.setSpawnId('g1')
-    for (let i = 0; i < 9; i++) a.parsed(10)
+    expect(feed(a, Array(9).fill(10))).toBe(0)
     expect(send).not.toHaveBeenCalled()
-    a.parsed(15)
-    expect(send).toHaveBeenCalledTimes(1)
+    expect(feed(a, [15])).toBe(1)
     expect(send).toHaveBeenLastCalledWith('g1', 105)
-    for (let i = 0; i < 25; i++) a.parsed(10)
+    expect(feed(a, Array(25).fill(10))).toBe(2)
     expect(send).toHaveBeenCalledTimes(3)
     expect(send.mock.calls.reduce((n, c) => n + (c[1] as number), 0)).toBe(305)
+  })
+
+  it('acks only once the marked write is parsed, covering earlier writes', () => {
+    const send = vi.fn()
+    const a = new OutputAcker(send, 100)
+    a.setSpawnId('g')
+    expect(a.write(60)).toBeUndefined()
+    const cb = a.write(60)
+    expect(cb).toBeDefined()
+    expect(send).not.toHaveBeenCalled()
+    cb?.()
+    expect(send).toHaveBeenCalledWith('g', 120)
+    cb?.()
+    expect(send).toHaveBeenCalledTimes(1)
   })
 
   it('holds acks until the generation id is known', () => {
     const send = vi.fn()
     const a = new OutputAcker(send, 100)
-    a.parsed(250)
+    feed(a, [250])
     expect(send).not.toHaveBeenCalled()
     a.setSpawnId('g2')
     expect(send).toHaveBeenCalledWith('g2', 250)
   })
 
-  it('defaults to 64 KB chunks', () => {
+  it('keeps ACK_CHUNK at 256 KB, half of the Rust FLOW_LOW (host/src/flow.rs pins the pair)', () => {
+    expect(ACK_CHUNK).toBe(256 * 1024)
+  })
+
+  it('defaults to ACK_CHUNK chunks', () => {
     const send = vi.fn()
     const a = new OutputAcker(send)
     a.setSpawnId('g')
-    a.parsed(ACK_CHUNK - 1)
+    feed(a, [ACK_CHUNK - 1])
     expect(send).not.toHaveBeenCalled()
-    a.parsed(1)
+    feed(a, [1])
     expect(send).toHaveBeenCalledWith('g', ACK_CHUNK)
   })
 })

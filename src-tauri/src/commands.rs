@@ -181,7 +181,7 @@ fn io_handle(state: &AppState, lock_name: &'static str, id: &str) -> Option<crat
 /// output (perf phase 2 flow control; batched, ACK_CHUNK per call). `async`:
 /// a plain command runs on the main thread, which also serves the IPC of
 /// every pane's output, so thousands of acks under a flood queued there.
-/// Order between acks does not matter (they add up).
+/// Acks are additive and the gate saturates, so pool reordering is harmless.
 #[tauri::command(async)]
 pub fn ack_output(state: State<'_, AppState>, id: String, spawn_id: String, bytes: u64) {
     let _span = crate::prof::span("cmd.ack_output");

@@ -51,6 +51,17 @@ export interface RendererPolicyOptions {
    */
   demoteMinVisible: number
   /**
+   * …and only while at least this many panes (on any renderer) are busy
+   * together, i.e. above `demoteBytesPerSec` for `demoteSustainMs`. The frame
+   * stalls on the AGGREGATE: a dozen floods at once (scenario c) need DOM,
+   * while agent panes take turns dumping (scenario d) and one or two
+   * concurrent dumps render fastest on WebGL. Gating on visibility alone
+   * demoted a d pane per long dump and, with promotion rarely finding idle
+   * time, left a third of them on DOM by the end of a 150 s run (WebView CPU
+   * +70 %, dump delivery p95 x2.5 against 1.22.1).
+   */
+  demoteMinBusy: number
+  /**
    * Which panes get the WebGL slots: 'quiet' = interactive/low-rate panes
    * (busy ones are demoted), 'busy' = sustained high-rate panes (kept until
    * the pane is removed; quiet panes stay on DOM).
@@ -87,6 +98,7 @@ export const DEFAULT_RENDERER_POLICY: RendererPolicyOptions = {
   openWebgl: true,
   evictOnOpen: true,
   demoteMinVisible: 8,
+  demoteMinBusy: 4,
   prefer: 'quiet',
   busyBytesPerSec: 64 * 1024,
   demoteBytesPerSec: 64 * 1024,
@@ -259,12 +271,18 @@ export function createRendererPolicy<K>(
       const busy = opts.prefer === 'busy'
       let promote: K | undefined
       let best = busy ? -Infinity : Infinity
-      for (const [key, p] of panes) {
+      // Counts sustained-busy panes on either renderer, so demotion goes on
+      // (hysteresis) until fewer than demoteMinBusy floods are left.
+      let busyPanes = 0
+      for (const p of panes.values()) {
         decay(p, now)
+        if (p.busySince !== undefined && now - p.busySince >= opts.demoteSustainMs) busyPanes++
+      }
+      const demoting = !busy && visibleCount >= opts.demoteMinVisible && busyPanes >= opts.demoteMinBusy
+      for (const [key, p] of panes) {
         if (now - p.lastSwapAt < opts.minDwellMs) continue
         if (p.renderer === 'webgl') {
-          if (!busy && p.busySince !== undefined && now - p.busySince >= opts.demoteSustainMs &&
-            visibleCount >= opts.demoteMinVisible) return { key, to: 'dom' }
+          if (demoting && p.busySince !== undefined && now - p.busySince >= opts.demoteSustainMs) return { key, to: 'dom' }
         } else if (!p.blocked && p.visible && webgl < opts.maxWebgl) {
           const ok = busy
             ? p.rate >= opts.busyBytesPerSec && p.rate > best

@@ -21,9 +21,11 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// Park the flusher above this many unacked bytes.
-pub const FLOW_HIGH: u64 = 512 * 1024;
-/// Resume once the renderer acked down to this.
-pub const FLOW_LOW: u64 = 128 * 1024;
+pub const FLOW_HIGH: u64 = 2048 * 1024;
+/// Resume once the renderer acked down to this. The renderer acks in
+/// `ACK_CHUNK` steps (`src/lib/output-ack.ts`, 256 KB) and keeps less than one
+/// chunk unacked, so this must stay at least twice that chunk.
+pub const FLOW_LOW: u64 = 512 * 1024;
 /// No ack for this long while parked = the renderer is gone or stuck.
 pub const FLOW_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 /// Reader → flusher queue depth, in reads (each up to `READ_BUF_BYTES`).
@@ -164,10 +166,23 @@ mod tests {
         assert!(t.elapsed() < Duration::from_millis(500));
     }
 
+    /// The renderer's `ACK_CHUNK` (src/lib/output-ack.ts, 256 KB; its test
+    /// pins that value) leaves less than one chunk unacked, so LOW must be at
+    /// least two chunks or a parked gate waits for the no-ack timeout.
+    const _: () = {
+        const RENDERER_ACK_CHUNK: u64 = 256 * 1024;
+        assert!(FLOW_LOW >= 2 * RENDERER_ACK_CHUNK);
+        assert!(FLOW_HIGH > FLOW_LOW);
+    };
+
     #[test]
     fn parks_above_high_and_resumes_only_below_low() {
         let g = Arc::new(FlowGate::with_timeout(Duration::from_secs(60)));
-        g.sent(600 * KB);
+        // Parked above HIGH; one ack lands between LOW and HIGH, the next below LOW.
+        let above_high = FLOW_HIGH as usize + 88 * KB;
+        let between = FLOW_LOW + 104 * KB as u64;
+        let below_low = FLOW_LOW - 24 * KB as u64;
+        g.sent(above_high);
         let (done_tx, done) = std::sync::mpsc::channel();
         let g2 = g.clone();
         std::thread::spawn(move || {
@@ -176,18 +191,18 @@ mod tests {
         });
         // Let it park first (an ack before `wait` would skip the gate).
         assert!(done.recv_timeout(Duration::from_millis(150)).is_err());
-        // Down to 200 KB: under HIGH but above LOW, still parked (hysteresis).
-        g.ack(400 * KB as u64);
+        // Down to `between`: under HIGH but above LOW, still parked (hysteresis).
+        g.ack(above_high as u64 - between);
         assert!(done.recv_timeout(Duration::from_millis(150)).is_err());
-        g.ack(100 * KB as u64);
+        g.ack(between - below_low);
         done.recv_timeout(Duration::from_secs(5)).expect("resumed");
-        assert_eq!(g.unacked(), 100 * KB as u64);
+        assert_eq!(g.unacked(), below_low);
     }
 
     #[test]
     fn no_ack_opens_the_gate_after_the_timeout() {
         let g = FlowGate::with_timeout(Duration::from_millis(100));
-        g.sent(1024 * KB);
+        g.sent(2 * FLOW_HIGH as usize);
         let t = Instant::now();
         g.wait();
         assert!(t.elapsed() >= Duration::from_millis(100));

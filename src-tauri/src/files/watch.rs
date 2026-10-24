@@ -13,14 +13,24 @@ use std::{
 };
 use tauri::Emitter;
 
-/// Raw events in one batch from which a trailing rescan is sent. The whole
+/// Raw events in one batch from which the batch counts as a storm. The whole
 /// context shares ONE ReadDirectoryChangesW buffer (16 KiB in notify 8), and
 /// notify drops an overflow silently (no Rescan flag), so a burst this size may
 /// have lost events we can never see.
 const RESCAN_BURST: usize = 64;
-/// Quiet time after the last burst before the rescan goes out, so a long
-/// `npm install` triggers one rescan at its end instead of one per batch.
+/// Quiet time after the last storm batch before the trailing rescan goes out,
+/// so a long `npm install` ends in one rescan instead of one per batch.
 const RESCAN_QUIET: Duration = Duration::from_millis(500);
+/// During a storm, changes still go out incrementally, but at most once per
+/// this interval (leading edge + throttled trailing emit), so the file tree
+/// follows a continuous storm with bounded latency and bounded renderer work.
+/// One frame: batches already end on a `BATCH_GAP` pause, so a longer
+/// interval only delays a burst that follows a short one (g screen: 80 ms
+/// put the storm-to-event p95 at ~97 ms vs ~65 ms without throttling).
+const STORM_EMIT: Duration = Duration::from_millis(16);
+/// Paths pending for one emit; beyond this a rescan replaces them (bounded
+/// memory and payload, and a reload is cheaper than thousands of paths).
+const MAX_PENDING: usize = 1024;
 /// How long one batch keeps draining after its first event, so an editor save
 /// (write + rename + attrib) coalesces into one change without delaying it.
 const BATCH_WINDOW: Duration = Duration::from_millis(80);
@@ -158,40 +168,84 @@ impl Filter {
 }
 
 /// Storm mode. A batch of `RESCAN_BURST` raw events (cargo build, npm install)
-/// may have overflowed the native buffer, so its individual paths are not
-/// trustworthy anyway: from then on batches are only counted, never filtered
-/// or emitted, and one rescan goes out once the tree has been quiet for
-/// `RESCAN_QUIET`. The rescan reloads everything, so no final state is lost.
+/// may have overflowed the native buffer, so its paths are not complete: the
+/// storm starts with a rescan (leading edge), keeps emitting the paths it does
+/// see at most every `STORM_EMIT`, and ends with one trailing rescan once the
+/// tree has been quiet for `RESCAN_QUIET`. Latency therefore stays bounded
+/// during a continuous storm instead of waiting for a quiet period that may
+/// never come.
 #[derive(Default)]
 struct Storm {
+    /// Last storm batch; `None` when calm.
     since: Option<Instant>,
+    last_emit: Option<Instant>,
+    paths: BTreeSet<String>,
+    rescan: bool,
+    error: Option<String>,
 }
 
 impl Storm {
-    /// Records a batch; true when its events should be processed one by one.
-    fn record(&mut self, raw_events: usize, now: Instant) -> bool {
-        // Any batch during a storm extends the quiet window: still busy.
+    fn has_pending(&self) -> bool {
+        self.rescan || self.error.is_some() || !self.paths.is_empty()
+    }
+    /// Records a batch of `raw_events`; a storm batch opens or extends the
+    /// storm, and opening one queues the leading rescan.
+    fn record(&mut self, raw_events: usize, now: Instant) {
         if raw_events >= RESCAN_BURST || self.since.is_some() {
-            self.since = Some(now);
-            false
-        } else {
-            true
-        }
-    }
-    /// How long to wait for the next event: forever when calm, until the
-    /// rescan is due during a storm.
-    fn wait(&self, now: Instant) -> Option<Duration> {
-        self.since
-            .map(|t| RESCAN_QUIET.saturating_sub(now.saturating_duration_since(t)))
-    }
-    fn due(&mut self, now: Instant) -> bool {
-        match self.since {
-            Some(t) if now.saturating_duration_since(t) >= RESCAN_QUIET => {
-                self.since = None;
-                true
+            if self.since.is_none() {
+                // Leading edge: the storm's first emit is never throttled.
+                self.rescan = true;
+                self.last_emit = None;
             }
-            _ => false,
+            self.since = Some(now);
         }
+    }
+    fn add(&mut self, paths: impl IntoIterator<Item = String>) {
+        // Paths go out even beside a rescan: listeners that wait for one
+        // specific path (an open document, a test) see it on the leading
+        // emit instead of one throttle interval later; the rescan reloads
+        // everything else.
+        self.paths.extend(paths);
+        if self.paths.len() > MAX_PENDING {
+            self.paths.clear();
+            self.rescan = true;
+        }
+    }
+    /// When the pump must wake up next without an event: never when calm
+    /// and nothing is pending.
+    fn wait(&self, now: Instant) -> Option<Duration> {
+        let emit = self
+            .has_pending()
+            .then(|| self.last_emit.map_or(now, |t| t + STORM_EMIT));
+        let quiet = self.since.map(|t| t + RESCAN_QUIET);
+        let due = match (emit, quiet) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        due.map(|d| d.saturating_duration_since(now))
+    }
+    /// Takes what is due at `now`: everything when calm, throttled during a
+    /// storm, plus the trailing rescan once the storm has gone quiet.
+    fn take_due(&mut self, now: Instant) -> Option<(Vec<String>, bool, Option<String>)> {
+        if let Some(t) = self.since {
+            if now.saturating_duration_since(t) >= RESCAN_QUIET {
+                self.since = None;
+                self.paths.clear();
+                self.rescan = true;
+            } else if self
+                .last_emit
+                .is_some_and(|e| now.saturating_duration_since(e) < STORM_EMIT)
+            {
+                return None;
+            }
+        }
+        if !self.has_pending() {
+            return None;
+        }
+        self.last_emit = Some(now);
+        let rescan = std::mem::take(&mut self.rescan);
+        let paths = std::mem::take(&mut self.paths);
+        Some((paths.into_iter().collect(), rescan, self.error.take()))
     }
 }
 
@@ -221,9 +275,9 @@ impl Source for mpsc::Receiver<Msg> {
     }
 }
 
-/// Watcher thread body: batches events, filters them, and switches to storm
-/// mode under event floods. `emit(paths, rescan, error)`. Returns on `Stop` or
-/// when every sender is gone.
+/// Watcher thread body: batches events, filters them, and throttles emits
+/// during event storms. `emit(paths, rescan, error)`. Returns on `Stop` or when
+/// every sender is gone.
 fn pump(
     src: &mut impl Source,
     now: impl Fn() -> Instant,
@@ -231,19 +285,22 @@ fn pump(
     mut emit: impl FnMut(Vec<String>, bool, Option<String>),
 ) {
     let mut storm = Storm::default();
+    let mut flush = |storm: &mut Storm, at: Instant| {
+        if let Some((paths, rescan, error)) = storm.take_due(at) {
+            emit(paths, rescan, error);
+        }
+    };
     loop {
         let first = match src.recv(storm.wait(now())) {
             Recv::Msg(m) => m,
             Recv::Timeout => {
-                if storm.due(now()) {
-                    emit(Vec::new(), true, None);
-                }
+                flush(&mut storm, now());
                 continue;
             }
             // Every sender is gone: the `WatchHandle` (its drop sends `Stop`
             // first) and the native watcher closure both hold one, so this
             // only happens once the watch was torn down. Its subscribers are
-            // gone with it, so a pending rescan is dropped on purpose, exactly
+            // gone with it, so pending changes are dropped on purpose, exactly
             // like on `Stop`; a new watch starts from a fresh listing.
             Recv::Closed => return,
         };
@@ -276,11 +333,12 @@ fn pump(
                 Recv::Timeout | Recv::Closed => break,
             }
         }
-        if batch.is_empty() || !storm.record(batch.len(), now()) {
+        if batch.is_empty() {
             continue;
         }
+        let at = now();
+        storm.record(batch.len(), at);
         let mut paths = BTreeSet::new();
-        let mut error = None;
         for event in batch {
             match event {
                 Ok(e) => {
@@ -293,12 +351,11 @@ fn pump(
                         );
                     }
                 }
-                Err(e) => error = Some(e.to_string()),
+                Err(e) => storm.error = Some(e.to_string()),
             }
         }
-        if !paths.is_empty() || error.is_some() {
-            emit(paths.into_iter().collect(), false, error);
-        }
+        storm.add(paths);
+        flush(&mut storm, at);
     }
 }
 
@@ -498,20 +555,41 @@ mod tests {
     }
 
     #[test]
-    fn storm_rescans_once_after_quiet() {
+    fn storm_leads_throttles_and_trails_with_a_rescan() {
         let t0 = Instant::now();
         let mut b = Storm::default();
-        assert!(b.record(3, t0), "small batches are processed");
+        b.record(3, t0);
+        b.add(["a".to_string()]);
+        assert_eq!(b.take_due(t0), Some((vec!["a".into()], false, None)));
         assert_eq!(b.wait(t0), None, "calm: block without an idle tick");
-        assert!(!b.due(t0 + RESCAN_QUIET * 2), "small batches never rescan");
-        assert!(!b.record(RESCAN_BURST, t0));
-        // Smaller follow-up batches keep the storm open and are skipped.
-        assert!(!b.record(1, t0 + RESCAN_QUIET / 2));
-        assert_eq!(b.wait(t0 + RESCAN_QUIET), Some(RESCAN_QUIET / 2));
-        assert!(!b.due(t0 + RESCAN_QUIET));
-        assert!(b.due(t0 + RESCAN_QUIET / 2 + RESCAN_QUIET));
-        assert!(!b.due(t0 + RESCAN_QUIET * 10), "only once");
-        assert!(b.record(1, t0 + RESCAN_QUIET * 10), "calm again");
+        b.record(RESCAN_BURST, t0);
+        assert_eq!(
+            b.take_due(t0),
+            Some((Vec::new(), true, None)),
+            "leading rescan"
+        );
+        let t1 = t0 + STORM_EMIT / 3;
+        b.record(1, t1);
+        b.add(["b".to_string()]);
+        assert_eq!(b.take_due(t1), None, "throttled");
+        assert_eq!(b.wait(t1), Some(STORM_EMIT - STORM_EMIT / 3));
+        let t2 = t0 + STORM_EMIT;
+        assert_eq!(b.take_due(t2), Some((vec!["b".into()], false, None)));
+        assert_eq!(b.wait(t2), Some(RESCAN_QUIET - (t2 - t1)));
+        let t3 = t1 + RESCAN_QUIET;
+        assert_eq!(b.take_due(t3), Some((Vec::new(), true, None)), "trailing");
+        assert_eq!(b.take_due(t3 + RESCAN_QUIET * 10), None, "only once");
+        assert_eq!(b.wait(t3), None);
+    }
+
+    #[test]
+    fn storm_pending_paths_are_bounded() {
+        let t0 = Instant::now();
+        let mut b = Storm::default();
+        b.record(RESCAN_BURST, t0);
+        b.take_due(t0);
+        b.add((0..=MAX_PENDING).map(|i| i.to_string()));
+        assert!(b.paths.is_empty() && b.rescan);
     }
 
     enum Step {
@@ -593,35 +671,61 @@ mod tests {
         assert_eq!(waits[0], None, "idle waits block, no tick");
     }
 
+    /// A continuous storm (no quiet period at all for 10 s): changes keep
+    /// flowing with bounded latency, and one trailing rescan follows.
     #[test]
-    fn pump_skips_storm_events_and_rescans_once_when_quiet() {
+    fn pump_continuous_storm_keeps_latency_bounded() {
         let ms = Duration::from_millis;
         let mut steps = Vec::new();
-        // A flood: several full batches back to back, then a lone straggler.
-        for i in 0..(RESCAN_BURST * 3) {
+        // One event per ms: every 80 ms batch is past RESCAN_BURST.
+        for i in 0..10_000 {
             steps.push(ev(&format!("/p/src/f{i}.rs")));
-            if i % 100 == 99 {
-                steps.push(Step::Gap(ms(100)));
-            }
+            steps.push(Step::Gap(ms(1)));
         }
-        steps.push(Step::Gap(ms(300)));
-        steps.push(ev("/p/src/late.rs"));
-        // Quiet: the rescan goes out, then normal processing resumes.
         steps.push(Step::Gap(RESCAN_QUIET * 3));
         steps.push(ev("/p/after.txt"));
-        let (out, waits) = run(steps);
-        assert_eq!(
-            out,
-            vec![
-                (Vec::new(), true),
-                (vec![display(Path::new("/p/after.txt"))], false)
-            ],
-            "no per-file changes during the storm, one rescan after it"
+        let clock = std::rc::Rc::new(std::cell::Cell::new(Instant::now()));
+        let t0 = clock.get();
+        let mut src = Fake {
+            steps: steps.into(),
+            clock: clock.clone(),
+            waits: Vec::new(),
+        };
+        let mut f = filter(Path::new("/p"), Vec::new());
+        let mut out: Vec<(Duration, Vec<String>, bool)> = Vec::new();
+        pump(
+            &mut src,
+            || clock.get(),
+            &mut f,
+            |paths, rescan, _| out.push((clock.get() - t0, paths, rescan)),
         );
+        // Each event (at i ms) is NAMED by an emit within the bound (every emit,
+        // the leading rescan too, carries its paths: a rescan alone does not
+        // count, it would mask the early events).
+        let bound = BATCH_WINDOW + STORM_EMIT + ms(5);
+        for i in 0..10_000u64 {
+            let at = ms(i);
+            let path = display(Path::new(&format!("/p/src/f{i}.rs")));
+            let seen = out
+                .iter()
+                .find(|(t, p, _)| *t >= at && p.contains(&path))
+                .unwrap_or_else(|| panic!("f{i} never emitted"));
+            assert!(seen.0 - at <= bound, "f{i} took {:?}", seen.0 - at);
+        }
+        // Throttled: far fewer emits than batches, never two within STORM_EMIT.
+        let storm: Vec<_> = out.iter().filter(|(t, ..)| *t <= ms(10_000)).collect();
+        let times: Vec<_> = storm.iter().map(|(t, _, r)| (t.as_millis(), *r)).collect();
         assert!(
-            waits.contains(&Some(RESCAN_QUIET)),
-            "a storm waits exactly for the quiet window"
+            storm.len() <= 10_000 / STORM_EMIT.as_millis() as usize + 2,
+            "{} emits: {times:?}",
+            storm.len()
         );
+        assert!(storm.windows(2).all(|w| w[1].0 - w[0].0 >= STORM_EMIT));
+        assert!(storm[0].2, "leading rescan");
+        let n = out.len();
+        assert!(out[n - 2].2, "trailing rescan after the storm");
+        assert_eq!(out[n - 1].1, vec![display(Path::new("/p/after.txt"))]);
+        assert!(!out[n - 1].2, "calm again");
     }
 
     #[test]
@@ -631,20 +735,23 @@ mod tests {
     }
 
     #[test]
-    fn pump_closed_during_a_storm_ends_without_rescan() {
+    fn pump_closed_during_a_storm_ends_without_trailing_rescan() {
         let steps = (0..RESCAN_BURST).map(|i| ev(&format!("/p/f{i}"))).collect();
         let (out, _) = run(steps);
-        assert!(out.is_empty());
+        // The leading rescan carries the batch's paths; nothing follows it.
+        assert_eq!(out.len(), 1, "only the leading rescan");
+        assert!(out[0].1 && out[0].0.len() == RESCAN_BURST);
     }
 
     #[test]
-    fn pump_stop_during_a_storm_drops_the_pending_rescan() {
+    fn pump_stop_during_a_storm_drops_the_trailing_rescan() {
         let mut steps: Vec<_> = (0..RESCAN_BURST).map(|i| ev(&format!("/p/f{i}"))).collect();
         // The storm batch ends, a rescan is pending, then the watch stops.
         steps.push(Step::Gap(BATCH_GAP * 2));
         steps.push(Step::Msg(Msg::Stop));
         let (out, _) = run(steps);
-        assert!(out.is_empty(), "no rescan after teardown");
+        assert_eq!(out.len(), 1, "no trailing rescan after teardown");
+        assert!(out[0].1, "the leading rescan");
     }
 
     #[test]
