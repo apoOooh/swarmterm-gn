@@ -6,6 +6,7 @@ const OPTS: RendererPolicyOptions = {
   openWebgl: false,
   evictOnOpen: false,
   demoteMinVisible: 0,
+  demoteMinBusy: 0,
   prefer: 'quiet',
   busyBytesPerSec: 64 * 1024,
   demoteBytesPerSec: 64 * 1024,
@@ -165,6 +166,37 @@ describe('renderer policy', () => {
     expect(p.next(4000)).toBeUndefined()
   })
 
+  it('demotes only while enough panes are busy together (floods, not turn-taking dumps)', () => {
+    const p = createRendererPolicy<string>({ ...OPTS, maxWebgl: 8, openWebgl: true, demoteMinBusy: 3, demoteSustainMs: 3000 })
+    const keys = ['a', 'b', 'c', 'd']
+    for (const k of keys) { p.add(k, 0); p.setVisible(k, true, 0); p.claimOnOpen(k, 0) }
+    // One long dump, then a second one: never more than two busy at once.
+    stream(p, 'a', 500_000, 0, 5000)
+    stream(p, 'b', 500_000, 0, 5000)
+    expect(p.next(5000)).toBeUndefined()
+    // A third concurrent flood tips the aggregate: the busy panes go to DOM.
+    for (const k of ['a', 'b', 'c']) stream(p, k, 500_000, 5000, 9000)
+    const s = p.next(9000)
+    expect(s?.to).toBe('dom')
+    expect(['a', 'b', 'c']).toContain(s?.key)
+  })
+
+  it('defaults: three concurrent floods keep WebGL, a fourth starts demotion, below four it stops', () => {
+    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0 })
+    expect(DEFAULT_RENDERER_POLICY.demoteMinBusy).toBe(4)
+    const keys = ['a', 'b', 'c', 'd']
+    for (const k of keys) { p.add(k, 0); p.setVisible(k, true, 0); p.claimOnOpen(k, 0) }
+    for (const k of ['a', 'b', 'c']) stream(p, k, 500_000, 0, 5000)
+    expect(p.next(5000)).toBeUndefined()
+    for (const k of keys) stream(p, k, 500_000, 5000, 10_000)
+    const s = p.next(10_000)
+    expect(s?.to).toBe('dom')
+    p.commit(s!, 10_000)
+    // Back to three floods (d goes quiet): no further demotion.
+    for (const k of ['a', 'b', 'c']) stream(p, k, 500_000, 10_000, 20_000)
+    expect(p.next(20_000)).toBeUndefined()
+  })
+
   it('with evictOnOpen, a pane opening at the cap takes the oldest holder\'s slot', () => {
     const p = createRendererPolicy<string>({ ...OPTS, maxWebgl: 2, openWebgl: true, evictOnOpen: true })
     for (const k of ['a', 'b', 'c', 'd']) p.add(k, 0)
@@ -248,7 +280,7 @@ describe('renderer policy', () => {
   })
 
   it('defaults: agent tool dumps keep WebGL, a sustained flood goes to DOM', () => {
-    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0 })
+    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0, demoteMinBusy: 0 })
     p.add('a', 0)
     p.setVisible('a', true, 0)
     expect(p.claimOnOpen('a', 0).webgl).toBe(true)
@@ -264,7 +296,7 @@ describe('renderer policy', () => {
   })
 
   it('defaults: an agent pane demoted by close dumps gets WebGL back while it streams', () => {
-    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0 })
+    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0, demoteMinBusy: 0 })
     p.add('a', 0)
     p.setVisible('a', true, 0)
     p.claimOnOpen('a', 0)
@@ -283,7 +315,7 @@ describe('renderer policy', () => {
   })
 
   it('defaults: a pane streaming ~50 KB/s after a demotion stays on DOM', () => {
-    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0 })
+    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0, demoteMinBusy: 0 })
     p.add('a', 0)
     p.setVisible('a', true, 0)
     p.commit({ key: 'a', to: 'dom' }, 0)
@@ -292,7 +324,7 @@ describe('renderer policy', () => {
   })
 
   it('defaults: an oscillating rate switches at most once per dwell', () => {
-    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0 })
+    const p = createRendererPolicy<string>({ ...DEFAULT_RENDERER_POLICY, demoteMinVisible: 0, demoteMinBusy: 0 })
     p.add('a', 0)
     p.setVisible('a', true, 0)
     p.claimOnOpen('a', 0)
