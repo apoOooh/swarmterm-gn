@@ -137,15 +137,20 @@ explicit buttons available for media; previewing a file does not execute it.
 
 **Media panel.** The right panel's **Media** tab lets you look at images and
 videos that come up while you work: a large viewer on top and a strip below,
-newest first, with each file's name, source pane and time. It is a viewer for
+newest first, with each file's name, source pane and time. The strip keeps the
+last 50 files and scrolls sideways: use the mouse wheel over it, its scrollbar,
+the ‹ › buttons at its ends, or the arrow keys once it has focus (Tab); the
+shown file is scrolled into view. It is a viewer for
 you only. Agents get no tool for it, cannot open it or put anything into it,
 and nothing in it is passed to an agent. The list is not saved when Swarmterm
 closes.
 
 Swarmterm notices media paths a pane prints: absolute paths
 (`C:\...\shot.png`, spaces included), quoted paths and paths relative to the
-pane's starting folder. If such a file exists, its **name** joins the Media
-strip with a placeholder icon, and the pane shows a **N new images/videos** pill
+pane's starting folder, also inside tables whose cells the agent wrapped over
+several lines (such as Claude Code's bordered tables). If such a file exists,
+its **name** joins the Media strip with a placeholder icon, and the pane shows
+a **N new images/videos** pill
 in its top-right corner. Swarmterm does not load the file until you open it:
 click the pill (opens the newest), the strip item, the popup item, or
 Ctrl+click the path in the terminal. Only then is that one file shown. Ctrl+click
@@ -173,8 +178,10 @@ placeholder icon instead of a thumbnail.
 **Zoom an image.** With the pointer over an image in the Media tab (or an
 image opened as a file, or while annotating), the mouse wheel zooms in and out
 around the pointer, from 10% to 2000% of the image's real size; a touchpad
-pinch works too. Scrolling anywhere else, such as over the thumbnail strip,
-scrolls as usual. When zoomed in, drag the image to move it; while annotating,
+pinch works too. Scrolling anywhere else scrolls as usual (over the thumbnail
+strip, sideways). Drag the image to move it, at any zoom level: a larger image
+always covers the panel, a smaller one moves freely but stays inside it, so an
+image can never be pushed out of sight. While annotating,
 drag with the middle mouse button or hold Space and drag, so the pen keeps the
 left button (Space is taken only while the pointer is over the image). The
 corner control shows the zoom level: **Fit** (or a double-click on the image
