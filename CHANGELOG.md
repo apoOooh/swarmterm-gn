@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- War Room: type `@` in the composer to mention a member or named pane, with
+  autocomplete (arrows, Enter/Tab, Esc); mentions show as clickable chips.
+
 - Performance: one pane's slow resize, creation or flood no longer stalls
   the others. Keystrokes, acks and resizes skip the app-wide terminals lock,
   acks run off the UI thread, and a per-pane worker applies only the latest

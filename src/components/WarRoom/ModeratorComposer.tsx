@@ -10,7 +10,7 @@
  * reserved for the send button — an earlier version put it on the mode
  * toggle, where it read as "click to send".
  */
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { ChevronDown, SendHorizontal, Users, Zap } from 'lucide-react'
 import { useWarRoomStore } from '@/store/war-room-store'
 import { useAppStore, selectFocusedTerminalId } from '@/store/app-store'
@@ -30,8 +30,60 @@ import {
 import { warRoomModeratorSend, type WarRoomMode } from '@/tauri/warroom'
 import { memberColor } from '@/lib/war-room-identity'
 import { cn } from '@/lib/utils'
+import {
+  acceptMention,
+  activeMention,
+  buildCandidates,
+  matchCandidates,
+  mentionKeyAction,
+  namedPanes,
+  tokenizeMentions,
+  type ActiveMention,
+  type MentionMatch
+} from '@/lib/war-room-mentions'
+import { MENTION_LIST_ID, MentionPopup, caretOffset, mentionOptionId } from './MentionPopup'
 
 const MAX_ROWS = 6
+
+/**
+ * Subscribes to the workspaces only while mounted (= while a mention is being
+ * typed) and publishes its matches through `out` for the composer's keydown.
+ */
+function MentionLayer({
+  query,
+  members,
+  selected,
+  anchor,
+  out,
+  onPick,
+  onHover
+}: {
+  query: string
+  members: Array<{ terminalId: string; name: string; agentId: string | null }>
+  selected: number
+  anchor: { left: number; bottom: number }
+  out: { current: MentionMatch[] }
+  onPick: (m: MentionMatch) => void
+  onHover: (i: number) => void
+}): ReactElement {
+  const workspaces = useAppStore((s) => s.workspaces)
+  const candidates = useMemo(() => buildCandidates(members, namedPanes(workspaces)), [members, workspaces])
+  const matches = useMemo(() => matchCandidates(candidates, query), [candidates, query])
+  // Written during render so a keydown right after the next keystroke sees
+  // the list that is on screen, not the previous one.
+  out.current = matches
+  const index = Math.min(selected, Math.max(0, matches.length - 1))
+  return (
+    <MentionPopup
+      matches={matches}
+      selected={index}
+      left={anchor.left}
+      bottom={anchor.bottom}
+      onPick={(i) => onPick(matches[i])}
+      onHover={onHover}
+    />
+  )
+}
 
 const MODE_HINT: Record<WarRoomMode, string> = {
   probe: 'Probe — the message goes to the peer’s inbox and nudges them to read it.',
@@ -55,6 +107,60 @@ export function ModeratorComposer(): ReactElement {
   // handler can still see stale `false` — the ref is written synchronously
   // and can't be stale.
   const inFlightRef = useRef(false)
+  // Mention popup: `caret` follows the selection so editing mid-text works;
+  // `dismissed` remembers the `@` the user closed with Esc so the popup stays
+  // shut until they start a different mention.
+  const [caret, setCaret] = useState(0)
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [dismissed, setDismissed] = useState<number | null>(null)
+  const matchesRef = useRef<MentionMatch[]>([])
+  const boxRef = useRef<HTMLDivElement>(null)
+  const typed = activeMention(text, caret)
+  const active: ActiveMention | null = typed !== null && typed.start !== dismissed ? typed : null
+  // A new query puts the highlight back on the best match; leaving the
+  // dismissed mention re-arms the popup for the next `@`.
+  const typedStart = typed?.start ?? null
+  const typedQuery = typed?.query ?? null
+  useEffect(() => {
+    setDismissed((d) => (d !== null && d === typedStart ? d : null))
+    setMentionIndex(0)
+  }, [typedStart, typedQuery])
+  // Measured only while open; the anchor is the `@`, so it holds still while
+  // the query grows.
+  const activeStart = active?.start ?? null
+  const anchor = useMemo(() => {
+    const el = areaRef.current
+    const box = boxRef.current
+    if (activeStart === null || el === null || box === null) return { left: 0, bottom: 0 }
+    const pos = caretOffset(el, activeStart)
+    const left = Math.max(0, Math.min(el.offsetLeft + pos.left, box.clientWidth - 224))
+    return { left, bottom: box.clientHeight - (el.offsetTop + pos.top) + 2 }
+  }, [activeStart, text])
+
+  function syncCaret(el: HTMLTextAreaElement): void {
+    setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : -1)
+  }
+
+  function pickMention(match: MentionMatch | undefined): void {
+    const el = areaRef.current
+    if (active === null || match === undefined || el === null) return
+    const next = acceptMention(text, active, caret, match.candidate.name)
+    // The first mention of a peer while the target is still the default
+    // "Everyone" points the message at that peer — visibly, in the target
+    // picker, so the user can still change it. Anything else (a second
+    // mention, a non-member pane, an explicit target) only references.
+    const firstMention = !tokenizeMentions(text.slice(0, active.start)).some((s) => s.t === 'mention')
+    if (match.candidate.kind === 'peer' && firstMention && targetId === EVERYONE) {
+      const row = composerTargets(members, mode).find((t) => t.id === match.candidate.id)
+      if (row !== undefined && row.disabled === null) setTargetId(row.id)
+    }
+    setText(next.text)
+    setCaret(next.caret)
+    requestAnimationFrame(() => {
+      el.setSelectionRange(next.caret, next.caret)
+      grow()
+    })
+  }
 
   // Membership and mode both invalidate a selection; reconciling in an effect
   // (rather than at render) keeps the trigger label and the menu in step.
@@ -148,8 +254,9 @@ export function ModeratorComposer(): ReactElement {
   return (
     <div className="shrink-0 border-t border-border p-1.5">
       <div
+        ref={boxRef}
         className={cn(
-          'rounded-md border bg-card transition-colors focus-within:border-[#00b0f4]',
+          'relative rounded-md border bg-card transition-colors focus-within:border-[#00b0f4]',
           mode === 'execute' ? 'border-[#f97316]/50' : 'border-border'
         )}
       >
@@ -161,12 +268,47 @@ export function ModeratorComposer(): ReactElement {
           // via the placeholder, matching the design (spec §Composer UI).
           disabled={!hasConnectedMember}
           placeholder={placeholder}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={active !== null}
+          aria-controls={active !== null ? MENTION_LIST_ID : undefined}
+          aria-activedescendant={
+            active !== null && matchesRef.current.length > 0 ? mentionOptionId(mentionIndex) : undefined
+          }
           onChange={(e) => {
             setText(e.target.value)
+            syncCaret(e.target)
             setError(null)
             grow()
           }}
+          onSelect={(e) => syncCaret(e.currentTarget)}
           onKeyDown={(e) => {
+            if (active !== null) {
+              const action = mentionKeyAction(e.key, {
+                count: matchesRef.current.length,
+                index: Math.min(mentionIndex, Math.max(0, matchesRef.current.length - 1)),
+                // keyCode 229 covers engines that report composition only there.
+                composing: e.nativeEvent.isComposing || e.keyCode === 229,
+                shift: e.shiftKey
+              })
+              if (action.type === 'move') {
+                e.preventDefault()
+                setMentionIndex(action.index)
+                return
+              }
+              if (action.type === 'accept') {
+                e.preventDefault()
+                pickMention(matchesRef.current[action.index])
+                return
+              }
+              if (action.type === 'close') {
+                // Esc closes the popup only; the next Esc leaves the composer.
+                e.preventDefault()
+                setDismissed(active.start)
+                return
+              }
+            }
+            if (e.nativeEvent.isComposing) return
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               void send()
@@ -181,6 +323,17 @@ export function ModeratorComposer(): ReactElement {
           }}
           className="block w-full resize-none bg-transparent px-2 pb-1 pt-1.5 text-xs leading-[18px] text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
         />
+        {active !== null && (
+          <MentionLayer
+            query={active.query}
+            members={members}
+            selected={mentionIndex}
+            anchor={anchor}
+            out={matchesRef}
+            onPick={pickMention}
+            onHover={setMentionIndex}
+          />
+        )}
 
         <div className="flex items-center gap-1 px-1 pb-1">
           <DropdownMenu>
