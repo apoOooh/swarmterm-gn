@@ -3,22 +3,39 @@
  *
  * `term.write` has no backpressure: under a flood, IPC strings pile up in
  * xterm's write queue and WebView memory. Rust parks a pane's flusher while
- * more than 512 KB are unacknowledged (`host/src/flow.rs`), so the renderer
+ * more than 2 MB are unacknowledged (`host/src/flow.rs`), so the renderer
  * acks bytes once xterm has PARSED them (the `term.write` callback). Acks
- * are batched: one IPC call per `ACK_CHUNK`, never one per write. The
+ * are batched: one IPC call and one parse callback per `ACK_CHUNK`, never
+ * one per write. The
  * remainder below a chunk is never acked, which is harmless: it is far
  * below the watermarks.
  */
 
-/** Bytes per `ack_output` call. */
-export const ACK_CHUNK = 64 * 1024
+/**
+ * Bytes per `ack_output` call. Must stay at most half of Rust's `FLOW_LOW`
+ * (`host/src/flow.rs`, 512 KB): the unacked remainder below one chunk must
+ * not keep a parked gate above its resume mark (it would only reopen on the
+ * 2 s no-ack timeout).
+ */
+export const ACK_CHUNK = 256 * 1024
 
 /**
  * Acks for ONE pty generation. Output can arrive before `create_terminal`
  * answers with the generation id, so bytes are held until `setSpawnId`.
+ *
+ * xterm parses writes in order, so one parse callback covers every write
+ * before it: `write` hands out a callback only for the write that crosses
+ * the next `chunk` boundary (one per ACK_CHUNK instead of one closure and one
+ * xterm callback per write), and that callback acks everything up to it.
  */
 export class OutputAcker {
-  private pending = 0
+  /** Bytes handed to xterm so far. */
+  private written = 0
+  /** `written` at the last write that got a callback. */
+  private marked = 0
+  /** Bytes known parsed (highest mark whose callback ran). */
+  private parsedTo = 0
+  private acked = 0
   private spawnId: string | null = null
 
   constructor(
@@ -31,16 +48,25 @@ export class OutputAcker {
     this.maybeSend()
   }
 
-  /** xterm parsed `bytes` more of this generation's output. */
-  parsed(bytes: number): void {
-    this.pending += bytes
-    this.maybeSend()
+  /**
+   * `bytes` more go to xterm; returns the parse callback to pass with this
+   * write, or undefined when a later write's callback will cover it.
+   */
+  write(bytes: number): (() => void) | undefined {
+    this.written += bytes
+    if (this.written - this.marked < this.chunk) return undefined
+    const mark = this.written
+    this.marked = mark
+    return () => {
+      if (mark > this.parsedTo) this.parsedTo = mark
+      this.maybeSend()
+    }
   }
 
   private maybeSend(): void {
-    if (this.spawnId === null || this.pending < this.chunk) return
-    const bytes = this.pending
-    this.pending = 0
+    if (this.spawnId === null || this.parsedTo - this.acked < this.chunk) return
+    const bytes = this.parsedTo - this.acked
+    this.acked = this.parsedTo
     this.send(this.spawnId, bytes)
   }
 }

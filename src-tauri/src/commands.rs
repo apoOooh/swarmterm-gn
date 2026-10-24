@@ -144,8 +144,11 @@ pub fn write_terminal_checked(
 }
 
 /// The renderer's xterm parsed `bytes` more of generation `spawn_id`'s
-/// output (perf phase 2 flow control; batched, ~64 KB per call).
-#[tauri::command]
+/// output (perf phase 2 flow control; batched, ACK_CHUNK per call). `async`:
+/// a plain command runs on the main thread, which also serves the IPC of
+/// every pane's output, so thousands of acks under a flood queued there.
+/// Acks are additive and the gate saturates, so pool reordering is harmless.
+#[tauri::command(async)]
 pub fn ack_output(state: State<'_, AppState>, id: String, spawn_id: String, bytes: u64) {
     let _span = crate::prof::span("cmd.ack_output");
     if let Some(t) = crate::prof::lock("lock.terminals.ack", &state.terminals).get(&id) {
@@ -154,10 +157,10 @@ pub fn ack_output(state: State<'_, AppState>, id: String, spawn_id: String, byte
 }
 
 /// The renderer disposed generation `spawn_id`'s xterm: open its flow gate
-/// now rather than after the no-ack timeout.
-#[tauri::command]
+/// now rather than after the no-ack timeout. Off the main thread like acks.
+#[tauri::command(async)]
 pub fn release_output(state: State<'_, AppState>, id: String, spawn_id: String) {
-    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
+    if let Some(t) = crate::prof::lock("lock.terminals.release", &state.terminals).get(&id) {
         t.release_output(&spawn_id);
     }
 }

@@ -10,8 +10,8 @@
 - Performance: the terminal host's mode tracker skips plain text with
   `memchr` to the next ESC instead of parsing byte by byte (same results).
 - Performance: end-to-end output flow control. The renderer acks output once
-  xterm parsed it; a pane more than 512 KB behind pauses its output (resumes
-  below 128 KB) and the shell is backpressured, so floods no longer grow
+  xterm parsed it; a pane more than 2 MB behind pauses its output (resumes
+  below 512 KB) and the shell is backpressured, so floods no longer grow
   WebView memory by GBs. Applies in-process and in the terminal host (new
   `ack` op, `flow-control` capability; older apps are never gated). The gate
   opens on detach, exit or 2 s without an ack; input is never gated.

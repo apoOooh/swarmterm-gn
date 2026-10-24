@@ -346,9 +346,13 @@ function armRendererTick(): void {
   }, RENDERER_TICK_MS)
 }
 
+/** Cumulative renderer swaps, for the perf harness only (perfRendererStats). */
+const rendererSwaps = { demote: 0, promote: 0, loss: 0, evict: 0 }
+
 function applyRendererSwap(swap: RendererSwap<Entry>): void {
   const entry = swap.key
   const now = performance.now()
+  rendererSwaps[swap.to === 'dom' ? 'demote' : 'promote']++
   if (swap.to === 'dom') {
     rendererPolicy.commit(swap, now)
     disposeWebgl(entry)
@@ -371,6 +375,7 @@ function loadWebgl(entry: Entry, now: number): boolean {
       // A late loss of an addon already disposed (demotion, eviction at open)
       // is not this pane's renderer any more.
       if (entry.webgl !== live) return
+      rendererSwaps.loss++
       rendererPolicy.block(entry, performance.now())
       disposeWebgl(entry)
       // A fit that raced the loss (alt-tab/occlusion on Windows can drop the
@@ -1163,7 +1168,7 @@ function getOrCreate(id: string): Entry {
   const session = new TerminalSession(
     id,
     {
-      write: (data, onParsed) => {
+      write: (data, onParsed, bytes) => {
         // Every decoded pty chunk is one activity tick: the pane is "working"
         // while bytes flow (including agent spinner redraws) and goes idle after
         // ACTIVITY_IDLE_MS of silence.
@@ -1171,10 +1176,11 @@ function getOrCreate(id: string): Entry {
         const live = entries.get(id)
         live?.detector?.noteOutput()
         // Bytes on both delivery paths, so the KB/s thresholds mean the same.
-        if (live) rendererPolicy.recordOutput(live, typeof data === 'string' ? utf8Length(data) : data.byteLength, performance.now())
-        // The callback acks parsed bytes to Rust's flow gate (perf phase 2):
-        // it fires only after xterm parsed this chunk, so a flood is paced
-        // by the parser instead of piling up in the write queue.
+        if (live) rendererPolicy.recordOutput(live, bytes ?? (typeof data === 'string' ? utf8Length(data) : data.byteLength), performance.now())
+        // The callback (one per ACK_CHUNK, see OutputAcker) acks parsed bytes to
+        // Rust's flow gate (perf phase 2): it fires only after xterm parsed
+        // this chunk, so a flood is paced by the parser instead of piling up
+        // in the write queue.
         term.write(data, onParsed)
       },
       replay: ({ data, cols, rows, truncated }, onParsed) => {
@@ -1297,6 +1303,7 @@ export function attachTerminal(id: string, container: HTMLElement, config: Attac
       if (!webglUnavailable) {
         const claim = rendererPolicy.claimOnOpen(entry, performance.now())
         if (claim.evicted) {
+          rendererSwaps.evict++
           // Free its context before creating ours, so Chromium's cap never
           // has to drop one. Its DOM renderer measures cells differently: the
           // refit runs now if it is laid out, else when its observer next
@@ -1634,10 +1641,10 @@ export function getTerminalStatus(id: string): TerminalStatus {
   return entries.get(id)?.session.getStatus() ?? NO_STATUS
 }
 
-/** The terminal's live cwd — OSC 7 if the shell reports it, else the spawn cwd. */
-/** Perf harness hook (tests/perf/flood.perf.ts, scenario f) only: live WebGL
- *  contexts and visible panes that render with the DOM fallback instead. */
-export function perfRendererStats(): { webgl: number; domVisible: number; visible: number } {
+/** Perf harness hook (tests/perf/flood.perf.ts) only: live WebGL contexts,
+ *  visible panes that render with the DOM fallback instead, and cumulative
+ *  renderer swaps. */
+export function perfRendererStats(): { webgl: number; domVisible: number; visible: number; swaps: typeof rendererSwaps } {
   let webgl = 0
   let domVisible = 0
   let visible = 0
@@ -1647,7 +1654,7 @@ export function perfRendererStats(): { webgl: number; domVisible: number; visibl
     visible++
     if (!entry.webgl) domVisible++
   }
-  return { webgl, domVisible, visible }
+  return { webgl, domVisible, visible, swaps: { ...rendererSwaps } }
 }
 
 /** Last `lines` rows of a terminal's buffer as text — for the dev test hook (testlab) only. */
