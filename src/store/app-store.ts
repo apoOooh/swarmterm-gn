@@ -50,6 +50,9 @@ export interface Workspace {
   broadcastLeafIds: string[]
   /** Enable MCP worktree tools for every terminal in this workspace. */
   worktreeMode: boolean
+  /** Opt-out of "Lower build priority": processes below this workspace's
+   *  agents keep Normal priority. Absent ⇒ follow the global setting. */
+  normalBuildPriority?: boolean
   /** Leaf shown alone (pane zoom); the others keep running off-screen. */
   zoomedLeafId?: string
   /** Leaves parked in the drawer: hidden from the split view but still in
@@ -192,6 +195,7 @@ export interface AppActions {
   promptPane: (target: { agentId: string; accountId?: string; prompt: string; worktree?: { path: string; branch: string } }) => string | undefined
   /** Set (or clear with undefined) a workspace's default split agent. */
   setWorkspaceDefaultAgent: (workspaceId: string, agentId: string | undefined) => void
+  setWorkspaceNormalBuildPriority: (workspaceId: string, on: boolean) => void
   closePane: (leafId: string) => void
   toggleZoom: (leafId: string) => void
   /** Park a pane in its workspace's drawer: hidden like a close, but kept alive. */
@@ -536,6 +540,17 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
     )
     return terminalId
   },
+
+  setWorkspaceNormalBuildPriority: (workspaceId, on) =>
+    set((s) => ({
+      workspaces: s.workspaces.map((w) => {
+        if (w.id !== workspaceId) return w
+        if (on) return { ...w, normalBuildPriority: true }
+        const rest = { ...w }
+        delete rest.normalBuildPriority
+        return rest
+      })
+    })),
 
   setWorkspaceDefaultAgent: (workspaceId, agentId) =>
     set((s) => ({

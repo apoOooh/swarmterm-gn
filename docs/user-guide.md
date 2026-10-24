@@ -516,6 +516,17 @@ if ($env:SWARMTERM_SESSION) {
 
 The marks are `A` (prompt drawn), `C` (command started) and `D;<exit>` (command ended); `B` (end of prompt) is optional and omitted above. The very first prompt's `D` is ignored, and a machine you `ssh` into without the snippet simply sends nothing until you are back.
 
+### Builds don't freeze your panes
+
+A CPU-heavy build started by an agent (for example `cargo build` with dozens of jobs) used to compete with Swarmterm, the console and the agent itself, so typing and the agent's menus stalled. Swarmterm now runs everything an agent starts at **below-normal** CPU priority: builds still use every idle core, but your keystrokes and the agent come first. Swarmterm, the shell and the agent itself keep normal priority; nothing is raised.
+
+- Below a recognised agent CLI (Claude, Codex, Cursor, …) every process is lowered.
+- In a plain Terminal pane (or before an agent has started) shells and script hosts such as `node`, `cmd`, `pwsh`, `python` and `bash` keep normal priority, because an agent may be running inside one of them; the first other program and everything it starts are lowered (`cargo`, `msbuild`, compilers). A heavy `python` or `node` script typed straight into the shell therefore keeps normal priority, while the tools it starts are lowered. Interactive programs (`ssh`, `vim`, `nvim`, `less`, `nano`) also keep normal priority; other programs you start by hand, such as `git`, run below normal like a build.
+- Processes you set to a higher priority yourself, or that are already below normal or idle, are left alone.
+- Windows passes the lowered priority on to everything a lowered process starts later.
+
+Switch it off in **Settings → Terminal → Responsiveness → Lower build priority**, or for one workspace from its **⋮** menu (**Lower build priority**, checked = on; the opt-out is saved with the workspace). Switching off only stops lowering new processes; ones already lowered keep their priority until they exit.
+
 ## Settings, tray and quitting
 
 **Settings** (from the navbar) covers appearance, terminal font and default shell with a live preview, the status line toggle, and the full shortcut list — these preferences persist between launches.

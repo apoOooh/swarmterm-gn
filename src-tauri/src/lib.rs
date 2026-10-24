@@ -3,6 +3,7 @@ mod accounts;
 mod agent_process;
 mod agents;
 mod analytics;
+mod child_priority;
 mod clipboard_media;
 mod commands;
 mod dev_defer;
@@ -70,6 +71,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             crate::prof::start(app.handle());
+            app.manage(child_priority::ChildPriority::default());
+            child_priority::start(app.handle().clone());
             app.manage(std::sync::Arc::new(files::FileService::new(
                 app.path().app_data_dir()?.join("local-history"),
             )));
@@ -166,6 +169,7 @@ pub fn run() {
             commands::media_check_detected,
             commands::media_open,
             commands::clipboard_media_set_enabled,
+            commands::child_priority_set,
             commands::media_save_marked,
             commands::media_read_opened_image,
             commands::files_unwatch,
