@@ -36,6 +36,7 @@ host this run started is sampled and stopped (see step 5 below).
 | e: War Room | yes | yes | yes | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | yes (wait_peer path) |
 | f: many visible | yes | yes | yes | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | WebGL budget, DOM fallback |
 | g: tool-heavy agents | yes | yes (many short child processes on the pane's console) | yes (200 KB outputs) | yes (small and large batches); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | yes (80-file storms in the watched data dir, where the files API exists) | no |
+| i: idle | counters only (no rAF/timer probes) | idle wakeups (resize workers, flushers) | idle gate timers | none | hidden WebGL contexts, renderer-policy tick | idle watcher | with `-MockAgents` (detector idle loop) |
 
 Without `-HostMode` the in-process PTY carries the output: the P2 flow gate
 and P3's raw channel bodies still apply (both paths share them), but the host
@@ -113,9 +114,38 @@ Output goes to `test-results/perf-runs/<timestamp>/`: `summary.md`, `summary.jso
 | e | `-StreamPanes` (4) streaming | `-WarPairs` (4) waiters (first probed) + 4 mock agent peers | generator for `-AgentSeconds` |
 | f | `-VisiblePanes` (16) visible + 2 x 4 in other workspaces | none | generator for `-AgentSeconds` in every pane |
 | g | `-ToolPanes` (6) | `-ToolIdle` (2), first probed | `scripts/perf/tool-agent.mjs` for `-ToolSeconds` (75) each |
+| i | none | `-IdlePanes` (10) `-IdleShell` (pwsh) panes, `-IdleVisible` (2) visible, the rest in hidden workspaces | none: `-IdleWarmup` (10 s), then `-IdleSeconds` (10 s) sampled |
 
-Scenarios d, e, f and g are not part of `all`. Run them with `-Scenario <s>`, or
-everything once with `-Scenario full` (d then uses mock agents).
+Scenarios d, e, f, g and i are not part of `all`. Run them with `-Scenario <s>`, or
+everything once with `-Scenario full` (d and i then use mock agents).
+
+### Scenario i (idle)
+
+Every other scenario has busy panes, so an idle CPU regression went unnoticed
+(2026-10-24: a user saw up to ~8 % machine CPU with everything idle). Scenario i
+opens `-IdlePanes` panes (pwsh by default, the shell users run;
+`-MockAgents`: perf-mock-agent panes waiting at their prompt) with
+`-IdleVisible` visible and the rest in hidden workspaces, waits for every
+prompt plus `-IdleWarmup`, then samples for `-IdleSeconds` with no input and no
+output. It installs none of the in-page probes (their rAF loop and timer chain
+would keep the WebView busy by themselves); it only counts, over the window,
+xterm writes (output of any kind, e.g. a shell redrawing after a resize)
+and rAF/setTimeout/setInterval registrations. The sampler splits the WebView
+into browser, renderer, gpu and utility processes and reports the console hosts
+(conhost/OpenConsole), plus the machine outside the instance. Expected: instance
+total about 0.1 % (32 cores) and no xterm writes. The real pane count is rounded up to the
+supported workspace sizes (the summary prints it). Bigger setup:
+`-IdlePanes 24`; terminal host: `-HostMode`.
+
+2026-10-24 screen (10 pwsh panes, 2 visible, 10 + 10 s; 1.22.1 vs dev a7fd852,
+2 alternating runs each): instance total 0.0-0.1 % vs 0.1 %, every process
+type at 0 % avg, 0 xterm writes in both builds;
+`-MockAgents` 0.1 vs 0.1 %, `-HostMode` 0.2 vs 0.1 %.
+
+Note (diagnosis, not baseline): the ~8 % idle load reported on 2026-10-24 came
+from outside Swarmterm: each Claude Code session re-ran a user-level
+`pwsh` status-line script every 5 s (`refreshInterval`), ~3 CPU-s per run as it
+re-parsed long transcripts (about 1.2 cores at the time of measuring).
 
 ### Scenario g (tool-heavy agents)
 

@@ -98,7 +98,7 @@ async function runScenario(tStart: number): Promise<void> {
   // Fixed-duration scenarios: they run PERF_SECONDS instead of until the
   // flood is complete or quiet.
   const fixed = agents || warRoom || many || tools
-  const wantMock = (agents && process.env.PERF_MOCK === '1') || warRoom
+  const wantMock = ((agents || scenario === 'i') && process.env.PERF_MOCK === '1') || warRoom
   if (!fixed && flood > 11) throw new Error('PERF_FLOOD must be <= 11')
   const seconds = Number(env('PERF_SECONDS', '150'))
   const browser = await chromium.connectOverCDP(env('PERF_CDP'))
@@ -114,7 +114,9 @@ async function runScenario(tStart: number): Promise<void> {
   // generator, scenario e to plain-shell peers running it in --mock mode.
   // assertPlainPanes then allows NO agent at all.
   const mock = wantMock && caps.mockTemplate
-  if (wantMock && !mock) notes.push(agents
+  if (wantMock && !mock) notes.push(scenario === 'i'
+    ? 'fallback: no perf-mock-agent template in this build; idle panes are plain shells'
+    : agents
     ? 'fallback: no perf-mock-agent template in this build; agent panes are plain shells running agent-stream.mjs (no detector, tab badges or state flips)'
     : 'fallback: no perf-mock-agent template in this build; War Room peers are plain shells running agent-stream.mjs --mock (no agent detector, so wait_peer may never see a flip)')
   if (!caps.renderCounter) notes.push('unsupported: render counter (src/lib/perf-render-count.ts) missing; WorkspaceTabs/AttentionBadge renders not measured')
@@ -123,6 +125,7 @@ async function runScenario(tStart: number): Promise<void> {
   // Abort before touching anything if the instance holds any agent pane.
   await assertPlainPanes(page, mock)
   await closePerfWorkspaces(page)
+  if (scenario === 'i') return runIdle(page, { tStart, mock, notes, caps })
   await installProbes(page)
   // The mock generators start on perf-mock.json; stale logs would mix runs.
   clearMockFiles(cwd)
@@ -913,4 +916,82 @@ async function installProbes(page: Page): Promise<void> {
     }
   })
   await page.evaluate((l) => { (window as any).__perfLines = l }, Number(process.env.PERF_LINES ?? '0'))
+}
+
+// Scenario i: idle. Panes sit at their prompt with no input and no output;
+// flood.ps1 samples per-process CPU over the window. No installProbes: its
+// rAF loop and timer chain would themselves keep the WebView busy. Instead
+// cheap counters (no extra wakeups) record what the page does while idle:
+// bytes handed to xterm (any output, e.g. a shell redrawing after a resize),
+// rAF / setTimeout / setInterval registrations. (Tauri's IPC internals are
+// frozen, so invoke calls cannot be counted from the page.)
+async function runIdle(page: Page, o: { tStart: number; mock: boolean; notes: string[]; caps: Caps }): Promise<void> {
+  const total = Number(env('PERF_IDLE', '10'))
+  const visible = Number(env('PERF_FLOOD', '2'))
+  const seconds = Number(env('PERF_SECONDS', '10'))
+  const warmupS = Number(env('PERF_WARMUP_S', '10'))
+  const shell = env('PERF_SHELL', 'pwsh')
+  const cwd = env('PERF_CWD')
+  const ids: string[] = await page.evaluate(async ({ cwd, total, visible, shell, mock, MOCK_ID }) => {
+    // Same shell as the user's panes (PSReadLine redraws are what an idle
+    // pane costs); older builds without the store keep their default.
+    try { (await import('/src/store/terminal-pref-store.ts' as string)).useTerminalPrefStore.getState().setShellId(shell) } catch { /* default shell */ }
+    const { useAppStore, visibleLeaves } = await import('/src/store/app-store.ts' as string)
+    const counts = [1, 2, 4, 6, 8, 10, 12]
+    const sizes: number[] = [counts.find(c => c >= Math.min(visible, total))!]
+    for (let left = total - sizes[0]; left > 0;) { const c = counts.find(c => c >= Math.min(left, 12))!; sizes.push(c); left -= c }
+    const wsIds: string[] = []
+    for (const c of sizes) {
+      useAppStore.getState().createWorkspace({ cwd, terminalCount: c, agentIds: Array(c).fill(mock ? MOCK_ID : 'terminal'), name: `perf-${wsIds.length}` })
+      wsIds.push(useAppStore.getState().activeWorkspaceId)
+    }
+    useAppStore.setState({ activeWorkspaceId: wsIds[0] })
+    const ids: string[] = []
+    for (const w of wsIds) for (const leaf of visibleLeaves(useAppStore.getState().workspaces.find((x: any) => x.id === w))) ids.push(leaf.terminalId)
+    return ids
+  }, { cwd, total, visible, shell, mock: o.mock, MOCK_ID })
+  await assertPlainPanes(page, o.mock)
+  // Hidden workspaces' panes attach only when shown on some builds: show each
+  // once so every shell runs, then return to the first.
+  await page.evaluate(async () => {
+    const { useAppStore } = await import('/src/store/app-store.ts' as string)
+    const ws = useAppStore.getState().workspaces.filter((w: any) => String(w.name).startsWith('perf-'))
+    for (const w of [...ws.slice(1), ws[0]]) { useAppStore.setState({ activeWorkspaceId: w.id }); await new Promise(r => setTimeout(r, 400)) }
+  })
+  await page.waitForFunction(async ({ all, REG }) => {
+    const reg = await import(REG)
+    return all.every((id: string) => { const t = reg.readTerminalText(id, 3); return /[>$#]\s*$/.test(t) || t.includes('perf-mock: waiting') })
+  }, { all: ids, REG }, { timeout: 120_000, polling: 500 })
+  await page.waitForTimeout(warmupS * 1000)
+  await page.evaluate(async () => {
+    const w = window as any
+    const c = { writeHooked: !!w.__idleWriteHooked, writeCalls: 0, writeChars: 0, raf: 0, timeout: 0, interval: 0 }
+    w.__idle = c
+    if (!w.__idleHooked) {
+      w.__idleHooked = true
+      const raf = w.requestAnimationFrame.bind(w); w.requestAnimationFrame = (cb: any) => { w.__idle.raf++; return raf(cb) }
+      const st = w.setTimeout.bind(w); w.setTimeout = (...a: any[]) => { w.__idle.timeout++; return st(...a) }
+      const si = w.setInterval.bind(w); w.setInterval = (...a: any[]) => { w.__idle.interval++; return si(...a) }
+      const url = performance.getEntriesByType('resource').map(e => e.name).find(n => n.includes('/.vite/deps/@xterm_xterm.js'))
+      if (url) {
+        const { Terminal } = await import(url)
+        const wr = Terminal.prototype.write
+        w.__idleWriteHooked = true; w.__idle.writeHooked = true
+        Terminal.prototype.write = function (d: any, cb?: any) { w.__idle.writeCalls++; w.__idle.writeChars += d?.length ?? d?.byteLength ?? 0; return wr.call(this, d, cb) }
+      }
+    }
+  })
+  const t0 = Date.now()
+  await page.waitForTimeout(seconds * 1000)
+  const t1 = Date.now()
+  const counters = await page.evaluate(() => (window as any).__idle)
+  const result: any = { scenario: 'i', panes: ids.length, visible, shell, mockAgents: o.mock ? ids.length : 0, idleCounters: counters, caps: o.caps, notes: o.notes,
+    windowStartMs: t0, windowEndMs: t1, wallSeconds: (t1 - t0) / 1000,
+    timing: { setupS: (t0 - o.tStart) / 1000, runS: (t1 - t0) / 1000, teardownS: null as number | null, totalS: null as number | null } }
+  writeFileSync(env('PERF_OUT'), JSON.stringify(result, null, 2))
+  const tTear = Date.now()
+  await closePerfWorkspaces(page)
+  result.timing.teardownS = (Date.now() - tTear) / 1000
+  result.timing.totalS = (Date.now() - o.tStart) / 1000
+  writeFileSync(env('PERF_OUT'), JSON.stringify(result, null, 2))
 }
