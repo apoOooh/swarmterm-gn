@@ -14,7 +14,21 @@
 
 import { collectLeaves, type LayoutNode } from '@/lib/layout-tree'
 
-export type MentionKind = 'peer' | 'agent' | 'shell'
+export type MentionKind = 'everyone' | 'peer' | 'agent' | 'shell'
+
+/**
+ * Reserved: `@everyone` always means the whole room. A pane or member that is
+ * literally named "everyone" is left out of the candidates rather than shown
+ * under a second label — it could never be addressed unambiguously anyway.
+ */
+export const EVERYONE_MENTION = 'everyone'
+export const EVERYONE_CANDIDATE: MentionCandidate = {
+  id: '__mention_everyone__',
+  name: EVERYONE_MENTION,
+  kind: 'everyone',
+  agentId: null,
+  hint: 'all in the War Room'
+}
 
 export interface MentionCandidate {
   /** terminalId — what a mention resolves to. */
@@ -62,14 +76,15 @@ export function namedPanes(workspaces: Array<{ name: string; layout: LayoutNode 
 export function buildCandidates(members: CandidateMember[], panes: CandidatePane[]): MentionCandidate[] {
   const seen = new Set<string>()
   const out: MentionCandidate[] = []
+  const reserved = (n: string): boolean => n.trim().toLowerCase() === EVERYONE_MENTION
   for (const m of members) {
-    if (m.name.trim() === '' || seen.has(m.terminalId)) continue
+    if (m.name.trim() === '' || reserved(m.name) || seen.has(m.terminalId)) continue
     seen.add(m.terminalId)
     out.push({ id: m.terminalId, name: m.name, kind: 'peer', agentId: m.agentId })
   }
   for (const p of panes) {
     const name = p.name?.trim()
-    if (!name || seen.has(p.terminalId)) continue
+    if (!name || reserved(name) || seen.has(p.terminalId)) continue
     seen.add(p.terminalId)
     const agentId = p.agentId && p.agentId !== 'terminal' ? p.agentId : null
     out.push({ id: p.terminalId, name, kind: agentId ? 'agent' : 'shell', agentId, hint: p.workspaceName })
@@ -182,7 +197,7 @@ export function tokenizeMentions(text: string): MentionSegment[] {
   }
   while (i < text.length) {
     const ch = text[i]
-    const boundary = i === 0 || /[\s(]/.test(text[i - 1])
+    const boundary = i === 0 || /[\s(*]/.test(text[i - 1])
     if (ch === '@' && boundary) {
       const quoted = readQuoted(text, i + 1)
       if (quoted) {
@@ -244,6 +259,8 @@ export type MentionResolution =
  */
 export function resolveMention(name: string, candidates: MentionCandidate[]): MentionResolution {
   const key = name.toLowerCase()
+  // The reserved token wins before any candidate can match it.
+  if (key === EVERYONE_MENTION) return { status: 'resolved', id: EVERYONE_CANDIDATE.id }
   const exact = candidates.filter((c) => c.name.toLowerCase() === key)
   if (exact.length === 1) return { status: 'resolved', id: exact[0].id }
   if (exact.length > 1) return { status: 'ambiguous', ids: exact.map((c) => c.id) }
@@ -274,14 +291,18 @@ export interface ActiveMention {
   quoted: boolean
 }
 
-/** The mention being typed at `caret`, if any (caret-based, so mid-text works). */
+/**
+ * The mention being typed at `caret`, if any (caret-based, so mid-text works).
+ * A quoted query ends at its first `"`: typing an escaped `\"` mid-query is
+ * not supported (pick the name from the list instead — accept escapes it).
+ */
 export function activeMention(text: string, caret: number): ActiveMention | null {
   // A space ends a bare query, but `@"My pa` legitimately contains spaces.
   const openQuoted = /@"[^"\n]*$/.test(text.slice(0, caret))
   for (let i = caret - 1; i >= 0; i--) {
     const ch = text[i]
     if (ch === '@') {
-      if (i > 0 && !/[\s(]/.test(text[i - 1])) return null
+      if (i > 0 && !/[\s(*]/.test(text[i - 1])) return null
       const body = text.slice(i + 1, caret)
       if (body.startsWith('"')) {
         const inner = body.slice(1)
@@ -347,6 +368,7 @@ export function mentionKeyAction(
   if (count === 0) return { type: 'pass' }
   if (key === 'ArrowDown') return { type: 'move', index: (index + 1) % count }
   if (key === 'ArrowUp') return { type: 'move', index: (index - 1 + count) % count }
-  if ((key === 'Enter' && !opts.shift) || key === 'Tab') return { type: 'accept', index }
+  // Shift+Tab stays focus navigation, so the popup never traps the keyboard.
+  if ((key === 'Enter' || key === 'Tab') && !opts.shift) return { type: 'accept', index }
   return { type: 'pass' }
 }

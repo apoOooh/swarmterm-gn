@@ -165,5 +165,6 @@ describe('mentionKeyAction', () => {
     expect(mentionKeyAction('Enter', { ...o, count: 0 })).toEqual({ type: 'pass' })
     expect(mentionKeyAction('Enter', { ...o, composing: true })).toEqual({ type: 'pass' })
     expect(mentionKeyAction('Enter', { ...o, shift: true })).toEqual({ type: 'pass' })
+    expect(mentionKeyAction('Tab', { ...o, shift: true })).toEqual({ type: 'pass' })
   })
 })

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useAppStore } from '@/store/app-store'
-import { buildCandidates, namedPanes, resolveMention, tokenizeMentions } from '@/lib/war-room-mentions'
+import { EVERYONE_CANDIDATE, buildCandidates, namedPanes, resolveMention, tokenizeMentions } from '@/lib/war-room-mentions'
 import { LogIn, LogOut, Plug, Trash2 } from 'lucide-react'
 import { useWarRoomStore } from '@/store/war-room-store'
 import {
@@ -18,7 +18,12 @@ function Markdown({ text }: { text: string }): ReactElement {
   return (
     <>
       {tokenizeMarkdown(text).map((tok, i) => {
-        if (tok.t === 'bold') return <strong key={i}>{tok.v}</strong>
+        if (tok.t === 'bold')
+          return (
+            <strong key={i}>
+              <TextWithMentions text={tok.v} />
+            </strong>
+          )
         if (tok.t === 'code')
           return (
             <code key={i} className="rounded bg-muted px-1 font-mono text-[11px]">
@@ -73,6 +78,9 @@ function MentionChip({ name, raw }: { name: string; raw: string }): ReactElement
         {raw}
       </span>
     )
+  }
+  if (res.status === 'resolved' && res.id === EVERYONE_CANDIDATE.id) {
+    return <span className="rounded-[3px] px-0.5 font-medium text-[#00b0f4]">{raw}</span>
   }
   const ids = res.status === 'resolved' ? [res.id] : res.ids
   return (

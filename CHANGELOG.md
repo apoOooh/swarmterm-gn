@@ -2,8 +2,9 @@
 
 ## [Unreleased]
 
-- War Room: type `@` in the composer to mention a member or named pane, with
-  autocomplete (arrows, Enter/Tab, Esc); mentions show as clickable chips.
+- War Room: type `@` in the composer to mention peers, with autocomplete. A message
+  with mentions goes only to those peers, and `@everyone` goes to the whole room.
+  Mentions of anyone outside the room block the send.
 
 - Performance: one pane's slow resize, creation or flood no longer stalls
   the others. Keystrokes, acks and resizes skip the app-wide terminals lock,
