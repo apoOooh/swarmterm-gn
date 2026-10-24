@@ -162,7 +162,7 @@ export class TerminalSession {
         if (msg.type === 'exit') exited = true
         if (!fresh()) return
         if (msg.type === 'data') {
-          const bytes = size(msg.payload)
+          const bytes = msg.bytes ?? size(msg.payload)
           this.sink.write(msg.payload, acker?.write(bytes), bytes)
         } else if (msg.type === 'replay') {
           // The host counts the replay against the gate like live output.

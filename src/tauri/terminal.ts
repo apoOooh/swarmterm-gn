@@ -7,7 +7,8 @@ import type { ShellId } from '@/lib/terminal-pref'
  * raw binary IPC body (perf phase 3), decoded by `decodePtyOut`.
  */
 export type PtyOut =
-  | { type: 'data'; payload: Uint8Array | string }
+  /** `bytes`: UTF-8 size of a string payload, when Rust sent it. */
+  | { type: 'data'; payload: Uint8Array | string; bytes?: number }
   | { type: 'replay'; payload: PtyReplay }
   | { type: 'exit'; payload: { exitCode: number } }
 
@@ -95,13 +96,18 @@ export function decodePtyOut(raw: ArrayBuffer | Uint8Array): PtyOut {
  * (`DIRECT_JSON_LIMIT` in `pty.rs`: Tauri evaluates it directly, while a
  * raw body of 1 KiB or more costs a fetch per message), everything else as
  * a raw frame for `decodePtyOut`. The string goes to xterm as is: re-encoding
- * it cost an allocation per batch and made xterm decode UTF-8 again; the
- * ack counts its UTF-8 size with `utf8Length` instead.
+ * it cost an allocation per batch and made xterm decode UTF-8 again. Rust
+ * sends it as `[utf8_len, text]`, so the ack needs no length scan. Nothing
+ * sends a bare string any more; it is still accepted (measured with
+ * `utf8Length`) only as a cheap guard.
  */
 // Mixing string and byte writes into one xterm is safe: Rust ends every
 // batch on a character boundary (`take_valid_utf8`), so xterm's UTF-8
 // decoder never holds a partial sequence across a switch.
-export function decodeChannelMessage(raw: ArrayBuffer | Uint8Array | string): PtyOut {
+export function decodeChannelMessage(
+  raw: ArrayBuffer | Uint8Array | string | [number, string]
+): PtyOut {
+  if (Array.isArray(raw)) return { type: 'data', payload: raw[1], bytes: raw[0] }
   if (typeof raw === 'string') return { type: 'data', payload: raw }
   return decodePtyOut(raw)
 }
@@ -112,7 +118,7 @@ export function createTerminal(
   options: CreateTerminalOptions,
   onOutput: (msg: PtyOut) => void
 ): Promise<CreateTerminalResult> {
-  const onData = new Channel<ArrayBuffer | string>()
+  const onData = new Channel<ArrayBuffer | string | [number, string]>()
   onData.onmessage = (raw) => onOutput(decodeChannelMessage(raw))
   return invoke<CreateTerminalResult>('create_terminal', { id, options, onData })
 }

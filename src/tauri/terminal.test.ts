@@ -75,6 +75,13 @@ describe('decodeChannelMessage', () => {
     expect(decodeChannelMessage('h\u00e9')).toEqual({ type: 'data', payload: 'h\u00e9' })
   })
 
+  it('takes the UTF-8 size Rust sends with a small batch', () => {
+    expect(decodeChannelMessage([3, 'hé'])).toEqual({ type: 'data', payload: 'hé', bytes: 3 })
+    // As Rust's serde_json emits it: escaped ESC, a 4-byte emoji.
+    const raw = JSON.parse('[6,"\\u001b\\ud83d\\ude00a"]') as [number, string]
+    expect(decodeChannelMessage(raw)).toEqual({ type: 'data', payload: '\u001b\u{1f600}a', bytes: 6 })
+  })
+
   it('decodes a raw frame', () => {
     expect(decodeChannelMessage(new Uint8Array([7, 0, 0, OUT_DATA])).type).toBe('data')
   })

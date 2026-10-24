@@ -182,7 +182,13 @@ impl PtyOut {
             if text.len() < DIRECT_JSON_LIMIT {
                 let json = serde_json::to_string(text)?;
                 if json.len() < DIRECT_JSON_LIMIT {
-                    return Ok(tauri::ipc::InvokeResponseBody::Json(json));
+                    // `[utf8_len,"text"]`: the renderer acks and rates this
+                    // exact byte count; sending it saves a UTF-8 length scan
+                    // of every small batch on the WebView main thread.
+                    return Ok(tauri::ipc::InvokeResponseBody::Json(format!(
+                        "[{},{json}]",
+                        text.len()
+                    )));
                 }
             }
         }
@@ -1664,7 +1670,7 @@ mod tests {
     fn small_data_goes_as_json_large_as_raw() {
         use tauri::ipc::InvokeResponseBody as B;
         match PtyOut::Data("a\u{1b}b".into()).into_body().unwrap() {
-            B::Json(j) => assert_eq!(j, r#""a\u001bb""#),
+            B::Json(j) => assert_eq!(j, r#"[3,"a\u001bb"]"#),
             B::Raw(_) => panic!("small data must be json"),
         }
         for big in [
