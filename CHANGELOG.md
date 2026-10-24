@@ -2,55 +2,82 @@
 
 ## [Unreleased]
 
-- No avoidable stalls: output, keystrokes, acks and resizes of one pane no
-  longer wait behind another pane's slow resize, creation or flood, and
-  opening a workspace starts its panes in parallel.
-- Performance: the file watcher handles an event storm (64+ raw events in
-  one batch, e.g. `cargo build` or `npm install` under the root) with a
-  leading rescan at once, then sends the changed paths at most every 16 ms
-  (more than 1,024 pending paths become one rescan instead), and one
-  trailing rescan after 500 ms of quiet, so the explorer stays current
-  during a long build. With nothing pending it blocks without an idle tick
-  (was a 100 ms poll); unwatching still releases the root at once.- Performance: the terminal host's mode tracker skips plain text with
+- Performance: one pane's slow resize, creation or flood no longer stalls
+  the others. Keystrokes, acks and resizes skip the app-wide terminals lock,
+  acks run off the UI thread, and a per-pane worker applies only the latest
+  size (a failed resize is logged).
+- Performance: opening a workspace creates its panes in parallel instead of
+  one after another, so restoring many agents is faster.
+- Performance: the explorer stays current during a file watcher event storm
+  (e.g. `cargo build`): a rescan at once, then changed paths at most every
+  16 ms, and a final rescan after 500 ms of quiet (1.23.0 waited for quiet).
+- Performance: output flow control pauses a pane only when it is more than
+  2 MB behind (was 512 KB), and closing or respawning a pane always
+  releases it.
+- Rendering: every pane gets a WebGL renderer when it opens, as in 1.22.1,
+  up to 16 (1.23.0: only visible panes, at most 12); beyond that the oldest
+  pane falls back to the DOM renderer. Hidden panes keep their renderer, so
+  switching workspaces is instant, at the cost of more GPU memory. With 8 or
+  more panes visible and 4 or more flooding (over 64 KB/s for 3 s), the
+  floods move to the DOM renderer and return to WebGL once below 32 KB/s.
+- Dev: optional profiling build feature (dev only, not in releases) with
+  lock, flow-gate and IPC counters for `flood.ps1 -Profile`.
+
+## [1.23.0] - 2026-10-23
+
+- Media panel: a new right-panel tab to inspect images and videos while agents
+  work, from any folder (not only the project). Large viewer, thumbnail strip
+  (newest first, source pane and time), wheel zoom toward the cursor (10%–2000%)
+  and pan. It is user-side only: no MCP tool, nothing is passed to agents, and a
+  file is served to the viewer only after you open it.
+- Media detection: image and video paths printed in a pane are listed by name
+  and counted in a pane badge; clicking opens the file. The media routes answer
+  only the main window, never the web-preview webviews.
+- Media: opt-in auto-show popup (Settings → Media) listing the newest items,
+  hides itself unless you interact, never takes the keyboard.
+- Media: opt-in clipboard capture (Windows) saves copied images to a temp
+  folder (capped, deleted on exit and when switched off).
+- Media: drag a thumbnail into a pane to insert its path like Ctrl+V does, so
+  Claude Code and Codex attach the image.
+- Media: Annotate images with pen, marker, line, arrow, rectangle and ellipse,
+  then save a marked copy and drag it into a pane. The original is never
+  modified.
+- Terminal drop: paths with `%` are no longer expanded by cmd panes.
+- Workspaces: new setting *Open new workspaces on startup by default*
+  (Settings → Workspaces → Open on startup, off by default). Newly created
+  workspaces are pinned to the startup list; existing ones are untouched, and
+  auto-pinning stops at 8 because pinned entries are never evicted.
+- Accounts: switching subscription on a pane whose session has no transcript
+  yet now starts fresh instead of running `--resume` on an unknown id (Claude
+  exited with "No conversation found" when session sharing was on).
+- Performance: the file watcher stops handling individual events during an
+  event storm (a batch of 64+ raw events, e.g. `cargo build` or `npm install`
+  under the root) and sends one rescan once the tree has been quiet for
+  500 ms. With nothing pending it blocks without an idle tick (was a 100 ms
+  poll); stop is a channel message, so unwatching still releases the root at once.
+- Performance: the terminal host's mode tracker skips plain text with
   `memchr` to the next ESC instead of parsing byte by byte (same results).
 - Performance: end-to-end output flow control. The renderer acks output once
-  xterm parsed it (in 256 KB steps, off the UI thread); a pane more than
-  2 MB behind pauses its output (resumes below 512 KB) and the shell is
-  backpressured, so floods no longer grow WebView memory by GBs. Applies
-  in-process and in the terminal host (new `ack` op, `flow-control`
-  capability; older apps are never gated). The gate opens on close,
-  respawn, detach, exit or 2 s without an ack; input is never gated.- Performance: terminal output reaches the renderer as raw bytes instead of
+  xterm parsed it; a pane more than 512 KB behind pauses its output (resumes
+  below 128 KB) and the shell is backpressured, so floods no longer grow
+  WebView memory by GBs. Applies in-process and in the terminal host (new
+  `ack` op, `flow-control` capability; older apps are never gated). The gate
+  opens on detach, exit or 2 s without an ack; input is never gated.
+- Performance: terminal output reaches the renderer as raw bytes instead of
   JSON strings (no escaping, no copy of the batch) and xterm parses them
   directly. The host connection decodes many frames per read without
   shifting its buffer per frame, and the app shares the host's output
   batching code instead of a copy.
-- Rendering: every pane gets a WebGL renderer when it opens, as in 1.22.1,
-  up to 16 contexts; the 17th pane takes the slot of the oldest one, which
-  falls back to the DOM renderer (Chromium itself drops the oldest beyond
-  its limit). Panes keep their renderer while hidden, so switching
-  workspaces never re-creates contexts; this trades up to 16 live WebGL
-  contexts (GPU memory) for instant switches. A lost WebGL context leaves
-  the pane on the DOM renderer. When at least 8 panes are visible and 4 or
-  more flood (over 64 KB/s for 3 s), the floods move to the DOM renderer to
-  keep frames smooth, and return to WebGL once below 32 KB/s for 3 s.
+- Memory: panes hold a WebGL context only while visible (at most 12, least
+  recently shown falls back to DOM first; re-acquired after a context loss).
   New Settings → Terminal → *Scrollback* (default 5,000 lines). The terminal
   host keeps 512 KiB of replay history per pane instead of 1 MB.
-- Performance: keystrokes, acks and resizes no longer take the app-wide
-  terminals lock for the PTY work, and acks run off the UI thread. A resize
-  is applied by a per-pane worker that only keeps the latest size, so a
-  pane whose output is stalled can no longer block other panes; a failed
-  resize is logged instead of reported back to the UI.
-- Performance: panes are created concurrently (up to 6 at a time in the
-  terminal host) instead of one after another, so restoring a workspace of
-  many agents is faster. Creating the same pane twice still waits for the
-  first.- Performance: workspace tabs, the attention badge and the prompt library no
+- Performance: workspace tabs, the attention badge and the prompt library no
   longer re-render on every agent state flip, the agent detector skips its
   screen scan while nothing changed, and `wait_peer` waiters are no longer
   woken by every output batch.
 - War Room: joining, moving, leaving or deleting a room now wakes pending
   `wait_peer` calls at once, so a peer that left is reported immediately.
-- Dev: optional profiling build feature (dev only, not in releases) with
-  lock, flow-gate and IPC counters for lood.ps1 -Profile.
 - Dev: perf benchmark harness (`scripts/perf/flood.ps1`) with an "agents"
   scenario of synthetic agent-like streams; it never starts an agent CLI.
 

@@ -2,8 +2,9 @@
 import { useRef, type ReactElement } from 'react'
 import { useSidebarPeekStore } from '@/store/sidebar-peek-store'
 import { useEdgePeek } from '@/components/use-edge-peek'
-import { Eye, GitBranch, Pin, RotateCw, Swords, X } from 'lucide-react'
-import { useGitStore } from '@/store/git-store'
+import { Eye, GitBranch, Image, Pin, RotateCw, Swords, X } from 'lucide-react'
+import { useGitStore, type RightPanelMode } from '@/store/git-store'
+import { MediaPanel } from '@/components/Media/MediaPanel'
 import { BrowserColumn } from '@/components/Browser/BrowserColumn'
 import { GitPanel } from '@/components/Git/GitPanel'
 import { WarRoomPanel } from '@/components/WarRoom/WarRoomPanel'
@@ -39,7 +40,7 @@ export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}):
   }
 
   // setMode also opens (docks) the panel — while peeking, switch tabs only.
-  function switchTo(next: 'browser' | 'git' | 'warroom'): void {
+  function switchTo(next: RightPanelMode): void {
     if (peek) useGitStore.setState({ mode: next })
     else useGitStore.getState().setMode(next)
   }
@@ -96,6 +97,18 @@ export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}):
           <Swords className="h-3.5 w-3.5" />
           War Room
         </button>
+        <button
+          onClick={() => switchTo('media')}
+          className={[
+            'flex items-center gap-1.5 px-3 py-1.5 text-xs transition-colors',
+            mode === 'media'
+              ? 'border-b-2 border-[#a855f7] bg-background text-foreground'
+              : 'text-muted-foreground hover:text-foreground',
+          ].join(' ')}
+        >
+          <Image className="h-3.5 w-3.5" />
+          Media
+        </button>
         {mode === 'git' && <RefreshButton />}
         {peek && (
           <button
@@ -134,6 +147,7 @@ export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}):
         )}
         {mode === 'git' && <GitPanel />}
         {mode === 'warroom' && <WarRoomPanel />}
+        {mode === 'media' && <MediaPanel />}
       </div>
     </div>
   )

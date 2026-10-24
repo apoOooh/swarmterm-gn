@@ -1,5 +1,5 @@
 import { dragCursor, pastThreshold, type DragEffect } from '@/lib/pointer-drag'
-import { useExplorerDragStore } from '@/store/explorer-drag-store'
+import { useExplorerDragStore, type DragGhost } from '@/store/explorer-drag-store'
 import { useAppStore } from '@/store/app-store'
 import { devLog } from '@/lib/dev-log'
 
@@ -25,6 +25,8 @@ export interface PointerDragOptions {
   onEnd?: () => void
   /** dev-log event prefix */
   name: string
+  /** Thumbnail/icon instead of the file icon in the ghost (media drags). */
+  ghost?: DragGhost
 }
 
 /**
@@ -39,6 +41,7 @@ export function startPointerDrag(down: { button: number; clientX: number; client
   const reset = (): void => {
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
+    window.removeEventListener('pointercancel', cancel)
     window.removeEventListener('keydown', key, true)
     useExplorerDragStore.setState({ drag: null })
     useAppStore.getState().setDropTarget(null)
@@ -56,7 +59,7 @@ export function startPointerDrag(down: { button: number; clientX: number; client
     const copyKey = ev.ctrlKey || ev.metaKey
     const hit = opts.hit(ev.clientX, ev.clientY, copyKey)
     useAppStore.getState().setDropTarget(hit.terminalId ?? null)
-    useExplorerDragStore.setState({ drag: { paths: opts.items, x: ev.clientX, y: ev.clientY, effect: hit.effect, overDir: hit.overDir ?? null } })
+    useExplorerDragStore.setState({ drag: { paths: opts.items, x: ev.clientX, y: ev.clientY, effect: hit.effect, overDir: hit.overDir ?? null, ghost: opts.ghost } })
     document.documentElement.dataset.dragging = '1'
     document.documentElement.style.cursor = dragCursor(hit.effect)
   }
@@ -75,7 +78,11 @@ export function startPointerDrag(down: { button: number; clientX: number; client
     active = false
     reset()
   }
+  // The OS can take the pointer away (window lost, touch gesture) without a
+  // pointerup; without this the listeners and the ghost would stay behind.
+  const cancel = (): void => { active = false; reset() }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
+  window.addEventListener('pointercancel', cancel)
   window.addEventListener('keydown', key, true)
 }

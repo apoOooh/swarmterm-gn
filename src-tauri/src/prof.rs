@@ -75,7 +75,12 @@ mod imp {
 
     impl Hist {
         const fn new() -> Self {
-            Hist { count: 0, sum_us: 0, max_us: 0, buckets: [0; BUCKETS] }
+            Hist {
+                count: 0,
+                sum_us: 0,
+                max_us: 0,
+                buckets: [0; BUCKETS],
+            }
         }
         fn add(&mut self, d: Duration) {
             let us = d.as_micros().min(u64::MAX as u128) as u64;
@@ -166,7 +171,9 @@ mod imp {
     fn wait_name(site: &'static str) -> &'static str {
         static NAMES: Mutex<BTreeMap<&'static str, &'static str>> = Mutex::new(BTreeMap::new());
         let mut names = NAMES.lock().unwrap();
-        names.entry(site).or_insert_with(|| Box::leak(format!("{site}.wait").into_boxed_str()))
+        names
+            .entry(site)
+            .or_insert_with(|| Box::leak(format!("{site}.wait").into_boxed_str()))
     }
 
     pub struct Span(&'static str, Instant);

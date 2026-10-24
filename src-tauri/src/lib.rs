@@ -3,6 +3,7 @@ mod accounts;
 mod agent_process;
 mod agents;
 mod analytics;
+mod clipboard_media;
 mod commands;
 mod dev_defer;
 mod devlog;
@@ -12,6 +13,7 @@ mod git;
 mod host_client;
 mod json_style;
 mod links;
+mod marked_media;
 mod mcp;
 mod paste_image;
 mod preview;
@@ -43,6 +45,8 @@ pub fn run() {
         .manage(AppState::default())
         .manage(host_client::HostHub::default())
         .manage(voice::VoiceHub::default())
+        .manage(clipboard_media_state())
+        .manage(marked_media::MarkedMedia::default())
         .manage(voice::tts::TtsHub::default())
         .manage(voice::companion::Companion::default())
         .manage(voice_speech_hub())
@@ -60,7 +64,7 @@ pub fn run() {
             let service = context
                 .app_handle()
                 .state::<std::sync::Arc<files::FileService>>();
-            files::media_response(&service, request)
+            files::media_response(&service, context.webview_label(), request)
         })
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
@@ -159,6 +163,11 @@ pub fn run() {
             commands::save_clipboard_image,
             commands::files_request,
             commands::files_watch,
+            commands::media_check_detected,
+            commands::media_open,
+            commands::clipboard_media_set_enabled,
+            commands::media_save_marked,
+            commands::media_read_opened_image,
             commands::files_unwatch,
             commands::create_terminal,
             commands::write_terminal,
@@ -252,6 +261,11 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 crate::prof::dump("exit");
                 crate::mcp::shutdown();
+                // Clipboard images are private: delete our PNGs on every exit.
+                #[cfg(windows)]
+                _app.state::<clipboard_media::ClipboardMedia>().shutdown();
+                // Marked copies are temporary too (the originals stay as they were).
+                _app.state::<marked_media::MarkedMedia>().shutdown();
             }
             // macOS: clicking the Dock icon while the window is hidden
             // (close-to-tray) fires Reopen — re-show like the tray's "Show".
@@ -262,6 +276,13 @@ pub fn run() {
             }
         });
 }
+
+#[cfg(windows)]
+fn clipboard_media_state() -> clipboard_media::ClipboardMedia {
+    clipboard_media::ClipboardMedia::default()
+}
+#[cfg(not(windows))]
+fn clipboard_media_state() {}
 
 /// Built-in speech source state (SWA-38); Windows-only like the voice pipe.
 #[cfg(windows)]

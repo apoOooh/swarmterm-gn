@@ -177,7 +177,14 @@ pub fn transfer(agent_id: &str, id: &str, from: &Path, to: &Path) -> Result<bool
         return Err("Invalid session id".into());
     }
     if same_target(from, to) {
-        return Ok(true);
+        // Nothing to copy, but a session that never got a turn has no
+        // transcript either: reporting it as carried would make the pane run
+        // `--resume <id>` and the CLI fails with "No conversation found".
+        return Ok(match agent_id {
+            "claude-code" => find_claude(from, id).is_some(),
+            "codex" => super::codex::find_rollout(&from.join("sessions"), id).is_some(),
+            _ => true,
+        });
     }
     let backup = backup_root()
         .unwrap_or_else(|_| to.join("session-share-backups"))
@@ -550,6 +557,38 @@ mod tests {
             ),
             Ok(false)
         );
+    }
+
+    #[test]
+    fn transfer_between_shared_stores_only_carries_a_session_with_a_transcript() {
+        let root = tempfile::tempdir().unwrap();
+        let (a, b) = (root.path().join("a"), root.path().join("b"));
+        let (shared, backups) = (root.path().join("shared"), root.path().join("backups"));
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        link_profile(&a, &shared, &backups).unwrap();
+        link_profile(&b, &shared, &backups).unwrap();
+        // Fresh session: no transcript yet, so the pane must start fresh.
+        assert_eq!(transfer("claude-code", ID, &a, &b), Ok(false));
+        write(&a.join("projects/C--x").join(format!("{ID}.jsonl")), "{}\n");
+        assert_eq!(transfer("claude-code", ID, &a, &b), Ok(true));
+    }
+
+    #[test]
+    fn transfer_between_shared_codex_homes_needs_a_rollout() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        assert_eq!(transfer("codex", ID, &a, &a.join(".")), Ok(false));
+        let rel = format!("sessions/2026/10/17/rollout-2026-10-17T10-00-00-{ID}.jsonl");
+        write(
+            &a.join(rel),
+            &format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ID}\",\"cwd\":\"C:/x\"}}}}
+"
+            ),
+        );
+        assert_eq!(transfer("codex", ID, &a, &a.join(".")), Ok(true));
     }
 
     #[test]

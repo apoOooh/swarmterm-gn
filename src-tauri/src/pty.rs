@@ -1362,8 +1362,11 @@ pub fn deliver_output(app: &AppHandle, id: &str, text: String, on_data: &Channel
     // Lock scope is the one statement — never held across the send. `None`
     // only during teardown, when there is nobody left to read the tail.
     if let Some(state) = app.try_state::<AppState>() {
-        crate::prof::lock("lock.peer_states.output", &state.peer_states)
-            .push_output(id, &text, crate::warroom::now_ms());
+        crate::prof::lock("lock.peer_states.output", &state.peer_states).push_output(
+            id,
+            &text,
+            crate::warroom::now_ms(),
+        );
         // No `peer_wake` here: output only pushes a `wait_peer` stall verdict
         // later, never produces one, and the loop re-reads the output clock
         // on its own stall timer (`mcp::tools::peers::wait_loop`). Waking

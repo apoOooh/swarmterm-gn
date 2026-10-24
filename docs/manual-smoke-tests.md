@@ -300,6 +300,108 @@ Do not mark them passed from the in-memory fixture alone.
       "worktree isolation is not enabled".
 - [ ] Closing a pane or workspace does NOT delete any worktree.
 
+## Media panel
+
+- [ ] The Swarmterm MCP server lists no `media.*` tool, and its instructions do
+      not mention the Media panel.
+- [ ] Run `echo C:\path with spaces\shot.png` (existing file) in a pane:
+      a "1 new image/video" pill appears, the strip shows `shot.png` with a
+      placeholder icon (no thumbnail), the Media panel does not open, typing
+      continues in the shell.
+- [ ] Before opening it, the devtools network log shows no request for the
+      file; requesting its `swarmterm-media://localhost/unrooted?path=...` URL
+      is refused (403).
+- [ ] Click the pill: the Media tab opens on that image and shows it, the pill
+      is gone and keystrokes still land in the terminal.
+- [ ] Click a second, unopened strip item: it loads and shows. An MP4 plays
+      and seeking works (range requests).
+- [ ] Ctrl+click a media path outside the project in the terminal: the Media
+      tab opens on it. Ctrl+click a `.txt` path still opens the editor/file
+      manager as before.
+- [ ] Print the same path again: no new pill. Print a relative `out/x.webp`
+      and a quoted `"a b.gif"`: both are picked up; a missing, `.svg` or
+      `\\host\share` path is not.
+- [ ] Switching from Preview to Media hides the native preview webview.
+- [ ] `cat` a large log (no media paths): no visible slowdown versus before.
+
+## Media zoom
+
+- [ ] Wheel over an opened image in the Media tab: it zooms in/out around the
+      pointer (the spot under it stays put), stopping at 10% and 2000%; the
+      corner shows the percentage. A touchpad pinch zooms too.
+- [ ] Wheel over the thumbnail strip, or over the viewer outside the image:
+      the strip scrolls / nothing zooms. A video does not zoom.
+- [ ] Zoomed in: left-drag pans, the image cannot be dragged out of the panel;
+      double-click or **Fit** returns to fit, **1:1** shows real pixels.
+- [ ] Keystrokes still reach the focused terminal after zooming, panning and
+      clicking Fit/1:1.
+- [ ] While annotating: zoom in, draw a pen stroke and a rectangle; they land
+      under the pointer. Middle-drag and Space+drag pan without drawing; Space
+      with the pointer elsewhere types a space in the terminal. Marks stay sharp
+      after zooming; Save copy is identical to an unzoomed save.
+
+## Media annotate
+
+- [ ] An opened image shows **Annotate** in the viewer title; an unopened item
+      and a video do not.
+- [ ] Draw with pen and marker, a line, an arrow, a rectangle and an ellipse
+      (drag up-left as well as down-right), with Fill on and off and different
+      colours/widths: the live preview follows the pointer and each shape lands
+      where it was drawn. Resize the right panel: the marks stay in place.
+- [ ] Undo removes marks newest first; Clear then Undo brings them all back.
+- [ ] While drawing, and right after moving the width slider or toggling
+      Fill, keystrokes still go to the focused terminal (arrow keys do not
+      move the slider).
+- [ ] Re-print or overwrite the image file while annotating: the marks still
+      sit on the picture you are drawing on, and the saved copy shows it.
+- [ ] While annotating, Esc with the
+      pointer over the image leaves annotate mode; Esc elsewhere reaches the agent.
+- [ ] Save copy: a `<name> (marked).png` item tagged `marked` is selected, shows
+      the marks at full resolution, and the original file is unchanged on disk.
+- [ ] Drag the marked item (or the toolbar grip while annotating) into a Claude
+      Code pane: the agent attaches the image and sees the marks.
+- [ ] A very large image (e.g. 10000 px wide) saves downscaled to 8192 px
+      without freezing the UI.
+- [ ] Quit Swarmterm: `%TEMP%\swarmterm-marked\<pid>` is gone. The MCP server
+      lists no tool for annotating or reading marked images.
+
+## Media popup and clipboard images
+
+- [ ] Defaults: with a fresh profile, Settings → Media shows the popup and
+      Clipboard images off; a printed media path and copying a screenshot show no popup.
+- [ ] Turn on Show popup, `echo` an existing image path while you type in a
+      pane: the corner popup lists the item, keystrokes keep landing in the
+      shell, and it hides after ~6 s.
+- [ ] Hover the popup for 15 s: it stays; leave: it hides a full timeout later.
+      Scroll a long list: the countdown restarts.
+- [ ] Press Esc while hovering: the popup closes and the agent does NOT receive
+      the Esc. Esc with the pointer elsewhere goes to the terminal.
+- [ ] Click an item: the Media tab opens on it, the popup closes, typing still
+      goes to the terminal and the image loads. Unopened rows show the
+      placeholder icon; an opened video row shows the film icon.
+- [ ] With the web preview open, trigger the popup: the preview hides while the
+      popup is up and comes back after it hides.
+- [ ] Turn on Clipboard images, press Win+Shift+S and snip: a `clipboard` item
+      appears in the Media tab and the popup. Copy the same image again: no new
+      item. Copy a PNG and an MP4 file in Explorer: both appear as the files.
+- [ ] Copy text: nothing happens. Turn Clipboard images off and snip: nothing.
+- [ ] Copy a large (4K) screenshot: the UI does not stutter.
+- [ ] Quit from the tray: `%TEMP%\swarmterm-clipboard\<pid>` is gone.
+
+## Media drag into panes
+
+- [ ] Drag an opened image from the Media strip: after a few pixels a ghost
+      with its thumbnail follows the pointer (film icon for an opened
+      video, image icon for any unopened item) and the pane under it gets the drop ring.
+- [ ] Release over a Claude Code pane: the path arrives as a paste and the
+      CLI shows `[Image #1]` (Codex likewise); the pane has the keyboard.
+- [ ] Release over a PowerShell pane: the quoted path is typed, nothing runs.
+- [ ] Drag an unopened item into a pane: its path is typed, the strip still
+      shows the placeholder and its media URL still answers 404.
+- [ ] Release over the web-preview column, the navbar or the panel, or press
+      Esc mid-drag: nothing is typed. A plain click still opens the item.
+- [ ] With the popup up, drag one of its rows into a pane: same result.
+
 ## Web preview
 
 - [ ] Preview a framing-hostile site: type `github.com` in the address bar —

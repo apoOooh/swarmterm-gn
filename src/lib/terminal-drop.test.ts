@@ -98,3 +98,19 @@ describe('paneDropText', () => {
     expect(paneDropText(['/p/a.svg'], { agentId: 'codex', cwd: '/p', flavor: 'posix' }, false)).toBe('/p/a.svg ')
   })
 })
+
+describe('cmd percent signs', () => {
+  const r = String.raw
+  it('keeps %VAR% from expanding in cmd', () => {
+    // Backslashes before a cut stay outside the quotes: `\"` would be an escaped quote to the program's argv parser.
+    expect(formatDroppedPaths([r`C:\t\%USERPROFILE%.png`], 'cmd')).toBe(r`"C:\t"\^%"USERPROFILE"^%".png" `)
+    expect(formatDroppedPaths([r`C:\a%%b`], 'cmd')).toBe(r`"C:\a"^%^%"b" `)
+    expect(formatDroppedPaths(['%x'], 'cmd')).toBe('^%"x" ')
+    expect(formatDroppedPaths([r`C:\my dir\a.png`], 'cmd')).toBe(r`"C:\my dir\a.png" `)
+  })
+  it('leaves safe cmd paths bare and PowerShell/posix unchanged', () => {
+    expect(formatDroppedPaths([r`C:\t\a.png`], 'cmd')).toBe(r`C:\t\a.png `)
+    expect(formatDroppedPaths([r`C:\t\%USERPROFILE%.png`], 'powershell')).toBe(r`C:\t\%USERPROFILE%.png `)
+    expect(formatDroppedPaths(['/t/%HOME%.png'], 'posix')).toBe('/t/%HOME%.png ')
+  })
+})
