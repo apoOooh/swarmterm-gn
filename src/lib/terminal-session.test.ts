@@ -64,6 +64,22 @@ describe('TerminalSession', () => {
     expect(releaseOutput).toHaveBeenCalledWith('t1', 'gen-7')
   })
 
+  it('releases the dying generation on a respawn before killing it', async () => {
+    const deps = makeDeps()
+    vi.mocked(deps.createTerminal).mockImplementation((_id, _o, cb) => {
+      deps.channels.push(cb)
+      return Promise.resolve({ ok: true, pid: 1, shell: 'sh', spawnId: 'gen-1' })
+    })
+    const releaseOutput = vi.fn()
+    const session = new TerminalSession('t1', { write: vi.fn() }, { ...deps, releaseOutput })
+    session.start(OPTS)
+    await Promise.resolve()
+    await Promise.resolve()
+    session.respawn(OPTS)
+    expect(releaseOutput).toHaveBeenCalledWith('t1', 'gen-1')
+    expect(deps.killTerminal).toHaveBeenCalled()
+  })
+
   it('acks parsed output per generation, batched, once the spawn id is known', async () => {
     const deps = makeDeps()
     vi.mocked(deps.createTerminal).mockImplementation((_id, _o, cb) => {

@@ -116,6 +116,10 @@ export class TerminalSession {
     }
     this.pendingRespawn = options
     this.emit({ kind: 'connecting' })
+    // The dying generation's output is still parsed (until its exit) but its
+    // shutdown grace can run seconds: open its gate now so it never waits
+    // out the no-ack timeout.
+    if (this.spawnId !== null) this.deps.releaseOutput?.(this.id, this.spawnId)
     void this.deps.killTerminal(this.id)
   }
 
