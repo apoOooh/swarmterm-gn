@@ -6,6 +6,9 @@
   keeps repainting (they stayed held before), and never get typed into an
   unsent draft in the agent's input box. The ⏸ badge explains why a message
   is held, with "Deliver now" for a busy pane.
+- War Room: type `@` in the composer to mention peers, with autocomplete. A message
+  with mentions goes only to those peers, and `@everyone` goes to the whole room.
+  Mentions of anyone outside the room block the send.
 
 - Performance: one pane's slow resize, creation or flood no longer stalls
   the others. Keystrokes, acks and resizes skip the app-wide terminals lock,

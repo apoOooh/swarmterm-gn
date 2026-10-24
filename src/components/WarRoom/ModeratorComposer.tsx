@@ -10,7 +10,7 @@
  * reserved for the send button — an earlier version put it on the mode
  * toggle, where it read as "click to send".
  */
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { ChevronDown, SendHorizontal, Users, Zap } from 'lucide-react'
 import { useWarRoomStore } from '@/store/war-room-store'
 import { useAppStore, selectFocusedTerminalId } from '@/store/app-store'
@@ -18,9 +18,9 @@ import { focusTerminal } from '@/lib/terminal-registry'
 import {
   EVERYONE,
   composerTargets,
-  reconcileTarget,
-  validateComposer
+  reconcileTarget
 } from '@/lib/war-room-composer'
+import { planSend, runSendPlan } from '@/lib/war-room-mention-routing'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,8 +30,75 @@ import {
 import { warRoomModeratorSend, type WarRoomMode } from '@/tauri/warroom'
 import { memberColor } from '@/lib/war-room-identity'
 import { cn } from '@/lib/utils'
+import {
+  acceptMention,
+  activeMention,
+  EVERYONE_CANDIDATE,
+  buildCandidates,
+  matchCandidates,
+  mentionKeyAction,
+  namedPanes,
+  type ActiveMention,
+  type MentionMatch
+} from '@/lib/war-room-mentions'
+import { MENTION_LIST_ID, MentionPopup, caretOffset, mentionOptionId } from './MentionPopup'
 
 const MAX_ROWS = 6
+
+/**
+ * Subscribes to the workspaces only while mounted (= while a mention is being
+ * typed) and publishes its matches through `out` for the composer's keydown.
+ */
+function MentionLayer({
+  query,
+  members,
+  selected,
+  anchor,
+  out,
+  onPick,
+  onHover,
+  onCount
+}: {
+  onCount: (n: number) => void
+  query: string
+  members: Array<{ terminalId: string; name: string; agentId: string | null }>
+  selected: number
+  anchor: { left: number; bottom: number }
+  out: { current: MentionMatch[] }
+  onPick: (m: MentionMatch) => void
+  onHover: (i: number) => void
+}): ReactElement {
+  const workspaces = useAppStore((s) => s.workspaces)
+  // @everyone first (always, even in an empty room), then members, then the
+  // other named panes — the latter flagged in the row, since mentioning them
+  // blocks the send.
+  const candidates = useMemo(
+    () => [EVERYONE_CANDIDATE, ...buildCandidates(members, namedPanes(workspaces))],
+    [members, workspaces]
+  )
+  const matches = useMemo(() => matchCandidates(candidates, query), [candidates, query])
+  // Published after commit (not during render, which a discarded concurrent
+  // render could leave stale); layout effect = before the next keydown.
+  useLayoutEffect(() => {
+    out.current = matches
+    onCount(matches.length)
+    return () => {
+      out.current = []
+      onCount(0)
+    }
+  }, [matches, out, onCount])
+  const index = Math.min(selected, Math.max(0, matches.length - 1))
+  return (
+    <MentionPopup
+      matches={matches}
+      selected={index}
+      left={anchor.left}
+      bottom={anchor.bottom}
+      onPick={(i) => onPick(matches[i])}
+      onHover={onHover}
+    />
+  )
+}
 
 const MODE_HINT: Record<WarRoomMode, string> = {
   probe: 'Probe — the message goes to the peer’s inbox and nudges them to read it.',
@@ -55,6 +122,56 @@ export function ModeratorComposer(): ReactElement {
   // handler can still see stale `false` — the ref is written synchronously
   // and can't be stale.
   const inFlightRef = useRef(false)
+  // Mention popup: `caret` follows the selection so editing mid-text works;
+  // `dismissed` remembers the `@` the user closed with Esc so the popup stays
+  // shut until they start a different mention.
+  const [caret, setCaret] = useState(0)
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [dismissed, setDismissed] = useState<number | null>(null)
+  const matchesRef = useRef<MentionMatch[]>([])
+  const [matchCount, setMatchCount] = useState(0)
+  // Bumped on textarea scroll so the anchor follows a scrolled caret line.
+  const [scrollTick, setScrollTick] = useState(0)
+  const clampedIndex = Math.min(mentionIndex, Math.max(0, matchCount - 1))
+  const boxRef = useRef<HTMLDivElement>(null)
+  const typed = activeMention(text, caret)
+  const active: ActiveMention | null = typed !== null && typed.start !== dismissed ? typed : null
+  // A new query puts the highlight back on the best match; leaving the
+  // dismissed mention re-arms the popup for the next `@`.
+  const typedStart = typed?.start ?? null
+  const typedQuery = typed?.query ?? null
+  useEffect(() => {
+    setDismissed((d) => (d !== null && d === typedStart ? d : null))
+    setMentionIndex(0)
+  }, [typedStart, typedQuery])
+  // Measured only while open; the anchor is the `@`, so it holds still while
+  // the query grows.
+  const activeStart = active?.start ?? null
+  const anchor = useMemo(() => {
+    const el = areaRef.current
+    const box = boxRef.current
+    if (activeStart === null || el === null || box === null) return { left: 0, bottom: 0 }
+    const pos = caretOffset(el, activeStart)
+    const left = Math.max(0, Math.min(el.offsetLeft + pos.left, box.clientWidth - 224))
+    return { left, bottom: box.clientHeight - (el.offsetTop + pos.top) + 2 }
+  }, [activeStart, text, scrollTick])
+
+  function syncCaret(el: HTMLTextAreaElement): void {
+    setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : -1)
+  }
+
+  function pickMention(match: MentionMatch | undefined): void {
+    const el = areaRef.current
+    if (active === null || match === undefined || el === null) return
+    const next = acceptMention(text, active, caret, match.candidate.name)
+    setText(next.text)
+    setError(null)
+    setCaret(next.caret)
+    requestAnimationFrame(() => {
+      el.setSelectionRange(next.caret, next.caret)
+      grow()
+    })
+  }
 
   // Membership and mode both invalidate a selection; reconciling in an effect
   // (rather than at render) keeps the trigger label and the menu in step.
@@ -71,8 +188,22 @@ export function ModeratorComposer(): ReactElement {
   }, [roomId])
 
   const targets = composerTargets(members, mode)
-  const validation = validateComposer({ text, targetId, mode, members })
+  // Mentions decide the recipients (war-room-mention-routing.ts). Open panes
+  // are read on demand (only for a message with member mentions, i.e. on a
+  // keystroke) instead of subscribing the composer to every layout change.
+  const plan = useMemo(
+    () =>
+      planSend({ text, targetId, mode, members, panes: () => namedPanes(useAppStore.getState().workspaces) }),
+    [text, targetId, mode, members]
+  )
+  const validation = plan
   const canSend = validation.ok && !sending
+  const recipientLine =
+    plan.ok && plan.recipients.kind !== 'picker'
+      ? plan.recipients.kind === 'everyone'
+        ? `everyone (${plan.recipients.peers} ${plan.recipients.peers === 1 ? 'peer' : 'peers'})`
+        : plan.recipients.ids.map((id) => members.find((m) => m.terminalId === id)?.name ?? id).join(', ')
+      : null
   const hasConnectedMember = members.some((m) => m.connected)
 
   // In execute mode reconcileTarget's last resort is EVERYONE (see its own doc
@@ -102,12 +233,9 @@ export function ModeratorComposer(): ReactElement {
     inFlightRef.current = true
     setSending(true)
     try {
-      await warRoomModeratorSend({
-        roomId,
-        to: targetId === EVERYONE ? null : targetId,
-        content: text.trim(),
-        mode
-      })
+      // A message without mentions is exactly one call with the arguments
+      // this used to pass inline (pinned by war-room-mention-routing.test).
+      await runSendPlan(validation.calls, { roomId, content: text.trim(), mode }, warRoomModeratorSend)
       setText('')
       setError(null)
       // The textarea shrinks back only if we re-measure after the value clears.
@@ -148,11 +276,23 @@ export function ModeratorComposer(): ReactElement {
   return (
     <div className="shrink-0 border-t border-border p-1.5">
       <div
+        ref={boxRef}
         className={cn(
-          'rounded-md border bg-card transition-colors focus-within:border-[#00b0f4]',
+          'relative rounded-md border bg-card transition-colors focus-within:border-[#00b0f4]',
           mode === 'execute' ? 'border-[#f97316]/50' : 'border-border'
         )}
       >
+        {recipientLine !== null && (
+          // Mentions override the target picker, so say who gets it before
+          // Enter, not after.
+          <div
+            aria-live="polite"
+            className="truncate border-b border-border px-2 py-[2px] text-[10px] text-muted-foreground"
+            title={recipientLine}
+          >
+            To: <span className="text-foreground">{recipientLine}</span>
+          </div>
+        )}
         <textarea
           ref={areaRef}
           rows={1}
@@ -161,12 +301,53 @@ export function ModeratorComposer(): ReactElement {
           // via the placeholder, matching the design (spec §Composer UI).
           disabled={!hasConnectedMember}
           placeholder={placeholder}
+          role="combobox"
+          aria-haspopup="listbox"
+          aria-autocomplete="list"
+          aria-expanded={active !== null}
+          aria-controls={active !== null ? MENTION_LIST_ID : undefined}
+          aria-activedescendant={
+            active !== null && matchCount > 0 ? mentionOptionId(clampedIndex) : undefined
+          }
+          onScroll={() => {
+            if (active !== null) setScrollTick((t) => t + 1)
+          }}
           onChange={(e) => {
             setText(e.target.value)
+            syncCaret(e.target)
             setError(null)
             grow()
           }}
+          onSelect={(e) => syncCaret(e.currentTarget)}
           onKeyDown={(e) => {
+            if (active !== null) {
+              const action = mentionKeyAction(e.key, {
+                count: matchesRef.current.length,
+                index: Math.min(mentionIndex, Math.max(0, matchesRef.current.length - 1)),
+                // (ref, not matchCount: it is current even before a re-render)
+                // keyCode 229 covers engines that report composition only there.
+                composing: e.nativeEvent.isComposing || e.keyCode === 229,
+                shift: e.shiftKey
+              })
+              if (action.type === 'move') {
+                e.preventDefault()
+                setMentionIndex(action.index)
+                return
+              }
+              if (action.type === 'accept') {
+                e.preventDefault()
+                pickMention(matchesRef.current[action.index])
+                return
+              }
+              if (action.type === 'close') {
+                // Esc closes the popup only; the next Esc leaves the composer.
+                e.preventDefault()
+                e.stopPropagation()
+                setDismissed(active.start)
+                return
+              }
+            }
+            if (e.nativeEvent.isComposing) return
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               void send()
@@ -181,6 +362,18 @@ export function ModeratorComposer(): ReactElement {
           }}
           className="block w-full resize-none bg-transparent px-2 pb-1 pt-1.5 text-xs leading-[18px] text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
         />
+        {active !== null && (
+          <MentionLayer
+            query={active.query}
+            members={members}
+            selected={mentionIndex}
+            anchor={anchor}
+            out={matchesRef}
+            onPick={pickMention}
+            onHover={setMentionIndex}
+            onCount={setMatchCount}
+          />
+        )}
 
         <div className="flex items-center gap-1 px-1 pb-1">
           <DropdownMenu>
