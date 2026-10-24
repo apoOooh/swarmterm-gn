@@ -20,6 +20,9 @@
   switching workspaces is instant, at the cost of more GPU memory. With 8 or
   more panes visible and 4 or more flooding (over 64 KB/s for 3 s), the
   floods move to the DOM renderer and return to WebGL once below 32 KB/s.
+- MCP: a restarted app waits up to 10 s for its previous port (e.g. while
+  the old instance is still shutting down after an update) before falling
+  back to a new one, so reattached panes keep their MCP connection.
 - Dev: optional profiling build feature (dev only, not in releases) with
   lock, flow-gate and IPC counters for `flood.ps1 -Profile`.
 
