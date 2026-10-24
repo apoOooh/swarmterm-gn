@@ -249,6 +249,18 @@ async function runScenario(tStart: number): Promise<void> {
     for (const [i, id] of ids.entries()) await term.writeTerminal(id, fixed ? `node "${file}" ${seconds} ${i + 1}\r` : `cmd /d /c type "${file}"\r`)
   }, { ids: typed, file, fixed, seconds })
 
+  // Profiling aid (PERF_RENDERER_TIMELINE=1 only, never in A/B runs): renderer
+  // counts and cumulative swaps every 5 s, to see what changes over a run.
+  const timeline: unknown[] = []
+  const timelineSample = async (): Promise<void> => {
+    const s = await page.evaluate(async (REG) => (await import(REG)).perfRendererStats(), REG).catch(() => undefined)
+    if (s) timeline.push({ t: Math.round((Date.now() - t0) / 1000), ...s })
+  }
+  // Samples are chained, so none can land after the final one below.
+  let timelineChain = Promise.resolve()
+  const timelineTimer = process.env.PERF_RENDERER_TIMELINE && caps.rendererStats
+    ? setInterval(() => { timelineChain = timelineChain.then(timelineSample) }, 5000)
+    : undefined
   const waits = room ? runWaiters(room, t0 + seconds * 1000) : undefined
   let switches: SwitchSample[] = []
   if (many) switches = await switchWorkspaces(page, wsIds, t0, seconds, Number(env('PERF_SWITCH_S', '3')), caps.rendererStats)
@@ -271,6 +283,7 @@ async function runScenario(tStart: number): Promise<void> {
     toolSummary = summarizeTools(files, watching ? events : null)
   }
 
+  if (timelineTimer) { clearInterval(timelineTimer); await timelineChain; await timelineSample() }
   if (idleId) await page.keyboard.press('Escape')
   await page.waitForTimeout(1500)
   const result = await page.evaluate((lines) => (window as any).__perf.stop(lines), lines)
@@ -284,6 +297,7 @@ async function runScenario(tStart: number): Promise<void> {
   if (waitResults) result.warRoom = summarizeWaits(waitResults, cwd, peerIds, war, streamN)
   if (many) result.renderers = summarizeSwitches(switches, ids.length, caps.rendererStats)
   if (tools) result.tools = toolSummary
+  if (timelineTimer) result.rendererTimeline = timeline
   // Epoch window for flood.ps1 to trim its CPU/memory samples to the flood.
   result.windowStartMs = t0; result.windowEndMs = t0 + Math.round((fixed ? seconds : result.floodSeconds) * 1000)
   // Timing: setup = test start to the run's t0, run = t0 to the probes'
