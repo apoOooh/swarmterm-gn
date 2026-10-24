@@ -473,6 +473,8 @@ impl IoHandle {
             #[cfg(windows)]
             IoHandle::Host {
                 conn, terminal_id, ..
+            // A maximal ack saturates the host gate's debt to zero, which
+            // opens it like a local release.
             } => conn.ack(terminal_id, spawn_id, u64::MAX),
         }
     }
