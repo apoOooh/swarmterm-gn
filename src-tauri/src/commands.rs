@@ -86,14 +86,25 @@ pub fn files_unwatch(
 static SPAWNING: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
     std::sync::Mutex::new(None);
 
+/// Signalled whenever a reservation is released.
+static SPAWN_DONE: std::sync::Condvar = std::sync::Condvar::new();
+
 struct SpawnReservation(String);
 
 impl SpawnReservation {
-    fn take(id: &str) -> Option<Self> {
+    /// Reserve `id`, waiting while another create of the SAME id is in
+    /// flight (the old global SPAWN_LOCK made it wait too). After the wait
+    /// the caller sees the finished spawn, so a duplicate still gets the
+    /// usual "already exists" from `spawn_terminal`, and a create retried
+    /// after a failed one simply proceeds. Creates of different ids never
+    /// wait on each other. Runs on the blocking pool, never the main thread.
+    fn take(id: &str) -> Self {
         let mut set = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
-        set.get_or_insert_with(Default::default)
-            .insert(id.to_string())
-            .then(|| SpawnReservation(id.to_string()))
+        while set.get_or_insert_with(Default::default).contains(id) {
+            set = SPAWN_DONE.wait(set).unwrap_or_else(|e| e.into_inner());
+        }
+        set.get_or_insert_with(Default::default).insert(id.to_string());
+        SpawnReservation(id.to_string())
     }
 }
 
@@ -103,6 +114,34 @@ impl Drop for SpawnReservation {
         if let Some(set) = set.as_mut() {
             set.remove(&self.0);
         }
+        SPAWN_DONE.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod spawn_reservation_tests {
+    use super::SpawnReservation;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn same_id_waits_for_the_first_create() {
+        let first = SpawnReservation::take("res-test-a");
+        let t = std::thread::spawn(|| {
+            let t0 = Instant::now();
+            let _second = SpawnReservation::take("res-test-a");
+            t0.elapsed()
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        drop(first);
+        assert!(t.join().unwrap() >= Duration::from_millis(90));
+    }
+
+    #[test]
+    fn different_ids_do_not_wait() {
+        let _a = SpawnReservation::take("res-test-b");
+        let t0 = Instant::now();
+        let _b = SpawnReservation::take("res-test-c");
+        assert!(t0.elapsed() < Duration::from_millis(50));
     }
 }
 
@@ -118,13 +157,11 @@ pub async fn create_terminal(
         // Only the id is reserved, not the whole spawn: config reads, profile
         // enrollment and the OS process start of different panes overlap, so
         // a workspace of N agents no longer starts them one after another.
-        // Two creates of the SAME id still exclude each other (the second
-        // gets the duplicate error, as it did after waiting before).
+        // Two creates of the SAME id still serialise: the second waits for
+        // the first and then behaves exactly as it did behind SPAWN_LOCK.
         let _span = crate::prof::span("cmd.create_terminal");
         let t0 = crate::prof::now();
-        let Some(_reservation) = SpawnReservation::take(&id) else {
-            return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
-        };
+        let _reservation = SpawnReservation::take(&id);
         crate::prof::since("spawn.reserve", t0);
         let state = app.state::<AppState>();
         crate::pty::spawn_terminal(&app, &state, id, options, on_data)
