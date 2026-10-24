@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectMediaPaths, MAX_CARRY, MediaOutputBuffer, MISS_MAX_TRIES, MISS_RETRY_MS, OVERLAP, SeenPaths } from './media-detect'
+import { detectMediaPaths, stitchTableRows, MAX_CARRY, MediaOutputBuffer, MISS_MAX_TRIES, MISS_RETRY_MS, OVERLAP, SeenPaths } from './media-detect'
 
 describe('detectMediaPaths', () => {
   it('ignores output without a media extension', () => {
@@ -47,6 +47,91 @@ describe('detectMediaPaths', () => {
   })
 })
 
+// A real Claude Code table: box borders, long paths hard-wrapped inside column 2.
+const DIR = 'C:\\Users\\pawel\\AppData\\Local\\Temp\\claude\\G--ai-claude\\91f60608-d216-485d-a4f4-cc1051d2b8c7\\scratchpad\\pc-shots'
+const SHOTS = ['rows-cmp.png', '0-pc-dev-960.png', '1-pc-covers-960.png', 'diff-0-1-pc-covers-960.png'].map((f) => `${DIR}\\${f}`)
+const PAIR = [`${DIR}\\0-pc-dev.png`, `${DIR}\\1-pc-covers.png`]
+const ROWS: [string, string][] = [
+  ['Compare', SHOTS[0]], ['Dev', SHOTS[1]], ['Covers', SHOTS[2]], ['Diff', SHOTS[3]], ['Full size', `${PAIR[0]} and ${PAIR[1]}`],
+]
+const B = '\u2502'
+/** Colours every path piece per line, as the CLI re-emits colour after a wrap. */
+const paint = (s: string): string => s.replace(/\S+/g, (w) => (w === 'and' ? w : `\x1b[36m${w}\x1b[39m`))
+
+/** Word-wraps like the CLI: break at spaces, cut a token longer than the cell. */
+function wrap(text: string, width: number): string[] {
+  const lines: string[] = []
+  let cur = ''
+  for (const word of text.split(' ')) {
+    let w = word
+    if (cur && cur.length + 1 + w.length <= width) { cur += ' ' + w; continue }
+    if (cur) lines.push(cur)
+    while (w.length > width) { lines.push(w.slice(0, width)); w = w.slice(width) }
+    cur = w
+  }
+  lines.push(cur)
+  return lines
+}
+
+function table(total: number): string {
+  const w1 = 10
+  const w2 = total - w1 - 7
+  const out = [`\u250c${'\u2500'.repeat(w1 + 2)}\u252c${'\u2500'.repeat(w2 + 2)}\u2510`]
+  for (const [a, b] of ROWS) {
+    wrap(b, w2).forEach((r, i) => out.push(`${B} ${(i === 0 ? a : '').padEnd(w1)} ${B} ${paint(r)}${' '.repeat(w2 - r.length)} ${B}`))
+  }
+  out.push(`\u2514${'\u2500'.repeat(w1 + 2)}\u2534${'\u2500'.repeat(w2 + 2)}\u2518`)
+  return out.join('\r\n') + '\r\n'
+}
+
+describe('wrapped table cells', () => {
+  for (const width of [100, 135]) {
+    it(`detects all full paths in a table wrapped at ${width} columns`, () => {
+      const t = table(width)
+      expect(t.split('\n').length).toBeGreaterThan(ROWS.length + 3)
+      expect(detectMediaPaths(t)).toEqual([...SHOTS, ...PAIR])
+    })
+
+    it(`keeps a row whole across scans at ${width} columns`, () => {
+      const b = new MediaOutputBuffer()
+      const found: string[] = []
+      // One line per scan: every continuation arrives after its row started.
+      for (const line of table(width).split(/(?<=\n)/)) { b.append(line); found.push(...detectMediaPaths(b.take())) }
+      found.push(...detectMediaPaths(b.drain()))
+      expect(found).toEqual([...SHOTS, ...PAIR])
+    })
+  }
+
+  it('joins at word breaks with a space and leaves other lines alone', () => {
+    expect(stitchTableRows(`${B} a ${B} see     ${B}\n${B}   ${B} out.png ${B}\nplain`)).toBe(`${B} a ${B} see out.png ${B}\nplain`)
+    expect(stitchTableRows('no table')).toBe('no table')
+  })
+
+  it('keeps a real space after a directory when the piece did not fill its cell', () => {
+    expect(stitchTableRows(`${B} a ${B} see /tmp/out/  ${B}\n${B}   ${B} and more       ${B}`)).toBe(`${B} a ${B} see /tmp/out/ and more ${B}`)
+    // A hard cut right after a separator fills the cell and glues.
+    expect(stitchTableRows(`${B} a ${B} C:\\tmp\\ ${B}\n${B}   ${B} x.png   ${B}`)).toBe(`${B} a ${B} C:\\tmp\\x.png ${B}`)
+  })
+
+  it('finds full paths with CRLF line ends and coloured borders', () => {
+    // table() already joins with CRLF; also colour every border and row.
+    const t = table(100).replace(/[\u2502\u250c\u2510\u2514\u2518\u252c\u2534\u2500]+/g, (m) => `\x1b[90m${m}\x1b[39m`)
+    expect(t).toContain('\r\n')
+    expect(detectMediaPaths(t)).toEqual([...SHOTS, ...PAIR])
+    const b = new MediaOutputBuffer()
+    const found: string[] = []
+    for (const line of t.split(/(?<=\r\n)/)) { b.append(line); found.push(...detectMediaPaths(b.take())) }
+    found.push(...detectMediaPaths(b.drain()))
+    expect(found).toEqual([...SHOTS, ...PAIR])
+  })
+
+  it('leaves tree and git-graph lines alone', () => {
+    const tree = `${B}   ${B}   ├── shot.png\n${B}   ${B}   x/y.gif\n`
+    expect(stitchTableRows(tree)).toBe(tree.replace(/\n$/, '\n'))
+    expect(detectMediaPaths(tree)).toEqual(['shot.png', 'x/y.gif'])
+  })
+})
+
 describe('MediaOutputBuffer', () => {
   it('reassembles a path split across chunks before scanning', () => {
     const b = new MediaOutputBuffer()
@@ -72,6 +157,14 @@ describe('MediaOutputBuffer', () => {
     b.append('ng\n')
     expect(detectMediaPaths(b.take())).toEqual(['C:\\t\\a.png'])
     expect(OVERLAP).toBeGreaterThan(9)
+  })
+
+  it('holds back a trailing table row until a non-table line follows', () => {
+    const b = new MediaOutputBuffer()
+    b.append(`x\n${B} a ${B} C:\\t\\lo ${B}\n`)
+    expect(b.take()).toBe('x\n')
+    b.append(`${B}   ${B} ng.png  ${B}\ndone\n`)
+    expect(detectMediaPaths(b.take())).toEqual(['C:\\t\\long.png'])
   })
 
   it('drains a partial last line', () => {

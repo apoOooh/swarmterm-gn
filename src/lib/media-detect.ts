@@ -39,7 +39,7 @@ export const MAX_MEDIA_PER_SCAN = 20
 export function detectMediaPaths(text: string): string[] {
   if (!EXT_PREFILTER.test(text)) return []
   // Cursor moves stand in for spaces in TUI redraws: keep tokens apart.
-  const clean = text.replace(CURSOR_MOVE_RE, ' ').replace(ANSI_RE, '')
+  const clean = stitchTableRows(text.replace(CURSOR_MOVE_RE, ' ').replace(ANSI_RE, ''))
   // Drop URLs: `https://x/y.png` is the browser's business, not a file.
   const masked = clean.replace(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/\S+/g, (m) => ' '.repeat(m.length))
   const hits: { start: number; end: number; path: string }[] = []
@@ -68,6 +68,113 @@ export function detectMediaPaths(text: string): string[] {
   return out
 }
 
+/** Vertical box-drawing border Claude Code (and others) draw markdown tables with. */
+const CELL_BORDER = '│'
+
+/**
+ * Positions of the cell borders in a line; null for a line that is no table
+ * row. A row opens AND closes with a border and has at least two cells, so
+ * `tree`/git-graph lines (`│   │   ├── shot.png`, text after the last border)
+ * never count and keep their paths. Positions are UTF-16 indexes: a wide
+ * character in another cell shifts them, so such a row is simply not joined.
+ */
+function borderColumns(line: string): number[] | null {
+  const t = line.trim()
+  if (!t.startsWith(CELL_BORDER) || !t.endsWith(CELL_BORDER)) return null
+  const cols: number[] = []
+  for (let i = line.indexOf(CELL_BORDER); i >= 0; i = line.indexOf(CELL_BORDER, i + 1)) cols.push(i)
+  return cols.length >= 3 ? cols : null
+}
+
+const cellsOf = (line: string, cols: number[]): string[] =>
+  cols.slice(1).map((c, i) => line.slice(cols[i] + 1, c).trim())
+
+/** A table line whose first cell is blank continues the row above (a hard-wrapped cell). */
+const isContinuation = (line: string, cols: number[]): boolean => cellsOf(line, cols)[0] === ''
+
+/** Whether each cell's text runs up to its border (at most one padding space). */
+const filledOf = (line: string, cols: number[]): boolean[] =>
+  cols.slice(1).map((c, i) => {
+    const raw = line.slice(cols[i] + 1, c)
+    return raw.trim() !== '' && raw.trimEnd().length >= raw.length - 1
+  })
+
+/**
+ * Join a wrapped cell's pieces. The wrapper breaks at a space whenever the
+ * next word fits on a fresh line, and cuts inside a token only when it is
+ * longer than the cell, which leaves that piece filling the cell to its
+ * border. So a piece glues on without a space only when it FILLED its cell
+ * and ends inside a path (last token has a separator, no media extension
+ * yet); this holds for a cut right after a `\` too. A piece with room left
+ * was broken at a real space (`see /tmp/out/` + `and more`) and gets one.
+ * A bare file name cut mid-name has no separator and also gets a space, so
+ * only its tail is found; absolute paths are what tables wrap.
+ */
+function joinCell(above: string, next: string, filled: boolean): string {
+  if (!above || !next) return above || next
+  const last = above.slice(above.lastIndexOf(' ') + 1)
+  const midPath = filled && /[\\/]/.test(last) && !EXT_PREFILTER.test(last)
+  return above + (midPath ? '' : ' ') + next
+}
+
+/**
+ * Terminal tables hard-wrap long cells across lines, which splits an
+ * absolute path so only its tail would match. Each row and its continuation
+ * lines (same border columns, blank first cell) become one line of joined
+ * cells. Lines are expected ANSI-free; anything that is no table passes as is.
+ */
+export function stitchTableRows(text: string): string {
+  if (!text.includes(CELL_BORDER)) return text
+  const lines = text.split(/\r?\n|\r/)
+  const out: string[] = []
+  /** `filled`: whether each cell's latest piece reached its border (see joinCell). */
+  let row: { cols: number[]; cells: string[]; filled: boolean[] } | null = null
+  const flush = (): void => {
+    if (row) out.push(`${CELL_BORDER} ${row.cells.join(` ${CELL_BORDER} `)} ${CELL_BORDER}`)
+    row = null
+  }
+  for (const line of lines) {
+    const cols = borderColumns(line)
+    const same = !!cols && !!row && cols.length === row.cols.length && cols.every((c, i) => c === row!.cols[i])
+    if (cols && same && isContinuation(line, cols)) {
+      const cells = cellsOf(line, cols)
+      const filled = filledOf(line, cols)
+      row!.cells = row!.cells.map((c, i) => joinCell(c, cells[i], row!.filled[i]))
+      // An empty piece keeps the flag of the text it did not extend.
+      row!.filled = row!.filled.map((f, i) => (cells[i] ? filled[i] : f))
+      continue
+    }
+    flush()
+    if (cols) row = { cols, cells: cellsOf(line, cols), filled: filledOf(line, cols) }
+    else out.push(line)
+  }
+  flush()
+  return out.join('\n')
+}
+
+/**
+ * How much of the complete lines `take` holds back while they may still be
+ * a wrapped table row: from the start of the last row (a bordered line with a
+ * non-blank first cell) to the end. 0 when the text does not end in a table.
+ */
+function tableTail(done: string): number {
+  // Only a held-back tail of at most MAX_CARRY matters: look at no more, so a
+  // TUI that draws borders all the time costs a bounded slice per take.
+  const tail = done.slice(-(MAX_CARRY + 1))
+  if (!tail.includes(CELL_BORDER)) return 0
+  // Start offset of every complete line in the tail (its cut first line is
+  // skipped unless it is the whole text); `done` ends with a line break.
+  const starts = tail.length === done.length ? [0] : []
+  for (const m of tail.matchAll(/\r?\n|\r/g)) starts.push(m.index + m[0].length)
+  for (let i = starts.length - 2; i >= 0; i--) {
+    const line = tail.slice(starts[i], starts[i + 1]).replace(/[\r\n]+$/, '').replace(CURSOR_MOVE_RE, ' ').replace(ANSI_RE, '')
+    const cols = borderColumns(line)
+    if (!cols) return 0
+    if (!isContinuation(line, cols)) return tail.length - starts[i]
+  }
+  return 0
+}
+
 /** Longest unterminated tail kept between flushes (a path split across chunks). */
 export const MAX_CARRY = 2048
 /** Tail re-scanned after a newline-less cut. */
@@ -92,7 +199,10 @@ export class MediaOutputBuffer {
     return this.pending.length > 0
   }
 
-  /** Complete lines since the last take; the partial last line is carried over. */
+  /**
+   * Complete lines since the last take; the partial last line is carried
+   * over, and so is a trailing table row (see `tableTail`).
+   */
   take(): string {
     const cut = Math.max(this.pending.lastIndexOf('\n'), this.pending.lastIndexOf('\r'))
     if (cut < 0) {
@@ -106,8 +216,18 @@ export class MediaOutputBuffer {
       }
       return ''
     }
-    const done = this.pending.slice(0, cut + 1)
+    let done = this.pending.slice(0, cut + 1)
     this.pending = this.pending.slice(cut + 1)
+    // A table row's wrapped continuation may still be on its way: keep the
+    // last row back until a non-table line follows (or `drain` on quiet, so
+    // a bordered box that stays last on screen, like an input box, is still
+    // scanned one interval later). A row longer than MAX_CARRY is not held
+    // and may be split across scans like before.
+    const hold = tableTail(done)
+    if (hold > 0 && hold + this.pending.length <= MAX_CARRY) {
+      this.pending = done.slice(-hold) + this.pending
+      done = done.slice(0, -hold)
+    }
     if (this.pending.length > MAX_CARRY) this.pending = this.pending.slice(-MAX_CARRY)
     return done
   }

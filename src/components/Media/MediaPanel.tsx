@@ -1,11 +1,14 @@
-import { useState, type ReactElement } from 'react'
-import { Film, ImageIcon, PenLine } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { ChevronLeft, ChevronRight, Film, ImageIcon, PenLine } from 'lucide-react'
 import { MediaPathView } from '@/components/Files/MediaView'
 import { fileName, itemName, samePath } from '@/lib/media-gallery'
 import { AnnotateView } from '@/components/Media/AnnotateView'
 import { useMediaStore } from '@/store/media-store'
 import { unrootedMediaUrl } from '@/tauri/files'
 import { startMediaDrag } from '@/components/Media/start-media-drag'
+
+/** Pixels per wheel "line" (deltaMode 1, e.g. Firefox-style mice); same as media-zoom's wheelPixels. */
+const WHEEL_LINE_PX = 16
 
 const time = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
@@ -17,6 +20,35 @@ export function MediaPanel(): ReactElement {
   const selected = items.find((i) => selectedPath !== null && samePath(i.path, selectedPath)) ?? items[0]
   // Annotate mode belongs to one item: selecting another one leaves it (marks discarded).
   const [annotating, setAnnotating] = useState<string | null>(null)
+  const strip = useRef<HTMLDivElement>(null)
+  const selectedKey = selected?.path.toLowerCase()
+  const hasItems = selected !== undefined
+  // Keep the shown item visible in the strip. Only on a selection change: a
+  // new item arriving at the left edge must not yank the strip while the user
+  // looks at an older one. Scrolls the strip only (scrollIntoView would also
+  // move the panel's ancestors).
+  useEffect(() => {
+    const el = strip.current
+    const item = el?.querySelector<HTMLElement>('[data-active]')
+    if (!el || !item) return
+    // The strip is `relative`, so it is the items' offsetParent.
+    const left = item.offsetLeft
+    if (left < el.scrollLeft) el.scrollLeft = left
+    else if (left + item.offsetWidth > el.scrollLeft + el.clientWidth) el.scrollLeft = left + item.offsetWidth - el.clientWidth
+  }, [selectedKey])
+  useEffect(() => {
+    const el = strip.current
+    if (!el) return
+    // A plain mouse wheel only scrolls vertically: map it to the strip's axis.
+    // Non-passive so the panel behind does not scroll as well.
+    const onWheel = (e: WheelEvent): void => {
+      if (e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY) || el.scrollWidth <= el.clientWidth) return
+      e.preventDefault()
+      el.scrollLeft += e.deltaMode === 1 ? e.deltaY * WHEEL_LINE_PX : e.deltaMode === 2 ? e.deltaY * el.clientWidth : e.deltaY
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [hasItems])
   if (!selected) {
     return <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
       <p>Images and videos whose paths appear in a pane, and clipboard images (if enabled), show up here. Nothing here is visible to agents.</p>
@@ -42,12 +74,21 @@ export function MediaPanel(): ReactElement {
         <ImageIcon className="h-8 w-8" />
         <button tabIndex={-1} onClick={() => void open(selected.path)} className="rounded border border-border px-2 py-1 text-foreground hover:bg-muted">Show {fileName(selected.path)}</button>
       </div>}
-    {/* The strip needs no keyboard: hand focus back to the terminal after a click. */}
-    <div data-focus-return className="flex shrink-0 gap-2 overflow-x-auto border-t border-border p-2">
+    {/* Clicks hand focus back to the terminal (data-focus-return), so the
+        strip never keeps the keyboard by accident. It is still reachable with
+        Tab on purpose: arrow keys scrolling a long strip is the keyboard path
+        to items scrolled out of view. Its items stay tabIndex -1. */}
+    <div data-focus-return className="flex shrink-0 items-stretch border-t border-border">
+      <button tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => scrollStrip(strip.current, -1)} title="Scroll left"
+        className="shrink-0 px-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"><ChevronLeft className="h-4 w-4" /></button>
+      <div ref={strip} tabIndex={0} aria-label="Media items"
+        onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); scrollStrip(strip.current, e.key === 'ArrowLeft' ? -1 : 1) } }}
+        className="media-strip relative flex min-w-0 flex-1 gap-2 overflow-x-scroll p-2 outline-none focus-visible:ring-1 focus-visible:ring-[#a855f7]">
       {items.map((item) => {
         const active = samePath(item.path, selected.path)
         return <button
           key={item.path}
+          data-active={active || undefined}
           tabIndex={-1}
           // A press that moves is a drag into a pane (lib/media-drag.ts); a
           // release in place is the click that opens the item. No onClick or
@@ -63,7 +104,7 @@ export function MediaPanel(): ReactElement {
             {!item.opened
               ? <ImageIcon className="h-6 w-6 text-muted-foreground" />
               : item.kind === 'video'
-                // An icon, not a <video> per item: up to 100 would each fetch metadata.
+                // An icon, not a <video> per item: up to 50 would each fetch metadata.
                 ? <Film className="h-6 w-6 text-muted-foreground" />
                 : <img src={unrootedMediaUrl(item.path, item.shownAt)} alt="" loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />}
           </div>
@@ -71,6 +112,14 @@ export function MediaPanel(): ReactElement {
           <span className="truncate text-muted-foreground">{item.source} · {time(item.shownAt)}</span>
         </button>
       })}
+      </div>
+      <button tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => scrollStrip(strip.current, 1)} title="Scroll right"
+        className="shrink-0 px-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"><ChevronRight className="h-4 w-4" /></button>
     </div>
   </div>
+}
+
+/** One arrow press moves most of a visible width, keeping an item of context. */
+function scrollStrip(el: HTMLElement | null, dir: -1 | 1): void {
+  if (el) el.scrollBy({ left: dir * Math.max(104, el.clientWidth - 104), behavior: 'smooth' })
 }
