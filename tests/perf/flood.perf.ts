@@ -227,6 +227,45 @@ async function runScenario(tStart: number): Promise<void> {
   // ---- scenario e: War Room setup ----
   let room: WarRoomRun | undefined
   if (warRoom) room = await setupWarRoom(page, cwd, waiterIds, peerIds, mock, caps.warRoomRooms)
+  // Delivery check before the run: a Moderator probe broadcast must reach
+  // every idle mock peer (the nudge typed into its pane, then Enter).
+  let deliverCheck: unknown
+  if (room?.roomId && mock) {
+    // "Connected" = the pane's bearer made an MCP request (an agent's MCP
+    // client would); the mock peers have none, so connect them from here.
+    for (const id of peerIds) await mcpSession(room.mcpUrl, id)
+    await page.waitForTimeout(500)
+    deliverCheck = await page.evaluate(async ({ roomId, peers }) => {
+      const w = window as any
+      const hits: Record<string, number> = {}
+      let delivers = 0
+      const unl = await (await import('/src/tauri/warroom.ts' as string)).onWarRoomDeliver(() => { delivers++ })
+      // Reached = the scheduler flushed the queue into the pane's prompt
+      // (IPC invoke is not hookable from the page: frozen internals).
+      const wstore = (await import('/src/store/war-room-store.ts' as string)).useWarRoomStore
+      const take = wstore.getState().takeFlush
+      wstore.setState({ takeFlush: (id: string) => { const p = take(id); if (peers.includes(id) && p.length && hits[id] === undefined) hits[id] = Date.now(); return p } })
+      const t0 = Date.now()
+      let sent: unknown
+      try { sent = await (await import('/src/tauri/warroom.ts' as string)).warRoomModeratorSend({ roomId, to: null, content: 'perf delivery check', mode: 'probe' }) } catch (e) { sent = String(e) }
+      try {
+        while (Date.now() - t0 < 15_000 && Object.keys(hits).length < peers.length) await new Promise(r => setTimeout(r, 100))
+      } finally {
+        unl()
+        wstore.setState({ takeFlush: take })
+      }
+      // Why a peer was not reached: its hold reason, engine state, activity.
+      const why: Record<string, unknown> = {}
+      try {
+        const ws = (await import('/src/store/war-room-store.ts' as string)).useWarRoomStore.getState()
+        const as = (await import('/src/store/agent-state-store.ts' as string)).useAgentStateStore.getState()
+        const act = (await import('/src/store/terminal-activity-store.ts' as string)).useTerminalActivityStore.getState()
+        for (const id of peers) if (hits[id] === undefined) why[id.slice(0, 8)] = { held: ws.held?.[id] ?? null, queued: (ws.queues?.[id] ?? []).length, agent: as.byId?.[id]?.state, active: !!act.active?.[id] }
+      } catch (e) { why.error = String(e) }
+      return { sent, peers: peers.length, reached: Object.keys(hits).length, ms: Object.values(hits).map(t => t - t0), why, delivers }
+    }, { roomId: room.roomId, peers: peerIds })
+    console.log('war room delivery check: ' + JSON.stringify(deliverCheck))
+  }
 
   if (idleId) {
     // Focus the idle pane by clicking its xterm, like a user would.
@@ -297,7 +336,7 @@ async function runScenario(tStart: number): Promise<void> {
   result.caps = caps; result.notes = notes
   result.scenario = scenario; result.flood = flood; result.idle = idle; result.wallSeconds = (Date.now() - t0) / 1000
   result.hostMode = hostMode; result.host = host; result.mockAgents = mockIds.length
-  if (waitResults) result.warRoom = summarizeWaits(waitResults, cwd, peerIds, war, streamN)
+  if (waitResults) result.warRoom = { ...summarizeWaits(waitResults, cwd, peerIds, war, streamN), deliverCheck }
   if (many) result.renderers = summarizeSwitches(switches, ids.length, caps.rendererStats)
   if (tools) result.tools = toolSummary
   if (timelineTimer) result.rendererTimeline = timeline
