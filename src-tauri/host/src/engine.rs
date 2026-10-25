@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, PtySize};
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -33,6 +33,7 @@ use crate::input::PtyInput;
 use crate::modes::ModeTracker;
 use crate::output::{next_batch, take_valid_utf8, OUTPUT_IDLE, READ_BUF_BYTES};
 use crate::protocol::{Attached, CreateSpec, Event, TerminalInfo};
+use crate::resize::Resizer;
 use crate::ring::Ring;
 
 /// How long a closed pane's process tree may take to exit on its own before
@@ -108,7 +109,8 @@ struct Entry {
     cols: u16,
     rows: u16,
     input: PtyInput,
-    master: Box<dyn MasterPty + Send>,
+    /// Resized off the `terminals` lock (`resize.rs`); `close` drops it.
+    resizer: Arc<Resizer>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     #[cfg(windows)]
     job: Option<crate::job::JobHandle>,
@@ -133,7 +135,7 @@ impl Entry {
         {
             let Entry {
                 input,
-                master,
+                resizer,
                 killer,
                 job,
                 ..
@@ -149,7 +151,7 @@ impl Entry {
             let deadline = std::time::Instant::now() + KILL_GRACE;
             std::thread::spawn(move || {
                 drop(input);
-                drop(master);
+                drop(resizer.close());
             });
             Some(std::thread::spawn(move || {
                 while std::time::Instant::now() < deadline
@@ -164,6 +166,7 @@ impl Entry {
         }
         #[cfg(not(windows))]
         {
+            drop(self.resizer.close());
             let mut killer = self.killer;
             let _ = killer.kill();
             None
@@ -400,7 +403,7 @@ impl Host {
                     cols: spec.cols,
                     rows: spec.rows,
                     input: PtyInput::spawn(writer),
-                    master: pair.master,
+                    resizer: Resizer::new(pair.master),
                     killer,
                     #[cfg(windows)]
                     job,
@@ -553,7 +556,17 @@ impl Host {
         }
         let map = self.terminals.lock().unwrap();
         if let Some(t) = map.get(id).filter(|t| t.spawn_id == spawn_id) {
-            t.flow.ack(bytes);
+            // The app sends a maximal ack when the renderer disposed this
+            // generation (`release_output`): treat it as a release so a late
+            // ack still in flight cannot close the gate again. A stale release
+            // from a replaced connection cannot reach a new reader's gate:
+            // the client check above drops it, and `spawn_id` drops one
+            // from an older generation.
+            if bytes == u64::MAX {
+                t.flow.release();
+            } else {
+                t.flow.ack(bytes);
+            }
         }
     }
 
@@ -577,19 +590,21 @@ impl Host {
         t.input.send(data)
     }
 
+    /// Records the size (the replay facts) and hands the PTY resize to the
+    /// pane's coalescing worker: a ConPTY resize can block on a full output
+    /// pipe, and doing it under `terminals` stalled every ack, write and
+    /// create behind it — and with them the connection's dispatch loop.
+    /// `request` never blocks, so it runs under the lock: recorded and
+    /// requested sizes cannot cross. A failed PTY resize is no longer
+    /// reported (it never was actionable: the app ignored the answer); the
+    /// recorded size is what the client asked for, which is what a replay
+    /// must be rendered at anyway.
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let mut map = self.terminals.lock().unwrap();
         let t = map.get_mut(id).ok_or("target-gone")?;
-        t.master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| e.to_string())?;
         t.cols = cols;
         t.rows = rows;
+        t.resizer.request(cols, rows);
         Ok(())
     }
 

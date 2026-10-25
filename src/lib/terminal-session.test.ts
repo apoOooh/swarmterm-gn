@@ -64,6 +64,22 @@ describe('TerminalSession', () => {
     expect(releaseOutput).toHaveBeenCalledWith('t1', 'gen-7')
   })
 
+  it('releases the dying generation on a respawn before killing it', async () => {
+    const deps = makeDeps()
+    vi.mocked(deps.createTerminal).mockImplementation((_id, _o, cb) => {
+      deps.channels.push(cb)
+      return Promise.resolve({ ok: true, pid: 1, shell: 'sh', spawnId: 'gen-1' })
+    })
+    const releaseOutput = vi.fn()
+    const session = new TerminalSession('t1', { write: vi.fn() }, { ...deps, releaseOutput })
+    session.start(OPTS)
+    await Promise.resolve()
+    await Promise.resolve()
+    session.respawn(OPTS)
+    expect(releaseOutput).toHaveBeenCalledWith('t1', 'gen-1')
+    expect(deps.killTerminal).toHaveBeenCalled()
+  })
+
   it('acks parsed output per generation, batched, once the spawn id is known', async () => {
     const deps = makeDeps()
     vi.mocked(deps.createTerminal).mockImplementation((_id, _o, cb) => {
@@ -72,21 +88,44 @@ describe('TerminalSession', () => {
     })
     const ackOutput = vi.fn()
     const parsed: (() => void)[] = []
-    const write = vi.fn((_d: Uint8Array, onParsed?: () => void) => { if (onParsed) parsed.push(onParsed) })
+    const write = vi.fn((_d: Uint8Array | string, onParsed?: () => void) => { if (onParsed) parsed.push(onParsed) })
     const session = new TerminalSession('t1', { write }, { ...deps, ackOutput })
     session.start(OPTS)
-    const chunk = 'x'.repeat(16 * 1024)
+    const chunk = 'x'.repeat(64 * 1024)
     for (let i = 0; i < 8; i++) deps.emit({ type: 'data', payload: b(chunk) })
     // Nothing parsed yet: no acks, however much was written.
     expect(ackOutput).not.toHaveBeenCalled()
+    // One parse callback per ACK_CHUNK (256 KB), not one per write.
+    expect(parsed).toHaveLength(2)
     for (const p of parsed.splice(0)) p()
     await Promise.resolve()
     await Promise.resolve()
-    // 128 KB parsed = two 64 KB batches, not eight calls.
+    // 512 KB parsed = two 256 KB batches, not eight calls.
     const total = ackOutput.mock.calls.reduce((n, c) => n + (c[2] as number), 0)
-    expect(total).toBe(128 * 1024)
+    expect(total).toBe(512 * 1024)
     expect(ackOutput.mock.calls.length).toBeLessThanOrEqual(2)
     expect(ackOutput.mock.calls.every(c => c[0] === 't1' && c[1] === 'gen-1')).toBe(true)
+  })
+
+  it('acks a string payload with its exact UTF-8 size', async () => {
+    const deps = makeDeps()
+    vi.mocked(deps.createTerminal).mockImplementation((_id, _o, cb) => {
+      deps.channels.push(cb)
+      return Promise.resolve({ ok: true, pid: 1, shell: 'sh', spawnId: 'gen-1' })
+    })
+    const ackOutput = vi.fn()
+    const parsed: (() => void)[] = []
+    const write = vi.fn((_d: Uint8Array | string, onParsed?: () => void) => { if (onParsed) parsed.push(onParsed) })
+    const session = new TerminalSession('t1', { write }, { ...deps, ackOutput })
+    session.start(OPTS)
+    await Promise.resolve()
+    // Mixed widths, well past one 256 KB ack chunk.
+    const chunk = 'aé─\u{1F600}'.repeat(32 * 1024)
+    deps.emit({ type: 'data', payload: chunk })
+    for (const p of parsed.splice(0)) p()
+    await Promise.resolve()
+    const total = ackOutput.mock.calls.reduce((n, c) => n + (c[2] as number), 0)
+    expect(total).toBe(new TextEncoder().encode(chunk).byteLength)
   })
 
   it('hands a reattached pane its history through replay, not write', () => {
@@ -100,7 +139,7 @@ describe('TerminalSession', () => {
     deps.emit({ type: 'data', payload: b('live') })
     expect(replay).toHaveBeenCalledWith(payload, undefined)
     expect(write).toHaveBeenCalledTimes(1)
-    expect(write).toHaveBeenCalledWith(b('live'), undefined)
+    expect(write).toHaveBeenCalledWith(b('live'), undefined, 4)
   })
 
   it('writes a replay as plain output when the sink has no replay handler', () => {
@@ -220,7 +259,7 @@ describe('TerminalSession', () => {
     session.start(OPTS)
     deps.emit({ type: 'data', payload: b('hello') })
 
-    expect(write).toHaveBeenCalledWith(b('hello'), undefined)
+    expect(write).toHaveBeenCalledWith(b('hello'), undefined, 5)
   })
 
   it('kills the pty exactly once on dispose, even if called twice', () => {
@@ -293,7 +332,7 @@ describe('TerminalSession', () => {
 
     // A late message from the OLD pty channel must not reach the sink.
     staleChannel({ type: 'data', payload: b('ghost') })
-    expect(write).not.toHaveBeenCalledWith(b('ghost'), undefined)
+    expect(write).not.toHaveBeenCalledWith(b('ghost'), undefined, 5)
   })
 
   it('kills a running pty and re-spawns only after its exit is observed', () => {

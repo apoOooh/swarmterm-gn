@@ -14,24 +14,42 @@ export class ActivityTracker<T> {
   private readonly setActive: (target: T, active: boolean) => void
   private readonly idleMs: number
   private readonly timers = new Map<T, ReturnType<typeof setTimeout>>()
+  /** Time of each active target's latest notify. */
+  private readonly last = new Map<T, number>()
 
   constructor(setActive: (target: T, active: boolean) => void, idleMs: number = DEFAULT_IDLE_MS) {
     this.setActive = setActive
     this.idleMs = idleMs
   }
 
-  /** Record a tick from `target`. Activates it if idle; resets the idle timer. */
+  /**
+   * Record a tick from `target`. Activates it if idle; pushes its idle
+   * deadline out. Hot path (every output batch of every pane): only a time
+   * stamp, no clearTimeout/setTimeout pair per call. The one pending timer
+   * re-arms itself for the remainder when ticks came in meanwhile.
+   */
   notify(target: T): void {
-    const existing = this.timers.get(target)
-    if (existing === undefined) this.setActive(target, true)
-    else clearTimeout(existing)
+    this.last.set(target, Date.now())
+    if (this.timers.has(target)) return
+    this.setActive(target, true)
+    this.arm(target, this.idleMs)
+  }
 
+  private arm(target: T, ms: number): void {
     this.timers.set(
       target,
       setTimeout(() => {
+        // Clamped: a wall-clock step back must not stretch the re-arm past
+        // idleMs (Date.now, not performance.now, so fake timers drive it).
+        const quiet = Math.max(0, Date.now() - (this.last.get(target) ?? 0))
+        if (quiet < this.idleMs) {
+          this.arm(target, this.idleMs - quiet)
+          return
+        }
         this.timers.delete(target)
+        this.last.delete(target)
         this.setActive(target, false)
-      }, this.idleMs)
+      }, ms)
     )
   }
 
@@ -46,11 +64,13 @@ export class ActivityTracker<T> {
       clearTimeout(timer)
       this.timers.delete(target)
     }
+    this.last.delete(target)
   }
 
   /** Cancel all pending idle timers (no deactivation callbacks fire). */
   dispose(): void {
     for (const timer of this.timers.values()) clearTimeout(timer)
     this.timers.clear()
+    this.last.clear()
   }
 }

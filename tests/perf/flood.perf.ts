@@ -3,7 +3,7 @@
 // remote debugging on, generates the data files and samples process CPU and
 // memory while this spec drives the real app over CDP.
 //
-// Inputs (env): PERF_CDP (http://127.0.0.1:9333), PERF_SCENARIO (a|b|c|d|e|f),
+// Inputs (env): PERF_CDP (http://127.0.0.1:9333), PERF_SCENARIO (a|b|c|d|e|f|g),
 // PERF_FLOOD (flooding panes), PERF_IDLE (idle panes), PERF_FILE (data file),
 // PERF_LINES (sequence lines in the file, scenario a/c), PERF_CWD,
 // PERF_OUT (result JSON), PERF_TRACE (optional Chromium trace path),
@@ -12,7 +12,8 @@
 // PERF_CWD), PERF_HOST (1 = switch the terminal host on before creating
 // panes), PERF_MOCK (1 = scenario d's agent panes use the perf-mock-agent
 // template), PERF_WAR (scenario e: War Room peer/waiter pairs), PERF_STREAM
-// (scenario e: extra streaming panes), PERF_VISIBLE (scenario f: visible panes
+// (scenario e: extra streaming panes; scenario g: PERF_FILE is
+// scripts/perf/tool-agent.mjs, PERF_FLOOD tool panes, PERF_IDLE idle panes), PERF_VISIBLE (scenario f: visible panes
 // in the main workspace), PERF_SWITCH_S (scenario f: workspace switch period).
 //
 // Hard rule: no agent CLI or AI provider, ever. Panes are plain shells, except
@@ -26,6 +27,7 @@
 import { chromium, test, type Page } from '@playwright/test'
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { startProfile, type ProfileMode } from './profile-capture'
 
 const env = (k: string, d?: string): string => {
   const v = process.env[k] ?? d
@@ -91,10 +93,12 @@ async function runScenario(tStart: number): Promise<void> {
   const agents = scenario === 'd'
   const warRoom = scenario === 'e'
   const many = scenario === 'f'
+  // Scenario g: tool-heavy agents (scripts/perf/tool-agent.mjs in plain shells).
+  const tools = scenario === 'g'
   // Fixed-duration scenarios: they run PERF_SECONDS instead of until the
   // flood is complete or quiet.
-  const fixed = agents || warRoom || many
-  const wantMock = (agents && process.env.PERF_MOCK === '1') || warRoom
+  const fixed = agents || warRoom || many || tools
+  const wantMock = ((agents || scenario === 'i') && process.env.PERF_MOCK === '1') || warRoom
   if (!fixed && flood > 11) throw new Error('PERF_FLOOD must be <= 11')
   const seconds = Number(env('PERF_SECONDS', '150'))
   const browser = await chromium.connectOverCDP(env('PERF_CDP'))
@@ -110,7 +114,9 @@ async function runScenario(tStart: number): Promise<void> {
   // generator, scenario e to plain-shell peers running it in --mock mode.
   // assertPlainPanes then allows NO agent at all.
   const mock = wantMock && caps.mockTemplate
-  if (wantMock && !mock) notes.push(agents
+  if (wantMock && !mock) notes.push(scenario === 'i'
+    ? 'fallback: no perf-mock-agent template in this build; idle panes are plain shells'
+    : agents
     ? 'fallback: no perf-mock-agent template in this build; agent panes are plain shells running agent-stream.mjs (no detector, tab badges or state flips)'
     : 'fallback: no perf-mock-agent template in this build; War Room peers are plain shells running agent-stream.mjs --mock (no agent detector, so wait_peer may never see a flip)')
   if (!caps.renderCounter) notes.push('unsupported: render counter (src/lib/perf-render-count.ts) missing; WorkspaceTabs/AttentionBadge renders not measured')
@@ -119,6 +125,7 @@ async function runScenario(tStart: number): Promise<void> {
   // Abort before touching anything if the instance holds any agent pane.
   await assertPlainPanes(page, mock)
   await closePerfWorkspaces(page)
+  if (scenario === 'i') return runIdle(page, { tStart, mock, notes, caps })
   await installProbes(page)
   // The mock generators start on perf-mock.json; stale logs would mix runs.
   clearMockFiles(cwd)
@@ -143,6 +150,10 @@ async function runScenario(tStart: number): Promise<void> {
     ids = await createPanes(page, cwd, kinds)
     waiterIds = ids.slice(0, war); peerIds = ids.slice(war, 2 * war)
     floodIds = ids.slice(2 * war, 2 * war + streamN); idleId = waiterIds[0]
+  } else if (tools) {
+    // Idle panes first (the first is probed), then the tool agents.
+    ids = await createPanes(page, cwd, Array(idle + flood).fill('terminal'))
+    floodIds = ids.slice(idle); idleId = ids[0]
   } else {
     const kinds = agents ? ['terminal', ...Array(flood).fill(mock ? MOCK_ID : 'terminal')] : Array(flood + idle).fill('terminal')
     ids = await createPanes(page, cwd, kinds)
@@ -183,9 +194,78 @@ async function runScenario(tStart: number): Promise<void> {
     if (!(host as any).connected) throw new Error('PERF_HOST: terminal host is not connected: ' + JSON.stringify(host))
   }
 
+  // ---- scenario g: file watcher on the panes' cwd (the perf data dir) ----
+  // Opens a file context for a tool pane and watches its root, as the file
+  // explorer would, and timestamps every files:changed event in-page. Builds
+  // without the files API (1.22.1) skip it with a note.
+  // Each event keeps only its time, the rescan flag and the storm folders
+  // (<pane>/storm-<round>) its paths touch, so the other file traffic in the
+  // data dir cannot pass for a storm's event.
+  let watching = false
+  if (tools) {
+    const err: string = await page.evaluate(async (id) => {
+      try {
+        const f = await import('/src/tauri/files.ts' as string)
+        if (!f.openFileContext || !f.watchFiles || !f.onFileChange) return 'openFileContext/watchFiles/onFileChange missing'
+        const ctx = await f.openFileContext(id)
+        const w = window as any
+        w.__perfFileEvents = [] as { t: number; rescan: boolean; keys: string[] }[]
+        w.__perfFileUnlisten = await f.onFileChange((c: any) => {
+          const keys = new Set<string>()
+          for (const p of c.paths ?? []) { const m = /perf-tool-ws[\\/](\d+)[\\/](storm-\d+)/.exec(p); if (m) keys.add(`${m[1]}/${m[2]}`) }
+          w.__perfFileEvents.push({ t: Date.now(), rescan: !!c.rescan, keys: [...keys] })
+        })
+        await f.watchFiles(ctx.id)
+        w.__perfFileCtx = ctx.id
+        return ''
+      } catch (e) { return String(e) }
+    }, floodIds[0])
+    watching = !err
+    if (!watching) notes.push(`unsupported: file watcher not measurable on this build (${err}); file-event counts and latency not measured`)
+  }
+
   // ---- scenario e: War Room setup ----
   let room: WarRoomRun | undefined
   if (warRoom) room = await setupWarRoom(page, cwd, waiterIds, peerIds, mock, caps.warRoomRooms)
+  // Delivery check before the run: a Moderator probe broadcast must reach
+  // every idle mock peer (the nudge typed into its pane, then Enter).
+  let deliverCheck: unknown
+  if (room?.roomId && mock) {
+    // "Connected" = the pane's bearer made an MCP request (an agent's MCP
+    // client would); the mock peers have none, so connect them from here.
+    for (const id of peerIds) await mcpSession(room.mcpUrl, id)
+    await page.waitForTimeout(500)
+    deliverCheck = await page.evaluate(async ({ roomId, peers }) => {
+      const w = window as any
+      const hits: Record<string, number> = {}
+      let delivers = 0
+      const unl = await (await import('/src/tauri/warroom.ts' as string)).onWarRoomDeliver(() => { delivers++ })
+      // Reached = the scheduler flushed the queue into the pane's prompt
+      // (IPC invoke is not hookable from the page: frozen internals).
+      const wstore = (await import('/src/store/war-room-store.ts' as string)).useWarRoomStore
+      const take = wstore.getState().takeFlush
+      wstore.setState({ takeFlush: (id: string) => { const p = take(id); if (peers.includes(id) && p.length && hits[id] === undefined) hits[id] = Date.now(); return p } })
+      const t0 = Date.now()
+      let sent: unknown
+      try { sent = await (await import('/src/tauri/warroom.ts' as string)).warRoomModeratorSend({ roomId, to: null, content: 'perf delivery check', mode: 'probe' }) } catch (e) { sent = String(e) }
+      try {
+        while (Date.now() - t0 < 15_000 && Object.keys(hits).length < peers.length) await new Promise(r => setTimeout(r, 100))
+      } finally {
+        unl()
+        wstore.setState({ takeFlush: take })
+      }
+      // Why a peer was not reached: its hold reason, engine state, activity.
+      const why: Record<string, unknown> = {}
+      try {
+        const ws = (await import('/src/store/war-room-store.ts' as string)).useWarRoomStore.getState()
+        const as = (await import('/src/store/agent-state-store.ts' as string)).useAgentStateStore.getState()
+        const act = (await import('/src/store/terminal-activity-store.ts' as string)).useTerminalActivityStore.getState()
+        for (const id of peers) if (hits[id] === undefined) why[id.slice(0, 8)] = { held: ws.held?.[id] ?? null, queued: (ws.queues?.[id] ?? []).length, agent: as.byId?.[id]?.state, active: !!act.active?.[id] }
+      } catch (e) { why.error = String(e) }
+      return { sent, peers: peers.length, reached: Object.keys(hits).length, ms: Object.values(hits).map(t => t - t0), why, delivers }
+    }, { roomId: room.roomId, peers: peerIds })
+    console.log('war room delivery check: ' + JSON.stringify(deliverCheck))
+  }
 
   if (idleId) {
     // Focus the idle pane by clicking its xterm, like a user would.
@@ -198,6 +278,9 @@ async function runScenario(tStart: number): Promise<void> {
   }
 
   if (process.env.PERF_TRACE) await browser.startTracing(page, { path: process.env.PERF_TRACE, screenshots: false, categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline.frame'] })
+  // Profile runs only (flood.ps1 -Profile): captures start with the window.
+  const profMode = process.env.PERF_PROFILE as ProfileMode | undefined
+  const stopProfile = profMode ? await startProfile(browser, page, profMode, env('PERF_PROFILE_DIR')) : undefined
   await page.evaluate(() => (window as any).__perf.start())
   const t0 = Date.now()
   // Start signal for the mock agents (their template line already runs).
@@ -208,23 +291,55 @@ async function runScenario(tStart: number): Promise<void> {
     for (const [i, id] of ids.entries()) await term.writeTerminal(id, fixed ? `node "${file}" ${seconds} ${i + 1}\r` : `cmd /d /c type "${file}"\r`)
   }, { ids: typed, file, fixed, seconds })
 
+  // Profiling aid (PERF_RENDERER_TIMELINE=1 only, never in A/B runs): renderer
+  // counts and cumulative swaps every 5 s, to see what changes over a run.
+  const timeline: unknown[] = []
+  const timelineSample = async (): Promise<void> => {
+    const s = await page.evaluate(async (REG) => (await import(REG)).perfRendererStats(), REG).catch(() => undefined)
+    if (s) timeline.push({ t: Math.round((Date.now() - t0) / 1000), ...s })
+  }
+  // Samples are chained, so none can land after the final one below.
+  let timelineChain = Promise.resolve()
+  const timelineTimer = process.env.PERF_RENDERER_TIMELINE && caps.rendererStats
+    ? setInterval(() => { timelineChain = timelineChain.then(timelineSample) }, 5000)
+    : undefined
   const waits = room ? runWaiters(room, t0 + seconds * 1000) : undefined
   let switches: SwitchSample[] = []
   if (many) switches = await switchWorkspaces(page, wsIds, t0, seconds, Number(env('PERF_SWITCH_S', '3')), caps.rendererStats)
   else await probeLoop(page, { scenario, fixed, agents, seconds, lines, flood, timeoutS, t0, busyId, idleId })
   const waitResults = waits ? await waits : undefined
+  let toolSummary: unknown
+  if (tools) {
+    // Stop listening at the run's end, before the generators write their
+    // summaries and clean up, so only the run's own events count.
+    const events: FileEvent[] = watching ? await page.evaluate(async () => {
+      const w = window as any
+      try { w.__perfFileUnlisten?.(); await (await import('/src/tauri/files.ts' as string)).unwatchFiles(w.__perfFileCtx) } catch { /* teardown only */ }
+      return w.__perfFileEvents ?? []
+    }) : []
+    // The generators stop on their own after PERF_SECONDS; a spawn still
+    // running then delays the summary file a little.
+    const files = floodIds.map((_, i) => join(cwd, `perf-tool-${i + 1}.json`))
+    const until = Date.now() + 15_000
+    while (Date.now() < until && !files.every((f) => existsSync(f))) await page.waitForTimeout(250)
+    toolSummary = summarizeTools(files, watching ? events : null)
+  }
 
+  if (timelineTimer) { clearInterval(timelineTimer); await timelineChain; await timelineSample() }
   if (idleId) await page.keyboard.press('Escape')
   await page.waitForTimeout(1500)
   const result = await page.evaluate((lines) => (window as any).__perf.stop(lines), lines)
   const tRunEnd = Date.now()
+  if (stopProfile) await stopProfile()
   if (process.env.PERF_TRACE) await browser.stopTracing()
   if (!caps.renderCounter) result.renders = { WorkspaceTabs: 'unsupported', AttentionBadge: 'unsupported' }
   result.caps = caps; result.notes = notes
   result.scenario = scenario; result.flood = flood; result.idle = idle; result.wallSeconds = (Date.now() - t0) / 1000
   result.hostMode = hostMode; result.host = host; result.mockAgents = mockIds.length
-  if (waitResults) result.warRoom = summarizeWaits(waitResults, cwd, peerIds, war, streamN)
+  if (waitResults) result.warRoom = { ...summarizeWaits(waitResults, cwd, peerIds, war, streamN), deliverCheck }
   if (many) result.renderers = summarizeSwitches(switches, ids.length, caps.rendererStats)
+  if (tools) result.tools = toolSummary
+  if (timelineTimer) result.rendererTimeline = timeline
   // Epoch window for flood.ps1 to trim its CPU/memory samples to the flood.
   result.windowStartMs = t0; result.windowEndMs = t0 + Math.round((fixed ? seconds : result.floodSeconds) * 1000)
   // Timing: setup = test start to the run's t0, run = t0 to the probes'
@@ -296,7 +411,54 @@ async function probeLoop(page: Page, o: { scenario: string; fixed: boolean; agen
 
 function clearMockFiles(cwd: string): void {
   if (!existsSync(cwd)) return
-  for (const f of readdirSync(cwd)) if (f === 'perf-mock.json' || f === 'perf-mcp.json' || /^perf-mock-.*\.log$/.test(f)) rmSync(join(cwd, f), { force: true })
+  for (const f of readdirSync(cwd)) if (f === 'perf-mock.json' || f === 'perf-mcp.json' || /^perf-mock-.*\.log$/.test(f) || /^perf-tool-\d+\.json$/.test(f)) rmSync(join(cwd, f), { force: true })
+  // Scenario g's workspace (the generators remove their own folder; this
+  // catches one killed mid-run).
+  rmSync(join(cwd, 'perf-tool-ws'), { recursive: true, force: true })
+}
+
+// ---------- scenario g: tool-heavy agents ----------
+// Merges the generators' summaries: spawn round trips per kind (total count,
+// median over panes of each pane's p50 / p95, overall max) and the storm
+// latency: from a storm's start to the first files:changed event that names
+// its folder, or the first rescan at or after its end (storm mode skips the
+// later batches and sends one rescan after RESCAN_QUIET without raw events,
+// which other panes' file traffic can delay). Within 5 s, else missed.
+// `events` null = not measured.
+type FileEvent = { t: number; rescan: boolean; keys: string[] }
+type Storm = { key: string; start: number; end: number }
+function summarizeTools(files: string[], events: FileEvent[] | null): unknown {
+  const per = files.filter((f) => existsSync(f)).map((f) => JSON.parse(readFileSync(f, 'utf8')))
+  const kind = (k: string) => {
+    const xs = per.map((p) => p[k]).filter((x) => x && x.count)
+    const med = (a: number[]) => pctl(a, 0.5)
+    return { count: xs.reduce((n, x) => n + x.count, 0), p50: med(xs.map((x) => x.p50)), p95: med(xs.map((x) => x.p95)), max: xs.length ? Math.max(...xs.map((x) => x.max)) : null }
+  }
+  const lat: number[] = []
+  let stormsMissed = 0
+  let viaRescan = 0
+  const storms: Storm[] = per.flatMap((p) => p.storms ?? [])
+  if (events) {
+    const ev = [...events].sort((a, b) => a.t - b.t)
+    for (const s of storms) {
+      const e = ev.find((x) => x.t >= s.start && (x.keys.includes(s.key) || (x.rescan && x.t >= s.end)))
+      if (e !== undefined && e.t - s.start <= 5000) { lat.push(e.t - s.start); if (!e.keys.includes(s.key)) viaRescan++ } else stormsMissed++
+    }
+  }
+  const na = 'unsupported'
+  return {
+    panesReported: per.length, panes: files.length,
+    spawnCmd: kind('cmd'), spawnPwsh: kind('pwsh'), spawnBigOutput: kind('big'),
+    spawnFailed: per.reduce((n, p) => n + (p.spawnFailed ?? 0), 0),
+    fileOps: per.reduce((n, p) => n + (p.fileOps ?? 0), 0),
+    storms: storms.length,
+    fileEvents: events ? events.length : na,
+    rescans: events ? events.filter((e) => e.rescan).length : na,
+    // Same leaves either way, so compare.ps1 lines up a build without the API.
+    fileEventLatency: events
+      ? { samples: lat.length, viaRescan, missed: stormsMissed, p50: pctl(lat, 0.5), p95: pctl(lat, 0.95), max: lat.length ? Math.max(...lat) : null }
+      : { samples: na, viaRescan: na, missed: na, p50: na, p95: na, max: na },
+  }
 }
 
 // ---------- scenario e: War Room waiters ----------
@@ -605,6 +767,24 @@ async function installProbes(page: Page): Promise<void> {
     let lastData = performance.now()
     const longTasks: number[] = []
     const frames: number[] = []
+    // Nested setTimeout(0) delay, the way xterm's write loop yields between
+    // parse slices: past nesting level 5 it depends on the timer resolution
+    // the renderer gets (1 ms vs 15.6 ms), which throttles parse throughput
+    // without showing as CPU or long frames. Every 100 ms: 8 nested hops,
+    // the last 3 recorded. Cost: ~10 extra 4 ms+ wakeups/s on the main thread,
+    // and a pending short timer may itself raise the timer resolution, so it
+    // runs the same on both builds and also outside the window (the chain
+    // stays warm); compare probe-on runs only with probe-on runs.
+    const timerDelays: number[] = []
+    const timerBurst = (depth: number, t: number): void => {
+      setTimeout(() => {
+        const now = performance.now()
+        if (recording && depth >= 5) timerDelays.push(now - t)
+        if (depth < 7) timerBurst(depth + 1, now)
+        else setTimeout(() => timerBurst(0, performance.now()), 100)
+      }, 0)
+    }
+    timerBurst(0, performance.now())
     const echoes: number[] = []
     let pending: { ch: string; t: number; busy: boolean } | undefined
     let expectBusy = false
@@ -638,6 +818,8 @@ async function installProbes(page: Page): Promise<void> {
     let firstData = 0
     let firstParse = 0
     let lastWrite = 0
+    let decodeMs = 0
+    let decodeCalls = 0
     // rAF is throttled while hidden; report how long that was the case.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') hiddenAt = performance.now()
@@ -657,7 +839,11 @@ async function installProbes(page: Page): Promise<void> {
       let s = streams.get(this)
       if (!s) streams.set(this, s = { dec: new TextDecoder(), written: 0, parsed: 0, tail: '', next: 0, gaps: 0, missing: 0, dupes: 0, seen: 0, hash: 2166136261, lastSeq: -1, rTail: '', pTail: '', rLast: 0, pLast: 0, recv: [], parse: [], recvD: [], parseD: [], tokDupes: 0 })
       const st = s
-      const text = typeof data === 'string' ? data : st.dec.decode(data, { stream: true })
+      // Harness cost asymmetry: only a Uint8Array write pays this decode, so it is
+      // timed and reported (harnessDecodeMs) to keep builds comparable.
+      let text: string
+      if (typeof data === 'string') text = data
+      else { const d0 = performance.now(); text = st.dec.decode(data, { stream: true }); decodeMs += performance.now() - d0; decodeCalls++ }
       st.written += text.length
       ;[st.rTail, st.rLast] = lagScan(st.rTail, text, st.rLast, st.recv, st.recvD, Date.now(), st)
       const focused = this.textarea && this.textarea === document.activeElement
@@ -703,8 +889,9 @@ async function installProbes(page: Page): Promise<void> {
     const pct = (a: number[], p: number): number | null => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y); return Math.round(b[Math.min(b.length - 1, Math.floor(p * b.length))] * 10) / 10 }
     ;(window as any).__perf = {
       start() {
-        streams.clear(); longTasks.length = 0; frames.length = 0; echoes.length = 0; echoesBusy.length = 0
+        streams.clear(); longTasks.length = 0; frames.length = 0; timerDelays.length = 0; echoes.length = 0; echoesBusy.length = 0
         pending = undefined; unanswered = 0; unansweredBusy = 0; expectBusy = false; lastBusyN = 0; hiddenMs = 0; maxGap = 0
+        decodeMs = 0; decodeCalls = 0
         recording = true; prev = 0; lastData = lastParse = startAt = floodEnd = performance.now(); firstData = firstParse = lastWrite = 0
         // Dev-only render counter (src/lib/perf-render-count.ts) counts while set.
         ;(window as any).__perfRenderCounts = {}
@@ -740,7 +927,7 @@ async function installProbes(page: Page): Promise<void> {
           // output parsed). Null when no output came at all.
           outputTiming: firstData ? {
             firstOutputMs: Math.round(firstData - startAt), firstParsedMs: firstParse ? Math.round(firstParse - startAt) : null,
-            streamSeconds: Math.round(lastWrite - firstData) / 1000, allParsedMs: firstParse ? Math.round(floodEnd - startAt) : null
+            streamSeconds: Math.round(lastWrite - firstData) / 1000, harnessDecodeMs: Math.round(decodeMs), harnessDecodeCalls: decodeCalls, allParsedMs: firstParse ? Math.round(floodEnd - startAt) : null
           } : null,
           // Component renders during the window (WorkspaceTabs, AttentionBadge).
           renders,
@@ -761,10 +948,89 @@ async function installProbes(page: Page): Promise<void> {
             perPane: lagged.map(s => ({ parse: lagStats(s.parse), recvP95: pct(s.recv, 0.95) }))
           } : null,
           longTasks: { count: longTasks.length, over50: longTasks.filter(d => d > 50).length, totalMs: Math.round(longTasks.reduce((a, b) => a + b, 0)), max: pct(longTasks, 1) },
-          frames: { count: frames.length, p50: pct(frames, 0.5), p95: pct(frames, 0.95), p99: pct(frames, 0.99), max: pct(frames, 1), over50: frames.filter(f => f > 50).length }
+          frames: { count: frames.length, p50: pct(frames, 0.5), p95: pct(frames, 0.95), p99: pct(frames, 0.99), max: pct(frames, 1), over50: frames.filter(f => f > 50).length },
+          timerDelay: { samples: timerDelays.length, p50: pct(timerDelays, 0.5), p95: pct(timerDelays, 0.95), max: pct(timerDelays, 1) }
         }
       }
     }
   })
   await page.evaluate((l) => { (window as any).__perfLines = l }, Number(process.env.PERF_LINES ?? '0'))
+}
+
+// Scenario i: idle. Panes sit at their prompt with no input and no output;
+// flood.ps1 samples per-process CPU over the window. No installProbes: its
+// rAF loop and timer chain would themselves keep the WebView busy. Instead
+// cheap counters (no extra wakeups) record what the page does while idle:
+// bytes handed to xterm (any output, e.g. a shell redrawing after a resize),
+// rAF / setTimeout / setInterval registrations. (Tauri's IPC internals are
+// frozen, so invoke calls cannot be counted from the page.)
+async function runIdle(page: Page, o: { tStart: number; mock: boolean; notes: string[]; caps: Caps }): Promise<void> {
+  const total = Number(env('PERF_IDLE', '10'))
+  const visible = Number(env('PERF_FLOOD', '2'))
+  const seconds = Number(env('PERF_SECONDS', '10'))
+  const warmupS = Number(env('PERF_WARMUP_S', '10'))
+  const shell = env('PERF_SHELL', 'pwsh')
+  const cwd = env('PERF_CWD')
+  const ids: string[] = await page.evaluate(async ({ cwd, total, visible, shell, mock, MOCK_ID }) => {
+    // Same shell as the user's panes (PSReadLine redraws are what an idle
+    // pane costs); older builds without the store keep their default.
+    try { (await import('/src/store/terminal-pref-store.ts' as string)).useTerminalPrefStore.getState().setShellId(shell) } catch { /* default shell */ }
+    const { useAppStore, visibleLeaves } = await import('/src/store/app-store.ts' as string)
+    const counts = [1, 2, 4, 6, 8, 10, 12]
+    const sizes: number[] = [counts.find(c => c >= Math.min(visible, total))!]
+    for (let left = total - sizes[0]; left > 0;) { const c = counts.find(c => c >= Math.min(left, 12))!; sizes.push(c); left -= c }
+    const wsIds: string[] = []
+    for (const c of sizes) {
+      useAppStore.getState().createWorkspace({ cwd, terminalCount: c, agentIds: Array(c).fill(mock ? MOCK_ID : 'terminal'), name: `perf-${wsIds.length}` })
+      wsIds.push(useAppStore.getState().activeWorkspaceId)
+    }
+    useAppStore.setState({ activeWorkspaceId: wsIds[0] })
+    const ids: string[] = []
+    for (const w of wsIds) for (const leaf of visibleLeaves(useAppStore.getState().workspaces.find((x: any) => x.id === w))) ids.push(leaf.terminalId)
+    return ids
+  }, { cwd, total, visible, shell, mock: o.mock, MOCK_ID })
+  await assertPlainPanes(page, o.mock)
+  // Hidden workspaces' panes attach only when shown on some builds: show each
+  // once so every shell runs, then return to the first.
+  await page.evaluate(async () => {
+    const { useAppStore } = await import('/src/store/app-store.ts' as string)
+    const ws = useAppStore.getState().workspaces.filter((w: any) => String(w.name).startsWith('perf-'))
+    for (const w of [...ws.slice(1), ws[0]]) { useAppStore.setState({ activeWorkspaceId: w.id }); await new Promise(r => setTimeout(r, 400)) }
+  })
+  await page.waitForFunction(async ({ all, REG }) => {
+    const reg = await import(REG)
+    return all.every((id: string) => { const t = reg.readTerminalText(id, 3); return /[>$#]\s*$/.test(t) || t.includes('perf-mock: waiting') })
+  }, { all: ids, REG }, { timeout: 120_000, polling: 500 })
+  await page.waitForTimeout(warmupS * 1000)
+  await page.evaluate(async () => {
+    const w = window as any
+    const c = { writeHooked: !!w.__idleWriteHooked, writeCalls: 0, writeChars: 0, raf: 0, timeout: 0, interval: 0 }
+    w.__idle = c
+    if (!w.__idleHooked) {
+      w.__idleHooked = true
+      const raf = w.requestAnimationFrame.bind(w); w.requestAnimationFrame = (cb: any) => { w.__idle.raf++; return raf(cb) }
+      const st = w.setTimeout.bind(w); w.setTimeout = (...a: any[]) => { w.__idle.timeout++; return st(...a) }
+      const si = w.setInterval.bind(w); w.setInterval = (...a: any[]) => { w.__idle.interval++; return si(...a) }
+      const url = performance.getEntriesByType('resource').map(e => e.name).find(n => n.includes('/.vite/deps/@xterm_xterm.js'))
+      if (url) {
+        const { Terminal } = await import(url)
+        const wr = Terminal.prototype.write
+        w.__idleWriteHooked = true; w.__idle.writeHooked = true
+        Terminal.prototype.write = function (d: any, cb?: any) { w.__idle.writeCalls++; w.__idle.writeChars += d?.length ?? d?.byteLength ?? 0; return wr.call(this, d, cb) }
+      }
+    }
+  })
+  const t0 = Date.now()
+  await page.waitForTimeout(seconds * 1000)
+  const t1 = Date.now()
+  const counters = await page.evaluate(() => (window as any).__idle)
+  const result: any = { scenario: 'i', panes: ids.length, visible, shell, mockAgents: o.mock ? ids.length : 0, idleCounters: counters, caps: o.caps, notes: o.notes,
+    windowStartMs: t0, windowEndMs: t1, wallSeconds: (t1 - t0) / 1000,
+    timing: { setupS: (t0 - o.tStart) / 1000, runS: (t1 - t0) / 1000, teardownS: null as number | null, totalS: null as number | null } }
+  writeFileSync(env('PERF_OUT'), JSON.stringify(result, null, 2))
+  const tTear = Date.now()
+  await closePerfWorkspaces(page)
+  result.timing.teardownS = (Date.now() - tTear) / 1000
+  result.timing.totalS = (Date.now() - o.tStart) / 1000
+  writeFileSync(env('PERF_OUT'), JSON.stringify(result, null, 2))
 }

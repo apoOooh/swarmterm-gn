@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-10-25
+
+- War Room: messages now reach real agent panes whose status line or cursor
+  keeps repainting (they stayed held before), and never get typed into an
+  unsent draft in the agent's input box. The ⏸ badge explains why a message
+  is held, with "Deliver now" for a busy pane.
+- War Room: type `@` in the composer to mention peers, with autocomplete. A message
+  with mentions goes only to those peers, and `@everyone` goes to the whole room.
+  Mentions of anyone outside the room block the send.
+- Performance: one pane's slow resize, creation or flood no longer stalls
+  the others. Keystrokes, acks and resizes skip the app-wide terminals lock,
+  acks run off the UI thread, and a per-pane worker applies only the latest
+  size (a failed resize is logged).
+- Performance: opening a workspace creates its panes in parallel instead of
+  one after another, so restoring many agents is faster.
+- Performance: the explorer stays current during a file watcher event storm
+  (e.g. `cargo build`): a rescan at once, then changed paths at most every
+  16 ms, and a final rescan after 500 ms of quiet (1.23.0 waited for quiet).
+- Performance: output flow control pauses a pane only when it is more than
+  2 MB behind (was 512 KB), and closing or respawning a pane always
+  releases it.
+- Rendering: every pane gets a WebGL renderer when it opens, as in 1.22.1,
+  up to 16 (1.23.0: only visible panes, at most 12); beyond that the oldest
+  pane falls back to the DOM renderer. Hidden panes keep their renderer, so
+  switching workspaces is instant, at the cost of more GPU memory. With 8 or
+  more panes visible and 4 or more flooding (over 64 KB/s for 3 s), the
+  floods move to the DOM renderer and return to WebGL once below 32 KB/s.
+- MCP: a restarted app waits up to 10 s for its previous port (e.g. while
+  the old instance is still shutting down after an update) before falling
+  back to a new one, so reattached panes keep their MCP connection.
+- Performance: processes started by an agent CLI in a pane (builds, tests,
+  tools) run at below-normal priority, so heavy agent work no longer slows the
+  app and your typing. On by default (Settings → Terminal), with a saved
+  per-workspace opt-out.
+- Media: long paths in hard-wrapped tables are detected whole. The thumbnail
+  strip keeps 50 items and scrolls sideways (wheel, scrollbar, arrow buttons
+  and keys), and drag-pan works at any zoom.
+- Dev: optional profiling build feature (dev only, not in releases) with
+  lock, flow-gate and IPC counters for `flood.ps1 -Profile`.
+
 ## [1.23.0] - 2026-10-23
 
 - Media panel: a new right-panel tab to inspect images and videos while agents

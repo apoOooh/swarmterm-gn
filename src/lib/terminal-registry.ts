@@ -2,7 +2,7 @@ import { Terminal, type ILink, type ILinkHandler, type ITheme } from '@xterm/xte
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { createWebglBudget, WEBGL_CONTEXT_BUDGET } from '@/lib/webgl-budget'
+import { createRendererPolicy, DEFAULT_RENDERER_POLICY, type RendererPolicyOptions, type RendererSwap } from '@/lib/renderer-policy'
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
 import { enableUnicode11 } from './terminal-unicode'
 import { terminalTheme } from '@/lib/theme-adapter'
@@ -50,6 +50,7 @@ import {
   revealInFileManager
 } from '@/tauri/links'
 import { ActivityTracker } from '@/lib/activity-tracker'
+import { utf8Length } from '@/lib/output-ack'
 import { forgetMediaOutput, noteMediaOutput, showClickedMedia } from '@/lib/media-passive'
 import { writeReplayHistory } from '@/lib/replay-history'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
@@ -73,6 +74,7 @@ import {
   type SuppressState
 } from '@/lib/terminal-input-client'
 import { AgentStateDetector, type DetectorDeps } from '@/lib/agent-state/detector'
+import { promptBoxHasDraft } from '@/lib/prompt-draft'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import type { BufferView } from '@/lib/agent-state/snapshot'
@@ -152,12 +154,8 @@ interface Entry {
   opened: boolean
   pendingFocus?: boolean
   observer?: ResizeObserver
-  /** Live GPU renderer, only while the pane is visible — see syncWebgl. */
+  /** Live GPU renderer, when the renderer policy gave the pane a slot. */
   webgl?: WebglAddon
-  /** Context losses since the pane was last shown; caps re-acquire attempts. */
-  webglLosses?: number
-  /** Lost its slot to a more recently shown pane; cleared when next hidden. */
-  webglEvicted?: boolean
   /** Pty-side size: observer ticks are coalesced, attach/spawn flush at once. */
   ptyResize: ResizeDebouncer
   /**
@@ -262,90 +260,143 @@ const activityTracker = new ActivityTracker<string>(
 const NO_STATUS: TerminalStatus = { kind: 'connecting' }
 
 /**
- * GPU (WebGL) renderer, held only while the pane is visible. xterm's default DOM
- * renderer rebuilds per-cell spans and reflows on every frame; the WebGL
- * renderer is markedly cheaper per frame under heavy output, which is why every
- * serious terminal (VS Code, Hyper) uses it. But each addon pins a WebGL2
- * context and a glyph texture atlas, and the browser caps live contexts at ~16
- * per page — so contexts follow visibility instead of pane lifetime:
+ * Renderer choice per pane (DOM or WebGL), see lib/renderer-policy.ts for the
+ * rules and the measurements behind them. The registry only feeds it (output
+ * bytes, visibility) and applies its decisions:
  *
- * - acquired when an opened pane has a laid-out size (attach, observer refit);
- * - released when the pane is detached, disposed, or its host collapses to 0×0
- *   (hidden workspace, `display:none`) — a hidden pane draws nothing anyway;
- * - capped by `webglBudget`: past WEBGL_CONTEXT_BUDGET, the least recently
- *   visible holder falls back to the DOM renderer rather than letting the
- *   browser kill an arbitrary context;
- * - after a context loss the addon is disposed and re-acquired once, a moment
- *   later, if the pane is still visible (a pane that keeps losing its context
- *   stays on DOM until it is next hidden and shown; so does an evicted one).
- *
- * Disposing the addon swaps xterm back to the DOM renderer, which measures cells
- * with its own metrics — every swap ends in a refit.
+ * - every pane loads WebGL in its open step, as in 1.22.1; with the cap
+ *   (Chromium's per-page limit) full, the oldest holder is disposed first,
+ *   which is what Chromium did to 1.22.1 without the context-loss events;
+ * - other swaps run from a RENDERER_TICK_MS timer, never inside a refit, the
+ *   rAF batch or a write. Demotions (dispose, cheap) are all applied from the
+ *   timer itself, since a starved main thread is what they relieve; at most
+ *   one promotion (loadAddon) per tick, in an idle callback with idle time
+ *   left. The refit a swap needs (DOM and WebGL measure cells differently)
+ *   goes into the next frame batch;
+ * - visibility never creates or disposes a context: a hidden pane keeps its
+ *   renderer, so workspace switches cost no context churn;
+ * - a context loss puts the pane on DOM for good, as in 1.22.1. Re-promoting
+ *   after a loss (an earlier draft, without a cap) hung a scenario f run,
+ *   most likely losses evicting each other at Chromium's cap.
  */
-const webglBudget = createWebglBudget<Entry>(WEBGL_CONTEXT_BUDGET, (entry) => {
-  // Stays on DOM until next hidden and shown, or two panes would evict each
-  // other on every refit.
-  entry.webglEvicted = true
-  dropWebgl(entry, true)
-})
-const WEBGL_RETRY_MS = 1000
-const WEBGL_MAX_LOSSES = 2
+/** Polling period of the policy while panes exist; the swap waits for idle time. */
+const RENDERER_TICK_MS = 500
+/** Idle time a swap needs: loadAddon compiles shaders and builds the atlas. */
+const RENDERER_SWAP_MIN_IDLE_MS = 8
+
+function rendererPolicyOptions(): RendererPolicyOptions {
+  // Dev-only override for perf experiments (`VITE_RENDERER_POLICY` JSON in the
+  // environment of `tauri dev`); release builds always use the defaults.
+  const raw: unknown = import.meta.env.DEV === true ? import.meta.env.VITE_RENDERER_POLICY : undefined
+  if (typeof raw !== 'string' || raw === '') return DEFAULT_RENDERER_POLICY
+  try {
+    return { ...DEFAULT_RENDERER_POLICY, ...(JSON.parse(raw) as Partial<RendererPolicyOptions>) }
+  } catch {
+    return DEFAULT_RENDERER_POLICY
+  }
+}
+const rendererPolicy = createRendererPolicy<Entry>(rendererPolicyOptions())
 /** Set once WebglAddon fails to load (no WebGL2, GPU blocklisted): every pane
- *  stays on DOM instead of retrying — and evicting a holder — on each refit. */
+ *  stays on DOM instead of retrying. */
 let webglUnavailable = false
+let rendererTick: ReturnType<typeof setTimeout> | undefined
+let rendererIdleArmed = false
 
 function isPaneVisible(entry: Entry): boolean {
   return entry.opened && entry.host.isConnected
     && entry.host.clientWidth > 0 && entry.host.clientHeight > 0
 }
 
-/** Bring the pane's renderer in line with its visibility. Cheap when unchanged. */
-function syncWebgl(entry: Entry): void {
-  if (!isPaneVisible(entry)) {
-    releaseWebgl(entry)
+function requestIdle(cb: IdleRequestCallback): void {
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(cb, { timeout: 2000 })
+  else setTimeout(() => cb({ didTimeout: true, timeRemaining: () => 0 }), 0)
+}
+
+/** Poll the policy every RENDERER_TICK_MS while panes exist; stops by itself. */
+function armRendererTick(): void {
+  if (rendererTick !== undefined || rendererIdleArmed || webglUnavailable) return
+  rendererTick = setTimeout(() => {
+    rendererTick = undefined
+    if (rendererPolicy.size() === 0) return
+    // A demotion is a dispose (cheap) and relieves the frame at once: apply it
+    // from the timer, without waiting for idle time a flood never leaves.
+    // All pending demotions go at once: a dozen panes starting to flood
+    // together otherwise wait a tick each, which kept scenario c's floods on
+    // WebGL for most of their run. The scan that ends the loop may find a
+    // promotion; it is dropped and recomputed in the idle callback (one
+    // extra O(panes) scan, no swap).
+    let demoted = false
+    for (let swap = rendererPolicy.next(performance.now()); swap?.to === 'dom'; swap = rendererPolicy.next(performance.now())) {
+      applyRendererSwap(swap)
+      demoted = true
+    }
+    if (demoted) {
+      armRendererTick()
+      return
+    }
+    rendererIdleArmed = true
+    requestIdle((deadline) => {
+      rendererIdleArmed = false
+      // A starved main thread (idle timeout) is exactly when a synchronous
+      // shader compile hurts most: a promotion waits for real idle time.
+      const swap = rendererPolicy.next(performance.now())
+      if (swap && (swap.to === 'dom' || deadline.timeRemaining() >= RENDERER_SWAP_MIN_IDLE_MS)) {
+        applyRendererSwap(swap)
+      }
+      armRendererTick()
+    })
+  }, RENDERER_TICK_MS)
+}
+
+/** Cumulative renderer swaps, for the perf harness only (perfRendererStats). */
+const rendererSwaps = { demote: 0, promote: 0, loss: 0, evict: 0 }
+
+function applyRendererSwap(swap: RendererSwap<Entry>): void {
+  const entry = swap.key
+  const now = performance.now()
+  rendererSwaps[swap.to === 'dom' ? 'demote' : 'promote']++
+  if (swap.to === 'dom') {
+    rendererPolicy.commit(swap, now)
+    disposeWebgl(entry)
+    refitBatch.schedule(entry)
     return
   }
-  if (entry.webgl) {
-    webglBudget.acquire(entry) // refresh its LRU position
-    return
+  if (loadWebgl(entry, now)) {
+    rendererPolicy.commit(swap, now)
+    refitBatch.schedule(entry)
   }
-  if (webglUnavailable || entry.webglEvicted || (entry.webglLosses ?? 0) >= WEBGL_MAX_LOSSES) return
-  if (!webglBudget.acquire(entry)) return
+}
+
+/** Load the WebGL addon on an opened terminal; false (pane stays/goes DOM) on failure. */
+function loadWebgl(entry: Entry, now: number): boolean {
   let addon: WebglAddon | undefined
   try {
     addon = new WebglAddon()
     const live = addon
     addon.onContextLoss(() => {
+      // A late loss of an addon already disposed (demotion, eviction at open)
+      // is not this pane's renderer any more.
       if (entry.webgl !== live) return
-      entry.webglLosses = (entry.webglLosses ?? 0) + 1
-      dropWebgl(entry, true)
+      rendererSwaps.loss++
+      rendererPolicy.block(entry, performance.now())
+      disposeWebgl(entry)
       // A fit that raced the loss (alt-tab/occlusion on Windows can drop the
-      // GPU context mid-layout) may have collapsed cols/rows; the refit above
-      // re-measures, and the retry re-acquires once the GPU is back.
-      setTimeout(() => {
-        if (entry.observer !== undefined) syncWebgl(entry)
-      }, WEBGL_RETRY_MS)
+      // GPU context mid-layout) may have collapsed cols/rows: re-measure.
+      refitBatch.schedule(entry)
     })
     entry.term.loadAddon(addon)
     entry.webgl = addon
+    return true
   } catch {
-    // WebGL2 unavailable — stay on the DOM renderer, for good.
+    // WebGL2 unavailable — every pane stays on the DOM renderer, for good.
     webglUnavailable = true
-    webglBudget.release(entry)
+    rendererPolicy.block(entry, now)
     try { addon?.dispose() } catch { /* half-loaded */ }
+    return false
   }
 }
 
-/** Free the pane's context (hidden, detached, disposed). Resets the loss count:
- *  the next show is a fresh attempt. */
-function releaseWebgl(entry: Entry): void {
-  entry.webglLosses = 0
-  entry.webglEvicted = false
-  if (entry.webgl) dropWebgl(entry, false)
-}
-
-function dropWebgl(entry: Entry, refit: boolean): void {
-  webglBudget.release(entry)
+function disposeWebgl(entry: Entry): void {
   const addon = entry.webgl
   entry.webgl = undefined
   if (!addon) return
@@ -355,7 +406,6 @@ function dropWebgl(entry: Entry, refit: boolean): void {
     // Disposing after a lost context can throw inside the addon; the renderer
     // swap has already happened by then.
   }
-  if (refit) setTimeout(() => refitEntry(entry), 0)
 }
 
 /** Fit the terminal to its host, skipping when the host has no laid-out size. */
@@ -383,9 +433,9 @@ function refitEntry(entry: Entry): void {
   // garbage (FitAddon's 2×1 floor) and would be pushed to the pty, making a
   // running TUI redraw at 2 columns. The focus/visibility refit in App.tsx
   // re-measures the moment the window is visible again.
-  // Before the hidden-window return: a workspace switched away while the
-  // window is minimised still frees its contexts on this tick.
-  syncWebgl(entry)
+  // Visibility only feeds the policy (hidden panes are never promoted); it
+  // never creates or frees a context here.
+  rendererPolicy.setVisible(entry, isPaneVisible(entry), performance.now())
   if (document.visibilityState === 'hidden') return
   const { cols, rows } = entry.term
   if (safeFit(entry) && (entry.term.cols !== cols || entry.term.rows !== rows)) {
@@ -1123,17 +1173,21 @@ function getOrCreate(id: string): Entry {
   const session = new TerminalSession(
     id,
     {
-      write: (data, onParsed) => {
+      write: (data, onParsed, bytes) => {
         // Every decoded pty chunk is one activity tick: the pane is "working"
         // while bytes flow (including agent spinner redraws) and goes idle after
         // ACTIVITY_IDLE_MS of silence.
         activityTracker.notify(id)
-        entries.get(id)?.detector?.noteOutput()
+        const live = entries.get(id)
+        live?.detector?.noteOutput()
+        // Bytes on both delivery paths, so the KB/s thresholds mean the same.
+        if (live) rendererPolicy.recordOutput(live, bytes ?? (typeof data === 'string' ? utf8Length(data) : data.byteLength), performance.now())
         // Passive media detection: append-only here, scanned on a timer.
         noteMediaOutput(id, data)
-        // The callback acks parsed bytes to Rust's flow gate (perf phase 2):
-        // it fires only after xterm parsed this chunk, so a flood is paced
-        // by the parser instead of piling up in the write queue.
+        // The callback (one per ACK_CHUNK, see OutputAcker) acks parsed bytes to
+        // Rust's flow gate (perf phase 2): it fires only after xterm parsed
+        // this chunk, so a flood is paced by the parser instead of piling up
+        // in the write queue.
         term.write(data, onParsed)
       },
       replay: ({ data, cols, rows, truncated }, onParsed) => {
@@ -1250,7 +1304,25 @@ export function attachTerminal(id: string, container: HTMLElement, config: Attac
       if (entries.get(id) !== entry || !entry.host.isConnected || entry.host.parentElement !== container) return
       entry.term.open(entry.mount)
       entry.opened = true
-      syncWebgl(entry)
+      rendererPolicy.add(entry, performance.now())
+      rendererPolicy.setVisible(entry, isPaneVisible(entry), performance.now())
+      // Before the attach fit, so the first fit measures the final renderer.
+      if (!webglUnavailable) {
+        const claim = rendererPolicy.claimOnOpen(entry, performance.now())
+        if (claim.evicted) {
+          rendererSwaps.evict++
+          // Free its context before creating ours, so Chromium's cap never
+          // has to drop one. Its DOM renderer measures cells differently: the
+          // refit runs now if it is laid out, else when its observer next
+          // fires (on show), like any hidden pane.
+          disposeWebgl(claim.evicted)
+          refitBatch.schedule(claim.evicted)
+        }
+        // If this load throws, the evicted pane stays on DOM for good: WebGL
+        // is then unavailable page-wide anyway (webglUnavailable).
+        if (claim.webgl) loadWebgl(entry, performance.now())
+      }
+      armRendererTick()
       finishTerminalAttach(entry, container)
       const app = useAppStore.getState()
       if (entry.pendingFocus && !app.welcomeFocused && selectFocusedTerminalId(app) === id
@@ -1291,7 +1363,9 @@ export function detachTerminal(id: string): void {
   entry.observer = undefined
   refitBatch.cancel(entry)
   entry.ptyResize.cancel()
-  releaseWebgl(entry)
+  // A remount (split collapse) moves the host, and the canvas keeps its
+  // context: only mark the pane hidden.
+  rendererPolicy.setVisible(entry, false, performance.now())
   entry.host.remove()
 }
 
@@ -1307,7 +1381,8 @@ export function disposeTerminal(id: string): void {
   entry.observer = undefined
   refitBatch.cancel(entry)
   entry.ptyResize.cancel()
-  releaseWebgl(entry)
+  rendererPolicy.remove(entry)
+  disposeWebgl(entry)
   entry.session.dispose()
   entry.term.dispose()
   entry.host.remove()
@@ -1340,8 +1415,6 @@ export function focusTerminal(id: string): void {
   if (!entry.opened) entry.pendingFocus = true
   else {
     entry.term.focus()
-    // Focus counts as "seen": keeps the pane in use off the eviction end.
-    if (entry.webgl) webglBudget.acquire(entry)
   }
 }
 
@@ -1421,6 +1494,45 @@ export function deliverPromptToTerminal(id: string, text: string): void {
   const normalized = sanitizePromptText(text).replace(/\r?\n/g, '\r')
   const body = entry.term.modes.bracketedPasteMode ? `\x1b[200~${normalized}\x1b[201~` : normalized
   void writeTerminal(id, body)
+}
+
+/**
+ * Smoothed output rate (bytes/s) of a pane — the renderer policy's EWMA,
+ * already fed on every output batch, so the War Room scheduler reads it at
+ * recheck time without any extra hot-path work. 0 for an unknown pane.
+ */
+export function paneOutputRate(id: string): number {
+  const entry = entries.get(id)
+  return entry ? rendererPolicy.rate(entry, performance.now()) : 0
+}
+
+/**
+ * Does this pane's agent input box show unsent text? Read from the screen
+ * (see prompt-draft.ts) only when a War Room flush is about to type — never
+ * on the output path. Dim cells are blanked first: Claude Code's empty-box
+ * placeholder is dim. Claude Code only; false for anything else.
+ */
+export function paneHasPromptDraft(id: string): boolean {
+  const entry = entries.get(id)
+  if (!entry || !entry.opened || entry.config.agentId !== 'claude-code') return false
+  const buffer = entry.term.buffer.active
+  const end = buffer.length
+  const start = Math.max(0, end - entry.term.rows)
+  const lines: string[] = []
+  const cell = buffer.getNullCell()
+  for (let y = start; y < end; y++) {
+    const line = buffer.getLine(y)
+    if (!line) continue
+    let text = ''
+    for (let x = 0; x < line.length; x++) {
+      line.getCell(x, cell)
+      const ch = cell.getChars()
+      if (cell.getWidth() === 0) continue
+      text += ch === '' || cell.isDim() ? ' ' : ch
+    }
+    lines.push(text.trimEnd())
+  }
+  return promptBoxHasDraft(lines.join('\n'))
 }
 
 /**
@@ -1576,10 +1688,10 @@ export function getTerminalStatus(id: string): TerminalStatus {
   return entries.get(id)?.session.getStatus() ?? NO_STATUS
 }
 
-/** The terminal's live cwd — OSC 7 if the shell reports it, else the spawn cwd. */
-/** Perf harness hook (tests/perf/flood.perf.ts, scenario f) only: live WebGL
- *  contexts and visible panes that render with the DOM fallback instead. */
-export function perfRendererStats(): { webgl: number; domVisible: number; visible: number } {
+/** Perf harness hook (tests/perf/flood.perf.ts) only: live WebGL contexts,
+ *  visible panes that render with the DOM fallback instead, and cumulative
+ *  renderer swaps. */
+export function perfRendererStats(): { webgl: number; domVisible: number; visible: number; swaps: typeof rendererSwaps } {
   let webgl = 0
   let domVisible = 0
   let visible = 0
@@ -1589,7 +1701,7 @@ export function perfRendererStats(): { webgl: number; domVisible: number; visibl
     visible++
     if (!entry.webgl) domVisible++
   }
-  return { webgl, domVisible, visible }
+  return { webgl, domVisible, visible, swaps: { ...rendererSwaps } }
 }
 
 /** Last `lines` rows of a terminal's buffer as text — for the dev test hook (testlab) only. */

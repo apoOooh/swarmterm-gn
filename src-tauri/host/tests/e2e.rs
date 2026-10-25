@@ -292,7 +292,10 @@ fn ring_is_bounded_per_pane() {
 #[test]
 fn unacked_output_stops_the_reader_and_acks_resume_it_in_order() {
     use swarmterm_host::flow::FLOW_HIGH;
-    const LINES: u32 = 150_000;
+    // At least 11 bytes per line (`line-N\r\n`, N >= 5 digits for most):
+    // > 4 MB, at least twice FLOW_HIGH, so the gate must hold (asserted below).
+    const LINES: u32 = 400_000;
+    assert!(LINES as u64 * 11 >= 2 * FLOW_HIGH);
     // A long timeout: this test must see the gate hold, not time out.
     let host = Host::with_flow_timeout(1 << 20, Duration::from_secs(120));
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

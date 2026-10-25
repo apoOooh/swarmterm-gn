@@ -205,6 +205,106 @@ pub fn files_unwatch(
     Ok(())
 }
 
+/// Ids whose `create_terminal` is in flight (see there).
+static SPAWNING: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+/// Signalled whenever a reservation is released.
+static SPAWN_DONE: std::sync::Condvar = std::sync::Condvar::new();
+
+struct SpawnReservation(String);
+
+/// How long a create waits for an in-flight create of the same id. A healthy
+/// spawn finishes well inside the host's create request timeout; twice that
+/// means the first one hung, and the later create fails instead of blocking
+/// a pool thread forever.
+const SPAWN_RESERVE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(2 * crate::host_client::conn::REQUEST_TIMEOUT.as_secs());
+
+impl SpawnReservation {
+    /// Reserve `id`, waiting while another create of the SAME id is in
+    /// flight (the old global SPAWN_LOCK made it wait too). After the wait
+    /// the caller sees the finished spawn, so a duplicate still gets the
+    /// usual "already exists" from `spawn_terminal`, and a create retried
+    /// after a failed one simply proceeds. Creates of different ids never
+    /// wait on each other. Runs on the blocking pool, never the main thread.
+    fn take(id: &str) -> Result<Self, String> {
+        Self::take_within(id, SPAWN_RESERVE_TIMEOUT)
+    }
+
+    fn take_within(id: &str, timeout: std::time::Duration) -> Result<Self, String> {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut set = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
+        while set.get_or_insert_with(Default::default).contains(id) {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return Err(format!(
+                    "Terminal {id} is still being created by an earlier request (waited {}s)",
+                    timeout.as_secs()
+                ));
+            }
+            set = SPAWN_DONE
+                .wait_timeout(set, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        set.get_or_insert_with(Default::default)
+            .insert(id.to_string());
+        Ok(SpawnReservation(id.to_string()))
+    }
+}
+
+impl Drop for SpawnReservation {
+    fn drop(&mut self) {
+        let mut set = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(set) = set.as_mut() {
+            set.remove(&self.0);
+        }
+        SPAWN_DONE.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod spawn_reservation_tests {
+    use super::SpawnReservation;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn same_id_waits_for_the_first_create() {
+        let first = SpawnReservation::take("res-test-a").unwrap();
+        let t = std::thread::spawn(|| {
+            let t0 = Instant::now();
+            let _second = SpawnReservation::take("res-test-a").unwrap();
+            t0.elapsed()
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        drop(first);
+        assert!(t.join().unwrap() >= Duration::from_millis(90));
+    }
+
+    #[test]
+    fn different_ids_do_not_wait() {
+        let _a = SpawnReservation::take("res-test-b").unwrap();
+        let t0 = Instant::now();
+        let _b = SpawnReservation::take("res-test-c").unwrap();
+        assert!(t0.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn hung_same_id_create_times_out_with_an_error() {
+        let _hung = SpawnReservation::take("res-test-d").unwrap();
+        let t0 = Instant::now();
+        let err = SpawnReservation::take_within("res-test-d", Duration::from_millis(100))
+            .err()
+            .expect("second create must give up");
+        assert!(t0.elapsed() >= Duration::from_millis(90));
+        assert!(err.contains("res-test-d"), "{err}");
+        // The id is still reserved by the hung create, not by the loser.
+        drop(_hung);
+        assert!(SpawnReservation::take_within("res-test-d", Duration::from_millis(100)).is_ok());
+    }
+}
+
 #[tauri::command]
 pub async fn create_terminal(
     app: AppHandle,
@@ -214,12 +314,18 @@ pub async fn create_terminal(
 ) -> CreateTerminalResult {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Preserve serialized creation/duplicate-id checks while keeping config
-        // reads, profile enrollment and OS process startup off the UI thread.
-        static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let Ok(_guard) = SPAWN_LOCK.lock() else {
-            return CreateTerminalResult::err("Terminal creation interrupted");
+        // Only the id is reserved, not the whole spawn: config reads, profile
+        // enrollment and the OS process start of different panes overlap, so
+        // a workspace of N agents no longer starts them one after another.
+        // Two creates of the SAME id still serialise: the second waits for
+        // the first and then behaves exactly as it did behind SPAWN_LOCK.
+        let _span = crate::prof::span("cmd.create_terminal");
+        let t0 = crate::prof::now();
+        let _reservation = match SpawnReservation::take(&id) {
+            Ok(r) => r,
+            Err(e) => return CreateTerminalResult::err(e),
         };
+        crate::prof::since("spawn.reserve", t0);
         let state = app.state::<AppState>();
         crate::pty::spawn_terminal(&app, &state, id, options, on_data)
     })
@@ -233,7 +339,8 @@ pub fn write_terminal(state: State<'_, AppState>, id: String, data: String) -> R
     // thread (pty::PtyInput), so a full input pipe can't freeze the UI. An
     // unknown id stays a silent no-op (a pane racing its own close); a full
     // queue is returned so the renderer can tell the user input was dropped.
-    match state.terminals.lock().unwrap().get(&id) {
+    let _span = crate::prof::span("cmd.write_terminal");
+    match crate::prof::lock("lock.terminals.write", &state.terminals).get(&id) {
         Some(t) => t.send(data.as_bytes()).inspect_err(|e| {
             eprintln!("[pty] write to {id} dropped: {e}");
         }),
@@ -262,28 +369,44 @@ pub fn write_terminal_checked(
     t.send_checked(&expected_spawn_id, data.as_bytes())
 }
 
+/// Clone the pane's I/O handle; the `terminals` lock is held only for the
+/// lookup, never across the gate or the PTY call (perf step C).
+fn io_handle(state: &AppState, lock_name: &'static str, id: &str) -> Option<crate::pty::IoHandle> {
+    crate::prof::lock(lock_name, &state.terminals)
+        .get(id)
+        .map(|t| t.handle())
+}
+
 /// The renderer's xterm parsed `bytes` more of generation `spawn_id`'s
-/// output (perf phase 2 flow control; batched, ~64 KB per call).
-#[tauri::command]
+/// output (perf phase 2 flow control; batched, ACK_CHUNK per call). `async`:
+/// a plain command runs on the main thread, which also serves the IPC of
+/// every pane's output, so thousands of acks under a flood queued there.
+/// Acks are additive and the gate saturates, so pool reordering is harmless.
+#[tauri::command(async)]
 pub fn ack_output(state: State<'_, AppState>, id: String, spawn_id: String, bytes: u64) {
-    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
-        t.ack(&spawn_id, bytes);
+    let _span = crate::prof::span("cmd.ack_output");
+    if let Some(h) = io_handle(&state, "lock.terminals.ack", &id) {
+        h.ack(&spawn_id, bytes);
     }
 }
 
 /// The renderer disposed generation `spawn_id`'s xterm: open its flow gate
-/// now rather than after the no-ack timeout.
-#[tauri::command]
+/// now rather than after the no-ack timeout. Off the main thread like acks.
+#[tauri::command(async)]
 pub fn release_output(state: State<'_, AppState>, id: String, spawn_id: String) {
-    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
-        t.release_output(&spawn_id);
+    if let Some(h) = io_handle(&state, "lock.terminals.release", &id) {
+        h.release_output(&spawn_id);
     }
 }
 
+/// Stays a main-thread command on purpose: it is now O(1) (the resize worker
+/// applies the size), and running resizes on the async pool could reorder
+/// them, so an older size could win.
 #[tauri::command]
 pub fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) {
-    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
-        t.resize(cols, rows);
+    let _span = crate::prof::span("cmd.resize_terminal");
+    if let Some(h) = io_handle(&state, "lock.terminals.resize", &id) {
+        h.resize(cols, rows);
     }
 }
 
@@ -303,7 +426,8 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     //
     // The `let` binding releases the map lock BEFORE the kill/drop, so the reader
     // thread can re-lock the map to clear the id without deadlocking.
-    let removed = state.terminals.lock().unwrap().remove(&id);
+    let _span = crate::prof::span("cmd.kill_terminal");
+    let removed = crate::prof::lock("lock.terminals.kill", &state.terminals).remove(&id);
     if let Some(t) = removed {
         // Closes the master PTY (forcing the reader's EOF) and lets the tree
         // exit cleanly before terminating it; the deadline runs off-thread.
@@ -356,6 +480,18 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     // see the peer gone rather than run out its timeout.
     state.peer_states.lock().unwrap().forget(&id);
     state.peer_wake.notify_waiters();
+}
+
+/// Settings → Terminal "Lower build priority" plus the per-workspace opt-outs,
+/// flattened by the renderer into the exempt panes' terminal ids. Cheap (one
+/// short lock), so sync is fine.
+#[tauri::command]
+pub fn child_priority_set(
+    state: State<'_, crate::child_priority::ChildPriority>,
+    enabled: bool,
+    exempt: Vec<String>,
+) {
+    state.set(enabled, exempt);
 }
 
 /// Screen-independent proof that the pane's agent CLI is still running: a

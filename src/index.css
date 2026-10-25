@@ -156,6 +156,16 @@
   }
 }
 
+/* The Media strip scrolls sideways only: keep its bar visible and grabbable
+   (the overlay thumb above is near-invisible at rest). */
+.media-strip::-webkit-scrollbar { height: 8px; }
+.media-strip::-webkit-scrollbar-thumb {
+  min-width: 32px;
+  border-radius: var(--sb-radius);
+  background: hsl(var(--sb-thumb) / var(--sb-thumb-hover));
+}
+.media-strip::-webkit-scrollbar-thumb:hover { background: hsl(var(--sb-thumb) / var(--sb-thumb-active)); }
+
 .pane-header { height: var(--pane-tabbar-h, 28px); }
 .theme-row { padding-block: var(--row-pad-y, 6px); }
 .theme-row[data-active="true"] { box-shadow: inset var(--marker-w, 2px) 0 rgb(var(--color-primary)); }

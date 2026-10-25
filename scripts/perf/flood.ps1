@@ -25,7 +25,19 @@
     f  -VisiblePanes (16-20) streaming panes visible in one workspace plus two
        4-pane workspaces, switching every -SwitchSeconds; reports live WebGL
        contexts and visible DOM-fallback panes
-    full  a, b, c, d (mock agents), e and f, once each
+    g  -ToolPanes (6) panes each running scripts/perf/tool-agent.mjs for
+       -ToolSeconds (75): tool-heavy agent work (many short cmd/pwsh child
+       processes, bursty small output, file create/read/write/delete storms
+       of 80 files in perf-tool-ws\<n> under the data dir, appends, a ~200 KB
+       type now and then) plus -ToolIdle (2) idle panes, the first probed;
+       reports spawn round trips and, where the files API exists, the
+       watcher's file events and storm-to-event latency
+    i  idle: -IdlePanes (10) plain shells (-MockAgents: mock agents at their
+       prompt) in workspaces of which -IdleVisible (2) panes are visible,
+       NO input and NO output; after -IdleWarmup (10 s) the CPU of every
+       process type is sampled for -IdleSeconds (10). No in-page probes (their
+       rAF loop would itself keep the WebView busy). Guards idle CPU.
+    full  a, b, c, d (mock agents), e, f, g and i, once each
   -HostMode switches the terminal host on in the throwaway perf profile
   (builds swarmterm-host first), so output runs through the host path.
   HARD RULE: no agent CLI or AI provider is ever started. Every pane is a
@@ -49,12 +61,13 @@
   pwsh scripts/perf/flood.ps1                       # all scenarios x 3 runs, defaults
   pwsh scripts/perf/flood.ps1 -Scenario a -Panes 4 -SizeMB 50
   pwsh scripts/perf/flood.ps1 -Scenario d -AgentPanes 15 -AgentSeconds 150
+  pwsh scripts/perf/flood.ps1 -Scenario g -ToolPanes 6 -ToolSeconds 75
 #>
 [CmdletBinding()]
 param(
   # 'all' is a, b and c; d (agents, ~3 min per run), e and f are run on their
-  # own; 'full' runs a, b, c, d (mock agents), e and f once each.
-  [ValidateSet('a', 'b', 'c', 'd', 'e', 'f', 'all', 'full')] [string]$Scenario = 'all',
+  # own; 'full' runs a, b, c, d (mock agents), e, f and g once each.
+  [ValidateSet('a', 'b', 'c', 'd', 'e', 'f', 'g', 'i', 'all', 'full')] [string]$Scenario = 'all',
   [switch]$HostMode,
   [switch]$MockAgents,
   [ValidateRange(1, 5)] [int]$WarPairs = 4,
@@ -64,6 +77,14 @@ param(
   [ValidateRange(1, 11)] [int]$Panes = 4,
   [ValidateRange(1, 40)] [int]$AgentPanes = 15,
   [ValidateRange(10, 1800)] [int]$AgentSeconds = 150,
+  [ValidateRange(1, 11)] [int]$ToolPanes = 6,
+  [ValidateRange(1, 4)] [int]$ToolIdle = 2,
+  [ValidateRange(10, 600)] [int]$ToolSeconds = 75,
+  [ValidateRange(1, 36)] [int]$IdlePanes = 10,
+  [ValidateSet(1, 2, 4)] [int]$IdleVisible = 2,
+  [ValidateRange(5, 600)] [int]$IdleSeconds = 10,
+  [ValidateRange(0, 300)] [int]$IdleWarmup = 10,
+  [ValidateSet('pwsh', 'powershell', 'cmd', 'default')] [string]$IdleShell = 'pwsh',
   # Defaults keep a full a+b+c x 3 run to a few minutes; single runs are too
   # noisy to compare (see docs/perf-baseline.md), so each scenario repeats.
   [int]$SizeMB = 50,
@@ -75,13 +96,107 @@ param(
   # no LLVM). tauri:dev:isolated works too where LLVM is available.
   [ValidateSet('tauri:dev:no-speech', 'tauri:dev:isolated')] [string]$DevScript = 'tauri:dev:no-speech',
   [switch]$Trace,
-  [switch]$KeepRunning
+  [switch]$KeepRunning,
+  # Profile run (docs/perf-profiling.md): `profiling` cargo profile + feature,
+  # renderer capture (-ProfileMode), 1 Hz per-process CPU, optional ETW via
+  # the admin broker (-Etw). Results go to test-results/perf-profile/, never
+  # perf-runs/: profiled numbers are perturbed and must not enter A/B tables.
+  # (`$Profile` is a PowerShell automatic variable, hence the alias.)
+  [Alias('Profile')] [switch]$ProfileRun,
+  [ValidateSet('cpu', 'trace', 'mem')] [string]$ProfileMode = 'cpu',
+  [ValidateSet('none', 'spawn', 'cpu', 'wait')] [string]$Etw = 'none'
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot/../..").Path
 $dataDir = Join-Path $env:TEMP 'swarmterm-perf'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $outDir = Join-Path $repo "test-results/perf-runs/$stamp"
+if ($ProfileRun) {
+  if ($Trace -and $ProfileMode -eq 'trace') { throw '-Trace and -ProfileMode trace both trace; pick one' }
+  $outDir = Join-Path $repo "test-results/perf-profile/$stamp"
+  $profRustDir = Join-Path $outDir 'rust'
+  New-Item -ItemType Directory -Force $profRustDir | Out-Null
+  $banner = "PROFILE RUN ($ProfileMode, etw $Etw): instrumented build, perturbed timings. NEVER mix these results into A/B tables (perf-runs/compare.ps1)."
+  Set-Content (Join-Path $outDir 'PROFILE-RUN.txt') $banner
+  Write-Host ('=' * 78) -ForegroundColor Yellow; Write-Host $banner -ForegroundColor Yellow; Write-Host ('=' * 78) -ForegroundColor Yellow
+  # The broker lives in the project folder, beside repo\ and worktrees\.
+  $broker = if ($env:SWARMTERM_ADMIN_BROKER) { $env:SWARMTERM_ADMIN_BROKER } else {
+    @((Join-Path $repo '..\admin-broker'), (Join-Path $repo '..\..\admin-broker')) | Where-Object { Test-Path $_ } | Select-Object -First 1
+  }
+  if (-not $broker) { $broker = Join-Path $repo '..\admin-broker' }
+  if ($Etw -ne 'none' -and -not (Test-Path (Join-Path $broker 'ready'))) {
+    Write-Warning "admin broker not running ($broker\ready missing): ETW capture skipped. The lead starts it with start-broker.ps1."
+    $Etw = 'none'
+  }
+}
+
+# ETW through the elevated admin broker (whitelisted logman/wpr actions only;
+# this script never elevates). Returns $true when the broker acknowledged.
+function Invoke-Broker([string]$action, [string]$name) {
+  $r = & pwsh -NoProfile -File (Join-Path $broker 'request.ps1') -Action $action -Name $name 2>&1
+  if ($LASTEXITCODE) { Write-Warning "broker $action $name failed: $r"; return $false }
+  return $true
+}
+
+# Non-elevated ETL readers: Get-WinEvent for the Kernel-Process trace,
+# tracerpt's summary for WPR traces (per-stack CPU/wait analysis needs WPA or
+# wpaexporter from the Windows Performance Toolkit, not installed here). The
+# .etl is deleted after summarizing.
+function Save-EtwSummary([string]$etl, [string]$kind, [string]$dir) {
+  if (-not (Test-Path $etl)) { Write-Warning "no ETL at $etl"; return }
+  try {
+    if ($kind -eq 'spawn') {
+      $ev = @(Get-WinEvent -Path $etl -Oldest -ErrorAction Stop)
+      # Kernel-Process: 1 = process start, 2 = process stop.
+      $rows = foreach ($e in $ev | Where-Object { $_.Id -in 1, 2 }) {
+        $x = [xml]$e.ToXml(); $d = @{}; foreach ($n in $x.Event.EventData.Data) { $d[$n.Name] = $n.'#text' }
+        [pscustomobject]@{ time = $e.TimeCreated.ToString('HH:mm:ss.fff'); event = if ($e.Id -eq 1) { 'start' } else { 'stop' }; pid = $d.ProcessID; ppid = $d.ParentProcessID; image = $d.ImageName }
+      }
+      $rows | Export-Csv (Join-Path $dir 'etw-spawn.csv') -NoTypeInformation
+      Write-Host "etw spawn: $(@($rows | Where-Object event -EQ 'start').Count) starts, $(@($rows | Where-Object event -EQ 'stop').Count) stops -> etw-spawn.csv"
+    } else {
+      tracerpt $etl -summary (Join-Path $dir "etw-$kind-summary.txt") -o (Join-Path $dir "etw-$kind-dump.xml") -of XML -y *> $null
+      Remove-Item (Join-Path $dir "etw-$kind-dump.xml") -ErrorAction SilentlyContinue
+      Write-Host "etw ${kind}: tracerpt summary -> etw-$kind-summary.txt (per-stack CPU/wait needs WPA, not installed)"
+    }
+  } catch { Write-Warning "ETL summary failed: $_" }
+  finally {
+    Remove-Item $etl -Force -ErrorAction SilentlyContinue
+    if (Test-Path $etl) { Write-Warning "could not delete $etl (broker-owned ACL?); delete it by hand, ETLs are large" }
+  }
+}
+
+# End of one profiled scenario: stop ETW and the process sampler, have the app
+# dump its Rust counters into the scenario folder, print the top-N summary.
+# Reads $profDir, $profRustDir, $procJob, $procStop, $etwOn, $etwName from the
+# scenario loop.
+function Complete-ProfileScenario {
+  if ($etwOn) {
+    $stopAction = if ($Etw -eq 'spawn') { 'spawn-stop' } else { 'cpu-stop' }
+    if (Invoke-Broker $stopAction $etwName) { Save-EtwSummary (Join-Path $broker "out\$etwName.etl") $Etw $profDir }
+    elseif ($Etw -ne 'spawn') { Invoke-Broker 'cancel' $etwName | Out-Null }
+  }
+  Remove-Item Env:PERF_PROFILE, Env:PERF_PROFILE_DIR -ErrorAction SilentlyContinue
+  Set-Content $procStop ''
+  Wait-Job $procJob -Timeout 5 | Out-Null; Stop-Job $procJob; Remove-Job $procJob -Force
+  $before = @(Get-ChildItem $profRustDir -Filter 'prof-*.json' -ErrorAction SilentlyContinue)
+  Set-Content (Join-Path $profRustDir 'dump.request') ''
+  $deadline = (Get-Date).AddSeconds(5)
+  do { Start-Sleep -Milliseconds 200; $new = @(Get-ChildItem $profRustDir -Filter 'prof-*-trigger.json' | Where-Object { $_.Name -notin $before.Name }) } until ($new.Count -or (Get-Date) -gt $deadline)
+  # Completion time and work done, so the summary can show CPU per unit of
+  # work: more CPU that finishes sooner is a win, not a regression.
+  if (Test-Path $json) { Copy-Item $json (Join-Path $profDir 'result.json') -Force }
+  $work = switch ($s) {
+    'a' { @{ units = $cfg.flood * $SizeMB; unit = 'MB' } }
+    'b' { @{ units = $cfg.flood * $TuiSizeMB; unit = 'MB' } }
+    'c' { @{ units = $cfg.flood * $SizeMB; unit = 'MB' } }
+    default { @{ units = $cfg.flood * $AgentSeconds; unit = 'pane-s' } }
+  }
+  $work | ConvertTo-Json | Set-Content (Join-Path $profDir 'work.json')
+  if ($new.Count) { Move-Item $new[0].FullName (Join-Path $profDir 'rust.json') -Force }
+  else { Write-Warning "no Rust counter dump (not a profiling build? see $profRustDir)" }
+  node (Join-Path $PSScriptRoot 'profile-summary.mjs') $profDir | Tee-Object -FilePath (Join-Path $profDir 'summary.txt') | Write-Host
+}
 New-Item -ItemType Directory -Force $dataDir, $outDir | Out-Null
 
 # ---------- data generation ----------
@@ -184,16 +299,25 @@ function Start-Sampler([int]$rootPid, [string]$csv, [string]$hostExe, [int[]]$fo
     param($rootPid, $csv, $treeSrc, $hostExe, $foreignHosts)
     ${function:Get-Tree} = [ScriptBlock]::Create($treeSrc)
     $cores = [Environment]::ProcessorCount
+    if (-not ('PerfSys.Times' -as [type])) {
+      Add-Type -Namespace PerfSys -Name Times -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool GetSystemTimes(out long idle, out long kernel, out long user);'
+    }
     "epochMs,group,cpuPct,privateMB" | Set-Content $csv
     $prev = @{}
     $i = 0
     while ($true) {
       # The WMI walk is the slow part; the tree only changes when panes spawn.
       if ($i++ % 10 -eq 0) { $tree = Get-Tree $rootPid $hostExe $foreignHosts }
-      $groups = @{ app = @(); host = @(); webview = @() }
+      $groups = @{ app = @(); host = @(); webview = @(); children = @(); 'wv-browser' = @(); 'wv-renderer' = @(); 'wv-gpu' = @(); 'wv-utility' = @(); console = @() }
       foreach ($p in $tree) {
-        $g = switch -regex ($p.Name) { '^swarmterm\.exe$' { 'app' } '^swarmterm-host\.exe$' { 'host' } '^msedgewebview2\.exe$' { 'webview' } default { $null } }
-        if ($g) { $groups[$g] += [int]$p.ProcessId }
+        $g = switch -regex ($p.Name) { '^swarmterm\.exe$' { 'app' } '^swarmterm-host\.exe$' { 'host' } '^msedgewebview2\.exe$' { 'webview' } default { 'children' } }
+        # Everything else in the tree (root npm/cmd, dev server, cargo, conhost,
+        # shells) is 'children' on purpose: the whole instance's footprint.
+        $groups[$g] += [int]$p.ProcessId
+        # Overlapping detail rows (already inside webview/children): which WebView2
+        # process type, and the console hosts, burn the CPU.
+        if ($g -eq 'webview') { $wt = if ($p.CommandLine -match '--type=(renderer|gpu-process)') { @{ renderer = 'wv-renderer'; 'gpu-process' = 'wv-gpu' }[$Matches[1]] } elseif ($p.CommandLine -match '--type=') { 'wv-utility' } else { 'wv-browser' }; $groups[$wt] += [int]$p.ProcessId }
+        if ($p.Name -match '^(conhost|OpenConsole)\.exe$') { $groups['console'] += [int]$p.ProcessId }
       }
       $now = Get-Date
       $epoch = [DateTimeOffset]::new($now).ToUnixTimeMilliseconds()
@@ -216,6 +340,19 @@ function Start-Sampler([int]$rootPid, [string]$csv, [string]$hostExe, [int[]]$fo
         $cpuCell = if ($complete) { $cpu.ToString('F1', [Globalization.CultureInfo]::InvariantCulture) } else { '' }
         [string]::Format([Globalization.CultureInfo]::InvariantCulture, "{0},{1},{2},{3:F1}", $epoch, $g, $cpuCell, ($mem / 1MB)) | Add-Content $csv
       }
+      # Whole machine (every process, ours included): a scenario that runs
+      # 2-3x slower with more CPU per MB (bimodal c) must show whether
+      # something else loaded the machine at the time.
+      # GetSystemTimes: kernel time includes idle, so busy = kernel + user - idle.
+      $now = Get-Date; $epoch = [DateTimeOffset]::new($now).ToUnixTimeMilliseconds()
+      $si = 0L; $sk = 0L; $su = 0L; [void][PerfSys.Times]::GetSystemTimes([ref]$si, [ref]$sk, [ref]$su)
+      $all = ($sk + $su - $si) / 1e4
+      if ($prev.ContainsKey('machine')) {
+        $dt = ($now - $prev['machine'].t).TotalMilliseconds
+        $m = if ($dt -gt 0) { [Math]::Max(0, 100 * ($all - $prev['machine'].cpu) / $dt / $cores) } else { 0 }
+        [string]::Format([Globalization.CultureInfo]::InvariantCulture, "{0},machine,{1:F1},", $epoch, $m) | Add-Content $csv
+      }
+      $prev['machine'] = @{ t = $now; cpu = $all }
       Start-Sleep -Milliseconds 1000
     }
   }
@@ -224,14 +361,14 @@ function Start-Sampler([int]$rootPid, [string]$csv, [string]$hostExe, [int[]]$fo
 # Stats over the flood window only (epoch ms from the driver's result).
 function Get-Stats([string]$csv, [long]$startMs, [long]$endMs) {
   $rows = @(Import-Csv $csv | Where-Object { [long]$_.epochMs -ge $startMs -and [long]$_.epochMs -le $endMs })
-  foreach ($g in 'app', 'host', 'webview') {
+  foreach ($g in 'app', 'host', 'webview', 'wv-browser', 'wv-renderer', 'wv-gpu', 'wv-utility', 'console', 'children', 'machine') {
     $r = @($rows | Where-Object group -EQ $g)
     if (-not $r.Count) { continue }
     $cpu = @($r | Where-Object cpuPct -NE '' | ForEach-Object { [double]$_.cpuPct } | Sort-Object)
-    $mem = @($r | ForEach-Object { [double]$_.privateMB })
+    $mem = @($r | Where-Object privateMB -NE '' | ForEach-Object { [double]$_.privateMB })
     [pscustomobject]@{
       group = $g; samples = $r.Count
-      cpuAvg = if ($cpu.Count) { [math]::Round(($cpu | Measure-Object -Average).Average, 1) } else { $null }
+      cpuAvg = if ($cpu.Count) { [math]::Round(($cpu | Measure-Object -Average).Average, 2) } else { $null }
       cpuP95 = if ($cpu.Count) { $cpu[[math]::Min($cpu.Count - 1, [int][math]::Floor(0.95 * $cpu.Count))] } else { $null }
       memStartMB = [math]::Round($mem[0], 0); memMaxMB = [math]::Round(($mem | Measure-Object -Maximum).Maximum, 0); memEndMB = [math]::Round($mem[-1], 0)
     }
@@ -247,11 +384,15 @@ $agentScript = Join-Path $PSScriptRoot 'agent-stream.mjs'
 # The perf-mock-agent template runs `node agent-stream.mjs --mock` in the pane's
 # cwd (the data dir): refresh that copy from this checkout every run.
 Copy-Item $agentScript (Join-Path $dataDir 'agent-stream.mjs') -Force
+$toolScript = Join-Path $PSScriptRoot 'tool-agent.mjs'
 if ($Scenario -eq 'full') { $Repeat = 1; $MockAgents = $true }
 if ($HostMode) {
   # tauri dev builds only the app; the host binary is a separate package.
   Push-Location $repo
-  try { cargo build -p swarmterm-host --manifest-path src-tauri/Cargo.toml 2>&1 | Select-Object -Last 1 | Write-Host; if ($LASTEXITCODE) { throw "cargo build -p swarmterm-host failed" } } finally { Pop-Location }
+  # The app looks for the host next to its own exe: a profiling app lives in
+  # target\profiling, so the host must be built there too.
+  $hostProfile = if ($ProfileRun) { @('--profile', 'profiling') } else { @() }
+  try { cargo build -p swarmterm-host @hostProfile --manifest-path src-tauri/Cargo.toml 2>&1 | Select-Object -Last 1 | Write-Host; if ($LASTEXITCODE) { throw "cargo build -p swarmterm-host failed" } } finally { Pop-Location }
 }
 
 if (Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue) {
@@ -274,9 +415,14 @@ foreach ($d in (Join-Path $env:APPDATA $perfId), (Join-Path $env:LOCALAPPDATA $p
   if (Test-Path $d) { throw "could not clear perf profile $d (instance still running?)" }
 }
 $features = if ($DevScript -eq 'tauri:dev:no-speech') { ' -- --no-default-features' } else { '' }
+if ($ProfileRun) {
+  # Release codegen + line tables (Cargo.toml [profile.profiling]); its
+  # output dir target/profiling never overwrites a debug/release A/B binary.
+  $features = if ($features) { "$features --features profiling --profile profiling" } else { ' -- --features profiling --profile profiling' }
+}
 
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo 'src-tauri\target' }
-$hostExe = Join-Path $targetDir 'debug\swarmterm-host.exe'
+$hostExe = Join-Path $targetDir "$(if ($ProfileRun) { 'profiling' } else { 'debug' })\swarmterm-host.exe"
 # Dev hosts of this worktree that already run belong to someone else: never
 # sample or stop them.
 $foreignHosts = Get-DevHostPids $hostExe
@@ -288,10 +434,13 @@ if ($foreignHosts.Count) { Write-Warning "dev host(s) $($foreignHosts -join ', '
 $prevWv2Args = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = (@($prevWv2Args, "--remote-debugging-port=$CdpPort") | Where-Object { $_ }) -join ' '
 $log = Join-Path $outDir 'dev.log'
+$prevProfDir = $env:SWARMTERM_PROFILE_DIR
+if ($ProfileRun) { $env:SWARMTERM_PROFILE_DIR = $profRustDir }
 try {
   $npm = Start-Process -FilePath 'cmd.exe' -ArgumentList '/d', '/c', "npx tauri dev --config `"$perfConf`"$features > `"$log`" 2>&1" -WorkingDirectory $repo -PassThru -WindowStyle Hidden
 } finally {
   if ($null -eq $prevWv2Args) { Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue } else { $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $prevWv2Args }
+  if ($null -eq $prevProfDir) { Remove-Item Env:SWARMTERM_PROFILE_DIR -ErrorAction SilentlyContinue } else { $env:SWARMTERM_PROFILE_DIR = $prevProfDir }
 }
 $npmStart = $npm.StartTime
 Write-Host "dev instance starting (pid $($npm.Id)), log $log"
@@ -306,7 +455,7 @@ try {
   if (-not $ok) { throw "CDP endpoint did not come up; see $log" }
   Start-Sleep 5
 
-  $plan = switch ($Scenario) { 'all' { 'a', 'b', 'c' } 'full' { 'a', 'b', 'c', 'd', 'e', 'f' } default { $Scenario } }
+  $plan = switch ($Scenario) { 'all' { 'a', 'b', 'c' } 'full' { 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'i' } default { $Scenario } }
   $flag = Join-Path $outDir 'AGENT-DETECTED.txt'
   $hostLog = Join-Path $outDir 'hosts.txt'
   $guard = Start-Guard $npm.Id $hostExe $foreignHosts $flag $hostLog
@@ -322,6 +471,8 @@ try {
       'd' { @{ flood = $AgentPanes; idle = 1; file = $agentScript; lines = 0 } }
       'e' { @{ flood = $StreamPanes; idle = 2 * $WarPairs; file = $agentScript; lines = 0 } }
       'f' { @{ flood = $VisiblePanes + 8; idle = 0; file = $agentScript; lines = 0 } }
+      'g' { @{ flood = $ToolPanes; idle = $ToolIdle; file = $toolScript; lines = 0 } }
+      'i' { @{ flood = $IdleVisible; idle = $IdlePanes; file = ''; lines = 0 } }
     }
     $env:PERF_HOST = if ($HostMode) { '1' } else { '' }
     $env:PERF_MOCK = if ($MockAgents) { '1' } else { '' }
@@ -330,10 +481,26 @@ try {
     $csv = Join-Path $outDir "proc-$s-$rep.csv"; $json = Join-Path $outDir "webview-$s-$rep.json"
     $env:PERF_CDP = "http://127.0.0.1:$CdpPort"; $env:PERF_SCENARIO = $s
     $env:PERF_FLOOD = $cfg.flood; $env:PERF_IDLE = $cfg.idle; $env:PERF_FILE = $cfg.file; $env:PERF_LINES = $cfg.lines
-    $env:PERF_CWD = $dataDir; $env:PERF_OUT = $json; $env:PERF_TIMEOUT_S = $TimeoutSeconds; $env:PERF_SECONDS = $AgentSeconds
+    $env:PERF_CWD = $dataDir; $env:PERF_OUT = $json; $env:PERF_TIMEOUT_S = $TimeoutSeconds; $env:PERF_SECONDS = $(switch ($s) { 'g' { $ToolSeconds } 'i' { $IdleSeconds } default { $AgentSeconds } }); $env:PERF_WARMUP_S = $IdleWarmup; $env:PERF_SHELL = $IdleShell
     $env:PERF_TRACE = if ($Trace) { Join-Path $outDir "trace-$s-$rep.json" } else { '' }
     if (Test-Path $json) { Remove-Item $json }
     $pwLog = Join-Path $outDir "playwright-$s-$rep.log"
+    if ($ProfileRun) {
+      $profDir = Join-Path $outDir "$s-$rep"
+      New-Item -ItemType Directory -Force $profDir | Out-Null
+      $env:PERF_PROFILE = $ProfileMode; $env:PERF_PROFILE_DIR = $profDir
+      # Rust counters restart with the scenario (the watchdog polls the file every 50 ms).
+      Set-Content (Join-Path $profRustDir 'reset.request') ''
+      $procStop = Join-Path $profDir 'procs.stop'
+      $procJob = Start-Job -FilePath (Join-Path $PSScriptRoot 'profile-procs.ps1') -ArgumentList (Join-Path $profDir 'procs.csv'), $npm.Id, $procStop, 3600, $hostExe
+      $etwName = "p$stamp-$s-$rep"
+      $etwOn = $false
+      if ($Etw -ne 'none') {
+        $etwOn = Invoke-Broker $(if ($Etw -eq 'wait') { 'wait-start' } else { "$Etw-start" }) $etwName
+        # A half-started session must not keep tracing: stop/cancel it.
+        if (-not $etwOn) { if ($Etw -eq 'spawn') { Invoke-Broker 'spawn-stop' $etwName | Out-Null } else { Invoke-Broker 'cancel' $etwName | Out-Null } }
+      }
+    }
     $job = Start-Sampler $npm.Id $csv $hostExe $foreignHosts
     # Wall time of the whole scenario: Playwright start, setup, run, teardown.
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -349,6 +516,7 @@ try {
       # Surface sampler failures instead of silently reporting empty stats.
       if ($job.State -eq 'Failed' -or $job.ChildJobs[0].Error.Count) { Write-Warning "sampler for scenario $s failed: $($job.ChildJobs[0].Error -join '; ') $($job.ChildJobs[0].JobStateInfo.Reason)" }
       Stop-Job $job; Remove-Job $job -Force
+      if ($ProfileRun) { Complete-ProfileScenario }
     }
     $wv = if (Test-Path $json) { Get-Content $json -Raw | ConvertFrom-Json } else { $null }
     # Status and reason: the spec writes its error into the result file; a
@@ -403,7 +571,7 @@ try {
       '| scenario | echo p50 ms | echo p95 ms | echo max ms | frames > 50 ms | long tasks > 50 ms | app CPU avg % | WebView CPU avg % | WebView MB max (cumulative in instance) | lines lost | flood s |',
       '|---|---|---|---|---|---|---|---|---|---|---|'
   }
-  foreach ($g in ($results | Group-Object scenario | Where-Object Name -NotIn 'd', 'e', 'f')) {
+  foreach ($g in ($results | Group-Object scenario | Where-Object Name -NotIn 'd', 'e', 'f', 'g', 'i')) {
     $w = @($g.Group | ForEach-Object { $_.webview } | Where-Object { $_ })
     $pa = @($g.Group | ForEach-Object { $_.proc | Where-Object group -EQ 'app' })
     $pw = @($g.Group | ForEach-Object { $_.proc | Where-Object group -EQ 'webview' })
@@ -467,11 +635,49 @@ try {
       "| frames > 50 ms / long tasks > 50 ms | $(Get-Spread ($w | % { $_.frames.over50 })) / $(Get-Spread ($w | % { $_.longTasks.over50 })) |",
       "| WebView CPU avg % / MB max | $(Get-Spread ($pw | % { $_.cpuAvg })) / $(Get-Spread ($pw | % { $_.memMaxMB })) |", ''
   }
+  $gr = @($results | Where-Object scenario -EQ 'g')
+  if ($gr.Count) {
+    $w = @($gr | ForEach-Object { $_.webview } | Where-Object { $_ })
+    $pa = @($gr | ForEach-Object { $_.proc | Where-Object group -EQ 'app' })
+    $pw = @($gr | ForEach-Object { $_.proc | Where-Object group -EQ 'webview' })
+    $md += "## Scenario g (tool-heavy agents): $ToolPanes tool panes + $ToolIdle idle, $ToolSeconds s", '',
+      '| metric | value |', '|---|---|',
+      "| echo idle pane p50 / p95 / max ms | $(Get-Spread ($w | % { $_.echo.p50 })) / $(Get-Spread ($w | % { $_.echo.p95 })) / $(Get-Spread ($w | % { $_.echo.max })) |",
+      "| cmd spawns / round trip p50 / p95 / max ms | $(Get-Spread ($w | % { $_.tools.spawnCmd.count })) / $(Get-Spread ($w | % { $_.tools.spawnCmd.p50 })) / $(Get-Spread ($w | % { $_.tools.spawnCmd.p95 })) / $(Get-Spread ($w | % { $_.tools.spawnCmd.max })) |",
+      "| pwsh spawns / round trip p50 / p95 ms | $(Get-Spread ($w | % { $_.tools.spawnPwsh.count })) / $(Get-Spread ($w | % { $_.tools.spawnPwsh.p50 })) / $(Get-Spread ($w | % { $_.tools.spawnPwsh.p95 })) |",
+      "| 200 KB type spawns / round trip p50 / p95 ms | $(Get-Spread ($w | % { $_.tools.spawnBigOutput.count })) / $(Get-Spread ($w | % { $_.tools.spawnBigOutput.p50 })) / $(Get-Spread ($w | % { $_.tools.spawnBigOutput.p95 })) |",
+      "| failed spawns / file ops / storms | $(Get-Spread ($w | % { $_.tools.spawnFailed })) / $(Get-Spread ($w | % { $_.tools.fileOps })) / $(Get-Spread ($w | % { $_.tools.storms })) |",
+      "| file events / rescans | $(Get-Spread ($w | % { $_.tools.fileEvents })) / $(Get-Spread ($w | % { $_.tools.rescans })) |",
+      "| storm-to-event latency p50 / p95 / max ms | $(Get-Spread ($w | % { $_.tools.fileEventLatency.p50 })) / $(Get-Spread ($w | % { $_.tools.fileEventLatency.p95 })) / $(Get-Spread ($w | % { $_.tools.fileEventLatency.max })) |",
+      "| storms seen / via rescan / missed (5 s) | $(Get-Spread ($w | % { $_.tools.fileEventLatency.samples })) / $(Get-Spread ($w | % { $_.tools.fileEventLatency.viaRescan })) / $(Get-Spread ($w | % { $_.tools.fileEventLatency.missed })) |",
+      "| frame p95 / p99 ms / frames > 50 ms / long tasks > 50 ms | $(Get-Spread ($w | % { $_.frames.p95 })) / $(Get-Spread ($w | % { $_.frames.p99 })) / $(Get-Spread ($w | % { $_.frames.over50 })) / $(Get-Spread ($w | % { $_.longTasks.over50 })) |",
+      "| app CPU avg % | $(Get-Spread ($pa | % { $_.cpuAvg })) |",
+      "| WebView CPU avg / p95 % / MB max | $(Get-Spread ($pw | % { $_.cpuAvg })) / $(Get-Spread ($pw | % { $_.cpuP95 })) / $(Get-Spread ($pw | % { $_.memMaxMB })) |", ''
+  }
+  $ir = @($results | Where-Object scenario -EQ 'i')
+  if ($ir.Count) {
+    $w = @($ir | ForEach-Object { $_.webview } | Where-Object { $_ })
+    $md += "## Scenario i (idle): $((@($w | % { $_.panes }) | Select-Object -First 1)) $IdleShell panes$(if ($MockAgents) { ' (mock agents)' }), $IdleVisible visible, $IdleWarmup s warmup + $IdleSeconds s window, median (min-max) over runs", '',
+      '| process | CPU avg % | CPU p95 % |', '|---|---|---|'
+    foreach ($g in 'app', 'host', 'webview', 'wv-browser', 'wv-renderer', 'wv-gpu', 'wv-utility', 'console', 'children', 'machine') {
+      $p = @($ir | ForEach-Object { $_.proc | Where-Object group -EQ $g })
+      if ($p.Count) { $md += "| $g | $(Get-Spread ($p | % { $_.cpuAvg })) | $(Get-Spread ($p | % { $_.cpuP95 })) |" }
+    }
+    # Ours = the exclusive groups; the rest of the machine is everything else.
+    $ours = @($ir | ForEach-Object { ($_.proc | Where-Object group -In 'app', 'host', 'webview', 'children' | Measure-Object cpuAvg -Sum).Sum })
+    $outside = @($ir | ForEach-Object { $r = $_; $m = ($r.proc | Where-Object group -EQ 'machine').cpuAvg; if ($null -ne $m) { [math]::Round($m - ($r.proc | Where-Object group -In 'app', 'host', 'webview', 'children' | Measure-Object cpuAvg -Sum).Sum, 1) } })
+    $md += "| **instance total** | $(Get-Spread $ours) | |", "| machine outside the instance | $(Get-Spread $outside) | |", ''
+    foreach ($x in $w) {
+      $c = $x.idleCounters
+      $md += "- in-page over the window: xterm writes $($c.writeCalls) ($($c.writeChars) chars), rAF $($c.raf), setTimeout $($c.timeout), setInterval $($c.interval)$(if (-not $c.writeHooked) { ' (xterm write hook unavailable: writes n/a)' })"
+    }
+    $md += ''
+  }
   foreach ($r in $results) {
     $w = $r.webview
     $md += "## Scenario $($r.scenario), run $($r.run)", '', '| process | CPU avg % | CPU p95 % | private MB start / max / end |', '|---|---|---|---|'
     foreach ($p in $r.proc) { $md += "| $($p.group) | $($p.cpuAvg) | $($p.cpuP95) | $($p.memStartMB) / $($p.memMaxMB) / $($p.memEndMB) |" }
-    if ($w) {
+    if ($w -and $r.scenario -ne 'i') {
       $md += '', "- flood: $($w.floodSeconds) s (wall $([math]::Round($w.wallSeconds)) s, window hidden $($w.hiddenMs) ms, longest output gap $($w.maxOutputGapMs) ms)",
         "- echo latency ms: p50 $($w.echo.p50), p95 $($w.echo.p95), max $($w.echo.max) ($($w.echo.samples) samples, $($w.echo.unanswered) unanswered)",
         "- long tasks: $($w.longTasks.count) (over 50 ms: $($w.longTasks.over50), total $($w.longTasks.totalMs) ms, max $($w.longTasks.max) ms)",

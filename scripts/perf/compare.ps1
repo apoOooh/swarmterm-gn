@@ -9,7 +9,8 @@
   counts, process CPU/memory and the timings (wall, setup, run, teardown,
   stream duration, first output, all output parsed). Failed or skipped runs
   are listed with their reason, never folded into the numbers. Metrics a
-  build could not measure show "unsupported".
+  build could not measure show "unsupported". Process rows include the
+  WebView2 process types (wv-*) and console hosts; scenario i is idle CPU.
 
 .EXAMPLE
   pwsh scripts/perf/compare.ps1 -Base test-results/perf-runs/20261020-121206 -New test-results/perf-runs/20261020-150000

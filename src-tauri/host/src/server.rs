@@ -185,6 +185,12 @@ async fn serve(
     let hello_deadline = tokio::time::Instant::now() + HELLO_TIMEOUT;
     let mut chunk = vec![0u8; 64 * 1024];
     let mut client: Option<u64> = None;
+    // Creates of this connection still in flight (see `Op::Create`). Pruned
+    // on every dispatch; when the connection drops, this list just goes away
+    // with it: each create task holds only its own sender and finishes (and
+    // answers into a closed `tx`, which is ignored) on its own, so nothing
+    // leaks and the host's orphan rules handle the pane it spawned.
+    let mut creates: Vec<PendingCreate> = Vec::new();
     // Resolves when a newer client replaced this one (see `Client::_kick`).
     let mut kicked: Option<tokio::sync::oneshot::Receiver<()>> = None;
     'conn: loop {
@@ -224,7 +230,7 @@ async fn serve(
                     }
                     None => break 'conn,
                 },
-                Some(cid) => dispatch(&host, cid, &tx, req).await,
+                Some(cid) => dispatch(&host, cid, &tx, &mut creates, req).await,
             }
         }
         let read = async {
@@ -304,17 +310,91 @@ fn hello(
     Some(host.connect_client_kickable(tx.clone(), flow_control))
 }
 
+/// Creates in flight across all connections (see `Op::Create`).
+const MAX_CREATES_IN_FLIGHT: usize = 6;
+
+fn create_permits() -> Arc<tokio::sync::Semaphore> {
+    static PERMITS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    PERMITS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CREATES_IN_FLIGHT)))
+        .clone()
+}
+
+/// A create still running in its own task. `done` closes (its sender is
+/// dropped) when the task ends, however it ends; a receiver is cheap to clone,
+/// so a deferred `list` can wait on it without owning the task.
+struct PendingCreate {
+    terminal_id: String,
+    done: watch::Receiver<()>,
+}
+
+impl PendingCreate {
+    fn finished(&self) -> bool {
+        self.done.has_changed().is_err()
+    }
+}
+
+async fn wait_done(mut done: watch::Receiver<()>) {
+    // Never sent on, so this returns only once the sender is dropped.
+    while done.changed().await.is_ok() {}
+}
+
 /// Requests of one connection run strictly in order (the keystroke FIFO), so
 /// this is awaited by the reader. `create` (openpty + process spawn, tens of
-/// ms) runs on the blocking pool: it still holds back later requests of the
-/// same connection — they may target the pane being created — but no longer
-/// parks a runtime worker that other connections' I/O needs.
+/// ms) runs in its own task on the blocking pool, so it never holds back the
+/// other panes' requests on this connection.
 async fn dispatch(
     host: &Arc<Host>,
     client: u64,
     tx: &mpsc::UnboundedSender<Vec<u8>>,
+    creates: &mut Vec<PendingCreate>,
     req: Request,
 ) {
+    // Ops that must observe a pending create wait only for what they need,
+    // never inline for unrelated panes (one slow create would otherwise stall
+    // every pane's acks, writes and resizes until the flow timeout):
+    // `kill`/`attach` wait inline for creates of the SAME id, including their
+    // wait for a create permit (the kill must find the pane it names), and `list` (feeds `reap_orphans`, which must see a
+    // create whose answer timed out) answers from its own task once every
+    // create pending now has finished.
+    creates.retain(|c| !c.finished());
+    match &req.op {
+        Op::Kill { terminal_id } | Op::Attach { terminal_id } => {
+            let same: Vec<_> = creates
+                .iter()
+                .filter(|c| &c.terminal_id == terminal_id)
+                .map(|c| c.done.clone())
+                .collect();
+            for d in same {
+                wait_done(d).await;
+            }
+        }
+        Op::List if !creates.is_empty() => {
+            let pending: Vec<_> = creates.iter().map(|c| c.done.clone()).collect();
+            // The answer may go out after LATER requests ran, so it must not
+            // show panes created after this `list` (the app's reap could
+            // kill one it has not registered yet): only what exists now plus
+            // the creates pending now.
+            let mut allowed: std::collections::HashSet<String> =
+                creates.iter().map(|c| c.terminal_id.clone()).collect();
+            let (h, tx, id) = (host.clone(), tx.clone(), req.id);
+            allowed.extend(h.list().into_iter().map(|t| t.terminal_id));
+            tokio::spawn(async move {
+                for d in pending {
+                    wait_done(d).await;
+                }
+                let terminals: Vec<_> = h
+                    .list()
+                    .into_iter()
+                    .filter(|t| allowed.contains(&t.terminal_id))
+                    .collect();
+                let body = protocol::ok(id, json!({ "terminals": terminals }));
+                let _ = tx.send(frame::encode_json(&body));
+            });
+            return;
+        }
+        _ => {}
+    }
     let id = req.id;
     let answer = |r: Result<serde_json::Value, String>| {
         let body = match r {
@@ -326,11 +406,36 @@ async fn dispatch(
     match req.op {
         Op::Hello { .. } => answer(Err("already-hello".into())),
         Op::Create(spec) => {
+            // Answered from its own task: a create (openpty + process spawn,
+            // tens of ms) must not hold back the connection's other requests
+            // — keystrokes, acks and resizes of every other pane. Requests
+            // for the pane being created cannot overtake it: the app only
+            // addresses a pane after its `spawned` event, which `create`
+            // sends once the entry is in the map. Capped so a workspace
+            // restore cannot fork dozens of shells at once.
             let h = host.clone();
-            let r = tokio::task::spawn_blocking(move || h.create(client, spec))
-                .await
-                .unwrap_or_else(|_| Err("spawn-failed: panic".into()));
-            answer(r.map(|s| serde_json::to_value(s).expect("serialises")))
+            let tx = tx.clone();
+            let permits = create_permits();
+            let (done_tx, done) = watch::channel(());
+            creates.push(PendingCreate {
+                terminal_id: spec.terminal_id.clone(),
+                done,
+            });
+            tokio::spawn(async move {
+                let _done = done_tx;
+                // Never closed, so this cannot fail. The app's create timeout
+                // (10 s) also covers the wait here; at tens of ms per create
+                // that leaves room for well over a hundred queued panes.
+                let _permit = permits.acquire_owned().await.ok();
+                let r = tokio::task::spawn_blocking(move || h.create(client, spec))
+                    .await
+                    .unwrap_or_else(|_| Err("spawn-failed: panic".into()));
+                let body = match r {
+                    Ok(s) => protocol::ok(id, serde_json::to_value(s).expect("serialises")),
+                    Err(reason) => protocol::err(Some(id), &reason),
+                };
+                let _ = tx.send(frame::encode_json(&body));
+            });
         }
         Op::Write { terminal_id, data } => {
             answer(host.write(&terminal_id, data.as_bytes()).map(|_| json!({})))
@@ -385,6 +490,46 @@ async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn pending_create_finishes_when_its_task_ends() {
+        let (done_tx, done) = watch::channel(());
+        let p = PendingCreate {
+            terminal_id: "t".into(),
+            done,
+        };
+        assert!(!p.finished());
+        let waiter = tokio::spawn(wait_done(p.done.clone()));
+        drop(done_tx);
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("wait_done returns once the create ends")
+            .unwrap();
+        assert!(p.finished());
+    }
+
+    /// The dropped-connection case: the connection's list goes away, the
+    /// create task still runs to its end and its answer into the closed
+    /// channel is ignored, without panicking.
+    #[tokio::test]
+    async fn a_create_outlives_its_dropped_connection() {
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (done_tx, done) = watch::channel(());
+        let creates = vec![PendingCreate {
+            terminal_id: "t".into(),
+            done: done.clone(),
+        }];
+        drop(creates);
+        drop(rx);
+        let task = tokio::spawn(async move {
+            let _done = done_tx;
+            let _ = tx.send(vec![1]);
+        });
+        task.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), wait_done(done))
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn pipe_name_is_stable_and_case_insensitive() {

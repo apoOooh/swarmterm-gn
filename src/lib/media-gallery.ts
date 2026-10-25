@@ -19,7 +19,7 @@ export interface MediaItem {
 }
 
 /** Agents re-show the same file while iterating; keep the strip bounded. */
-export const MEDIA_GALLERY_MAX = 100
+export const MEDIA_GALLERY_MAX = 50
 
 export const samePath = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
 

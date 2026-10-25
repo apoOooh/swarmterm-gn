@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { NUDGE_IDLE_MS, TYPING_QUIET_MS } from './war-room-nudge'
+import { MAX_IDLE_HOLD_MS, NUDGE_IDLE_MS, TYPING_QUIET_MS } from './war-room-nudge'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import { useAppStore } from '@/store/app-store'
 import { useWarRoomStore } from '@/store/war-room-store'
@@ -24,11 +24,15 @@ vi.mock('@/lib/terminal-registry', () => ({
   },
   submitTerminalPrompt: (id: string) => {
     events.push({ kind: 'submit', id })
-  }
+  },
+  paneOutputRate: (id: string) => paneRate[id] ?? 0,
+  paneHasPromptDraft: (id: string) => paneDraft[id] ?? false
 }))
+const paneRate: Record<string, number> = {}
+const paneDraft: Record<string, boolean> = {}
 
 // Import AFTER the mock so the wiring binds the mocked delivery fns.
-const { startWarRoomDelivery, SUBMIT_DELAY_MS, HOLD_RECHECK_MS } = await import('./war-room-delivery')
+const { startWarRoomDelivery, requestDeliverNow, SUBMIT_DELAY_MS, HOLD_RECHECK_MS } = await import('./war-room-delivery')
 
 let stop: () => void
 
@@ -44,6 +48,8 @@ beforeEach(() => {
   useTerminalActivityStore.setState({ active: {} })
   useTerminalTypingStore.setState({ lastKeyAt: {}, dirty: {} })
   useAgentStateStore.setState({ byId: {} })
+  for (const k of Object.keys(paneRate)) delete paneRate[k]
+  for (const k of Object.keys(paneDraft)) delete paneDraft[k]
   useAppStore.setState({ workspaces: [], activeWorkspaceId: '' })
   stop = startWarRoomDelivery()
 })
@@ -312,5 +318,121 @@ describe('the focused-and-recent arm (no terminal is focused anywhere else in th
     expect(useWarRoomStore.getState().held['t1']).toBeUndefined()
     expect(events).toHaveLength(1)
     expect(events[0].kind).toBe('body')
+  })
+})
+
+describe('startWarRoomDelivery: real agent panes (busy gate)', () => {
+  const idleAgent = (id: string, nowMs: number): void =>
+    useAgentStateStore.getState().publish(id, 'idle', { paneWatched: true, nowMs })
+
+  /** Drive a pane for `ms`: a 1.5 KB status line every 5 s (active for the
+   *  tracker's 1.1 s afterwards, EWMA rate decaying with tau 1 s) and, while
+   *  `spinner` is on, constant output at 2 KB/s. 100 ms steps. */
+  function drive(id: string, ms: number, opts: { spinner?: boolean; phase?: number } = {}): void {
+    const start = Date.now() - (opts.phase ?? 0)
+    for (let t = 0; t < ms; t += 100) {
+      const since = (Date.now() - start) % 5000
+      const rate = opts.spinner ? 2000 : 1500 * Math.exp(-since / 1000)
+      paneRate[id] = rate
+      useTerminalActivityStore.getState().setActive(id, opts.spinner === true || since < 1100)
+      vi.advanceTimersByTime(100)
+      if (events.length > 0) return
+    }
+  }
+
+  it('silent pane keeps the strict fast path (3 s)', () => {
+    useWarRoomStore.getState().applyEvent(join('room-1', 't1', 1))
+    idleAgent('t1', Date.now())
+    useWarRoomStore.getState().enqueue({ toId: 't1', fromName: 'Codex', mode: 'probe', content: null })
+    vi.advanceTimersByTime(NUDGE_IDLE_MS + 1)
+    expect(events[0]?.kind).toBe('body')
+  })
+
+  it('idle agent with a status line repainting every 5 s gets the nudge within a few seconds', () => {
+    useWarRoomStore.getState().applyEvent(join('room-1', 't1', 1))
+    idleAgent('t1', Date.now() - 60_000)
+    const t0 = Date.now()
+    useWarRoomStore.getState().enqueue({ toId: 't1', fromName: 'Codex', mode: 'probe', content: null })
+    drive('t1', 30_000)
+    expect(events[0]?.kind).toBe('body')
+    // Before the next repaint: the first one (at t0) is waited out, never
+    // the whole timeline.
+    expect(Date.now() - t0).toBeLessThan(5000)
+  })
+
+  it('a repaint landing every 2.5 s (strict countdown never completes) still delivers', () => {
+    useWarRoomStore.getState().applyEvent(join('room-1', 't1', 1))
+    idleAgent('t1', Date.now() - 60_000)
+    useWarRoomStore.getState().enqueue({ toId: 't1', fromName: 'Codex', mode: 'probe', content: null })
+    for (let i = 0; i < 20 && events.length === 0; i++) {
+      paneRate.t1 = 300
+      useTerminalActivityStore.getState().setActive('t1', true)
+      vi.advanceTimersByTime(1100)
+      useTerminalActivityStore.getState().setActive('t1', false)
+      vi.advanceTimersByTime(1400)
+    }
+    expect(events[0]?.kind).toBe('body')
+  })
+
+  it('holds while the agent is working with a spinner, delivers after it goes idle', () => {
+    useWarRoomStore.getState().applyEvent(join('room-1', 't1', 1))
+    useAgentStateStore.getState().publish('t1', 'working', { paneWatched: true, nowMs: Date.now() })
+    useWarRoomStore.getState().enqueue({ toId: 't1', fromName: 'Codex', mode: 'probe', content: null })
+    drive('t1', 30_000, { spinner: true })
+    expect(events).toHaveLength(0)
+    expect(useWarRoomStore.getState().held['t1']).toBe('agent-working')
+    idleAgent('t1', Date.now())
+    drive('t1', 10_000)
+    expect(events[0]?.kind).toBe('body')
+  })
+
+  it('idle-by-detector but constant output: pane-busy hold, then the max-hold valve', () => {
+    useWarRoomStore.getState().applyEvent(join('room-1', 't1', 1))
+    idleAgent('t1', Date.now())
+    const t0 = Date.now()
+    useWarRoomStore.getState().enqueue({ toId: 't1', fromName: 'Codex', mode: 'probe', content: null })
+    drive('t1', 10_000, { spinner: true })
+    expect(events).toHaveLength(0)
+    expect(useWarRoomStore.getState().held['t1']).toBe('pane-busy')
+    drive('t1', 30_000, { spinner: true })
+    expect(events[0]?.kind).toBe('body')
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(MAX_IDLE_HOLD_MS)
+    expect(Date.now() - t0).toBeLessThan(MAX_IDLE_HOLD_MS + HOLD_RECHECK_MS + 200)
+  })
+
+  it('"Deliver now" on a pane-busy hold delivers at once', () => {
+    useWarRoomStore.getState().applyEvent(join('room-1', 't1', 1))
+    idleAgent('t1', Date.now())
+    useWarRoomStore.getState().enqueue({ toId: 't1', fromName: 'Codex', mode: 'probe', content: null })
+    drive('t1', 5_000, { spinner: true })
+    expect(useWarRoomStore.getState().held['t1']).toBe('pane-busy')
+    requestDeliverNow('t1')
+    vi.advanceTimersByTime(1)
+    expect(events[0]?.kind).toBe('body')
+  })
+
+  it('never types into a blocked pane, not even after the valve time', () => {
+    useWarRoomStore.getState().applyEvent(join('room-1', 't1', 1))
+    useAgentStateStore.getState().publish('t1', 'blocked', { paneWatched: true, nowMs: Date.now() })
+    useWarRoomStore.getState().enqueue({ toId: 't1', fromName: 'Codex', mode: 'execute', content: 'x' })
+    drive('t1', MAX_IDLE_HOLD_MS * 3)
+    requestDeliverNow('t1')
+    vi.advanceTimersByTime(NUDGE_IDLE_MS * 3)
+    expect(events).toHaveLength(0)
+    expect(useWarRoomStore.getState().held['t1']).toBe('agent-blocked')
+  })
+
+  it('an unsent draft in the input box holds (also quiet panes) until it is cleared', () => {
+    useWarRoomStore.getState().applyEvent(join('room-1', 't1', 1))
+    idleAgent('t1', Date.now() - 60_000)
+    paneDraft.t1 = true
+    useWarRoomStore.getState().enqueue({ toId: 't1', fromName: 'Codex', mode: 'probe', content: null })
+    drive('t1', MAX_IDLE_HOLD_MS * 2)
+    vi.advanceTimersByTime(NUDGE_IDLE_MS * 2)
+    expect(events).toHaveLength(0)
+    expect(useWarRoomStore.getState().held['t1']).toBe('draft')
+    paneDraft.t1 = false
+    vi.advanceTimersByTime(HOLD_RECHECK_MS + 2)
+    expect(events[0]?.kind).toBe('body')
   })
 })

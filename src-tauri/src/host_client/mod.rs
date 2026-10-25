@@ -94,7 +94,7 @@ impl HostHub {
         if !self.enabled() {
             return None;
         }
-        let mut slot = self.client.lock().unwrap();
+        let mut slot = crate::prof::lock("lock.host_hub.client", &self.client);
         if let Some(c) = slot.as_ref().filter(|c| c.conn.is_alive()) {
             return Some(c.clone());
         }
@@ -565,9 +565,9 @@ pub fn init(app: &AppHandle) {
     {
         let app = app.clone();
         if hub.enabled() {
-            std::thread::spawn(move || boot(&app));
+            crate::prof::spawn_named("host-boot", move || boot(&app));
         } else {
-            std::thread::spawn(move || sweep(&app));
+            crate::prof::spawn_named("host-sweep", move || sweep(&app));
         }
     }
     #[cfg(not(windows))]

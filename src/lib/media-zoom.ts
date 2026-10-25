@@ -47,10 +47,15 @@ export function wheelFactor(e: { deltaY: number; deltaMode: number; ctrlKey: boo
   return Math.exp(-wheelPixels(e, pageHeight) * (e.ctrlKey ? 0.01 : 0.002))
 }
 
-/** How far the image may move from centre: only by its overhang beyond the container. */
+/**
+ * How far the image may move from centre. Larger than the container: only by
+ * its overhang, so it always covers the panel on that axis. Smaller: anywhere
+ * inside the panel, so a zoomed-out image can still be moved but never ends
+ * up (partly) off-screen.
+ */
 export function clampPan(v: View, layout: Size, container: Size): View {
-  const ox = Math.max(0, (v.s * layout.width - container.width) / 2)
-  const oy = Math.max(0, (v.s * layout.height - container.height) / 2)
+  const ox = Math.abs(v.s * layout.width - container.width) / 2
+  const oy = Math.abs(v.s * layout.height - container.height) / 2
   // `|| 0` folds -0 into 0.
   return { s: v.s, tx: clamp(v.tx, -ox, ox) || 0, ty: clamp(v.ty, -oy, oy) || 0 }
 }

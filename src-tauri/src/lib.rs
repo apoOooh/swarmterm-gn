@@ -3,6 +3,7 @@ mod accounts;
 mod agent_process;
 mod agents;
 mod analytics;
+mod child_priority;
 mod clipboard_media;
 mod commands;
 mod dev_defer;
@@ -17,6 +18,7 @@ mod marked_media;
 mod mcp;
 mod paste_image;
 mod preview;
+mod prof;
 mod pty;
 mod routine_cmd;
 mod sessions;
@@ -38,6 +40,8 @@ use tauri::WindowEvent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(feature = "profiling")]
+    install_named_runtime();
     tauri::Builder::default()
         .manage(AppState::default())
         .manage(host_client::HostHub::default())
@@ -66,6 +70,9 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            crate::prof::start(app.handle());
+            app.manage(child_priority::ChildPriority::default());
+            child_priority::start(app.handle().clone());
             app.manage(std::sync::Arc::new(files::FileService::new(
                 app.path().app_data_dir()?.join("local-history"),
             )));
@@ -162,6 +169,7 @@ pub fn run() {
             commands::media_check_detected,
             commands::media_open,
             commands::clipboard_media_set_enabled,
+            commands::child_priority_set,
             commands::media_save_marked,
             commands::media_read_opened_image,
             commands::files_unwatch,
@@ -255,6 +263,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
+                crate::prof::dump("exit");
                 crate::mcp::shutdown();
                 // Clipboard images are private: delete our PNGs on every exit.
                 #[cfg(windows)]
@@ -287,3 +296,18 @@ fn voice_speech_hub() -> voice::speech::SpeechHub {
 
 #[cfg(not(windows))]
 fn voice_speech_hub() {}
+
+/// Profiling builds only: the same multi-thread runtime Tauri would create,
+/// but with named workers so samply/WPA stacks group as `tokio-rt`.
+#[cfg(feature = "profiling")]
+fn install_named_runtime() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("tokio-rt")
+        .build()
+        .expect("tokio runtime");
+    let handle = rt.handle().clone();
+    // Tauri only borrows a handle; the runtime must outlive the app.
+    Box::leak(Box::new(rt));
+    tauri::async_runtime::set(handle);
+}

@@ -51,10 +51,18 @@ describe('media-zoom', () => {
     expect(viewTransform(v)).toBe('translate(50px, -20px) scale(2)')
   })
 
-  it('pan is limited to the overhang and centred when the image fits', () => {
+  it('pan is limited to the overhang, or to the panel when the image fits', () => {
     const layout = { width: 400, height: 200 }
     const container = { width: 500, height: 300 }
-    expect(clampPan({ s: 1, tx: 80, ty: -40 }, layout, container)).toEqual({ s: 1, tx: 0, ty: 0 })
+    // Fits: free inside the panel (50 / 50 of room), never past its edge.
+    expect(clampPan({ s: 1, tx: 40, ty: -40 }, layout, container)).toEqual({ s: 1, tx: 40, ty: -40 })
+    expect(clampPan({ s: 1, tx: 80, ty: -80 }, layout, container)).toEqual({ s: 1, tx: 50, ty: -50 })
+    // Zoomed out to 200x100: 150 / 100 of room.
+    expect(clampPan({ s: 0.5, tx: -999, ty: 999 }, layout, container)).toEqual({ s: 0.5, tx: -150, ty: 100 })
+    // Mixed: 600x150 is wider than the panel (overhang 50) but lower (room 75).
+    expect(clampPan({ s: 1.5, tx: 999, ty: 999 }, { width: 400, height: 100 }, container)).toEqual({ s: 1.5, tx: 50, ty: 75 })
+    // Exactly fitting axis: centred.
+    expect(clampPan({ s: 1, tx: 9, ty: 9 }, { width: 500, height: 200 }, container)).toEqual({ s: 1, tx: 0, ty: 9 })
     // s=2: 800x400 in 500x300 -> overhang 150 / 50.
     expect(clampPan({ s: 2, tx: 999, ty: -999 }, layout, container)).toEqual({ s: 2, tx: 150, ty: -50 })
   })

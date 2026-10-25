@@ -595,7 +595,7 @@ has never run Swarmterm from source. Details in
       or "damaged" dialog.
 - [ ] A terminal pane spawns and runs `ls`; a split pane spawns a second shell.
 - [ ] The web preview column loads `https://github.com`.
-- [ ] `echo $SWARMTERM_MCP_URL` inside a pane prints a loopback URL.
+- [ ] `echo $SWARMTERM_MCP_URL` inside a pane prints a loopback URL (a pane opened within ~10 s of a restart, while the previous MCP port is awaited, may print nothing: known limit, user guide).
 - [ ] A War Room message reaches a second pane.
 - [ ] Prompts for Desktop/Documents/Downloads access name Swarmterm and carry a
       readable explanation (the `Info.plist` usage strings).
@@ -734,3 +734,12 @@ It restores previous shortcut settings and removes only its own workspaces.
       "Transcribing…", the sentence arrives as a draft (no Enter).
 - [ ] Start again, click the pill's Stop: nothing is typed.
 - [ ] Windows microphone access off for desktop apps: the bell reports "no microphone available".
+
+## Lower build priority
+
+- [ ] Agent pane: let the agent run `cargo build -j 8`; Task Manager → Details → Base priority shows
+      cargo/rustc "Below normal", the agent CLI, its shell and Swarmterm "Normal". Typing in another pane stays smooth.
+- [ ] Terminal pane: `cargo build` directly in the shell → cargo is "Below normal", the shell "Normal".
+- [ ] Workspace ⋮ → untick **Lower build priority**, start a new build there → "Normal".
+      Reopen the saved workspace: still unticked.
+- [ ] Settings → Terminal → Responsiveness: switch off → new builds in every workspace stay "Normal".

@@ -21,9 +21,11 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// Park the flusher above this many unacked bytes.
-pub const FLOW_HIGH: u64 = 512 * 1024;
-/// Resume once the renderer acked down to this.
-pub const FLOW_LOW: u64 = 128 * 1024;
+pub const FLOW_HIGH: u64 = 2048 * 1024;
+/// Resume once the renderer acked down to this. The renderer acks in
+/// `ACK_CHUNK` steps (`src/lib/output-ack.ts`, 256 KB) and keeps less than one
+/// chunk unacked, so this must stay at least twice that chunk.
+pub const FLOW_LOW: u64 = 512 * 1024;
 /// No ack for this long while parked = the renderer is gone or stuck.
 pub const FLOW_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 /// Reader → flusher queue depth, in reads (each up to `READ_BUF_BYTES`).
@@ -34,10 +36,15 @@ pub const READ_QUEUE_DEPTH: usize = 4;
 #[derive(Debug)]
 struct State {
     unacked: u64,
-    /// Opened by a timeout or `release`; the next ack closes it again.
+    /// Opened by a timeout (the next ack closes it) or by `release` (stays
+    /// open until `reset`, see `released`).
     open: bool,
     /// Generation over: never park again.
     closed: bool,
+    /// The acking renderer is gone (`release`): acks that were still in
+    /// flight (acks and releases are async commands, so one can land after
+    /// the release) must not close the gate again. Cleared by `reset`.
+    released: bool,
     last_ack: Instant,
     bypassed: u64,
 }
@@ -62,6 +69,7 @@ impl FlowGate {
                 unacked: 0,
                 open: false,
                 closed: false,
+                released: false,
                 last_ack: Instant::now(),
                 bypassed: 0,
             }),
@@ -82,6 +90,9 @@ impl FlowGate {
     /// The renderer parsed `n` more bytes.
     pub fn ack(&self, n: u64) {
         let mut s = self.st.lock().unwrap();
+        if s.released {
+            return;
+        }
         s.unacked = s.unacked.saturating_sub(n);
         s.last_ack = Instant::now();
         s.open = false;
@@ -116,6 +127,7 @@ impl FlowGate {
         let mut s = self.st.lock().unwrap();
         s.unacked = 0;
         s.open = false;
+        s.released = false;
         s.last_ack = Instant::now();
         drop(s);
         self.cv.notify_all();
@@ -127,6 +139,7 @@ impl FlowGate {
         let mut s = self.st.lock().unwrap();
         s.unacked = 0;
         s.open = true;
+        s.released = true;
         drop(s);
         self.cv.notify_all();
     }
@@ -164,10 +177,23 @@ mod tests {
         assert!(t.elapsed() < Duration::from_millis(500));
     }
 
+    /// The renderer's `ACK_CHUNK` (src/lib/output-ack.ts, 256 KB; its test
+    /// pins that value) leaves less than one chunk unacked, so LOW must be at
+    /// least two chunks or a parked gate waits for the no-ack timeout.
+    const _: () = {
+        const RENDERER_ACK_CHUNK: u64 = 256 * 1024;
+        assert!(FLOW_LOW >= 2 * RENDERER_ACK_CHUNK);
+        assert!(FLOW_HIGH > FLOW_LOW);
+    };
+
     #[test]
     fn parks_above_high_and_resumes_only_below_low() {
         let g = Arc::new(FlowGate::with_timeout(Duration::from_secs(60)));
-        g.sent(600 * KB);
+        // Parked above HIGH; one ack lands between LOW and HIGH, the next below LOW.
+        let above_high = FLOW_HIGH as usize + 88 * KB;
+        let between = FLOW_LOW + 104 * KB as u64;
+        let below_low = FLOW_LOW - 24 * KB as u64;
+        g.sent(above_high);
         let (done_tx, done) = std::sync::mpsc::channel();
         let g2 = g.clone();
         std::thread::spawn(move || {
@@ -176,18 +202,18 @@ mod tests {
         });
         // Let it park first (an ack before `wait` would skip the gate).
         assert!(done.recv_timeout(Duration::from_millis(150)).is_err());
-        // Down to 200 KB: under HIGH but above LOW, still parked (hysteresis).
-        g.ack(400 * KB as u64);
+        // Down to `between`: under HIGH but above LOW, still parked (hysteresis).
+        g.ack(above_high as u64 - between);
         assert!(done.recv_timeout(Duration::from_millis(150)).is_err());
-        g.ack(100 * KB as u64);
+        g.ack(between - below_low);
         done.recv_timeout(Duration::from_secs(5)).expect("resumed");
-        assert_eq!(g.unacked(), 100 * KB as u64);
+        assert_eq!(g.unacked(), below_low);
     }
 
     #[test]
     fn no_ack_opens_the_gate_after_the_timeout() {
         let g = FlowGate::with_timeout(Duration::from_millis(100));
-        g.sent(1024 * KB);
+        g.sent(2 * FLOW_HIGH as usize);
         let t = Instant::now();
         g.wait();
         assert!(t.elapsed() >= Duration::from_millis(100));
@@ -248,5 +274,23 @@ mod tests {
         let t = Instant::now();
         g.wait();
         assert!(t.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn late_ack_after_release_keeps_the_gate_open() {
+        let g = FlowGate::with_timeout(Duration::from_secs(60));
+        g.sent(1024 * KB);
+        g.release();
+        // An ack that was in flight when the renderer went away.
+        g.ack(64 * KB as u64);
+        g.sent(4096 * KB);
+        let t = Instant::now();
+        g.wait();
+        assert!(t.elapsed() < Duration::from_millis(500));
+        // A new reader re-arms the gate and its acks count again.
+        g.reset();
+        g.sent(1024 * KB);
+        g.ack(512 * KB as u64);
+        assert_eq!(g.unacked(), 512 * KB as u64);
     }
 }

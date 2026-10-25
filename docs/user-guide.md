@@ -137,15 +137,20 @@ explicit buttons available for media; previewing a file does not execute it.
 
 **Media panel.** The right panel's **Media** tab lets you look at images and
 videos that come up while you work: a large viewer on top and a strip below,
-newest first, with each file's name, source pane and time. It is a viewer for
+newest first, with each file's name, source pane and time. The strip keeps the
+last 50 files and scrolls sideways: use the mouse wheel over it, its scrollbar,
+the ‹ › buttons at its ends, or the arrow keys once it has focus (Tab); the
+shown file is scrolled into view. It is a viewer for
 you only. Agents get no tool for it, cannot open it or put anything into it,
 and nothing in it is passed to an agent. The list is not saved when Swarmterm
 closes.
 
 Swarmterm notices media paths a pane prints: absolute paths
 (`C:\...\shot.png`, spaces included), quoted paths and paths relative to the
-pane's starting folder. If such a file exists, its **name** joins the Media
-strip with a placeholder icon, and the pane shows a **N new images/videos** pill
+pane's starting folder, also inside tables whose cells the agent wrapped over
+several lines (such as Claude Code's bordered tables). If such a file exists,
+its **name** joins the Media strip with a placeholder icon, and the pane shows
+a **N new images/videos** pill
 in its top-right corner. Swarmterm does not load the file until you open it:
 click the pill (opens the newest), the strip item, the popup item, or
 Ctrl+click the path in the terminal. Only then is that one file shown. Ctrl+click
@@ -173,8 +178,10 @@ placeholder icon instead of a thumbnail.
 **Zoom an image.** With the pointer over an image in the Media tab (or an
 image opened as a file, or while annotating), the mouse wheel zooms in and out
 around the pointer, from 10% to 2000% of the image's real size; a touchpad
-pinch works too. Scrolling anywhere else, such as over the thumbnail strip,
-scrolls as usual. When zoomed in, drag the image to move it; while annotating,
+pinch works too. Scrolling anywhere else scrolls as usual (over the thumbnail
+strip, sideways). Drag the image to move it, at any zoom level: a larger image
+always covers the panel, a smaller one moves freely but stays inside it, so an
+image can never be pushed out of sight. While annotating,
 drag with the middle mouse button or hold Space and drag, so the pen keeps the
 left button (Space is taken only while the pointer is over the image). The
 corner control shows the zoom level: **Fit** (or a double-click on the image
@@ -359,7 +366,11 @@ Agents talk in two modes:
 
 You are a member too — the **Moderator**. The composer at the bottom of the Discussion tab sends to one agent or the whole room, in either mode; replies land in the transcript instead of someone's terminal.
 
-Deliveries never interrupt you: if the target pane has a half-typed — or pasted but not yet sent — command, the message is **held** — a pill in the pane, `⏸N` on the room tab — retries by itself once the pane is free, and "Deliver now" releases it immediately. The same hold applies while the agent is still working or is waiting on a permission/question prompt (so a delivery can never answer a prompt for you); those holds release on their own once the agent is idle and have no "Deliver now". Held messages are never dropped.
+**Mentions:** type `@` in the composer to reference a pane. A list offers the room's members first, then every other open pane you gave a name (unnamed panes are not listed), filtered as you type — `↑`/`↓` pick, `Enter` or `Tab` inserts the highlighted (best) match, `Esc` closes the list, and `Enter` sends as usual once the list is closed or empty. Picking is optional; you can just keep typing. Names with spaces are written quoted, `@"My pane"`. `@everyone` is always offered first.
+
+Mentions decide who gets the message, shown as **To:** above the box: `@reviewer @developer please check X` goes to exactly those two (once each, full text including the mentions), and `@everyone` anywhere goes to the whole room, as do messages without a mention, which still follow the target picker. A mention that is not a member of the room (an unknown name, or a pane outside the War Room, which the list greys out as *not in War Room*) blocks the whole message with an explanation, and your text stays in the box; nothing is ever half-sent or broadcast instead. `@` only counts at the start or after a space, and not inside `` `code` ``. In the transcript a mention is a chip that jumps to the pane; one that no longer matches an open pane is shown greyed.
+
+Deliveries never interrupt you: if the target pane has a half-typed — or pasted but not yet sent — command, the message is **held** — a pill in the pane, `⏸N` on the room tab — retries by itself once the pane is free, and "Deliver now" releases it immediately. The same hold applies while the agent is still working or is waiting on a permission/question prompt (so a delivery can never answer a prompt for you); those holds release on their own once the agent is idle and have no "Deliver now". A message also waits while the agent's input box holds unsent text you typed there (no "Deliver now"; send or clear the draft), and while the pane is still printing output, where "Deliver now" sends it anyway and it goes out by itself once the agent has been idle and the message has waited for 20 seconds each. The ⏸ badge says which of these is holding it. Held messages are never dropped.
 
 No setup is needed: Claude Code, Codex, OpenCode and Qwen Code panes connect to Swarmterm when the agent starts, so a dragged-in agent is ready immediately. Each member chip — and a dot in the pane header — shows **connected**, **waiting** (the agent is still starting) or an error with the reason when the pane has not reached Swarmterm after 15 seconds, for example a plain shell, an agent Swarmterm cannot configure, or a switched-off profile in **Settings → MCP**. An agent can re-read messages it already consumed with `war_room.read_inbox` and `includeRead`. A message is limited to 64k characters. An unread inbox keeps at most 200 messages; if more arrive, the oldest are dropped and the next `read_inbox` says how many were lost.
 
@@ -443,7 +454,7 @@ Click into a pane and press **Ctrl+Shift+Space** (or the microphone in the pane 
 - **Drop a file or folder** onto a pane — from your OS file manager or from **Files** (several selected entries at once) — to insert its path, quoted for that pane's shell. While dragging from **Files** a label follows the pointer and the cursor shows what a release does: insert into a terminal, move into a folder (hold `Ctrl` to copy), or nothing; `Esc` cancels. Dragged from **Files** onto a Claude Code pane, entries become `@` mentions relative to the pane's folder (`@src/foo.ts`), so Claude attaches them; paths with spaces stay quoted.
 - **Zoom the text with `Ctrl` + mouse wheel** over a terminal (shell or agent CLI): scroll up for bigger, down for smaller (8–32 px). Settings → Terminal → *Ctrl + scroll zoom* picks whether only the pane under the mouse changes (default; the pane keeps its zoom on top of the global size until the app restarts), all panes change (moves the global *Size*, saved), or nothing. `Ctrl + 0` in the focused pane resets the zoom (global mode: back to 13 px).
 - **Scrollback** (Settings → Terminal) sets how many lines each pane keeps (default 5,000). Memory grows with it in every pane: roughly 12 bytes per cell, so 5,000 lines of a 200-column pane are about 12 MB and the maximum of 50,000 about 120 MB. Lowering it trims every open pane at once.
-- **GPU rendering follows visibility.** A pane draws with WebGL only while it is on screen; panes in hidden workspaces, in the drawer or behind a zoomed pane release their GPU context and texture cache, and get it back when shown. At most 12 panes hold one at a time; past that, the pane shown or focused longest ago falls back to the slower DOM renderer until it is hidden and shown again.
+- **GPU rendering.** Every pane draws with WebGL from the moment it opens and keeps its GPU context while hidden (other workspaces, the drawer, behind a zoomed pane), so switching back is instant. The trade-off is GPU memory: up to 16 panes hold a context at once, also hidden ones. Opening a 17th pane moves the oldest one to the slower DOM renderer. A pane whose GPU context is lost stays on the DOM renderer. With 8 or more panes visible and at least 4 of them flooding output (over 64 KB/s for 3 s), the flooding panes switch to the DOM renderer to keep the window smooth, and switch back once they calm down (below 32 KB/s for 3 s).
 - **Choose your shell** — PowerShell, cmd, PowerShell 7 or Git Bash — per pane, or as a default in Settings.
 
 ## Shell integration
@@ -504,6 +515,17 @@ if ($env:SWARMTERM_SESSION) {
 ```
 
 The marks are `A` (prompt drawn), `C` (command started) and `D;<exit>` (command ended); `B` (end of prompt) is optional and omitted above. The very first prompt's `D` is ignored, and a machine you `ssh` into without the snippet simply sends nothing until you are back.
+
+### Builds don't freeze your panes
+
+A CPU-heavy build started by an agent (for example `cargo build` with dozens of jobs) used to compete with Swarmterm, the console and the agent itself, so typing and the agent's menus stalled. Swarmterm now runs everything an agent starts at **below-normal** CPU priority: builds still use every idle core, but your keystrokes and the agent come first. Swarmterm, the shell and the agent itself keep normal priority; nothing is raised.
+
+- Below a recognised agent CLI (Claude, Codex, Cursor, …) every process is lowered.
+- In a plain Terminal pane (or before an agent has started) shells and script hosts such as `node`, `cmd`, `pwsh`, `python` and `bash` keep normal priority, because an agent may be running inside one of them; the first other program and everything it starts are lowered (`cargo`, `msbuild`, compilers). A heavy `python` or `node` script typed straight into the shell therefore keeps normal priority, while the tools it starts are lowered. Interactive programs (`ssh`, `vim`, `nvim`, `less`, `nano`) also keep normal priority; other programs you start by hand, such as `git`, run below normal like a build.
+- Processes you set to a higher priority yourself, or that are already below normal or idle, are left alone.
+- Windows passes the lowered priority on to everything a lowered process starts later.
+
+Switch it off in **Settings → Terminal → Responsiveness → Lower build priority**, or for one workspace from its **⋮** menu (**Lower build priority**, checked = on; the opt-out is saved with the workspace). Switching off only stops lowering new processes; ones already lowered keep their priority until they exit.
 
 ## Settings, tray and quitting
 
@@ -637,6 +659,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **Built-in speech recognition runs on the CPU only** — no GPU acceleration yet; larger models (Small, Large v3 Turbo) take several seconds per sentence. One dictation runs at a time, and a recording stops after two minutes.
 - **Hosted panes survive a crash, not a quit** — Quit still closes every pane, and if the host process itself ends, its panes end like an exited shell. Only panes of saved workspaces can be taken over; a running pane of a saved workspace that does not open on startup keeps running unseen until you open that workspace.
 - **What a taken-over pane loses** — its War Room membership (drag it in again) and a dictation that was in progress. If another program took Swarmterm's previous connection port in the meantime, the agent in it shows `mcp offline` until it restarts — and keeps sending its pane token to that program, which could use it to act as that pane toward Swarmterm. Only a program running under your own account can do this.
+- **Panes opened in the first seconds after a restart may start without MCP** — on startup Swarmterm waits up to 10 s for its previous connection port to become free (so agents in taken-over panes reconnect). A pane created during that wait starts without `SWARMTERM_MCP_URL`, so its agent has no Swarmterm tools (War Room, preview); restart that pane once Swarmterm is up.
 - **Claude Code's cursor can lag after a resize** — Claude draws its own cursor block and only redraws it on the next keystroke, so right after dragging a window or pane edge the old block may stay visible. Output and prompt are correct; press any key to refresh.
 
 ## Astera themes

@@ -1,5 +1,5 @@
 /**
- * Wheel zoom + drag pan for an image in the Media viewer / annotate view.
+ * Wheel zoom + drag pan (at any zoom) for an image in the Media viewer / annotate view.
  * Math is in lib/media-zoom.ts. Rules that are easy to break:
  * - The wheel is claimed (non-passive, preventDefault) only while the pointer
  *   is over the image itself; anywhere else scrolling behaves normally.
@@ -59,7 +59,7 @@ export function useZoomPan({ container, img, extra, enabled, mode, resetKey, onC
     return {
       rect: r, layout, ratio: ratio_,
       bounds: scaleBounds(ratio_),
-      container: { width: box.clientWidth, height: box.clientHeight },
+      container: contentBox(box),
       // Layout centre = transformed centre minus the applied translation (scale is about the centre).
       centre: { x: r.left + r.width / 2 - a.tx, y: r.top + r.height / 2 - a.ty },
     }
@@ -74,7 +74,8 @@ export function useZoomPan({ container, img, extra, enabled, mode, resetKey, onC
       const t = v === FIT_VIEW || (v.s === 1 && v.tx === 0 && v.ty === 0) ? '' : viewTransform(v)
       for (const el of [img.current, extra?.current]) if (el) el.style.transform = t
       if (label.current) label.current.textContent = ratio.current > 0 ? `${Math.round(v.s * ratio.current * 100)}%` : ''
-      if (img.current && mode === 'view') img.current.style.cursor = v.s > 1 ? 'grab' : ''
+      // Panning works at every zoom (also zoomed out), so the cursor always says so.
+      if (img.current && mode === 'view') img.current.style.cursor = 'grab'
       onChangeRef.current?.(v)
     })
   }, [img, extra, mode])
@@ -117,7 +118,8 @@ export function useZoomPan({ container, img, extra, enabled, mode, resetKey, onC
     const wantsPan = (e: PointerEvent | MouseEvent): boolean => {
       if (!over(e.clientX, e.clientY)) return false
       if (mode === 'annotate') return e.button === 1 || (e.button === 0 && space)
-      return e.button === 0 && view.current.s > 1
+      // Not only when zoomed in: a zoomed-out image must stay movable too.
+      return e.button === 0
     }
     const onMouseDown = (e: MouseEvent): void => {
       // Middle button would start Chromium's autoscroll; a pan press must not move focus.
@@ -131,6 +133,8 @@ export function useZoomPan({ container, img, extra, enabled, mode, resetKey, onC
       box.setPointerCapture(e.pointerId)
       drag = { id: e.pointerId, x: e.clientX, y: e.clientY }
       box.style.cursor = 'grabbing'
+      // The image's own `grab` would win over the container's while dragging.
+      if (mode === 'view' && img.current) img.current.style.cursor = 'grabbing'
     }
     const onMove = (e: PointerEvent): void => {
       pointer = { x: e.clientX, y: e.clientY }
@@ -146,6 +150,7 @@ export function useZoomPan({ container, img, extra, enabled, mode, resetKey, onC
       e.stopPropagation()
       drag = null
       box.style.cursor = space ? 'grab' : ''
+      if (mode === 'view' && img.current) img.current.style.cursor = 'grab'
       if (box.hasPointerCapture(e.pointerId)) box.releasePointerCapture(e.pointerId)
     }
     const onDbl = (e: MouseEvent): void => {
@@ -194,6 +199,17 @@ export function useZoomPan({ container, img, extra, enabled, mode, resetKey, onC
   }, [container, img, enabled, mode, metrics, set, fit, resetKey])
 
   return { view, fit, actual, label }
+}
+
+/**
+ * The area the image is centred in: the container minus its padding (the
+ * viewer's `p-2`/`p-4`), so a clamped pan keeps the image inside what is seen.
+ */
+function contentBox(box: HTMLElement): { width: number; height: number } {
+  const cs = getComputedStyle(box)
+  const px = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+  const py = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+  return { width: Math.max(0, box.clientWidth - px), height: Math.max(0, box.clientHeight - py) }
 }
 
 const swallow = (e: { preventDefault: () => void }): void => e.preventDefault()

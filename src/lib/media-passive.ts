@@ -24,7 +24,7 @@ export const SCAN_INTERVAL_MS = 400
 export const MAX_PENDING_BYTES = 256 * 1024
 
 interface ScanState {
-  chunks: Uint8Array[]
+  chunks: (Uint8Array | string)[]
   bytes: number
   /** Streaming, so a UTF-8 sequence split across chunks decodes intact. */
   decoder: TextDecoder
@@ -47,7 +47,13 @@ export function paneSourceLabel(terminalId: string): string {
 function scan(terminalId: string, state: ScanState): void {
   state.timer = null
   const quiet = state.chunks.length === 0
-  for (const chunk of state.chunks) state.buffer.append(state.decoder.decode(chunk, { stream: true }))
+  for (const chunk of state.chunks) {
+    // Small batches arrive as strings (already decoded, whole UTF-8
+    // sequences). Flush the decoder first so bytes it still holds from a
+    // split sequence land before the string, not after it.
+    if (typeof chunk === 'string') state.buffer.append(state.decoder.decode() + chunk)
+    else state.buffer.append(state.decoder.decode(chunk, { stream: true }))
+  }
   state.chunks = []
   state.bytes = 0
   // Lines are scanned once complete; a partial last line (a TUI redraw or the
@@ -79,24 +85,29 @@ function scan(terminalId: string, state: ScanState): void {
 }
 
 /** Called for every decoded pty chunk of a live pane (not for replayed history). */
-export function noteMediaOutput(terminalId: string, data: Uint8Array): void {
+export function noteMediaOutput(terminalId: string, data: Uint8Array | string): void {
   let state = states.get(terminalId)
   if (!state) {
     state = { chunks: [], bytes: 0, decoder: new TextDecoder(), buffer: new MediaOutputBuffer(), seen: new SeenPaths(), timer: null }
     states.set(terminalId, state)
   }
   state.chunks.push(data)
-  state.bytes += data.byteLength
+  state.bytes += chunkSize(data)
   // Rare (a >256 KB burst within one interval): drop the oldest chunks. Lines
   // cut this way may be missed, and a fresh decoder avoids a stale split.
   while (state.bytes > MAX_PENDING_BYTES && state.chunks.length > 1) {
-    state.bytes -= state.chunks.shift()!.byteLength
+    state.bytes -= chunkSize(state.chunks.shift()!)
     state.decoder = new TextDecoder()
   }
   if (state.timer === null) {
     const s = state
     s.timer = setTimeout(() => scan(terminalId, s), SCAN_INTERVAL_MS)
   }
+}
+
+/** UTF-16 length for strings: a cheap cap estimate, no encode on the hot path. */
+function chunkSize(chunk: Uint8Array | string): number {
+  return typeof chunk === 'string' ? chunk.length : chunk.byteLength
 }
 
 export function forgetMediaOutput(terminalId: string): void {

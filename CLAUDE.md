@@ -210,7 +210,20 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   while focused. A held queue is never dropped — it re-arms every
   `HOLD_RECHECK_MS`, shows an in-pane pill plus a panel badge, and both
   "Deliver now" affordances release it by clearing the typing signal rather
-  than bypassing the scheduler. There is deliberately no maximum hold.
+  than bypassing the scheduler. There is deliberately no maximum hold for
+  blocked/working/typing, nor for `draft` (Claude Code input box shows
+  unsent non-dim text, read from the screen at flush time, `prompt-draft.ts`).
+  A pane that keeps printing is not held forever: `busyPaneReady` releases
+  it once the detector says idle (1.5 s dwell) and the smoothed output rate
+  (renderer-policy EWMA) is below 512 B/s, or after 20 s idle anyway; the
+  `pane-busy` hold's "Deliver now" waives only that output gate.
+- **War Room @-mentions.** `src/lib/war-room-mentions.ts` (pure: candidates,
+  ranking, `@name` / `@"quoted name"` tokens, parsing a sent message back into
+  spans) and `war-room-mention-routing.ts` (who a composer message goes to: no
+  mention = the picker's target unchanged, `@everyone` = one broadcast,
+  otherwise one send per mentioned member; any unresolved mention blocks the
+  whole send, never a partial one). `components/WarRoom/MentionPopup.tsx` only
+  wires the caret and the store to them.
 - **Worktree-per-agent.** The composer's "Isolate features in git worktrees"
   toggle now provisions isolation upfront: every agent pane is created inside
   its own `<repo>.worktrees/<slug>` worktree on branch `swarm/<agent>-<n>`
@@ -428,8 +441,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   pruning folders; git metadata watches and explicitly requested files pass
   regardless. notify 8 drops a ReadDirectoryChangesW buffer overflow
   silently, so a burst (`RESCAN_BURST` raw events) enters storm mode
-  (`Storm`: later batches are skipped, not filtered) and one trailing
-  `rescan` change goes out after `RESCAN_QUIET`; the thread (`pump`) blocks on
+  (`Storm`: a leading `rescan`, then the seen paths at most every
+  `STORM_EMIT` so latency stays bounded in a continuous storm, and one
+  trailing `rescan` after `RESCAN_QUIET`); the thread (`pump`) blocks on
   one `Msg` channel (events, extra files, `Stop`) with no idle tick; the explorer then reloads every
   loaded folder and documents re-check disk. Only the root itself stays
   non-renameable (user-guide Known limits).
@@ -482,6 +496,18 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   returned by hello).
   `input.rs`, `job.rs` and `output.rs` are copies of `pty.rs` parts until
   the in-process backend goes away: change both or neither.
+- **Child process priority.** `src-tauri/src/child_priority.rs` lowers
+  every process below a pane's agent (builds, compilers) to BelowNormal so a
+  `cargo -j32` cannot starve the UI; Swarmterm and the agent are never raised
+  or lowered. Pure rule in `plan`; launchers stay Normal outside a recognised
+  agent. Driven by Settings → Terminal "Lower build priority"
+  (`build-priority-store`) plus a per-workspace opt-out (navbar), merged in
+  `src/lib/build-priority.ts` and pushed via `child_priority_set`. Turning it
+  off does not raise processes already lowered.
+- **`profiling` Cargo feature (dev only).** `prof.rs` spans/counters/lock
+  timers compile to the plain operation without it, so normal and A/B builds
+  are unchanged; never enable it in a release. Use it via
+  `scripts/perf/flood.ps1 -Profile` and `docs/perf-profiling.md`.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that

@@ -15,6 +15,7 @@ pwsh scripts/perf/flood.ps1 -Scenario d -Repeat 3     # agents: 15 synthetic age
 pwsh scripts/perf/flood.ps1 -Scenario d -MockAgents   # same, as perf-mock-agent panes (detector, badges, renders)
 pwsh scripts/perf/flood.ps1 -Scenario e -AgentSeconds 60   # War Room: wait_peer resolve latency
 pwsh scripts/perf/flood.ps1 -Scenario f -AgentSeconds 60   # 16-20 visible panes + workspace switching
+pwsh scripts/perf/flood.ps1 -Scenario g                     # tool-heavy agents: 6 panes x 75 s of spawns + file storms
 pwsh scripts/perf/flood.ps1 -Scenario full -HostMode -AgentSeconds 60   # every scenario once, through the terminal host
 ```
 
@@ -34,11 +35,13 @@ host this run started is sampled and stopped (see step 5 below).
 | d: agents | yes | yes (echo in busy panes) | yes (tool dumps) | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | with `-MockAgents` |
 | e: War Room | yes | yes | yes | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | yes (wait_peer path) |
 | f: many visible | yes | yes | yes | yes (batches of 8 KiB of JSON or more go raw); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | no (file watcher only) | WebGL budget, DOM fallback |
+| g: tool-heavy agents | yes | yes (many short child processes on the pane's console) | yes (200 KB outputs) | yes (small and large batches); frame decoder with `-HostMode` | ring with `-HostMode`; scrollback and WebGL budget always | yes (80-file storms in the watched data dir, where the files API exists) | no |
+| i: idle | counters only (no rAF/timer probes) | idle wakeups (resize workers, flushers) | idle gate timers | none | hidden WebGL contexts, renderer-policy tick | idle watcher | with `-MockAgents` (detector idle loop) |
 
 Without `-HostMode` the in-process PTY carries the output: the P2 flow gate
 and P3's raw channel bodies still apply (both paths share them), but the host
 frame decoder and the P4 ring buffer are not on the path. P5 (file-watcher
-storm mode) is not exercised by any scenario. Add a column when a phase lands.
+storm mode) is exercised only by scenario g. Add a column when a phase lands.
 
 A single run is too noisy to compare (see Variance below). Always compare the
 medians of the default 3 runs. The summary prints the median and the min-max
@@ -110,9 +113,64 @@ Output goes to `test-results/perf-runs/<timestamp>/`: `summary.md`, `summary.jso
 | d | `-AgentPanes` (15): 11 visible, 4 in a hidden workspace | 1 (probed, first pane) | `scripts/perf/agent-stream.mjs` for `-AgentSeconds` (150) each |
 | e | `-StreamPanes` (4) streaming | `-WarPairs` (4) waiters (first probed) + 4 mock agent peers | generator for `-AgentSeconds` |
 | f | `-VisiblePanes` (16) visible + 2 x 4 in other workspaces | none | generator for `-AgentSeconds` in every pane |
+| g | `-ToolPanes` (6) | `-ToolIdle` (2), first probed | `scripts/perf/tool-agent.mjs` for `-ToolSeconds` (75) each |
+| i | none | `-IdlePanes` (10) `-IdleShell` (pwsh) panes, `-IdleVisible` (2) visible, the rest in hidden workspaces | none: `-IdleWarmup` (10 s), then `-IdleSeconds` (10 s) sampled |
 
-Scenarios d, e and f are not part of `all`. Run them with `-Scenario <s>`, or
-everything once with `-Scenario full` (d then uses mock agents).
+Scenarios d, e, f, g and i are not part of `all`. Run them with `-Scenario <s>`, or
+everything once with `-Scenario full` (d and i then use mock agents).
+
+### Scenario i (idle)
+
+Every other scenario has busy panes, so an idle CPU regression went unnoticed
+(2026-10-24: a user saw up to ~8 % machine CPU with everything idle). Scenario i
+opens `-IdlePanes` panes (pwsh by default, the shell users run;
+`-MockAgents`: perf-mock-agent panes waiting at their prompt) with
+`-IdleVisible` visible and the rest in hidden workspaces, waits for every
+prompt plus `-IdleWarmup`, then samples for `-IdleSeconds` with no input and no
+output. It installs none of the in-page probes (their rAF loop and timer chain
+would keep the WebView busy by themselves); it only counts, over the window,
+xterm writes (output of any kind, e.g. a shell redrawing after a resize)
+and rAF/setTimeout/setInterval registrations. The sampler splits the WebView
+into browser, renderer, gpu and utility processes and reports the console hosts
+(conhost/OpenConsole), plus the machine outside the instance. Expected: instance
+total about 0.1 % (32 cores) and no xterm writes. The real pane count is rounded up to the
+supported workspace sizes (the summary prints it). Bigger setup:
+`-IdlePanes 24`; terminal host: `-HostMode`.
+
+2026-10-24 screen (10 pwsh panes, 2 visible, 10 + 10 s; 1.22.1 vs dev a7fd852,
+2 alternating runs each): instance total 0.0-0.1 % vs 0.1 %, every process
+type at 0 % avg, 0 xterm writes in both builds;
+`-MockAgents` 0.1 vs 0.1 %, `-HostMode` 0.2 vs 0.1 %.
+
+Note (diagnosis, not baseline): the ~8 % idle load reported on 2026-10-24 came
+from outside Swarmterm: each Claude Code session re-ran a user-level
+`pwsh` status-line script every 5 s (`refreshInterval`), ~3 CPU-s per run as it
+re-parsed long transcripts (about 1.2 cores at the time of measuring).
+
+### Scenario g (tool-heavy agents)
+
+Each tool pane runs `node tool-agent.mjs <seconds> <n>` in its plain shell. On
+a fixed, seeded 12-step cycle it spawns short cmd.exe one-liners and small
+`for /l` loops (every few cycles `pwsh -NoProfile` or a `type` of a ~200 KB
+file instead), all sharing the pane's console, writes and reads 20 small
+files, creates and deletes 80 files in a fresh `storm-<round>` folder (160+
+raw events, past the watcher's `RESCAN_BURST` of 64, so every storm enters
+storm mode), appends 50 lines to a log, and pauses 0.3-1.2 s. Files live in
+`perf-tool-ws\<n>` under the data dir and are removed at the end, on Ctrl+C
+and by the spec's teardown. Each generator writes `perf-tool-<n>.json`: spawn
+counts and round trips (spawn to exit) per kind, failed spawns, file ops and
+each storm's folder, start and end. The summary shows per kind the total
+count, the median over panes of each pane's p50 / p95, and the overall max.
+Before the run the spec opens a file context on the first tool pane and
+watches its root (the data dir) like the file explorer does, recording every
+`files:changed` event until the run ends. Storm latency runs from a storm's
+start to the first event naming its folder, or the first rescan after its
+end (storm mode skips later batches and sends one rescan after
+`RESCAN_QUIET`, 500 ms without raw events, which the other panes' file
+traffic can push out); over 5 s counts as missed. Builds without that files
+API report the file metrics as `unsupported`. Echo is probed in the first
+idle pane. A run takes `-ToolSeconds` plus setup and up to 15 s waiting for
+the generators' summaries.
 
 ### Scenario d with `-MockAgents`
 
@@ -318,6 +376,9 @@ Small echo-sized batches therefore cost the same as before.
 The host keeps 512 KiB of replay history per pane (was 1 MiB). Scrollback is a
 setting (Settings > Terminal, default 5,000 lines, 500-50,000), and at most 12
 visible panes hold a WebGL context; the rest use the DOM renderer (scenario f).
+Superseded by the renderer policy (`src/lib/renderer-policy.ts`): WebGL at
+pane open for up to 16 panes, kept while hidden (up to 16 hidden contexts,
+traded for instant workspace switches), oldest evicted first.
 
 ## Phase 5 note: file watcher
 

@@ -4,7 +4,7 @@ import type {
   PtyOut,
   PtyReplay
 } from '@/tauri/terminal'
-import { OutputAcker } from '@/lib/output-ack'
+import { OutputAcker, utf8Length } from '@/lib/output-ack'
 
 export type TerminalStatus =
   | { kind: 'connecting' }
@@ -14,8 +14,11 @@ export type TerminalStatus =
 
 /** Where decoded pty output is pumped (the xterm instance, in production). */
 export interface SessionSink {
-  /** `onParsed` must run once xterm parsed `data` (flow-control acks). */
-  write: (data: Uint8Array, onParsed?: () => void) => void
+  /**
+   * `onParsed` (when given) must run once xterm parsed `data` (flow-control
+   * acks); `bytes` is the UTF-8 size of `data`.
+   */
+  write: (data: Uint8Array | string, onParsed?: () => void, bytes?: number) => void
   /**
    * History of a pane taken over from the terminal host (SWA-56), first
    * message of that generation. Not new output: no activity tick, and
@@ -113,6 +116,10 @@ export class TerminalSession {
     }
     this.pendingRespawn = options
     this.emit({ kind: 'connecting' })
+    // The dying generation's output is still parsed (until its exit) but its
+    // shutdown grace can run seconds: open its gate now so it never waits
+    // out the no-ack timeout.
+    if (this.spawnId !== null) this.deps.releaseOutput?.(this.id, this.spawnId)
     void this.deps.killTerminal(this.id)
   }
 
@@ -141,12 +148,10 @@ export class TerminalSession {
     const acker = ackOutput
       ? new OutputAcker((spawnId, bytes) => ackOutput(this.id, spawnId, bytes))
       : null
-    const parsed = (data: Uint8Array): (() => void) | undefined => {
-      if (!acker) return undefined
-      // The exact bytes Rust's gate counted for this message.
-      const bytes = data.byteLength
-      return () => acker.parsed(bytes)
-    }
+    // The exact bytes Rust's gate counted for this message, measured once
+    // and shared with the sink (renderer policy).
+    const size = (data: Uint8Array | string): number =>
+      typeof data === 'string' ? utf8Length(data) : data.byteLength
 
     this.emit({ kind: 'connecting' })
 
@@ -157,10 +162,11 @@ export class TerminalSession {
         if (msg.type === 'exit') exited = true
         if (!fresh()) return
         if (msg.type === 'data') {
-          this.sink.write(msg.payload, parsed(msg.payload))
+          const bytes = msg.bytes ?? size(msg.payload)
+          this.sink.write(msg.payload, acker?.write(bytes), bytes)
         } else if (msg.type === 'replay') {
           // The host counts the replay against the gate like live output.
-          const done = parsed(msg.payload.data)
+          const done = acker?.write(msg.payload.data.byteLength)
           if (this.sink.replay) this.sink.replay(msg.payload, done)
           else this.sink.write(msg.payload.data, done)
         } else {

@@ -115,6 +115,13 @@ it('keeps the workspace account choice across storage and drops malformed entrie
   expect(fromSaved(loaded, () => crypto.randomUUID()).accountSelections).toEqual(choice)
 })
 
+it('keeps the build-priority opt-out across storage', () => {
+  const snapshot = toSaved({ ...workspace, normalBuildPriority: true }, 'default', 20)!
+  const loaded = readSaved(storage(JSON.stringify({ version: 1, workspaces: [snapshot] })))[0]
+  expect(fromSaved(loaded, () => crypto.randomUUID()).normalBuildPriority).toBe(true)
+  expect(toSaved(workspace, 'default', 20)!.normalBuildPriority).toBeUndefined()
+})
+
 describe('open on startup', () => {
   const entry = (id: string, updatedAt: number): SavedWorkspace => ({ ...saved(), id, updatedAt })
   it('pinIfNew pins a first-seen entry at the end and leaves known ones alone', () => {
