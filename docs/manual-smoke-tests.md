@@ -595,7 +595,7 @@ has never run Swarmterm from source. Details in
       or "damaged" dialog.
 - [ ] A terminal pane spawns and runs `ls`; a split pane spawns a second shell.
 - [ ] The web preview column loads `https://github.com`.
-- [ ] `echo $SWARMTERM_MCP_URL` inside a pane prints a loopback URL.
+- [ ] `echo $SWARMTERM_MCP_URL` inside a pane prints a loopback URL (a pane opened within ~10 s of a restart, while the previous MCP port is awaited, may print nothing: known limit, user guide).
 - [ ] A War Room message reaches a second pane.
 - [ ] Prompts for Desktop/Documents/Downloads access name Swarmterm and carry a
       readable explanation (the `Info.plist` usage strings).

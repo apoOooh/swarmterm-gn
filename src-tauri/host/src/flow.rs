@@ -36,10 +36,15 @@ pub const READ_QUEUE_DEPTH: usize = 4;
 #[derive(Debug)]
 struct State {
     unacked: u64,
-    /// Opened by a timeout or `release`; the next ack closes it again.
+    /// Opened by a timeout (the next ack closes it) or by `release` (stays
+    /// open until `reset`, see `released`).
     open: bool,
     /// Generation over: never park again.
     closed: bool,
+    /// The acking renderer is gone (`release`): acks that were still in
+    /// flight (acks and releases are async commands, so one can land after
+    /// the release) must not close the gate again. Cleared by `reset`.
+    released: bool,
     last_ack: Instant,
     bypassed: u64,
 }
@@ -64,6 +69,7 @@ impl FlowGate {
                 unacked: 0,
                 open: false,
                 closed: false,
+                released: false,
                 last_ack: Instant::now(),
                 bypassed: 0,
             }),
@@ -84,6 +90,9 @@ impl FlowGate {
     /// The renderer parsed `n` more bytes.
     pub fn ack(&self, n: u64) {
         let mut s = self.st.lock().unwrap();
+        if s.released {
+            return;
+        }
         s.unacked = s.unacked.saturating_sub(n);
         s.last_ack = Instant::now();
         s.open = false;
@@ -118,6 +127,7 @@ impl FlowGate {
         let mut s = self.st.lock().unwrap();
         s.unacked = 0;
         s.open = false;
+        s.released = false;
         s.last_ack = Instant::now();
         drop(s);
         self.cv.notify_all();
@@ -129,6 +139,7 @@ impl FlowGate {
         let mut s = self.st.lock().unwrap();
         s.unacked = 0;
         s.open = true;
+        s.released = true;
         drop(s);
         self.cv.notify_all();
     }
@@ -263,5 +274,23 @@ mod tests {
         let t = Instant::now();
         g.wait();
         assert!(t.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn late_ack_after_release_keeps_the_gate_open() {
+        let g = FlowGate::with_timeout(Duration::from_secs(60));
+        g.sent(1024 * KB);
+        g.release();
+        // An ack that was in flight when the renderer went away.
+        g.ack(64 * KB as u64);
+        g.sent(4096 * KB);
+        let t = Instant::now();
+        g.wait();
+        assert!(t.elapsed() < Duration::from_millis(500));
+        // A new reader re-arms the gate and its acks count again.
+        g.reset();
+        g.sent(1024 * KB);
+        g.ack(512 * KB as u64);
+        assert_eq!(g.unacked(), 512 * KB as u64);
     }
 }

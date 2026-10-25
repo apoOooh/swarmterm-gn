@@ -449,7 +449,8 @@ mod tests {
 
     /// End to end with synthetic processes: a copy of `cmd.exe` named
     /// `claude.exe` plays the agent below this test process, and the `ping`
-    /// it starts must come out BelowNormal while the "agent" stays Normal.
+    /// it starts must come out BelowNormal while the "agent" keeps the class it
+    /// inherited from this test (Normal outside a Swarmterm pane).
     #[cfg(windows)]
     #[test]
     fn real_tree_lowers_child_of_synthetic_agent() {
@@ -465,12 +466,6 @@ mod tests {
         let sysroot = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
         std::fs::copy(format!(r"{sysroot}\System32\cmd.exe"), &fake).unwrap();
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let mut agent = std::process::Command::new(&fake)
-            .args(["/c", "ping", "-n", "30", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .unwrap();
         let class = |pid: u32| unsafe {
             let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             assert!(!h.is_null());
@@ -478,6 +473,18 @@ mod tests {
             CloseHandle(h);
             c
         };
+        // The "agent" inherits this test's class, read before it is spawned.
+        // Inside a Swarmterm pane the live watcher lowered `cargo` already, so
+        // this test binary is BelowNormal from birth and so is the agent; the
+        // strict "pass leaves the agent alone" check then only holds when run
+        // outside a pane (inherited Normal, no live watcher).
+        let inherited = class(std::process::id());
+        let mut agent = std::process::Command::new(&fake)
+            .args(["/c", "ping", "-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .unwrap();
         let me = std::process::id();
         let mut ping = None;
         for _ in 0..50 {
@@ -500,7 +507,11 @@ mod tests {
             .output();
         let _ = agent.wait();
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(agent_class, NORMAL_PRIORITY_CLASS);
+        assert!(
+            inherited == NORMAL_PRIORITY_CLASS || inherited == BELOW_NORMAL_PRIORITY_CLASS,
+            "unexpected test priority class {inherited:#x}"
+        );
+        assert_eq!(agent_class, inherited);
         assert_eq!(ping_class, BELOW_NORMAL_PRIORITY_CLASS);
     }
 }
