@@ -475,6 +475,24 @@ mod tests {
         let fake = dir.join("claude.exe");
         let sysroot = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
         std::fs::copy(format!(r"{sysroot}\System32\cmd.exe"), &fake).unwrap();
+        // cmd.exe loads its messages from `<lang>\cmd.exe.mui` beside the exe;
+        // give the copy the same resources so it behaves like the original.
+        // Only the UI language of this machine and the en-US fallback matter.
+        let ui_lang = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "(Get-UICulture).Name"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty());
+        for lang in ui_lang.iter().map(String::as_str).chain(["en-US"]) {
+            let mui = std::path::Path::new(&sysroot)
+                .join("System32")
+                .join(lang)
+                .join("cmd.exe.mui");
+            if mui.is_file() && std::fs::create_dir_all(dir.join(lang)).is_ok() {
+                let _ = std::fs::copy(&mui, dir.join(lang).join("claude.exe.mui"));
+            }
+        }
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let class = |pid: u32| unsafe {
             let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
@@ -489,34 +507,63 @@ mod tests {
         // strict "pass leaves the agent alone" check then only holds when run
         // outside a pane (inherited Normal, no live watcher).
         let inherited = class(std::process::id());
-        let mut agent = std::process::Command::new(&fake)
-            .args(["/c", "ping", "-n", "30", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .unwrap();
+        // Kills the whole fake tree (agent and ping) and removes the temp dir
+        // on every exit path, including a panic mid-test.
+        struct Cleanup {
+            agent: std::process::Child,
+            dir: std::path::PathBuf,
+        }
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &self.agent.id().to_string()])
+                    .output();
+                let _ = self.agent.wait();
+                let _ = std::fs::remove_dir_all(&self.dir);
+            }
+        }
+        let mut guard = Cleanup {
+            agent: std::process::Command::new(&fake)
+                .args(["/c", "ping", "-n", "60", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .unwrap(),
+            dir: dir.clone(),
+        };
+        let agent_pid = guard.agent.id();
         let me = std::process::id();
-        let mut ping = None;
-        for _ in 0..50 {
+        // A cold CI runner (Defender scanning the freshly copied exe, cold
+        // image cache) can take seconds before `ping` shows up, so wait up to
+        // 30 s and, on failure, say whether the agent died and what it started.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let ping = loop {
             let procs = crate::agent_process::snapshot().unwrap();
-            ping = procs
+            if let Some(p) = procs
                 .iter()
-                .find(|x| x.parent == agent.id() && stem(&x.exe) == "ping")
-                .map(|x| x.pid);
-            if ping.is_some() {
+                .find(|x| x.parent == agent_pid && stem(&x.exe) == "ping")
+            {
                 let mut memo = Memo::default();
                 pass(&procs, &[me], &mut memo);
-                break;
+                break p.pid;
+            }
+            // Checked after the search: ping runs 60 s, so an agent that has
+            // exited without a visible ping child never started it.
+            let exited = guard.agent.try_wait().ok().flatten();
+            if exited.is_some() || std::time::Instant::now() >= deadline {
+                let children: Vec<_> = procs
+                    .iter()
+                    .filter(|x| x.parent == agent_pid)
+                    .map(|x| format!("{} {}", x.pid, x.exe))
+                    .collect();
+                panic!(
+                    "ping child of fake agent {agent_pid} not found: agent exit {exited:?}, children {children:?}"
+                );
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        let ping = ping.expect("ping child");
-        let (agent_class, ping_class) = (class(agent.id()), class(ping));
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &agent.id().to_string()])
-            .output();
-        let _ = agent.wait();
-        let _ = std::fs::remove_dir_all(&dir);
+        };
+        let (agent_class, ping_class) = (class(agent_pid), class(ping));
+        drop(guard);
         assert!(
             inherited == NORMAL_PRIORITY_CLASS || inherited == BELOW_NORMAL_PRIORITY_CLASS,
             "unexpected test priority class {inherited:#x}"
