@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-10-25
+
 - War Room: messages now reach real agent panes whose status line or cursor
   keeps repainting (they stayed held before), and never get typed into an
   unsent draft in the agent's input box. The ⏸ badge explains why a message
@@ -30,6 +32,13 @@
 - MCP: a restarted app waits up to 10 s for its previous port (e.g. while
   the old instance is still shutting down after an update) before falling
   back to a new one, so reattached panes keep their MCP connection.
+- Performance: processes started by an agent CLI in a pane (builds, tests,
+  tools) run at below-normal priority, so heavy agent work no longer slows the
+  app and your typing. On by default (Settings → Terminal), with a saved
+  per-workspace opt-out.
+- Media: long paths in hard-wrapped tables are detected whole. The thumbnail
+  strip keeps 50 items and scrolls sideways (wheel, scrollbar, arrow buttons
+  and keys), and drag-pan works at any zoom.
 - Dev: optional profiling build feature (dev only, not in releases) with
   lock, flow-gate and IPC counters for `flood.ps1 -Profile`.
 
