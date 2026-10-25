@@ -477,20 +477,19 @@ mod tests {
         std::fs::copy(format!(r"{sysroot}\System32\cmd.exe"), &fake).unwrap();
         // cmd.exe loads its messages from `<lang>\cmd.exe.mui` beside the exe;
         // give the copy the same resources so it behaves like the original.
-        // Only the UI language of this machine and the en-US fallback matter.
-        let ui_lang = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", "(Get-UICulture).Name"])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty());
-        for lang in ui_lang.iter().map(String::as_str).chain(["en-US"]) {
-            let mui = std::path::Path::new(&sysroot)
-                .join("System32")
-                .join(lang)
-                .join("cmd.exe.mui");
-            if mui.is_file() && std::fs::create_dir_all(dir.join(lang)).is_ok() {
-                let _ = std::fs::copy(&mui, dir.join(lang).join("claude.exe.mui"));
+        // Only locale folders (`xx-YY`) can hold it, so skip the rest cheaply;
+        // just the installed UI languages have one, so this copies one or two
+        // files, and the other folders cost only a metadata lookup.
+        if let Ok(entries) = std::fs::read_dir(format!(r"{sysroot}\System32")) {
+            for e in entries.flatten() {
+                let lang = e.file_name();
+                if !lang.to_string_lossy().contains('-') {
+                    continue;
+                }
+                let mui = e.path().join("cmd.exe.mui");
+                if mui.is_file() && std::fs::create_dir_all(dir.join(&lang)).is_ok() {
+                    let _ = std::fs::copy(&mui, dir.join(&lang).join("claude.exe.mui"));
+                }
             }
         }
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -507,24 +506,87 @@ mod tests {
         // strict "pass leaves the agent alone" check then only holds when run
         // outside a pane (inherited Normal, no live watcher).
         let inherited = class(std::process::id());
-        // Kills the whole fake tree (agent and ping) and removes the temp dir
-        // on every exit path, including a panic mid-test.
+        // Kills the fake tree and removes the temp dir on every exit path,
+        // including a panic mid-test. Both kills go through process HANDLES,
+        // never a PID: once the agent has exited its PID can be reused at once
+        // on a busy runner, and `taskkill /T /PID` then kills an unrelated
+        // tree, e.g. host or pty children of tests running in parallel.
+        type Handle = windows_sys::Win32::Foundation::HANDLE;
+        /// Children of `parent` opened by handle. A snapshot PID may already
+        /// be reused when OpenProcess runs, so each handle is kept only if a
+        /// snapshot taken WHILE it is held still shows that PID under
+        /// `parent`: an open handle keeps its PID from being reused.
+        fn open_children(parent: u32) -> Vec<(u32, String, Handle)> {
+            let Some(before) = crate::agent_process::snapshot() else {
+                return Vec::new();
+            };
+            let opened: Vec<_> = before
+                .iter()
+                .filter(|x| x.parent == parent)
+                .filter_map(|x| {
+                    // SAFETY: plain Win32 call; the handle is returned or closed.
+                    let h = unsafe {
+                        OpenProcess(
+                            PROCESS_QUERY_LIMITED_INFORMATION
+                                | windows_sys::Win32::System::Threading::PROCESS_TERMINATE,
+                            0,
+                            x.pid,
+                        )
+                    };
+                    (!h.is_null()).then(|| (x.pid, x.exe.clone(), h))
+                })
+                .collect();
+            let after = crate::agent_process::snapshot().unwrap_or_default();
+            opened
+                .into_iter()
+                .filter_map(|(pid, exe, h)| {
+                    let same = after
+                        .iter()
+                        .any(|y| y.pid == pid && y.parent == parent && y.exe == exe);
+                    if same {
+                        Some((pid, exe, h))
+                    } else {
+                        // SAFETY: opened above, closed once.
+                        unsafe { CloseHandle(h) };
+                        None
+                    }
+                })
+                .collect()
+        }
+        fn terminate(h: Handle) {
+            // SAFETY: `h` was opened by this test and is closed once.
+            unsafe {
+                windows_sys::Win32::System::Threading::TerminateProcess(h, 1);
+                CloseHandle(h);
+            }
+        }
         struct Cleanup {
             agent: std::process::Child,
+            ping: Option<Handle>,
             dir: std::path::PathBuf,
         }
         impl Drop for Cleanup {
             fn drop(&mut self) {
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/F", "/T", "/PID", &self.agent.id().to_string()])
-                    .output();
+                if let Some(h) = self.ping.take() {
+                    terminate(h);
+                }
+                // Whatever else the agent started (e.g. a ping not pinned
+                // yet): the `Child` handle keeps the agent's PID reserved, so
+                // its children are found without a reuse race.
+                for (_, _, h) in open_children(self.agent.id()) {
+                    terminate(h);
+                }
+                let _ = self.agent.kill();
                 let _ = self.agent.wait();
                 let _ = std::fs::remove_dir_all(&self.dir);
             }
         }
+        // Absolute path: the runner's PATH must not decide which ping runs.
+        let ping_exe = format!(r"{sysroot}\System32\PING.EXE");
         let mut guard = Cleanup {
+            ping: None,
             agent: std::process::Command::new(&fake)
-                .args(["/c", "ping", "-n", "60", "127.0.0.1"])
+                .args(["/c", &ping_exe, "-n", "60", "127.0.0.1"])
                 .stdout(std::process::Stdio::null())
                 .creation_flags(CREATE_NO_WINDOW)
                 .spawn()
@@ -543,9 +605,23 @@ mod tests {
                 .iter()
                 .find(|x| x.parent == agent_pid && stem(&x.exe) == "ping")
             {
-                let mut memo = Memo::default();
-                pass(&procs, &[me], &mut memo);
-                break p.pid;
+                // Pin the ping by a verified handle (see `open_children`) so
+                // cleanup can never hit a reused PID.
+                let mut pinned = None;
+                for (pid, exe, h) in open_children(agent_pid) {
+                    if pinned.is_none() && pid == p.pid && stem(&exe) == "ping" {
+                        pinned = Some(h);
+                    } else {
+                        // SAFETY: opened by `open_children`, closed once.
+                        unsafe { CloseHandle(h) };
+                    }
+                }
+                if let Some(h) = pinned {
+                    guard.ping = Some(h);
+                    let mut memo = Memo::default();
+                    pass(&procs, &[me], &mut memo);
+                    break p.pid;
+                }
             }
             // Checked after the search: ping runs 60 s, so an agent that has
             // exited without a visible ping child never started it.
@@ -556,9 +632,14 @@ mod tests {
                     .filter(|x| x.parent == agent_pid)
                     .map(|x| format!("{} {}", x.pid, x.exe))
                     .collect();
-                panic!(
+                let msg = format!(
                     "ping child of fake agent {agent_pid} not found: agent exit {exited:?}, children {children:?}"
                 );
+                // Straight to the stderr handle, past the harness capture, so
+                // the reason reaches the CI log even if the binary dies later.
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr().lock(), "{msg}");
+                panic!("{msg}");
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         };
