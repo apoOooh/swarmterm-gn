@@ -214,6 +214,13 @@ static SPAWN_DONE: std::sync::Condvar = std::sync::Condvar::new();
 
 struct SpawnReservation(String);
 
+/// How long a create waits for an in-flight create of the same id. A healthy
+/// spawn finishes well inside the host's create request timeout; twice that
+/// means the first one hung, and the later create fails instead of blocking
+/// a pool thread forever.
+const SPAWN_RESERVE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(2 * crate::host_client::conn::REQUEST_TIMEOUT.as_secs());
+
 impl SpawnReservation {
     /// Reserve `id`, waiting while another create of the SAME id is in
     /// flight (the old global SPAWN_LOCK made it wait too). After the wait
@@ -221,14 +228,29 @@ impl SpawnReservation {
     /// usual "already exists" from `spawn_terminal`, and a create retried
     /// after a failed one simply proceeds. Creates of different ids never
     /// wait on each other. Runs on the blocking pool, never the main thread.
-    fn take(id: &str) -> Self {
+    fn take(id: &str) -> Result<Self, String> {
+        Self::take_within(id, SPAWN_RESERVE_TIMEOUT)
+    }
+
+    fn take_within(id: &str, timeout: std::time::Duration) -> Result<Self, String> {
+        let deadline = std::time::Instant::now() + timeout;
         let mut set = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
         while set.get_or_insert_with(Default::default).contains(id) {
-            set = SPAWN_DONE.wait(set).unwrap_or_else(|e| e.into_inner());
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return Err(format!(
+                    "Terminal {id} is still being created by an earlier request (waited {}s)",
+                    timeout.as_secs()
+                ));
+            }
+            set = SPAWN_DONE
+                .wait_timeout(set, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
         }
         set.get_or_insert_with(Default::default)
             .insert(id.to_string());
-        SpawnReservation(id.to_string())
+        Ok(SpawnReservation(id.to_string()))
     }
 }
 
@@ -249,10 +271,10 @@ mod spawn_reservation_tests {
 
     #[test]
     fn same_id_waits_for_the_first_create() {
-        let first = SpawnReservation::take("res-test-a");
+        let first = SpawnReservation::take("res-test-a").unwrap();
         let t = std::thread::spawn(|| {
             let t0 = Instant::now();
-            let _second = SpawnReservation::take("res-test-a");
+            let _second = SpawnReservation::take("res-test-a").unwrap();
             t0.elapsed()
         });
         std::thread::sleep(Duration::from_millis(100));
@@ -262,10 +284,24 @@ mod spawn_reservation_tests {
 
     #[test]
     fn different_ids_do_not_wait() {
-        let _a = SpawnReservation::take("res-test-b");
+        let _a = SpawnReservation::take("res-test-b").unwrap();
         let t0 = Instant::now();
-        let _b = SpawnReservation::take("res-test-c");
+        let _b = SpawnReservation::take("res-test-c").unwrap();
         assert!(t0.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn hung_same_id_create_times_out_with_an_error() {
+        let _hung = SpawnReservation::take("res-test-d").unwrap();
+        let t0 = Instant::now();
+        let err = SpawnReservation::take_within("res-test-d", Duration::from_millis(100))
+            .err()
+            .expect("second create must give up");
+        assert!(t0.elapsed() >= Duration::from_millis(90));
+        assert!(err.contains("res-test-d"), "{err}");
+        // The id is still reserved by the hung create, not by the loser.
+        drop(_hung);
+        assert!(SpawnReservation::take_within("res-test-d", Duration::from_millis(100)).is_ok());
     }
 }
 
@@ -285,7 +321,10 @@ pub async fn create_terminal(
         // the first and then behaves exactly as it did behind SPAWN_LOCK.
         let _span = crate::prof::span("cmd.create_terminal");
         let t0 = crate::prof::now();
-        let _reservation = SpawnReservation::take(&id);
+        let _reservation = match SpawnReservation::take(&id) {
+            Ok(r) => r,
+            Err(e) => return CreateTerminalResult::err(e),
+        };
         crate::prof::since("spawn.reserve", t0);
         let state = app.state::<AppState>();
         crate::pty::spawn_terminal(&app, &state, id, options, on_data)
