@@ -260,8 +260,8 @@ mod os {
     use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
     use windows_sys::Win32::System::Threading::{
         GetPriorityClass, GetProcessTimes, OpenProcess, SetPriorityClass,
-        BELOW_NORMAL_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS,
-        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_INFORMATION,
+        BELOW_NORMAL_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SET_INFORMATION,
     };
 
     /// Lowers `pid` once per (PID, creation time); returns that key, or `None`
@@ -400,13 +400,21 @@ mod tests {
 
     #[test]
     fn interactive_programs_in_a_plain_pane_stay_normal() {
-        let procs = [p(10, 1, "pwsh.exe"), p(11, 10, "ssh.exe"), p(12, 10, "nvim.exe")];
+        let procs = [
+            p(10, 1, "pwsh.exe"),
+            p(11, 10, "ssh.exe"),
+            p(12, 10, "nvim.exe"),
+        ];
         assert!(plan(&procs, 10).is_empty());
     }
 
     #[test]
     fn processes_outside_the_pane_are_ignored() {
-        let procs = [p(10, 1, "pwsh.exe"), p(20, 1, "cargo.exe"), p(21, 20, "rustc.exe")];
+        let procs = [
+            p(10, 1, "pwsh.exe"),
+            p(20, 1, "cargo.exe"),
+            p(21, 20, "rustc.exe"),
+        ];
         assert!(plan(&procs, 10).is_empty());
     }
 
@@ -443,8 +451,10 @@ mod tests {
         }
         let per = t.elapsed() / n;
         let procs = crate::agent_process::snapshot().unwrap().len();
-        println!("watcher pass: {per:?} per pass, {procs} processes, {:.3}% of one core at {POLL:?}",
-            per.as_secs_f64() / POLL.as_secs_f64() * 100.0);
+        println!(
+            "watcher pass: {per:?} per pass, {procs} processes, {:.3}% of one core at {POLL:?}",
+            per.as_secs_f64() / POLL.as_secs_f64() * 100.0
+        );
     }
 
     /// End to end with synthetic processes: a copy of `cmd.exe` named
@@ -457,8 +467,8 @@ mod tests {
         use std::os::windows::process::CommandExt;
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::Threading::{
-            GetPriorityClass, OpenProcess, BELOW_NORMAL_PRIORITY_CLASS,
-            NORMAL_PRIORITY_CLASS, PROCESS_QUERY_LIMITED_INFORMATION,
+            GetPriorityClass, OpenProcess, BELOW_NORMAL_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS,
+            PROCESS_QUERY_LIMITED_INFORMATION,
         };
         let dir = std::env::temp_dir().join(format!("swarmterm-cp-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
