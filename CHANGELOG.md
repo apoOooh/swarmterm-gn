@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-## [1.24.1] - 2026-10-25
+## [1.24.2] - 2026-10-25
 
-1.24.0 was tagged but never published: the release checks failed on a Rust formatting check. 1.24.1 ships the same changes.
+1.24.0 and 1.24.1 were tagged but never published: their release checks failed (Rust formatting, then two tests that were too strict for the CI runner). 1.24.2 ships the same changes.
 
 - War Room: messages now reach real agent panes whose status line or cursor
   keeps repainting (they stayed held before), and never get typed into an
@@ -44,9 +44,13 @@
 - Dev: optional profiling build feature (dev only, not in releases) with
   lock, flow-gate and IPC counters for `flood.ps1 -Profile`.
 
+## [1.24.1] - 2026-10-25
+
+Tagged but not published (release checks failed on two tests); see 1.24.2.
+
 ## [1.24.0] - 2026-10-25
 
-Tagged but not published (release checks failed on rustfmt); see 1.24.1.
+Tagged but not published (release checks failed on rustfmt); see 1.24.2.
 
 ## [1.23.0] - 2026-10-23
 

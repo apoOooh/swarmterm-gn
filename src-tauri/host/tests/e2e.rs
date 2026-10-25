@@ -296,8 +296,13 @@ fn unacked_output_stops_the_reader_and_acks_resume_it_in_order() {
     // > 4 MB, at least twice FLOW_HIGH, so the gate must hold (asserted below).
     const LINES: u32 = 400_000;
     assert!(LINES as u64 * 11 >= 2 * FLOW_HIGH);
-    // A long timeout: this test must see the gate hold, not time out.
-    let host = Host::with_flow_timeout(1 << 20, Duration::from_secs(120));
+    // cmd's `echo` loop is slow on CI runners (~70 KB/s seen), so reaching
+    // FLOW_HIGH can take far longer than WAIT. Budget the stall wait from the
+    // window at a pessimistic 16 KB/s (bounded), and keep the flow timeout at
+    // twice it so the gate holds rather than timing out.
+    const SLOW_RATE: u64 = 16 * 1024;
+    let stall_wait = Duration::from_secs((FLOW_HIGH / SLOW_RATE).clamp(20, 300));
+    let host = Host::with_flow_timeout(1 << 20, stall_wait * 2);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let c = host.connect_flow_client(tx);
     let mut inbox = Inbox::new(rx);
@@ -307,7 +312,7 @@ fn unacked_output_stops_the_reader_and_acks_resume_it_in_order() {
         .unwrap();
 
     // Wait for the stall: nothing new for 600 ms.
-    let deadline = Instant::now() + WAIT;
+    let deadline = Instant::now() + stall_wait;
     let mut seen = 0;
     let mut quiet_since = Instant::now();
     while quiet_since.elapsed() < Duration::from_millis(600) {
@@ -333,7 +338,9 @@ fn unacked_output_stops_the_reader_and_acks_resume_it_in_order() {
     assert_eq!(total, seen, "ring and live stream stop together");
 
     // Ack what arrived, as a renderer would, until the pane exits.
-    let deadline = Instant::now() + Duration::from_secs(120);
+    // The rest of the loop (up to 12 bytes a line) at the same slow rate.
+    let rest = (LINES as u64 * 12).saturating_sub(seen as u64);
+    let deadline = Instant::now() + Duration::from_secs((rest / SLOW_RATE).clamp(120, 600));
     let mut acked = 0;
     while !inbox.has_event("exit") {
         assert!(
