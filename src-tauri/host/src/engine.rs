@@ -556,7 +556,17 @@ impl Host {
         }
         let map = self.terminals.lock().unwrap();
         if let Some(t) = map.get(id).filter(|t| t.spawn_id == spawn_id) {
-            t.flow.ack(bytes);
+            // The app sends a maximal ack when the renderer disposed this
+            // generation (`release_output`): treat it as a release so a late
+            // ack still in flight cannot close the gate again. A stale release
+            // from a replaced connection cannot reach a new reader's gate:
+            // the client check above drops it, and `spawn_id` drops one
+            // from an older generation.
+            if bytes == u64::MAX {
+                t.flow.release();
+            } else {
+                t.flow.ack(bytes);
+            }
         }
     }
 
