@@ -136,10 +136,16 @@ updates, speech-model downloads, command routines, the web preview, and a
 forced environment filter with an admin allow list. The renderer only greys out
 locked controls. Details: [admin-policy.md](admin-policy.md).
 
-## Planned
+### Corp edition
 
-- A `corp` build variant with the administrator policy's locks compiled in as
-  defaults.
+The Swarmterm GN Corp build (Cargo feature `corp`, own identifier
+`com.apooooh.swarmterm.gn.corp`) compiles the locks `DisableBypassModes`,
+`DisableWarRoomExecute`, `DisableCompanion`, `DisableModelDownload` and
+`EnvPolicy=default` into the binary (`policy::Edition::locks`). They are
+combined with the registry policy, which can add locks but not lift these. The
+buzzkey download/installer and the speech-model download are compiled out, not
+only locked; the release workflow fails if their endpoints appear in the Corp
+executable. Details: [editions.md](editions.md).
 
 ## The user's responsibility
 

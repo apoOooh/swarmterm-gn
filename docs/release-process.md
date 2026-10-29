@@ -57,10 +57,16 @@ Tags inherited from before the fork are retained; the first GN release is `v1.1.
 2. Run the reusable CI workflow: frontend types, unit tests, production build,
    headless browser tests, full-history secret scan, Windows Rust checks and
    the dependency audit (`cargo deny`, `npm audit`).
-3. Build the Windows x64 NSIS installer with locked Rust dependencies.
-4. Download the build artifact in a separate publishing job, generate the
-   CycloneDX SBOMs `sbom-rust.cdx.json`, `sbom-rust-host.cdx.json` and
-   `sbom-npm.cdx.json`, and add
+3. Build both Windows x64 NSIS installers with locked Rust dependencies, in
+   parallel: **Swarmterm GN** and **Swarmterm GN Corp**
+   (`--config src-tauri/tauri.corp.conf.json -- --features corp`, see
+   [editions.md](editions.md)). Each exe is checked for analytics endpoints;
+   the Corp exe also for the buzzkey and speech-model download endpoints.
+4. Download both build artifacts in a separate publishing job, generate the
+   CycloneDX SBOMs `sbom-rust.cdx.json`, `sbom-rust-corp.cdx.json`,
+   `sbom-rust-host.cdx.json` and `sbom-npm.cdx.json`, rename the installers to
+   `Swarmterm.GN_<version>_x64-setup.exe` and
+   `Swarmterm.GN.Corp_<version>_x64-setup.exe`, and add
    `SHA256SUMS.txt` over all assets.
 5. Create a draft, upload all files, then publish the release only after all
    checks and the installer build succeed.

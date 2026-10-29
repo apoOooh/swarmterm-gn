@@ -554,6 +554,16 @@ Changes apply to the next pane or routine that starts; running panes keep the en
 
 Hosted panes outlive Swarmterm itself: if the app crashes or is ended from Task Manager, the programs in them keep running. Open the saved workspace again (workspaces set to open on startup do so by themselves) and its panes are taken over where they are, instead of starting again: the output so far is shown again, a full-screen program such as Claude Code repaints, and an agent keeps its Swarmterm connection. A dim line *older output is not available* marks a pane whose history was longer than the host keeps (512 KiB per pane). Running panes that no saved workspace knows are closed shortly after startup; forgetting a saved workspace closes its running panes too. If you switch the host off before starting Swarmterm again, the panes it still runs are closed at startup. Pane ids are stored with saved workspaces only while the host is on. **Quit** in the tray still closes every pane; the idle host then exits on its own after ten minutes.
 
+## Editions
+
+Swarmterm GN comes in two editions: **Swarmterm GN** and **Swarmterm GN Corp**
+for organisations. Corp has bypass launch modes and War Room execute by agents
+locked, the environment filter always on, and no buzzkey installer or speech
+model download (Settings → Voice hides them; your administrator provides
+models). The edition is shown in the title bar and, for Corp, at the top of
+Settings. Both can be installed side by side with separate settings. Full
+comparison: [Editions](editions.md).
+
 ## Updates
 
 Swarmterm GN never updates itself and makes no update checks. New versions are

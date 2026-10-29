@@ -49,5 +49,20 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   GitHub-style overview: features list, install, quick start, security and
   privacy, build, origin, licence. Details stay in the user guide.
 - **Enforcement for organisations.** Administrator policy through the
-  registry (see the 2026-10-29 entry above); a `corp` build variant with
-  restricted defaults is planned.
+  registry (see the 2026-10-29 entry above) plus a separate Corp edition.
+- **Corp edition contents** (user decision 2026-10-29, contents chosen by the
+  maintainer). Swarmterm GN Corp compiles in `DisableBypassModes`,
+  `DisableWarRoomExecute`, `DisableCompanion`, `DisableModelDownload` and
+  `EnvPolicy=default`, and compiles the buzzkey installer/updater and the
+  speech model download out. Command routines, `worktree.spawn`, the web
+  preview and MCP stay available and policy-lockable: they are core workflow,
+  run only what the user starts and fetch no code. The registry policy applies
+  on top and can only add locks. Both editions' differences are documented in
+  `docs/editions.md` (user requirement: describe the versions clearly).
+- **Corp identity** (2026-10-29). Corp has its own identifier
+  `com.apooooh.swarmterm.gn.corp` and product name "Swarmterm GN Corp"
+  (`src-tauri/tauri.corp.conf.json`), so both editions install side by side
+  with separate settings and single-instance locks, a Standard install's
+  settings cannot reach a Corp one, and IT can tell them apart in software
+  inventory. Settings are not migrated. Every release publishes both
+  installers.
