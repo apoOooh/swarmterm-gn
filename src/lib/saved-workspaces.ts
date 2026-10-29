@@ -26,10 +26,9 @@ export interface SavedLeaf {
   headerTint?: boolean
   /**
    * The pane's last runtime id: the key a pane that survived in the
-   * terminal host (SWA-56) is reattached by. It doubles as the pane's MCP
-   * bearer (`SWARMTERM_SESSION`), which authorises only while that pane
-   * lives and is already in its own environment — the same user boundary
-   * as this storage.
+   * terminal host (SWA-56) is reattached by. It is NOT the pane's MCP
+   * bearer: `SWARMTERM_SESSION` is a separate per-spawn secret that is
+   * never saved.
    */
   terminalId?: string
 }

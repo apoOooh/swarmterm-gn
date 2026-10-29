@@ -11,6 +11,18 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   `worktree.spawn` workers unless the user setting allows it, and blocked by
   `DisableBypassModes` (always on in the Corp edition), in Rust too. The
   backend launch-line check is a guard against mistakes, not a sandbox.
+- **`DisableWarRoom` policy; Corp does not lock it.** A new REG_DWORD
+  `DisableWarRoom` turns the whole War Room off (joins, the user's sends and
+  every `war_room.*` MCP tool are refused in Rust). The Corp edition does not
+  compile it in: Corp already blocks `execute`, and probes plus `read_peer`
+  are core workflow there, so the War Room stays lockable by policy only.
+- **MCP bearer token is a per-pane secret, not the pane id.** `war_room.list_peers`
+  shows pane ids, so `SWARMTERM_SESSION` is now a random secret minted per
+  spawn (rotated on respawn) and mapped to the pane id in the backend; every
+  writer keeps referencing the variable, so no config migration is needed.
+  Panes reattached from the terminal host that an older build created keep
+  their id as bearer until their next respawn.
+
 - **Administrator policy keys.** Organisations lock features through
   `HKLM\Software\Policies\SwarmtermGN` (and HKCU; HKLM wins per value), read
   once at start: `DisableBypassModes`, `DisableWarRoomExecute`,

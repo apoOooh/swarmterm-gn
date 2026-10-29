@@ -403,7 +403,7 @@ impl SwarmtermMcpServer {
         >,
         Parameters(args): Parameters<ReadPeerArgs>,
     ) -> Result<Json<ReadPeerResult>, rmcp::ErrorData> {
-        let terminal = self.caller(&parts)?;
+        let terminal = self.war_room_caller(&parts)?;
         let state = self.app.state::<AppState>();
         // Membership and screen live under different locks; the gate drops
         // `war_rooms` before `peer_states` is taken (see module doc). A peer
@@ -449,7 +449,7 @@ impl SwarmtermMcpServer {
         >,
         Parameters(args): Parameters<WaitPeerArgs>,
     ) -> Result<Json<WaitPeerResult>, rmcp::ErrorData> {
-        let terminal = self.caller(&parts)?;
+        let terminal = self.war_room_caller(&parts)?;
         let state = self.app.state::<AppState>();
         let (_name, is_agent) = peer_target(&state, &terminal.0, &args.peer)?;
         if !is_agent {

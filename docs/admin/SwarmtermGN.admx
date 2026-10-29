@@ -27,6 +27,12 @@
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
+    <policy name="DisableWarRoom" class="Both" displayName="$(string.DisableWarRoom)" explainText="$(string.DisableWarRoom_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableWarRoom">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
     <policy name="DisableWorktreeSpawn" class="Both" displayName="$(string.DisableWorktreeSpawn)" explainText="$(string.DisableWorktreeSpawn_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableWorktreeSpawn">
       <parentCategory ref="SwarmtermGN" />
       <supportedOn ref="SUPPORTED_SwarmtermGN" />

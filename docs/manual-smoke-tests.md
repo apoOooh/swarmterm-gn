@@ -804,6 +804,11 @@ start it again after every change; remove the key at the end:
       Bypass asks `worktree.spawn` → the worker starts in Bypass with the red badge. Off → worker starts in Default.
 - [ ] `DisableWarRoomExecute` = 1: the Agent safety execute switch is greyed; an agent's `war_room.send` execute is
       refused with a message naming `DisableWarRoomExecute`; probe still works.
+- [ ] `DisableWarRoom` = 1: the War Room tab shows "Managed by your administrator", the execute switch is greyed,
+      and an agent's `war_room.list_peers` / `send` / `read_inbox` / `read_peer` / `wait_peer` are refused with a
+      message naming `DisableWarRoom`.
+- [ ] MCP bearer: in a pane, `$env:SWARMTERM_SESSION` differs from the pane's terminalId; a request to `/status` with
+      `Authorization: Bearer <another pane's terminalId>` answers 401; after a respawn the old secret answers 401.
 - [ ] `DisableWorktreeSpawn` = 1: `worktree.spawn` is refused naming the policy.
 - [ ] `DisableMcp` = 1: new panes have no `SWARMTERM_MCP_URL`; `~/.claude.json` has no `swarmterm` entry after start;
       Settings → MCP switches are off and greyed.

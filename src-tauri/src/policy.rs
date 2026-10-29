@@ -36,6 +36,7 @@ pub enum RegValue {
 pub struct AdminPolicy {
     pub disable_bypass_modes: bool,
     pub disable_war_room_execute: bool,
+    pub disable_war_room: bool,
     pub disable_worktree_spawn: bool,
     pub disable_mcp: bool,
     pub disable_companion: bool,
@@ -55,6 +56,7 @@ type FlagField = fn(&mut AdminPolicy) -> &mut bool;
 const FLAGS: &[(&str, FlagField)] = &[
     ("DisableBypassModes", |p| &mut p.disable_bypass_modes),
     ("DisableWarRoomExecute", |p| &mut p.disable_war_room_execute),
+    ("DisableWarRoom", |p| &mut p.disable_war_room),
     ("DisableWorktreeSpawn", |p| &mut p.disable_worktree_spawn),
     ("DisableMcp", |p| &mut p.disable_mcp),
     ("DisableCompanion", |p| &mut p.disable_companion),
@@ -140,6 +142,7 @@ impl Edition {
 pub enum Lock {
     BypassModes,
     WarRoomExecute,
+    WarRoom,
     WorktreeSpawn,
     Mcp,
     Companion,
@@ -153,6 +156,7 @@ impl Lock {
         match self {
             Lock::BypassModes => "DisableBypassModes",
             Lock::WarRoomExecute => "DisableWarRoomExecute",
+            Lock::WarRoom => "DisableWarRoom",
             Lock::WorktreeSpawn => "DisableWorktreeSpawn",
             Lock::Mcp => "DisableMcp",
             Lock::Companion => "DisableCompanion",
@@ -166,6 +170,7 @@ impl Lock {
         match self {
             Lock::BypassModes => "Bypass/YOLO launch modes are",
             Lock::WarRoomExecute => "War Room execute is",
+            Lock::WarRoom => "The War Room is",
             Lock::WorktreeSpawn => "worktree.spawn is",
             Lock::Mcp => "The Swarmterm MCP server is",
             Lock::Companion => "The voice companion (buzzkey) install and update are",
@@ -314,6 +319,7 @@ impl AdminPolicy {
         match lock {
             Lock::BypassModes => self.disable_bypass_modes,
             Lock::WarRoomExecute => self.disable_war_room_execute,
+            Lock::WarRoom => self.disable_war_room,
             Lock::WorktreeSpawn => self.disable_worktree_spawn,
             Lock::Mcp => self.disable_mcp,
             Lock::Companion => self.disable_companion,
@@ -378,7 +384,7 @@ impl AdminPolicy {
         user: crate::agent_policy::AgentPolicy,
     ) -> crate::agent_policy::AgentPolicy {
         let mut out = user;
-        if self.disable_war_room_execute {
+        if self.disable_war_room_execute || self.disable_war_room {
             out.allow_war_room_execute = false;
         }
         if self.disable_bypass_modes {
@@ -852,6 +858,11 @@ mod tests {
         let eff = admin.apply_agent(agent.clone());
         assert!(!eff.allow_war_room_execute);
         assert!(eff.workers_inherit_bypass);
+        let room_off = AdminPolicy {
+            disable_war_room: true,
+            ..Default::default()
+        };
+        assert!(!room_off.apply_agent(agent.clone()).allow_war_room_execute);
         let bypass = AdminPolicy {
             disable_bypass_modes: true,
             ..Default::default()
@@ -940,6 +951,18 @@ mod tests {
     }
 
     #[test]
+    fn disable_war_room_parses_and_locks_only_the_war_room() {
+        let values: BTreeMap<String, RegValue> =
+            [("DisableWarRoom".to_string(), RegValue::Dword(1))].into();
+        let (p, _) = parse(&values);
+        assert!(p.disable_war_room && !p.disable_war_room_execute);
+        assert_eq!(p.active(), vec!["DisableWarRoom"]);
+        let err = p.check(Lock::WarRoom).unwrap_err();
+        assert!(err.contains("DisableWarRoom") && err.contains("War Room"));
+        assert!(p.check(Lock::Mcp).is_ok());
+    }
+
+    #[test]
     fn corp_edition_locks_what_infosec_rejected() {
         let corp = Edition::Corp.locks();
         for lock in [
@@ -957,6 +980,8 @@ mod tests {
             Lock::WorktreeSpawn,
             Lock::PreviewBrowser,
             Lock::Mcp,
+            // Lockable by policy only (decision 2026-10-29).
+            Lock::WarRoom,
         ] {
             assert!(!corp.is_locked(lock), "{lock:?}");
         }
