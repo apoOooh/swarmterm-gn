@@ -769,15 +769,23 @@ fn spawn_terminal_inner(
     options: CreateTerminalOptions,
     on_data: Channel<PtyOut>,
 ) -> CreateTerminalResult {
+    // The renderer quotes a brief for the shell the pane asked for. If that
+    // shell is unavailable, `plan_spawn` falls back to the default one, which
+    // would parse a POSIX-quoted brief differently (`'a''' ; calc ; '''b'`
+    // runs `calc` in PowerShell). Refuse such a launch instead.
+    let shell_id = options.shell_id.as_deref();
+    let shell_available = shell_id.map(|id| crate::shell::resolve_shell(id).is_some());
+    if let Err(e) = check_shell_for_line(
+        shell_id,
+        shell_available,
+        options.initial_command.as_deref(),
+    ) {
+        return CreateTerminalResult::err(e);
+    }
     // Admin policy: refuse bypass/YOLO lines here, on the final command, so
     // every path that builds one (menus, restore, worktree.spawn) is covered.
-    // The flavor of the shell the pane really gets: an unavailable shell
-    // falls back to the default one, like `plan_spawn` does.
     let flavor = crate::policy::ShellFlavor::from_shell_id(
-        options
-            .shell_id
-            .as_deref()
-            .filter(|id| crate::shell::resolve_shell(id).is_some()),
+        shell_id.filter(|_| shell_available == Some(true)),
     );
     if let Some(line) = launch_line_to_check(
         options.initial_command.as_deref(),
@@ -825,6 +833,24 @@ fn spawn_terminal_inner(
     spawn_local(app, state, id, plan, on_data)
 }
 
+/// A pane that types a line must get the shell it asked for: the line was
+/// quoted for that shell, and the default shell may read it differently.
+/// `available` is `resolve_shell(id).is_some()` for a requested `id`.
+/// `default` (or no id) always resolves to the default shell, so it passes.
+fn check_shell_for_line(
+    shell_id: Option<&str>,
+    available: Option<bool>,
+    initial: Option<&str>,
+) -> Result<(), String> {
+    let has_line = initial.is_some_and(|l| !l.trim().is_empty());
+    match shell_id {
+        Some(id) if id != "default" && has_line && available == Some(false) => Err(format!(
+            "shell-unavailable: the shell \"{id}\" is not available, so the pane's command was not run in another shell. Pick an available shell for this pane."
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// The line the admin bypass check reads. The renderer's `launch_line`
 /// (blank = absent) is trusted only when the typed line is that prefix plus
 /// nothing, or plus one brief quoted exactly as the renderer quotes it for
@@ -858,6 +884,7 @@ fn launch_line_to_check<'a>(
         {
             !text.starts_with('-')
                 && !text.chars().any(char::is_control)
+                && !windows_expansion(text, flavor)
                 && crate::policy::quote_for_shell(text, flavor) == quoted
         }
         _ => false,
@@ -867,6 +894,17 @@ fn launch_line_to_check<'a>(
     } else {
         Some(line)
     }
+}
+
+/// `%` and `!` expand in cmd (`%VAR%`, delayed `!VAR!`) even inside the
+/// renderer's quoting, and an expanded value can carry flags the check never
+/// saw; PowerShell gets the same rule so both Windows shells stay simple. Such
+/// a brief is not trusted: the whole line is checked instead (the launch
+/// still runs if that line passes, so plain briefs with `%` only lose the
+/// skip, never the pane).
+fn windows_expansion(text: &str, flavor: crate::policy::ShellFlavor) -> bool {
+    use crate::policy::ShellFlavor::{Cmd, PowerShell};
+    matches!(flavor, Cmd | PowerShell) && text.contains(['%', '!'])
 }
 
 /// Everything a pane is started with, resolved once for either backend.
@@ -1628,8 +1666,22 @@ mod tests {
         let ps = "claude 'it''s --yolo '";
         assert_eq!(in_shell(ps, "claude", PowerShell), Some("claude"));
         let cmd = r#"claude "50"^%" --yolo""#;
-        assert_eq!(in_shell(cmd, "claude", Cmd), Some("claude"));
+        // `%` / `!` in a Windows-shell brief: never trusted, whole line checked.
+        assert_eq!(in_shell(cmd, "claude", Cmd), Some(cmd));
         assert_eq!(in_shell(cmd, "claude", Posix), Some(cmd));
+        let plain = r#"claude "run the tests --yolo""#;
+        assert_eq!(in_shell(plain, "claude", Cmd), Some("claude"));
+        for (line, f) in [
+            (r#"claude "%X% --yolo""#, Cmd),
+            (r#"claude "!X! --yolo""#, Cmd),
+            ("claude '50% --yolo'", PowerShell),
+            ("claude 'hi! --yolo'", PowerShell),
+        ] {
+            assert_eq!(in_shell(line, "claude", f), Some(line), "{line}");
+        }
+        // POSIX shells do not expand these inside single quotes.
+        let pct = "claude '50% done!'";
+        assert_eq!(in_shell(pct, "claude", Posix), Some("claude"));
         let dq = "claude \"use --yolo\"";
         assert_eq!(in_shell(dq, "claude", PowerShell), Some(dq));
         // A brief that would parse as a flag is never skipped (review
@@ -1660,6 +1712,21 @@ mod tests {
         );
         assert_eq!(pick(Some(base), None), Some(base));
         assert_eq!(pick(None, Some(base)), None);
+    }
+
+    #[test]
+    fn unavailable_shell_refuses_a_line_quoted_for_it() {
+        use super::check_shell_for_line as check;
+        let brief = Some(r"claude 'a''' ; calc ; '''b'");
+        let err = check(Some("git-bash"), Some(false), brief).unwrap_err();
+        assert!(err.starts_with("shell-unavailable"), "{err}");
+        assert!(check(Some("wsl"), Some(false), brief).is_err());
+        // Available shell, the default shell or no line: nothing to refuse.
+        assert!(check(Some("git-bash"), Some(true), brief).is_ok());
+        assert!(check(Some("default"), Some(false), brief).is_ok());
+        assert!(check(None, None, brief).is_ok());
+        assert!(check(Some("git-bash"), Some(false), None).is_ok());
+        assert!(check(Some("git-bash"), Some(false), Some("  ")).is_ok());
     }
 
     #[test]
