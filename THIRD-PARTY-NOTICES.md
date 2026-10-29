@@ -1,5 +1,12 @@
 # Third-party notices
 
+This file lists components whose code or data was copied or ported into this
+repository, and bundled assets with their own notices. The complete list of
+Rust and npm dependencies with their licences ships with every release as
+CycloneDX SBOMs (`sbom-rust.cdx.json`, `sbom-rust-host.cdx.json`, `sbom-npm.cdx.json`, covered by
+`SHA256SUMS.txt`). CI enforces the dependency licence allow list in
+`src-tauri/deny.toml`.
+
 ## herdr (Apache License 2.0)
 
 The agent-state detection rule data and engine semantics under

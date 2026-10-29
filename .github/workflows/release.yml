@@ -112,6 +112,24 @@ jobs:
         with:
           name: windows-installer
           path: release-assets
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Generate CycloneDX SBOMs
+        env:
+          # Pinned tool version; bump deliberately.
+          CARGO_CYCLONEDX_VERSION: 0.5.7
+        run: |
+          cargo install cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION" --locked
+          (cd src-tauri && cargo cyclonedx --format json --all-features --target x86_64-pc-windows-msvc)
+          # The app crate's SBOM covers its tree; the terminal host is a
+          # separate workspace member with its own file.
+          mv src-tauri/swarmterm.cdx.json release-assets/sbom-rust.cdx.json
+          mv src-tauri/host/swarmterm-host.cdx.json release-assets/sbom-rust-host.cdx.json
+          # npm sbom reads the installed tree; scripts are not needed for it.
+          npm ci --ignore-scripts
+          npm sbom --sbom-format cyclonedx --omit=dev > release-assets/sbom-npm.cdx.json
       - name: Add checksums and publish after all checks pass
         env:
           GH_TOKEN: ${{ github.token }}
@@ -129,7 +147,7 @@ jobs:
             test ! -e "$asset"
             mv -- "$installer" "$asset"
           fi
-          (cd release-assets && sha256sum *.exe > SHA256SUMS.txt)
+          (cd release-assets && sha256sum *.exe *.cdx.json > SHA256SUMS.txt)
 
           state=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null || true)
           if [ "$state" = false ]; then

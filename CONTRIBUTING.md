@@ -3,6 +3,11 @@
 Thanks for your interest! This page covers everything you need to go from
 `git clone` to a merged pull request.
 
+Swarmterm GN is an independent project (it started as a fork of
+duongducnguyen/swarmterm and is no longer synced with it). Contribute here,
+not upstream. Project decisions are in [`docs/decisions.md`](docs/decisions.md);
+security issues go through [`SECURITY.md`](SECURITY.md), not public issues.
+
 ## Getting set up
 
 The GN fork supports Windows x64. Install the prerequisites from the
@@ -31,6 +36,12 @@ locally first:
 | Rust tests | `cargo test` *(from `src-tauri/`)* |
 | Rust formatting | `cargo fmt --check` *(from `src-tauri/`)* |
 | Rust lints | `cargo clippy --all-targets -- -D warnings` *(from `src-tauri/`)* |
+| Rust advisories, licences, sources | `cargo deny check advisories licenses sources` *(from `src-tauri/`, needs `cargo install cargo-deny`)* |
+| npm advisories | `npm audit --omit=dev --audit-level=high` |
+
+New dependencies must use a licence on the allow list in `src-tauri/deny.toml`.
+A change that adds a network connection or stores new data updates
+[`PRIVACY.md`](PRIVACY.md) in the same pull request.
 
 For changes that touch terminal lifecycle, focus, the War Room, or worktrees,
 also walk the relevant section of
