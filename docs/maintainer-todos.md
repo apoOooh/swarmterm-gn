@@ -44,13 +44,9 @@ do them (the GitHub API answers 404). They come from the corporate-readiness wor
 - [ ] **Release environment approval** (optional): Settings → Environments → `release` → required reviewers, if a
       second person should approve each publish.
 
-## External accounts
-
-- [ ] **OpenSSF Best Practices badge**: register the project on https://www.bestpractices.dev with the owner's
-      GitHub account and fill in the questionnaire (answers mostly link to `SECURITY.md`, `CONTRIBUTING.md`,
-      `docs/release-process.md`, CI and the SBOMs). Then add the badge to `README.md`.
-
 ## Not planned
+
+- OpenSSF Best Practices badge (bestpractices.dev): not submitted, by decision (2026-10-29).
 
 - Authenticode signing of the installer (SignPath Foundation, Azure Trusted Signing): skipped by decision
   (2026-10-29). Downloads are verified by `SHA256SUMS.txt`, SBOMs and build provenance instead.
