@@ -38,9 +38,29 @@ fn class(pid: u32) -> u32 {
     }
 }
 
+/// The inherited PATH with System32 first. CI runs `cargo test` from Git
+/// Bash, whose PATH the GitHub windows runner hands to cmd without System32,
+/// so a bare `ping` there failed with "'ping' is not recognized", the tree
+/// exited at once and the job stayed empty. Every test tree starts through
+/// `cmd`, so this one PATH covers nested shells and node's `cmd` as well.
+fn test_path() -> std::ffi::OsString {
+    let mut dirs = vec![std::path::PathBuf::from(sys32(""))];
+    if let Some(p) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&p));
+    }
+    std::env::join_paths(dirs).expect("PATH joins")
+}
+
 /// `cmd /c <line>` hidden, with stdout discarded.
 fn cmd(line: &str) -> std::process::Child {
     Command::new(sys32("cmd.exe"))
+        .env("PATH", test_path())
+        // cmd resolves a bare `ping` only through PATHEXT; keep the inherited
+        // one and fall back to cmd's defaults on a runner that does not set it.
+        .env(
+            "PATHEXT",
+            std::env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into()),
+        )
         .raw_arg(format!("/d /c {line}"))
         .stdout(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
@@ -56,7 +76,12 @@ fn wait_members(job: &JobHandle, pred: impl Fn(&[(u32, String)]) -> bool) -> Vec
         if pred(&names) {
             return names;
         }
-        assert!(Instant::now() < deadline, "timed out, members {names:?}");
+        assert!(
+            Instant::now() < deadline,
+            "timed out after {WAIT:?}, members {names:?} (raw pids {:?}; empty means the \
+             tree exited, e.g. a command it runs was not found)",
+            job.pids()
+        );
         std::thread::sleep(Duration::from_millis(100));
     }
 }
