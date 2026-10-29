@@ -127,8 +127,8 @@ proxies without credentials and certificate variables (`SSL_CERT_FILE`,
 `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`). A strict mode keeps only system
 variables plus what corporate networks and lockdowns rely on:
 `__PSLockdownPolicy` (dropping it would lift a PowerShell constrained-language
-lockdown set by that variable), `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (any
-case; still dropped when the URL carries credentials) and the CA variables
+lockdown set by that variable), `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
+`NO_PROXY` (any case; still dropped when the URL carries credentials) and the CA variables
 `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`,
 `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`. An allow list passes named variables
 (`src-tauri/src/terminal_env.rs`, Settings → Terminal → Environment).

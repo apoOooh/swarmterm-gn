@@ -232,6 +232,7 @@ const STRICT_NETWORK_NAMES: &[&str] = &[
     "__PSLOCKDOWNPOLICY",
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "ALL_PROXY",
     "NO_PROXY",
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
@@ -744,6 +745,8 @@ mod tests {
             ("https_proxy", "http://proxy.corp:8080"),
             ("NO_PROXY", "localhost,.corp"),
             ("no_proxy", "localhost"),
+            ("ALL_PROXY", "socks5://proxy.corp:1080"),
+            ("all_proxy", "http://proxy.corp:8080"),
             ("SSL_CERT_FILE", "c.pem"),
             ("SSL_CERT_DIR", "certs"),
             ("NODE_EXTRA_CA_CERTS", "c.pem"),
@@ -756,6 +759,7 @@ mod tests {
         }
         // A credentialed proxy is still dropped, unless the admin allows it.
         assert!(!policy.passes_var("HTTPS_PROXY", "http://me:pw@proxy:8080"));
+        assert!(!policy.passes_var("all_proxy", "socks5://me:pw@proxy:1080"));
         let allowed = EnvPolicy {
             allow: vec!["HTTPS_PROXY".into()],
             ..policy.clone()
