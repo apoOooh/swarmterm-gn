@@ -74,6 +74,30 @@ jobs:
         shell: bash
         working-directory: .
 
+  supply-chain:
+    name: Dependency audit (cargo deny + npm audit)
+    runs-on: ubuntu-latest
+    env:
+      # Pinned tool version; bump deliberately.
+      CARGO_DENY_VERSION: 0.20.2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
+      # Policy in src-tauri/deny.toml: RustSec advisories, licence allow list
+      # (GPL-3.0 compatible), crate sources; duplicate versions only warn.
+      - name: cargo deny
+        working-directory: src-tauri
+        run: cargo deny check advisories licenses bans sources
+      - name: npm audit (production dependencies)
+        run: npm audit --omit=dev --audit-level=high
+
   secrets:
     name: Public history secret scan
     runs-on: ubuntu-latest

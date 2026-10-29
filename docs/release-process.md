@@ -49,17 +49,20 @@ outside `main` history, or a version without `docs/releases/<version>.md`.
 Through 1.19.0, tags were on `dev` and `main` was merged afterwards. Those
 tags are on `main`'s history once that merge is pushed, so re-running the
 workflow for them still passes; before it, a retry fails the `main` check.
-Existing upstream tags are retained; the first GN release is `v1.1.0`.
+Tags inherited from before the fork are retained; the first GN release is `v1.1.0`.
 
 ## What the workflow does
 
 1. Verify the existing tag, version agreement and release notes.
 2. Run the reusable CI workflow: frontend types, unit tests, production build,
-   headless browser tests, full-history secret scan and Windows Rust checks.
+   headless browser tests, full-history secret scan, Windows Rust checks and
+   the dependency audit (`cargo deny`, `npm audit`).
 3. Build the Windows x64 NSIS installer with locked Rust dependencies.
-4. Download the build artifact in a separate publishing job and add
-   `SHA256SUMS.txt`.
-5. Create a draft, upload both files, then publish the release only after all
+4. Download the build artifact in a separate publishing job, generate the
+   CycloneDX SBOMs `sbom-rust.cdx.json`, `sbom-rust-host.cdx.json` and
+   `sbom-npm.cdx.json`, and add
+   `SHA256SUMS.txt` over all assets.
+5. Create a draft, upload all files, then publish the release only after all
    checks and the installer build succeed.
 6. Optional: submit the new version to winget (see below). This step is
    skipped without the opt-in secret and variable.
