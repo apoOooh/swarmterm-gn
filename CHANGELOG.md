@@ -2,6 +2,129 @@
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-10-29
+
+Corporate readiness release: no telemetry, no updater, secrets withheld from
+child processes, hardened agent permissions, an administrator policy, a
+second **Swarmterm GN Corp** installer and a verifiable supply chain. Read
+**Changed** and **Removed** before upgrading: several defaults are stricter.
+
+### Added
+
+- Environment filter for every child process: panes, command routines and
+  every program Swarmterm itself starts (git, editors, MarkText, reveal in
+  Explorer, WSL/Codex/OpenCode probes, the buzzkey companion) get a filtered
+  copy of the app's environment. **Settings → Terminal → Environment**:
+  **Hide secrets** (default) drops secret-looking names (`*_API_KEY`,
+  `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_PAT`, `*_DSN`, `PGPASSWORD`,
+  `MYSQL_PWD`, `AWS_*`/`ANTHROPIC_*`/`OPENAI_*`/`AZURE_OPENAI_*` credentials
+  and more) and values that are URLs with credentials; **System variables
+  only** keeps just the Windows variables a shell needs; **Always pass these
+  variables** is an allow list (prefixes with `*`). The policy is saved in
+  the app data folder (`env-policy.json`) and applies to panes restored at
+  startup. Git run by Swarmterm always passes `-c core.fsmonitor=`.
+- Agent safety: bypass launch modes (Claude Bypass and **Auto**, Codex YOLO,
+  Gemini/Qwen YOLO, Copilot allow-all, Cursor force) ask for confirmation
+  before launch and mark the pane with a red badge.
+- **Settings → Terminal → Agent safety**: **Allow agents to run prompts in
+  other panes** (War Room execute, off by default) and an opt-in for
+  `worktree.spawn` workers to inherit a bypass mode (off by default).
+- Administrator policy from `HKLM\Software\Policies\SwarmtermGN` (then
+  HKCU; HKLM wins per value), read once at start and enforced in the
+  backend: `DisableBypassModes`, `DisableWarRoomExecute`, `DisableWarRoom`,
+  `DisableWorktreeSpawn`, `DisableMcp`, `DisableCompanion`,
+  `DisableModelDownload`, `DisableRoutineCommands`, `DisablePreviewBrowser`,
+  `EnvPolicy` (`default`/`strict`) and `EnvAllow`. Invalid or unreadable
+  values fail closed. Locked controls are greyed out with "Managed by your
+  administrator" and Settings lists the active policies. ADMX/ADML
+  templates for Group Policy and Intune are in `docs/admin/`
+  ([admin-policy.md](docs/admin-policy.md)).
+- **Swarmterm GN Corp** edition, a second installer
+  (`Swarmterm.GN.Corp_<version>_x64-setup.exe`): own identifier
+  `com.apooooh.swarmterm.gn.corp`, installs per machine, with
+  `DisableBypassModes`, `DisableWarRoomExecute`, `DisableCompanion`,
+  `DisableModelDownload` and `EnvPolicy=default` compiled in (the registry
+  can add locks, never lift them); the buzzkey installer/updater and the
+  speech-model download are not in the program. Both editions install side
+  by side ([editions.md](docs/editions.md)).
+- Release assets: CycloneDX SBOMs (`sbom-rust.cdx.json`,
+  `sbom-rust-host.cdx.json`, `sbom-npm.cdx.json`), `SHA256SUMS.txt` over all
+  assets, and signed build provenance for every asset
+  (`gh attestation verify`).
+- Documents: [PRIVACY.md](PRIVACY.md), [TERMS.md](TERMS.md),
+  [SECURITY.md](SECURITY.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
+  [security model](docs/security-model.md), [editions](docs/editions.md),
+  [enterprise deployment](docs/enterprise-deployment.md) (incl. download
+  verification), [administrator policy](docs/admin-policy.md), the corporate
+  security review pack in [English](docs/corp-review/review-pack.en.md) and
+  [German](docs/corp-review/review-pack.de.md),
+  [decisions](docs/decisions.md) and
+  [maintainer to-dos](docs/maintainer-todos.md).
+- Swarmterm GN is stated to be an independent project: it started as a fork
+  of duongducnguyen/swarmterm and is no longer based on or synced with it.
+
+### Changed
+
+- **Behaviour change:** secrets in Swarmterm's own environment no longer
+  reach panes, routines or helper programs by default. An agent that
+  authenticates through an environment variable (`ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `GEMINI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, …) needs
+  that name in **Always pass these variables**, or log in through its own
+  configuration (`/login`, Swarmterm accounts), which is unaffected.
+- **Upgrade:** the first start after upgrading uses the default filter
+  (**Hide secrets**, empty allow list) until Settings has saved a policy.
+- **Behaviour change:** Claude **Auto** (`--permission-mode auto`) counts as
+  a dangerous mode: confirmed, badged and locked by `DisableBypassModes`.
+- **Behaviour change:** workers started by `worktree.spawn` no longer
+  inherit a bypass mode from the spawning pane unless the Agent safety
+  setting allows it.
+- **Behaviour change:** War Room execute by agents is refused unless
+  allowed in Settings; the check runs in Rust. Probes and your own sends
+  still work.
+- **Behaviour change:** the MCP server requires `Authorization: Bearer
+  <token>`; other schemes are refused. Each pane gets a random secret token
+  (`SWARMTERM_SESSION`, rotated on respawn) that is separate from the public
+  pane id shown to War Room peers. A pane started by an older version and
+  still running in the terminal host may need a restart to reach MCP.
+- **Behaviour change:** Markdown and other previews no longer load plain
+  `http:` images (the alt text shows instead); `https:`, relative and data
+  images still load. The release CSP also gains `object-src 'none'`,
+  `base-uri 'self'` and `form-action 'none'`, and the dev-server socket is
+  only allowed in dev builds.
+- Preview webviews (web preview column, popout) no longer have access to
+  the app's IPC; the capability is scoped to the main window.
+- Corp settings are separate from the Standard edition's and are not
+  migrated (different identifier and app data folder).
+
+### Removed
+
+- Google Analytics telemetry. Swarmterm GN sends no telemetry or usage data;
+  the release workflow fails if a built executable or the renderer contains
+  an analytics endpoint.
+- The disabled Tauri updater plugin, its tray entry, update dialogs and the
+  `latest.json` helper. The app never checks for or downloads updates of
+  itself; install new versions from GitHub Releases or your software
+  distribution.
+
+### Security
+
+- Supply chain: third-party GitHub Actions pinned to full commit SHAs,
+  workflows start with no token permissions, release builds use
+  `--locked`, no build cache and the Rust toolchain from
+  `rust-toolchain.toml`; npm packages install without scripts after
+  `npm audit signatures`. CI adds `cargo deny` (advisories, licences,
+  sources), `npm audit`, CodeQL, OpenSSF Scorecard and a REUSE licensing
+  lint; Dependabot and CODEOWNERS are configured.
+- Dependency updates clear the RustSec findings (rustls, webpki, tokio,
+  plist, chacha20, clipboard-win); remaining unmaintained crates are
+  documented in `deny.toml`.
+- Launch-line checks read the agent command with each shell's quoting and
+  ignore worker briefs only when they are safely quoted; briefs are quoted
+  safely for PowerShell, cmd, POSIX shells and fish. A refused launch also
+  stops a surviving detached host pane.
+- Licensing is REUSE compliant (`REUSE.toml`, `LICENSES/`,
+  `third-party-licenses/`).
+
 ## [1.25.4] - 2026-10-29
 
 - Media: images detected in pane output load their thumbnail in the strip and
