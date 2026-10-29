@@ -3,7 +3,8 @@ import {
   DEFAULT_ENV_POLICY,
   ENV_POLICY_KEY,
   ignoredAllowEntries,
-  parseAllowList, parseEnvPolicy,
+  parseAllowList,
+  parseEnvPolicy,
   readEnvPolicy,
   storeEnvPolicy
 } from './env-policy'
