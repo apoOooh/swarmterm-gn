@@ -49,7 +49,9 @@ pub struct AdminPolicy {
 
 /// The boolean locks, by registry value name. One table drives parsing,
 /// the "active policies" list and the refusal messages.
-const FLAGS: &[(&str, fn(&mut AdminPolicy) -> &mut bool)] = &[
+type FlagField = fn(&mut AdminPolicy) -> &mut bool;
+
+const FLAGS: &[(&str, FlagField)] = &[
     ("DisableBypassModes", |p| &mut p.disable_bypass_modes),
     ("DisableWarRoomExecute", |p| &mut p.disable_war_room_execute),
     ("DisableWorktreeSpawn", |p| &mut p.disable_worktree_spawn),
@@ -180,9 +182,11 @@ impl AdminPolicy {
     /// a lock set by either stays set; the stricter env mode wins.
     pub fn combine(&self, other: &AdminPolicy) -> AdminPolicy {
         let mut out = self.clone();
+        // FLAGS hands out `&mut` accessors, so read `other` through one copy.
+        let mut theirs = other.clone();
         for (_, field) in FLAGS {
-            let theirs = *field(&mut other.clone());
-            *field(&mut out) |= theirs;
+            let on = *field(&mut theirs);
+            *field(&mut out) |= on;
         }
         out.env_policy = match (self.env_policy, other.env_policy) {
             (Some(FilterMode::Strict), _) | (_, Some(FilterMode::Strict)) => {
@@ -200,9 +204,10 @@ impl AdminPolicy {
 
     /// Registry value names of the active policies, for logs and Settings.
     pub fn active(&self) -> Vec<&'static str> {
+        let mut copy = self.clone();
         let mut out: Vec<&'static str> = FLAGS
             .iter()
-            .filter(|(_, field)| *field(&mut self.clone()))
+            .filter(|(_, field)| *field(&mut copy))
             .map(|(n, _)| *n)
             .collect();
         if self.env_policy.is_some() {
@@ -337,8 +342,15 @@ pub fn bypass_flag(line: &str) -> Option<String> {
     None
 }
 
-/// Read both hives once (HKLM wins per value) and log what is active and
-/// what was ignored. A missing key is the normal, unmanaged case.
+/// Locks compiled into the binary. Empty for the normal build; the planned
+/// `corp` build fills it so its defaults hold even without any registry key.
+fn compiled_in() -> AdminPolicy {
+    AdminPolicy::default()
+}
+
+/// Read both hives once (HKLM wins per value), add the compiled-in locks and
+/// log what is active and what was ignored. A missing key is the normal,
+/// unmanaged case.
 pub fn load() -> AdminPolicy {
     #[cfg(windows)]
     let values = merge_hives(
@@ -347,7 +359,8 @@ pub fn load() -> AdminPolicy {
     );
     #[cfg(not(windows))]
     let values = BTreeMap::new();
-    let (policy, warnings) = parse(&values);
+    let (registry, warnings) = parse(&values);
+    let policy = compiled_in().combine(&registry);
     for w in &warnings {
         eprintln!("policy: {w}");
     }
@@ -383,8 +396,10 @@ pub mod registry {
     const MAX_DATA: usize = 64 * 1024;
 
     fn utf16(buf: &[u8]) -> Vec<u16> {
-        buf.chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        buf.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect()
     }
 

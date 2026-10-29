@@ -1505,6 +1505,13 @@ pub async fn set_swarmterm_mcp(
     enabled: bool,
 ) -> Result<(), String> {
     files_main_only(&window)?;
+    // Switching on under DisableMcp is refused here with the policy message;
+    // `toggle::set_enabled` refuses it again as the backstop.
+    if enabled {
+        app.state::<AppState>()
+            .admin_policy
+            .check(crate::policy::Lock::Mcp)?;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(id) = account_id.as_deref() {
             crate::accounts::resolve(&app, id, Some(&agent_id))?;
