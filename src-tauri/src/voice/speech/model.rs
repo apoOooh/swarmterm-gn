@@ -21,6 +21,9 @@ pub struct ModelInfo {
     pub sha256: &'static str,
 }
 
+// Corp compiles the download out (`speech::download`); this item then
+// only serves tests. Models an administrator places in the folder still load.
+#[cfg_attr(feature = "corp", allow(dead_code))]
 const BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
 
 /// Multilingual models only: the GN user dictates German and English.
@@ -90,6 +93,9 @@ pub fn find(id: &str) -> Option<&'static ModelInfo> {
     CATALOG.iter().find(|m| m.id == id)
 }
 
+// Corp compiles the download out (`speech::download`); this item then
+// only serves tests. Models an administrator places in the folder still load.
+#[cfg_attr(feature = "corp", allow(dead_code))]
 pub fn url(model: &ModelInfo) -> String {
     format!("{BASE_URL}{}", model.file)
 }
@@ -98,6 +104,9 @@ pub fn path(dir: &Path, model: &ModelInfo) -> PathBuf {
     dir.join(model.file)
 }
 
+// Corp compiles the download out (`speech::download`); this item then
+// only serves tests. Models an administrator places in the folder still load.
+#[cfg_attr(feature = "corp", allow(dead_code))]
 fn part_path(dir: &Path, model: &ModelInfo) -> PathBuf {
     dir.join(format!("{}.part", model.file))
 }
@@ -106,6 +115,9 @@ pub fn is_ready(dir: &Path, model: &ModelInfo) -> bool {
     path(dir, model).is_file()
 }
 
+// Corp compiles the download out (`speech::download`); this item then
+// only serves tests. Models an administrator places in the folder still load.
+#[cfg_attr(feature = "corp", allow(dead_code))]
 /// Hashes as bytes arrive and moves the file into place only on a match.
 /// Pure apart from the file system, so the hash gate is unit-tested without
 /// a network.
@@ -118,6 +130,9 @@ pub struct PartFile {
     expected: &'static str,
 }
 
+// Corp compiles the download out (`speech::download`); this item then
+// only serves tests. Models an administrator places in the folder still load.
+#[cfg_attr(feature = "corp", allow(dead_code))]
 impl PartFile {
     pub fn create(dir: &Path, model: &'static ModelInfo) -> Result<Self, String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?;
@@ -178,6 +193,9 @@ impl PartFile {
     }
 }
 
+// Corp compiles the download out (`speech::download`); this item then
+// only serves tests. Models an administrator places in the folder still load.
+#[cfg_attr(feature = "corp", allow(dead_code))]
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

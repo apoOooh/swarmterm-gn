@@ -272,14 +272,16 @@ mod spawn_reservation_tests {
     #[test]
     fn same_id_waits_for_the_first_create() {
         let first = SpawnReservation::take("res-test-a").unwrap();
-        let t = std::thread::spawn(|| {
-            let t0 = Instant::now();
+        // Timed from before the spawn: a thread that starts late on a busy
+        // machine must not shorten the measured wait.
+        let t0 = Instant::now();
+        let t = std::thread::spawn(move || {
             let _second = SpawnReservation::take("res-test-a").unwrap();
             t0.elapsed()
         });
         std::thread::sleep(Duration::from_millis(100));
         drop(first);
-        assert!(t.join().unwrap() >= Duration::from_millis(90));
+        assert!(t.join().unwrap() >= Duration::from_millis(100));
     }
 
     #[test]
@@ -472,6 +474,7 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     // exists to show. Drop it here and in `read_loop`, mirroring the two
     // places the terminal leaves `AppState.terminals`.
     state.mcp_clients.lock().unwrap().forget(&id);
+    state.forget_session_token(&id);
     // The context chip too: a respawned Claude must not inherit the old %.
     state.context_usage.lock().unwrap().forget(&id);
     state.rate_limit_usage.lock().unwrap().forget(&id);
@@ -480,6 +483,32 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     // see the peer gone rather than run out its timeout.
     state.peer_states.lock().unwrap().forget(&id);
     state.peer_wake.notify_waiters();
+}
+
+/// Settings → Terminal "Environment" (what panes and command routines
+/// inherit from the app). Takes effect for the next spawn; running panes keep
+/// the environment they started with.
+#[tauri::command]
+pub fn env_policy_set(state: State<'_, AppState>, policy: crate::terminal_env::EnvPolicy) {
+    crate::terminal_env::persist(&policy);
+    state.set_env_policy(policy);
+}
+
+/// Settings → Terminal → Agent safety (War Room execute between agents). Checked per MCP call,
+/// so a change applies to the next call without restarting any pane.
+#[tauri::command]
+pub fn agent_policy_set(state: State<'_, AppState>, policy: crate::agent_policy::AgentPolicy) {
+    *state
+        .agent_policy
+        .write()
+        .unwrap_or_else(|e| e.into_inner()) = policy;
+}
+
+/// Admin policy for the renderer: greys out locked controls. Display only —
+/// every lock is enforced again at its point of action in Rust.
+#[tauri::command]
+pub fn policy_get(state: State<'_, AppState>) -> crate::policy::PolicyView {
+    state.admin_policy.view()
 }
 
 /// Settings → Terminal "Process priority" plus the per-workspace opt-outs,
@@ -891,7 +920,10 @@ pub fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
     if !crate::links::is_allowed_editor(&bin) {
         return Err(format!("editor not allowed: {bin}"));
     }
-    std::process::Command::new(&bin)
+    // Filtered like a pane: an editor is a GUI app, but its extensions and
+    // integrated terminals inherit what we pass, and nothing it needs lives
+    // only in the app's secrets (users allow-list what an editor needs).
+    crate::terminal_env::command(&bin)
         .args(&args)
         .spawn()
         .map(|mut child| {
@@ -925,6 +957,7 @@ pub fn war_room_join(
     cwd: String,
     display_name: String,
 ) -> Result<(), String> {
+    state.admin_policy.check(crate::policy::Lock::WarRoom)?;
     let joined_id = terminal_id.clone();
     // TOCTOU: this liveness check and the `war_rooms.join` insert below take
     // two separate mutexes with no lock held across both, so a pane that dies
@@ -1196,6 +1229,7 @@ pub fn war_room_moderator_send(
     content: String,
     mode: Option<String>,
 ) -> Result<usize, String> {
+    state.admin_policy.check(crate::policy::Lock::WarRoom)?;
     let mode = crate::warroom::MessageMode::parse(mode.as_deref())?;
     let (event, deliveries) = {
         let mut reg = state.war_rooms.lock().unwrap();
@@ -1480,6 +1514,13 @@ pub async fn set_swarmterm_mcp(
     enabled: bool,
 ) -> Result<(), String> {
     files_main_only(&window)?;
+    // Switching on under DisableMcp is refused here with the policy message;
+    // `toggle::set_enabled` refuses it again as the backstop.
+    if enabled {
+        app.state::<AppState>()
+            .admin_policy
+            .check(crate::policy::Lock::Mcp)?;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(id) = account_id.as_deref() {
             crate::accounts::resolve(&app, id, Some(&agent_id))?;
@@ -1519,6 +1560,7 @@ pub async fn set_swarmterm_mcp(
 #[tauri::command]
 pub async fn run_routine_command(
     webview: tauri::Webview,
+    state: State<'_, AppState>,
     command: String,
     cwd: String,
     timeout_secs: u64,
@@ -1526,9 +1568,18 @@ pub async fn run_routine_command(
     if webview.label() != "main" {
         return Err("Routines are available only in the main application".into());
     }
+    state
+        .admin_policy
+        .check(crate::policy::Lock::RoutineCommands)?;
     crate::routine_cmd::validate(&command, &cwd, timeout_secs)?;
+    let env = state.env_policy_snapshot().inherited();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::routine_cmd::run(&command, &cwd, std::time::Duration::from_secs(timeout_secs))
+        crate::routine_cmd::run(
+            &command,
+            &cwd,
+            std::time::Duration::from_secs(timeout_secs),
+            &env,
+        )
     })
     .await
     .map_err(|e| e.to_string())?

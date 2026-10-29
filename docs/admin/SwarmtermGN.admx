@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Swarmterm GN administrative template. See docs/admin-policy.md. -->
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="swarmtermgn" namespace="SwarmtermGN.Policies" />
+    <using prefix="windows" namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <supportedOn>
+    <definitions>
+      <definition name="SUPPORTED_SwarmtermGN" displayName="$(string.SUPPORTED_SwarmtermGN)" />
+    </definitions>
+  </supportedOn>
+  <categories>
+    <category name="SwarmtermGN" displayName="$(string.SwarmtermGN)" />
+  </categories>
+  <policies>
+    <policy name="DisableBypassModes" class="Both" displayName="$(string.DisableBypassModes)" explainText="$(string.DisableBypassModes_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableBypassModes">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DisableWarRoomExecute" class="Both" displayName="$(string.DisableWarRoomExecute)" explainText="$(string.DisableWarRoomExecute_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableWarRoomExecute">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DisableWarRoom" class="Both" displayName="$(string.DisableWarRoom)" explainText="$(string.DisableWarRoom_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableWarRoom">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DisableWorktreeSpawn" class="Both" displayName="$(string.DisableWorktreeSpawn)" explainText="$(string.DisableWorktreeSpawn_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableWorktreeSpawn">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DisableMcp" class="Both" displayName="$(string.DisableMcp)" explainText="$(string.DisableMcp_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableMcp">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DisableCompanion" class="Both" displayName="$(string.DisableCompanion)" explainText="$(string.DisableCompanion_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableCompanion">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DisableModelDownload" class="Both" displayName="$(string.DisableModelDownload)" explainText="$(string.DisableModelDownload_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableModelDownload">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DisableRoutineCommands" class="Both" displayName="$(string.DisableRoutineCommands)" explainText="$(string.DisableRoutineCommands_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableRoutineCommands">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DisablePreviewBrowser" class="Both" displayName="$(string.DisablePreviewBrowser)" explainText="$(string.DisablePreviewBrowser_Help)" key="Software\Policies\SwarmtermGN" valueName="DisablePreviewBrowser">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="EnvPolicy" class="Both" displayName="$(string.EnvPolicy)" explainText="$(string.EnvPolicy_Help)" presentation="$(presentation.EnvPolicy)" key="Software\Policies\SwarmtermGN">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <elements>
+        <enum id="EnvPolicyMode" valueName="EnvPolicy" required="true">
+          <item displayName="$(string.EnvPolicy_Default)"><value><string>default</string></value></item>
+          <item displayName="$(string.EnvPolicy_Strict)"><value><string>strict</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="EnvAllow" class="Both" displayName="$(string.EnvAllow)" explainText="$(string.EnvAllow_Help)" presentation="$(presentation.EnvAllow)" key="Software\Policies\SwarmtermGN">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <elements>
+        <multiText id="EnvAllowList" valueName="EnvAllow" />
+      </elements>
+    </policy>
+  </policies>
+</policyDefinitions>

@@ -44,6 +44,10 @@ export interface LaunchMode {
   id: string
   label: string
   args: string
+  /** Runs tools without asking and/or outside the sandbox. Selecting it needs
+   *  a confirmation, the pane shows a red badge, and MCP-spawned workers never
+   *  inherit it (lib/launch-mode-safety). */
+  dangerous?: true
 }
 
 export interface WorkspaceTemplate {
@@ -97,8 +101,10 @@ export const TEMPLATES: WorkspaceTemplate[] = [
       { id: 'default', label: 'Default', args: '--permission-mode default' },
       { id: 'acceptEdits', label: 'Accept edits', args: '--permission-mode acceptEdits' },
       { id: 'plan', label: 'Plan', args: '--permission-mode plan' },
-      { id: 'auto', label: 'Auto', args: '--permission-mode auto' },
-      { id: 'bypass', label: 'Bypass permissions', args: '--dangerously-skip-permissions' }
+      // Auto hands per-action approval to Claude's own classifier, so no
+      // prompt reaches the user: treated as dangerous (docs/decisions.md).
+      { id: 'auto', label: 'Auto', args: '--permission-mode auto', dangerous: true },
+      { id: 'bypass', label: 'Bypass permissions', args: '--dangerously-skip-permissions', dangerous: true }
     ],
     // --continue is scoped to the pane's cwd by claude itself; bare --resume
     // opens its session picker.
@@ -120,7 +126,7 @@ export const TEMPLATES: WorkspaceTemplate[] = [
     launchModes: [
       { id: 'auto', label: 'Auto', args: '-s workspace-write -a on-request' },
       { id: 'safe', label: 'Safe (read-only)', args: '-s read-only -a on-request' },
-      { id: 'yolo', label: 'YOLO', args: '--dangerously-bypass-approvals-and-sandbox' }
+      { id: 'yolo', label: 'YOLO', args: '--dangerously-bypass-approvals-and-sandbox', dangerous: true }
     ],
     // --last is filtered to the pane's cwd by codex itself.
     continueCommand: (base, how) => (how === 'pick' ? `${base} resume` : `${base} resume --last`)

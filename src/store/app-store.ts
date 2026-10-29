@@ -22,6 +22,11 @@ import {
 import type { ShellId } from '@/lib/terminal-pref'
 import { withCloseGuard } from '@/lib/close-guard'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
+import { workerLaunchMode } from '@/lib/launch-mode-safety'
+import { useAgentPolicyStore } from '@/store/agent-policy-store'
+import { usePolicyStore } from '@/store/policy-store'
+import type { LaunchModePrefs } from '@/lib/agent-pref'
+import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { clearWorktree } from '@/tauri/git'
 import { isTransientLock } from '@/lib/worktree-cleanup'
 import { awaitTerminalRelocated } from '@/lib/terminal-registry'
@@ -239,6 +244,9 @@ export interface AppActions {
     branch: string
     agentId?: string
     prompt: string
+    /** Settings → default launch mode per agent (lib/launch-mode-safety);
+     *  omitted = read from the pref store, so no caller skips it silently. */
+    launchModePrefs?: LaunchModePrefs
   }) => void
   clearWorktreeBinding: (path: string) => void
   clearWorktrees: (targets: ClearTarget[]) => Promise<void>
@@ -849,6 +857,17 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       // Fall back to the requester's agent; a plain-shell requester yields a
       // plain shell in the worktree — visible, never a silent drop.
       const agentId = p.agentId ?? requester.agentId
+      const launchMode = workerLaunchMode({
+        agentId,
+        requesterAgentId: requester.agentId,
+        requesterMode: requester.launchMode,
+        prefs: p.launchModePrefs ?? useAgentPrefStore.getState().defaultLaunchModes,
+        // The admin bypass lock overrides the user's opt-in (Rust would refuse
+        // the line anyway; this keeps the worker on a safe mode instead).
+        inheritBypass:
+          useAgentPolicyStore.getState().policy.workersInheritBypass &&
+          !usePolicyStore.getState().policy.disableBypassModes
+      })
       const newLeaf: LeafNode = {
         type: 'leaf',
         id: uid(),
@@ -860,12 +879,11 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         cwd: p.path,
         worktreeBranch: p.branch,
         initialPrompt: p.prompt,
-        // A worker runs unattended: inherit the requester's mode (same agent
-        // only — mode ids are per-agent) so a bypassed orchestrator doesn't
-        // spawn workers that stall on the first permission prompt.
-        ...(agentId === requester.agentId && requester.launchMode !== undefined
-          ? { launchMode: requester.launchMode }
-          : {})
+        // A safe requester mode carries over (same agent only), but bypass /
+        // YOLO never does: an agent asked over MCP must not be able to
+        // multiply its own unchecked mode. Explicit, so a bypass Settings
+        // default cannot apply to the worker later either.
+        ...(launchMode !== undefined ? { launchMode } : {})
       }
       return {
         workspaces: s.workspaces.map((w) =>

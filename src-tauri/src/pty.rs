@@ -128,6 +128,10 @@ pub struct CreateTerminalOptions {
     pub cwd: Option<String>,
     pub shell_id: Option<String>,
     pub initial_command: Option<String>,
+    /// The part of `initial_command` the admin bypass check reads: the agent
+    /// command plus its launch-mode args, without a worker's task brief (so
+    /// prose in a brief is never taken for a flag). Absent ⇒ the whole line.
+    pub launch_line: Option<String>,
     /// Whether the owning workspace enables MCP worktree tools for this pty.
     pub worktree_mode: Option<bool>,
     /// The workspace's repo folder, recorded so worktree tools can resolve the
@@ -515,6 +519,11 @@ pub struct AppState {
     /// nested with `terminals` or `war_rooms`, because the `/mcp` middleware
     /// touches it on every inbound request and must not contend with pty I/O.
     pub mcp_clients: Mutex<crate::mcp::clients::McpClients>,
+    /// MCP bearer secret -> pane id (`mcp::session_tokens`). The pane id is
+    /// public to War Room peers, so it never authorises anything itself. Its
+    /// own lock, never nested with `terminals` (`live_session_owner` takes
+    /// them one after the other).
+    pub session_tokens: Mutex<crate::mcp::session_tokens::SessionTokens>,
     /// Last context-window percentage each Claude pane's status line reported
     /// via `/status?ctx=` (`mcp::context_usage`). Its own lock, never nested:
     /// `/status` hits it as often as every 300 ms per Claude pane while
@@ -533,6 +542,95 @@ pub struct AppState {
     /// `Notify` carries no payload on purpose: waiters re-read the snapshot
     /// after each wake, which makes a lost intermediate change harmless.
     pub peer_wake: tokio::sync::Notify,
+    /// Settings → Terminal "Environment": what of the app's environment a
+    /// pane or command routine inherits. Read once per spawn and cloned, so
+    /// the lock is never held across a spawn or nested with `terminals`.
+    pub env_policy: std::sync::RwLock<crate::terminal_env::EnvPolicy>,
+    /// Settings → Terminal → Agent safety: what an agent may make other panes do (War Room
+    /// execute). Starts at the restrictive default until the renderer pushes
+    /// the user's choice, so an early MCP call is never more permissive.
+    pub agent_policy: std::sync::RwLock<crate::agent_policy::AgentPolicy>,
+    /// Admin policy (`policy.rs`), read once at startup and never written
+    /// afterwards: the snapshots below apply it on every read, so a renderer
+    /// push can never loosen a lock.
+    pub admin_policy: crate::policy::AdminPolicy,
+}
+
+impl AppState {
+    /// The live pane a bearer secret belongs to, or `None` (unknown secret, or
+    /// its pane is gone). The two locks are taken one after the other.
+    pub fn live_session_owner(&self, token: &str) -> Option<String> {
+        let id = self
+            .session_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owner(token)?;
+        self.terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&id)
+            .then_some(id)
+    }
+
+    fn with_session_tokens<R>(
+        &self,
+        f: impl FnOnce(&mut crate::mcp::session_tokens::SessionTokens) -> R,
+    ) -> R {
+        f(&mut self
+            .session_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
+    /// Revoke a pane's bearer secret (closed by `kill_terminal`, which runs
+    /// before any same-id respawn).
+    pub fn forget_session_token(&self, id: &str) {
+        self.with_session_tokens(|t| t.forget(id));
+    }
+
+    /// A copy of the current env policy; a poisoned lock still yields the
+    /// last value rather than failing every spawn.
+    pub fn env_policy_snapshot(&self) -> crate::terminal_env::EnvPolicy {
+        let user = self
+            .env_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        self.admin_policy.apply_env(user)
+    }
+
+    /// Replace the user's env policy and publish the effective one to the
+    /// child processes spawned outside panes (`terminal_env::command`).
+    pub fn set_env_policy(&self, policy: crate::terminal_env::EnvPolicy) {
+        *self.env_policy.write().unwrap_or_else(|e| e.into_inner()) = policy;
+        crate::terminal_env::publish_child_policy(self.env_policy_snapshot());
+    }
+
+    /// Startup: load the user's policy persisted by the last
+    /// `env_policy_set`, so panes restored and routines run before the
+    /// renderer's push already use it. Without a file the secure default
+    /// stays; either way the effective policy is published.
+    pub fn load_env_policy(&self, path: std::path::PathBuf) {
+        self.read_persisted_env_policy(&path);
+        crate::terminal_env::set_store_path(path);
+        crate::terminal_env::publish_child_policy(self.env_policy_snapshot());
+    }
+
+    /// The state part of `load_env_policy`, without the process globals.
+    fn read_persisted_env_policy(&self, path: &std::path::Path) {
+        let user = crate::terminal_env::load_persisted(path).unwrap_or_default();
+        *self.env_policy.write().unwrap_or_else(|e| e.into_inner()) = user;
+    }
+
+    /// A copy of the agent policy; a poisoned lock yields the last value.
+    pub fn agent_policy_snapshot(&self) -> crate::agent_policy::AgentPolicy {
+        let user = self
+            .agent_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        self.admin_policy.apply_agent(user)
+    }
 }
 
 impl Default for AppState {
@@ -543,10 +641,14 @@ impl Default for AppState {
             mcp_url: OnceLock::new(),
             war_rooms: Mutex::new(crate::warroom::WarRooms::default()),
             mcp_clients: Mutex::new(crate::mcp::clients::McpClients::default()),
+            session_tokens: Mutex::new(Default::default()),
             context_usage: Mutex::new(Default::default()),
             rate_limit_usage: Mutex::new(Default::default()),
             peer_states: Mutex::new(crate::mcp::peer_state::PeerStates::default()),
             peer_wake: tokio::sync::Notify::new(),
+            env_policy: Default::default(),
+            agent_policy: Default::default(),
+            admin_policy: Default::default(),
         }
     }
 }
@@ -644,6 +746,54 @@ pub fn spawn_terminal(
     if state.terminals.lock().unwrap().contains_key(&id) {
         return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
     }
+    let result = spawn_terminal_inner(app, state, id.clone(), options, on_data);
+    // A failed create never reached `terminals`: drop the pending secret it
+    // minted (or adopted) so it does not linger. The duplicate check above
+    // returned before any mint, so a live pane's secret is never touched.
+    // Creates of the same id never race here: `create_terminal` holds a
+    // `SpawnReservation` for the id, so a second one runs only after this one
+    // finished and then stops at the duplicate check. The `live` test is a
+    // second guard for that invariant, not a fix for a race (it could not
+    // be one: the lock is released before `session_tokens` is taken).
+    let live = state.terminals.lock().unwrap().contains_key(&id);
+    if !result.ok && !live {
+        state.forget_session_token(&id);
+    }
+    result
+}
+
+fn spawn_terminal_inner(
+    app: &AppHandle,
+    state: &AppState,
+    id: String,
+    options: CreateTerminalOptions,
+    on_data: Channel<PtyOut>,
+) -> CreateTerminalResult {
+    let shell_id = options.shell_id.as_deref();
+    let shell_available = shell_id.map(|id| crate::shell::resolve_shell(id).is_some());
+    // Admin policy: refuse bypass/YOLO lines here, on the final command, so
+    // every path that builds one (menus, restore, worktree.spawn) is covered.
+    let flavor = crate::policy::ShellFlavor::from_shell_id(
+        shell_id.filter(|_| shell_available == Some(true)),
+    );
+    if let Some(line) = launch_line_to_check(
+        options.initial_command.as_deref(),
+        options.launch_line.as_deref(),
+        flavor,
+    ) {
+        if let Err(e) = state.admin_policy.check_launch_line(line) {
+            // A pane of that kind that survived the last app instance in the
+            // terminal host must not keep running detached: end it.
+            #[cfg(windows)]
+            if let Some((_, client)) = app
+                .try_state::<crate::host_client::HostHub>()
+                .and_then(|hub| hub.take_detached(&id))
+            {
+                client.conn.kill(&id);
+            }
+            return CreateTerminalResult::err(e);
+        }
+    }
     // A pane that survived the last app instance in the terminal host
     // (SWA-56): take it over instead of starting a new one. No template line,
     // no resume — the program is still running.
@@ -658,6 +808,19 @@ pub fn spawn_terminal(
         },
         None => on_data,
     };
+    // The renderer quotes a brief for the shell the pane asked for. If that
+    // shell is unavailable, `plan_spawn` falls back to the default one, which
+    // would parse a POSIX-quoted brief differently (`'a'\'' ; calc ; '\''b'`
+    // runs `calc` in PowerShell). Refuse such a launch instead. Only here,
+    // after the reattach above: a surviving host pane never retypes its line,
+    // so a shell probe hiccup must not refuse it and leave it windowless.
+    if let Err(e) = check_shell_for_line(
+        options.shell_id.as_deref(),
+        shell_available,
+        options.initial_command.as_deref(),
+    ) {
+        return CreateTerminalResult::err(e);
+    }
     let plan = match plan_spawn(app, state, &id, options) {
         Ok(plan) => plan,
         Err(e) => return CreateTerminalResult::err(e),
@@ -670,6 +833,80 @@ pub fn spawn_terminal(
         return spawn_hosted(state, id, plan, on_data, client);
     }
     spawn_local(app, state, id, plan, on_data)
+}
+
+/// A pane that types a line must get the shell it asked for: the line was
+/// quoted for that shell, and the default shell may read it differently.
+/// `available` is `resolve_shell(id).is_some()` for a requested `id`.
+/// `default` (or no id) always resolves to the default shell, so it passes.
+fn check_shell_for_line(
+    shell_id: Option<&str>,
+    available: Option<bool>,
+    initial: Option<&str>,
+) -> Result<(), String> {
+    let has_line = initial.is_some_and(|l| !l.trim().is_empty());
+    match shell_id {
+        Some(id) if id != "default" && has_line && available == Some(false) => Err(format!(
+            "shell-unavailable: the shell \"{id}\" is not available, so the pane's command was not run in another shell. Pick an available shell for this pane."
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// The line the admin bypass check reads. The renderer's `launch_line`
+/// (blank = absent) is trusted only when the typed line is that prefix plus
+/// nothing, or plus one brief quoted exactly as the renderer quotes it for
+/// this pane's shell (`quote_for_shell`, optionally after the `-i` prompt
+/// flag, see `spawnPromptFlag` in templates.ts), and that brief does not
+/// start with `-` (the renderer puts a space before such a brief, so an
+/// agent never parses it as a flag). Anything else checks the whole line.
+fn launch_line_to_check<'a>(
+    initial: Option<&'a str>,
+    launch: Option<&'a str>,
+    flavor: crate::policy::ShellFlavor,
+) -> Option<&'a str> {
+    let launch = launch.filter(|l| !l.trim().is_empty());
+    let (Some(line), Some(prefix)) = (initial, launch) else {
+        return initial;
+    };
+    let Some(rest) = line.strip_prefix(prefix) else {
+        return Some(line);
+    };
+    if rest.is_empty() {
+        return Some(prefix);
+    }
+    let Some(body) = rest.strip_prefix(' ') else {
+        return Some(line);
+    };
+    let quoted = body.strip_prefix("-i ").unwrap_or(body);
+    let brief_ok = match crate::policy::shell_words_in(quoted, flavor).as_slice() {
+        [text] =>
+        // A control byte (Ctrl-U, Esc, ...) edits the typed line in the
+        // shell's line editor, so the shell may run something else.
+        {
+            !text.starts_with('-')
+                && !text.chars().any(char::is_control)
+                && !windows_expansion(text, flavor)
+                && crate::policy::quote_for_shell(text, flavor) == quoted
+        }
+        _ => false,
+    };
+    if brief_ok {
+        Some(prefix)
+    } else {
+        Some(line)
+    }
+}
+
+/// `%` and `!` expand in cmd (`%VAR%`, delayed `!VAR!`) even inside the
+/// renderer's quoting, and an expanded value can carry flags the check never
+/// saw; PowerShell gets the same rule so both Windows shells stay simple. Such
+/// a brief is not trusted: the whole line is checked instead (the launch
+/// still runs if that line passes, so plain briefs with `%` only lose the
+/// skip, never the pane).
+fn windows_expansion(text: &str, flavor: crate::policy::ShellFlavor) -> bool {
+    use crate::policy::ShellFlavor::{Cmd, PowerShell};
+    matches!(flavor, Cmd | PowerShell) && text.contains(['%', '!'])
 }
 
 /// Everything a pane is started with, resolved once for either backend.
@@ -685,6 +922,10 @@ struct SpawnPlan {
     worktree_mode: bool,
     repo_root: Option<String>,
     claude_config_dir: Option<std::path::PathBuf>,
+    /// This generation's MCP bearer secret (`SWARMTERM_SESSION`); kept in the
+    /// host's meta so a reattached pane keeps authorising.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    session_token: String,
 }
 
 /// One lock per account id for `accounts::enroll` (see `plan_spawn`).
@@ -727,11 +968,13 @@ fn plan_spawn(
         .and_then(crate::shell::resolve_shell);
     let (shell, args) = resolved.clone().unwrap_or_else(default_shell);
 
-    // Inherit the parent environment, then advertise truecolor so CLIs emit
-    // 24-bit color sequences that ConPTY forwards and xterm renders verbatim.
-    // The plan is complete on purpose: the host clears its own environment
-    // and spawns exactly this (SWA-54 `CreateSpec.env`).
-    let mut env = crate::terminal_env::EnvPlan::inherited();
+    // Inherit the parent environment minus what the env policy withholds
+    // (secrets by default), then advertise truecolor so CLIs emit 24-bit
+    // color sequences that ConPTY forwards and xterm renders verbatim. The
+    // filter runs before the app's own variables are set, so those always
+    // reach the pane. The plan is complete on purpose: the host clears its
+    // own environment and spawns exactly this (SWA-54 `CreateSpec.env`).
+    let mut env = state.env_policy_snapshot().inherited();
     if let Some(account) = &account {
         crate::accounts::apply_environment(&mut env, account);
     }
@@ -760,6 +1003,8 @@ fn plan_spawn(
     // user-configured PROMPT_COMMAND still runs.
     if shell.to_lowercase().contains("bash") {
         let osc7 = r#"printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-}" "$PWD""#;
+        // Read from the app env, not the filtered plan: a prompt hook is
+        // not a secret and the env policy never names it.
         let existing = std::env::var("PROMPT_COMMAND").unwrap_or_default();
         let combined = if existing.is_empty() {
             osc7.to_string()
@@ -769,15 +1014,17 @@ fn plan_spawn(
         env.set("PROMPT_COMMAND", combined);
     }
     // Identify this session to in-terminal processes so an in-terminal agent
-    // can call Swarmterm's MCP server. `id` is the terminalId — a random UUID
-    // that only this shell's env sees — and doubles as the unguessable bearer
-    // token authorising the MCP call. `SWARMTERM_MCP_URL` points at the
+    // can call Swarmterm's MCP server. `SWARMTERM_SESSION` is a random secret
+    // minted per spawn (a respawn rotates it) that only this shell's env
+    // sees; it is NOT the terminalId, which War Room peers can list, so one
+    // pane cannot impersonate another. `SWARMTERM_MCP_URL` points at the
     // Streamable-HTTP endpoint bound at app boot; if the server failed to
     // bind, we skip the URL var (agents just won't have the swarmterm server
     // available) but still set the session so future subsystems can use it.
     // `SWARMTERM_PTY_GENERATION` is stamped by whichever backend creates the
     // generation (`spawn_local` here, the host for hosted panes).
-    env.set("SWARMTERM_SESSION", id);
+    let session_token = state.with_session_tokens(|t| t.mint(id));
+    env.set("SWARMTERM_SESSION", &session_token);
     if let Some(url) = state.mcp_url.get() {
         env.set("SWARMTERM_MCP_URL", url.as_ref());
         // OpenCode gets the server per process via OPENCODE_CONFIG_CONTENT
@@ -785,11 +1032,11 @@ fn plan_spawn(
         // never written. A value the user already exported wins.
         if options.agent_id.as_deref() == Some("opencode")
             && crate::mcp::toggle::is_enabled("opencode", None)
-            && std::env::var_os("OPENCODE_CONFIG_CONTENT").is_none()
+            && env.get("OPENCODE_CONFIG_CONTENT").is_none()
         {
             env.set(
                 "OPENCODE_CONFIG_CONTENT",
-                crate::mcp::config::opencode_config_content(url.as_ref(), id),
+                crate::mcp::config::opencode_config_content(url.as_ref(), &session_token),
             );
         }
     }
@@ -841,6 +1088,7 @@ fn plan_spawn(
         worktree_mode: options.worktree_mode.unwrap_or(false),
         repo_root: options.repo_root,
         claude_config_dir,
+        session_token,
     })
 }
 
@@ -949,6 +1197,7 @@ fn spawn_local(
             claude_config_dir: plan.claude_config_dir,
         },
     );
+    state.with_session_tokens(|t| t.settle(&id));
     send_initial_line(state, &id, &spawn_id, plan.initial_line);
 
     // A shell that exits on its own (typed `exit`, crash) never closes the
@@ -1005,6 +1254,7 @@ fn spawn_hosted(
         "worktreeMode": plan.worktree_mode,
         "repoRoot": plan.repo_root,
         "claudeConfigDir": plan.claude_config_dir,
+        "sessionToken": plan.session_token,
     });
     let op = serde_json::json!({
         "op": "create",
@@ -1087,6 +1337,15 @@ fn attach_hosted(
         repo_root: text("repoRoot"),
         claude_config_dir: text("claudeConfigDir").map(std::path::PathBuf::from),
     };
+    // The pane's env still carries the secret it was spawned with; re-learn
+    // it so the reattached pane keeps authorising. A pane created by a build
+    // before per-pane secrets has none in its meta and its env token is its
+    // id, so that legacy pane keeps working until its next respawn.
+    let token = text("sessionToken").unwrap_or_else(|| {
+        eprintln!("[host] {id}: no session secret in meta (older build); its id stays its bearer until respawn");
+        id.to_string()
+    });
+    state.with_session_tokens(|t| t.adopt(id, &token));
     client
         .sink
         .routes
@@ -1166,6 +1425,9 @@ pub fn register_hosted(
             claude_config_dir: pending.claude_config_dir,
         },
     );
+    // Never nest `session_tokens` inside `terminals`.
+    drop(map);
+    state.with_session_tokens(|t| t.settle(id));
 }
 
 /// Drop `id`'s map entry if it still belongs to `spawn_id` (the waiter's job
@@ -1323,6 +1585,8 @@ pub fn finish_generation(
     });
     if let Some(state) = app.try_state::<AppState>().filter(|_| !superseded) {
         state.mcp_clients.lock().unwrap().forget(id);
+        // Settled only: a same-id respawn may already hold a pending secret.
+        state.with_session_tokens(|t| t.forget_settled(id));
         // Same-id respawn must start from "no data", not its predecessor's %.
         state.context_usage.lock().unwrap().forget(id);
         state.rate_limit_usage.lock().unwrap().forget(id);
@@ -1363,6 +1627,127 @@ pub fn finish_generation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn persisted_env_policy_applies_before_the_renderer_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("env-policy.json");
+        let user = crate::terminal_env::EnvPolicy {
+            mode: crate::terminal_env::FilterMode::Strict,
+            allow: vec!["MY_TOOL_*".into()],
+            ..Default::default()
+        };
+        crate::terminal_env::save_persisted(&path, &user).unwrap();
+        let state = AppState::default();
+        // Not `load_env_policy`: it sets process globals other tests share.
+        state.read_persisted_env_policy(&path);
+        // The first spawn (restored pane) reads this snapshot.
+        assert_eq!(state.env_policy_snapshot(), user);
+    }
+
+    #[test]
+    fn launch_line_skips_only_a_quoted_brief() {
+        use crate::policy::ShellFlavor::{self, Cmd, Posix, PowerShell};
+        let pick = |i, l| super::launch_line_to_check(i, l, Posix);
+        let in_shell = |i, l, f: ShellFlavor| super::launch_line_to_check(Some(i), Some(l), f);
+        let base = "claude --permission-mode default";
+        let brief = format!("{base} 'run npx -y and never --yolo'");
+        assert_eq!(pick(Some(&brief), Some(base)), Some(base));
+        for (line, prefix) in [
+            ("gemini -y 'x'", "gemini"),
+            ("cursor-agent -f 'x'", "cursor-agent"),
+            ("claude 'a' --yolo 'b'", "claude"),
+        ] {
+            assert_eq!(pick(Some(line), Some(prefix)), Some(line));
+        }
+        let posix = format!(r"{base} 'it'\''s -y'");
+        assert_eq!(pick(Some(&posix), Some(base)), Some(base));
+        let flagged = "gemini -i 'use -y'";
+        assert_eq!(pick(Some(flagged), Some("gemini")), Some("gemini"));
+        assert_eq!(pick(Some(base), Some(base)), Some(base));
+        // Each shell's own exact quoting is trusted, another one is not.
+        let ps = "claude 'it''s --yolo '";
+        assert_eq!(in_shell(ps, "claude", PowerShell), Some("claude"));
+        let cmd = r#"claude "50"^%" --yolo""#;
+        // `%` / `!` in a Windows-shell brief: never trusted, whole line checked.
+        assert_eq!(in_shell(cmd, "claude", Cmd), Some(cmd));
+        assert_eq!(in_shell(cmd, "claude", Posix), Some(cmd));
+        let plain = r#"claude "run the tests --yolo""#;
+        assert_eq!(in_shell(plain, "claude", Cmd), Some("claude"));
+        for (line, f) in [
+            (r#"claude "%X% --yolo""#, Cmd),
+            (r#"claude "!X! --yolo""#, Cmd),
+            ("claude '50% --yolo'", PowerShell),
+            ("claude 'hi! --yolo'", PowerShell),
+        ] {
+            assert_eq!(in_shell(line, "claude", f), Some(line), "{line}");
+        }
+        // POSIX shells do not expand these inside single quotes.
+        let pct = "claude '50% done!'";
+        assert_eq!(in_shell(pct, "claude", Posix), Some("claude"));
+        let dq = "claude \"use --yolo\"";
+        assert_eq!(in_shell(dq, "claude", PowerShell), Some(dq));
+        // A brief that would parse as a flag is never skipped (review
+        // 2026-10-29); the renderer's leading space makes it a brief again.
+        for (line, f) in [
+            ("claude '--dangerously-skip-permissions'", Posix),
+            ("claude '--permission-mode=bypassPermissions'", Posix),
+            ("claude '--yolo '", PowerShell),
+            (r#"claude "--settings=C:\x\evil.json ""#, Cmd),
+        ] {
+            assert_eq!(in_shell(line, "claude", f), Some(line), "{line}");
+        }
+        assert_eq!(
+            in_shell("claude ' --yolo is banned'", "claude", Posix),
+            Some("claude")
+        );
+        // Control bytes would let the shell's line editor rewrite the line.
+        let ctl = "claude '\u{15}claude --yolo #'";
+        assert_eq!(in_shell(ctl, "claude", Posix), Some(ctl));
+        // A blank launch line is no launch line.
+        assert_eq!(pick(Some("claude 'x'"), Some(" ")), Some("claude 'x'"));
+        // Anything but a quoted brief after the prefix: check it all.
+        let extra = "claude --dangerously-skip-permissions 'x'";
+        assert_eq!(pick(Some(extra), Some("claude")), Some(extra));
+        assert_eq!(
+            pick(Some("codex -a never"), Some("claude")),
+            Some("codex -a never")
+        );
+        assert_eq!(pick(Some(base), None), Some(base));
+        assert_eq!(pick(None, Some(base)), None);
+    }
+
+    #[test]
+    fn unavailable_shell_refuses_a_line_quoted_for_it() {
+        use super::check_shell_for_line as check;
+        let brief = Some(r"claude 'a'\'' ; calc ; '\''b'");
+        let err = check(Some("git-bash"), Some(false), brief).unwrap_err();
+        assert!(err.starts_with("shell-unavailable"), "{err}");
+        assert!(check(Some("wsl"), Some(false), brief).is_err());
+        // Available shell, the default shell or no line: nothing to refuse.
+        assert!(check(Some("git-bash"), Some(true), brief).is_ok());
+        assert!(check(Some("default"), Some(false), brief).is_ok());
+        assert!(check(None, None, brief).is_ok());
+        assert!(check(Some("git-bash"), Some(false), None).is_ok());
+        assert!(check(Some("git-bash"), Some(false), Some("  ")).is_ok());
+    }
+
+    #[test]
+    fn env_policy_defaults_to_filtering_and_snapshot_follows_writes() {
+        use crate::terminal_env::{EnvPlan, EnvPolicy};
+        let state = AppState::default();
+        let secret = || EnvPlan::from_vars([("FOO_API_KEY".to_string(), "x".to_string())]);
+        assert_eq!(state.env_policy_snapshot(), EnvPolicy::default());
+        assert_eq!(
+            state.env_policy_snapshot().filter(secret()).iter().count(),
+            0
+        );
+        state.env_policy.write().unwrap().allow = vec!["FOO_API_KEY".into()];
+        assert_eq!(
+            state.env_policy_snapshot().filter(secret()).iter().count(),
+            1
+        );
+    }
+
     use super::*;
 
     #[test]

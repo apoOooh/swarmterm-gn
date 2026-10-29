@@ -15,21 +15,10 @@ const SAFE_POSIX = /^[A-Za-z0-9_@%+=:,./-]+$/
 const SAFE_WINDOWS = /^[A-Za-z0-9_@%+=:,./\\~-]+$/
 const SAFE_CMD = /^[A-Za-z0-9_@+=:,./\\~-]+$/
 
-/**
- * One cmd word for `path`. cmd expands `%NAME%` before it looks at quotes, so
- * each `%` goes outside the quotes as `^%`: any would-be variable name then
- * contains `"` or `^`, is never defined and stays literal (interactive cmd
- * keeps an undefined `%...%` as typed); the caret is removed afterwards.
- */
+/** One cmd word for `path`: bare when safe, else quoteForShell's cmd rules
+ *  (`%` outside the quotes as `^%`, trailing backslashes outside too). */
 function cmdWord(path: string): string {
-  if (SAFE_CMD.test(path)) return path
-  if (!path.includes('%')) return quoteForShell(path, 'cmd')
-  // Trailing backslashes stay outside the quotes: the target program's argv
-  // parser would read `\"` as an escaped quote. A bare `\` is inert to cmd.
-  return path.split('%').map((part) => {
-    const body = part.replace(/\\+$/, '')
-    return (body === '' ? '' : quoteForShell(body, 'cmd')) + part.slice(body.length)
-  }).join('^%')
+  return SAFE_CMD.test(path) ? path : quoteForShell(path, 'cmd')
 }
 
 /** A point in the coordinate space `document.elementFromPoint` expects (CSS px). */

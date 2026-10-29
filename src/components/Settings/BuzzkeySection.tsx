@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
+import { MANAGED_LABEL } from '@/lib/policy'
+import { usePolicyStore } from '@/store/policy-store'
 import { Button } from '@/components/ui/button'
 import {
   companionErrorText,
@@ -40,6 +42,8 @@ const ACTION_LABEL: Record<CompanionAction, string> = {
  */
 export function BuzzkeySection(): ReactElement | null {
   const [status, setStatus] = useState<CompanionStatus | null>(null)
+  // DisableCompanion: install, update check and autostart-on are refused in Rust.
+  const companionLocked = usePolicyStore((s) => s.policy.disableCompanion)
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [update, setUpdate] = useState<UpdateCheck | null>(null)
@@ -103,6 +107,9 @@ export function BuzzkeySection(): ReactElement | null {
         The dictation app for Swarmterm. It stays a separate program with its own tray icon and works
         in any app; Swarmterm only installs and starts it when you click, and offers new signed releases.
       </p>
+      {companionLocked && (
+        <div className="mt-2 text-xs font-medium text-amber-500">Install and updates: {MANAGED_LABEL}</div>
+      )}
       <div className="mt-3 text-sm text-foreground" data-testid="buzzkey-state" data-state={view.state}>
         {view.label}
       </div>
@@ -120,13 +127,15 @@ export function BuzzkeySection(): ReactElement | null {
               key={a}
               size="sm"
               variant={a === 'install' ? 'default' : 'outline'}
+              disabled={companionLocked && a !== 'start' && a !== 'quit'}
+              title={companionLocked && a !== 'start' && a !== 'quit' ? MANAGED_LABEL : undefined}
               onClick={() => run(a)}
             >
               {ACTION_LABEL[a]}
             </Button>
           ))}
           {update?.updateAvailable && view.state !== 'not-installed' && (
-            <Button size="sm" onClick={() => run('reinstall')}>
+            <Button size="sm" disabled={companionLocked} onClick={() => run('reinstall')}>
               Update to {update.latestVersion}
             </Button>
           )}
@@ -147,6 +156,8 @@ export function BuzzkeySection(): ReactElement | null {
             label="Start buzzkey with Windows"
             description="The same entry as buzzkey's own tray setting."
             checked={status.autostart}
+            // Turning it off stays possible under the lock (Rust allows it).
+            managed={companionLocked && !status.autostart}
             onChange={(on) =>
               void setCompanionAutostart(on).then(setStatus, (e) => setError(companionErrorText(String(e))))
             }

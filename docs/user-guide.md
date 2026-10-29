@@ -284,7 +284,9 @@ The list records independently of the sound and banner settings above, so muting
 
 Claude Code and Codex panes run in a **launch mode** that sets how much the agent may do without asking. The current mode is shown next to the agent icon, and the agent menu in the pane header switches it: the pane restarts the CLI with the new flags and continues the conversation (the pane's own session id or the folder's latest session). **Resume previous chat…** in the same menu restarts the pane into the CLI's own session picker (current mode kept), so an older conversation can be taken over.
 
-**Settings → Terminal → Default launch mode** picks, per provider, the mode new panes start in. It applies to new panes only — running panes keep the mode they started with. Worker panes spawned by an agent (`worktree.spawn`) inherit the spawning pane's mode when they run the same agent.
+**Settings → Terminal → Default launch mode** picks, per provider, the mode new panes start in. It applies to new panes only — running panes keep the mode they started with. Worker panes spawned by an agent (`worktree.spawn`) inherit the spawning pane's mode when they run the same agent — except **Bypass permissions** and **YOLO**, which are never inherited: such a worker starts in your Settings default for that agent, or in the agent's first mode (Claude **Default**, Codex **Auto**) if that default is itself Bypass/YOLO. An agent cannot multiply its own unchecked mode — unless you turn on **Settings → Terminal → Agent safety → Spawned workers inherit Bypass/YOLO from the agent that starts them** (off by default): then a worker of the same agent starts in the requester's Bypass/YOLO mode too (still badged red, no extra confirmation). Workers of a different agent never inherit it.
+
+**Bypass permissions** (Claude) and **YOLO** (Codex) let the agent run commands and edit files without asking — Codex also outside its sandbox. Faulty or manipulated instructions (from a web page, a file, a dependency or another agent) can then run unwanted commands with your rights. They stay available, but choosing one — in a pane's agent menu or as the Settings default — first shows a confirmation explaining this risk (Cancel is focused; Esc cancels). Both are shown in red in the menus, and a pane running in one of them carries a red badge with the mode in its header.
 
 ### Claude Code
 
@@ -328,7 +330,7 @@ See the [Codex hook documentation](https://learn.chatgpt.com/docs/hooks).
 A missing working folder stops reopening and shows a notice. A missing pane or
 worktree folder falls back to the working folder with a fresh session. A missing
 conversation starts the same agent fresh; an unavailable agent opens a plain
-terminal. An unavailable shell uses the default shell. These fallbacks are shown
+terminal. An unavailable shell uses the default shell; a pane with an initial command or worker brief is refused instead. These fallbacks are shown
 in a notice. Saved data stays on this computer; terminal output, prompts, file
 tabs and unsaved editor buffers are not saved. Closing the window hides it to
 the tray; use **Quit** to test a full app restart.
@@ -360,6 +362,8 @@ Agents talk in two modes:
 
 - **Probe** — lands in the peer's inbox and nudges it to read: questions, debate, coordination.
 - **Execute** — pasted into the peer's terminal and run as its next prompt: a handover ("we agreed, now do it"). Refused if the target is a plain shell.
+
+**Agents may only use Execute if you allow it.** **Settings → Terminal → Agent safety → Allow agents to run prompts in other panes** is off by default: an agent's `war_room.send` in execute mode is then refused by Swarmterm with a message telling it to use probe instead (the mode is never silently changed). Probe still works, and your own sends as Moderator from the composer — Execute included — are not affected. Turn it on only when you want agents to hand tasks to each other directly; an execute into a pane in Bypass/YOLO runs without any prompt. The setting does not cover `worktree.spawn`: an agent can still start a new worker pane with a task prompt, but that worker never starts in Bypass/YOLO (see [Launch modes](#launch-modes)).
 
 You are a member too — the **Moderator**. The composer at the bottom of the Discussion tab sends to one agent or the whole room, in either mode; replies land in the transcript instead of someone's terminal.
 
@@ -528,6 +532,18 @@ Changes apply at once to running panes; lifting a limit (switching to Off, or op
 
 Known limits: programs that Windows starts on a pane's behalf outside the pane are not covered: processes created through WMI (`Win32_Process.Create`), scheduled tasks and services, out-of-process COM servers, and anything opened through Explorer (`start` of a document or URL hands it to Explorer). A terminal host that was already running before an update keeps its own panes unlimited until it exits; while it runs, new panes open inside Swarmterm instead (limited), and **Process priority** says so. In **Agent at normal** mode, the programs a Node-based agent starts directly (its shell tool, for example) stay normal; what they start runs at the build priority. A program your shell profile starts in the first instant of a new pane that already sits in a job of its own (a Node tool, for example) cannot be put into the pane's job: Swarmterm sets its priority by hand and resets it twice a second, but it is not stopped when the pane closes.
 
+### What panes inherit
+
+Panes, command routines and the other programs Swarmterm starts (git, editors) start with a copy of Swarmterm's own environment, minus variables whose names follow common secret patterns. Agents that log in through their own configuration folders (the usual `/login`, and Swarmterm accounts) are not affected. What Swarmterm no longer passes on is everything else it happened to be started with: API keys, tokens and passwords such as `FOO_API_KEY`, `GITHUB_TOKEN`, `DB_PASSWORD`, `PGPASSWORD`, `SENTRY_DSN` or `AWS_SECRET_ACCESS_KEY`, and any variable whose value is a URL with a user name or password in it (`HTTP_PROXY=http://user:pw@proxy`). Provider settings such as `AWS_REGION`, `AWS_PROFILE`, `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` pass. If an agent authenticates through such a variable (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`), add it to the allowlist below. The filter matches names (and credential URLs) only, so a secret under an unremarkable name still passes; use **System variables only** to be sure. A variable your shell profile sets inside the pane is unaffected.
+
+Configure it in **Settings → Terminal → Environment**:
+
+- **Pass secrets from Swarmterm's environment to panes** (off by default): on passes everything unfiltered, as older versions did.
+- **Filter**: **Hide secrets** drops only secret-looking names; **System variables only** keeps just the Windows variables a shell needs (`PATH`, `SystemRoot`, `TEMP`, `USERPROFILE`, `ProgramFiles`, `PROCESSOR_*`, …) plus `__PSLockdownPolicy`, the proxy variables `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (without credentials) and certificate variables (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, …), so tool variables are dropped too.
+- **Always pass these variables**: names that always pass in either filter, one per line or comma-separated, case-insensitive; `MY_TOOL_*` matches a prefix. Use it for a key a tool in a pane really needs, or for `HTTP_PROXY` with credentials (and, under **System variables only**, `AWS_PROFILE` or `ANTHROPIC_BASE_URL`).
+
+Changes apply to the next pane or routine that starts; running panes keep the environment they started with. The setting is saved, so panes restored at startup use it too; only the first start after upgrading from a version before 1.26.0 uses the default filter (secrets hidden, no allowlist) until Settings saves your choice. Git operations, **Open in editor** and the other helper programs Swarmterm starts get the same filtered environment. Files and links opened in their default Windows application are the exception: Windows starts that application, and it may see Swarmterm's full environment.
+
 ## Settings, tray and quitting
 
 **Settings** (from the navbar) covers appearance, terminal font and default shell with a live preview, the status line toggle, and the full shortcut list — these preferences persist between launches.
@@ -538,37 +554,33 @@ Known limits: programs that Windows starts on a pane's behalf outside the pane a
 
 Hosted panes outlive Swarmterm itself: if the app crashes or is ended from Task Manager, the programs in them keep running. Open the saved workspace again (workspaces set to open on startup do so by themselves) and its panes are taken over where they are, instead of starting again: the output so far is shown again, a full-screen program such as Claude Code repaints, and an agent keeps its Swarmterm connection. A dim line *older output is not available* marks a pane whose history was longer than the host keeps (512 KiB per pane). Running panes that no saved workspace knows are closed shortly after startup; forgetting a saved workspace closes its running panes too. If you switch the host off before starting Swarmterm again, the panes it still runs are closed at startup. Pane ids are stored with saved workspaces only while the host is on. **Quit** in the tray still closes every pane; the idle host then exits on its own after ten minutes.
 
+## Editions
+
+Swarmterm GN comes in two editions: **Swarmterm GN** and **Swarmterm GN Corp**
+for organisations. Corp has bypass launch modes and War Room execute by agents
+locked, the environment filter always on, and no buzzkey installer or speech
+model download (Settings → Voice hides the buzzkey section and the download
+buttons; your administrator provides models). The edition is shown in the title bar and, for Corp, at the top of
+Settings. Both can be installed side by side with separate settings. Full
+comparison: [Editions](editions.md).
+
 ## Updates
 
-Swarmterm GN disables the upstream updater, including its tray entry, endpoint
-and update artifacts. Install new versions from this fork's GitHub Releases, or rebuild from its `main` branch (the latest release).
-Upstream Swarmterm releases do not contain the GN additions.
+Swarmterm GN never updates itself and makes no update checks. New versions are
+installers from this fork's [GitHub Releases](https://github.com/apoOooh/swarmterm-gn/releases)
+(or your IT's software distribution); install one over the existing version.
+Swarmterm GN is an independent project; releases of the original Swarmterm do
+not apply to it.
 
 ## Telemetry
 
-Official release builds send an anonymous usage ping so we can see how many
-people actually run Swarmterm: one `app_open` event at launch, then a
-heartbeat every five minutes while the app is open. Each event carries a
-random id, the app version and the OS name (`macos` / `windows` / `linux`) —
-nothing else. No paths, no terminal content, no hostname, no account.
-Google Analytics infers a country from the request's IP, as any website does;
-Swarmterm never sends the IP itself.
-
-The random id lives in one small file so restarts count as the same person —
-`~/Library/Application Support/com.swarmterm.app/telemetry-id` on macOS,
-`%APPDATA%\com.swarmterm.app\telemetry-id` on Windows,
-`~/.config/com.swarmterm.app/telemetry-id` on Linux. Delete it any time to
-start over as a new anonymous user.
-
-**Builds from source contain no telemetry at all.** The analytics keys are
-injected only when official releases are built; compile Swarmterm yourself
-(`npm run tauri dev` or `npm run tauri build`) and the reporting code
-compiles to nothing. Offline use is fine too — a failed ping is silently
-dropped, never retried loudly, and never blocks the app.
+Swarmterm GN sends no telemetry or usage data.
 
 ## What your agents can do
 
-Every pane is automatically connected to the app over MCP for exactly as long as it lives — nothing to configure for Claude Code, Codex and Qwen Code, which Swarmterm enrolls automatically; other MCP-capable CLIs can be pointed at the per-pane URL by hand (the War Room panel shows the hint). Enrolled agents can drive Swarmterm themselves: **open a web preview** beside their own pane, **spawn / list / remove worktrees** to hand tasks to fresh parallel agents (removal refuses uncommitted changes), and use the **War Room** — list peers, message them in probe or execute mode, read their inbox and reply, wait for a peer to need input or finish (`wait_peer`) and peek at what its screen shows (`read_peer`). An execute hand-off to a peer that is sitting on a prompt is refused until that prompt is answered — the sender is told to wait first.
+Every pane is automatically connected to the app over MCP for exactly as long as it lives — nothing to configure for Claude Code, Codex and Qwen Code, which Swarmterm enrolls automatically; other MCP-capable CLIs can be pointed at the per-pane URL by hand (the War Room panel shows the hint). Enrolled agents can drive Swarmterm themselves: **open a web preview** beside their own pane, **spawn / list / remove worktrees** to hand tasks to fresh parallel agents (removal refuses uncommitted changes), and use the **War Room** — list peers, message them in probe or execute mode, read their inbox and reply, wait for a peer to need input or finish (`wait_peer`) and peek at what its screen shows (`read_peer`). An execute hand-off to a peer that is sitting on a prompt is refused until that prompt is answered — the sender is told to wait first. Agents can send execute at all only when **Settings → Terminal → Agent safety** allows it (off by default). Spawned workers inherit Bypass/YOLO only when the second Agent safety switch allows it (off by default).
+
+On a managed computer your administrator can switch any of these abilities off (and others: the web preview, command routines, buzzkey installs, speech-model downloads, the MCP server, the environment filter). Such controls are greyed out with **Managed by your administrator**, and the top of Settings lists the active policies. Details for administrators: [Administrator policy](admin-policy.md).
 
 War Room abilities only work for panes you dragged into a room, worktree abilities only in workspaces with isolation enabled — and removing a pane from a room revokes its access instantly.
 
@@ -637,6 +649,8 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **An agent is missing from the composer** — its CLI isn't on your `PATH`; install it and reopen the composer. A default or template that assigns it uses those slots for plain terminals meanwhile, and picks the agent up again once it's installed — unless you edit and save that default or template before then.
 - **A War Room message never arrived** — look for the pill in the pane or `⏸N` on the room tab: it's held behind an unsubmitted prompt line, or the agent is working / sitting on a prompt (the pill says which). Press Enter or click "Deliver now" for a typing hold; answer the prompt or wait for the agent to finish otherwise.
 - **An agent says its execute was refused** — the target pane is blocked on a permission or question; answer that prompt (or let the sending agent `wait_peer`) and the hand-off goes through on re-send.
+- **A control says "Managed by your administrator"** — your organisation set an [administrator policy](admin-policy.md); it cannot be changed in Swarmterm. Ask your IT department.
+- **An agent says execute is disabled** — **Allow agents to run prompts in other panes** (Settings → Terminal → Agent safety) is off, the default. The agent should use probe; turn the setting on only if you want agents to run prompts in each other's panes.
 - **A War Room send was refused for a "control character"** — the message contained an escape code or other terminal control byte, which Swarmterm never types into a pane (it could break out of the paste and run as keystrokes). Resend as plain text; quote escape sequences as the literal text `ESC[…` instead.
 - **An agent says it isn't in the War Room** — its pane was removed or restarted; drag it back in.
 - **A relative path isn't clickable after `cd`** — a PowerShell quirk; absolute paths (everything agents print) still work.

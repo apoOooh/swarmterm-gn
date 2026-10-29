@@ -2,7 +2,7 @@
 name = "swarmterm-host"
 version = "0.1.0"
 description = "Swarmterm terminal host: owns the PTYs so they outlive an app quit or update (ADR 0001)"
-authors = ["Duong Duc Nguyen"]
+authors = ["Swarmterm GN maintainers"]
 license = "GPL-3.0-only"
 edition = "2021"
 publish = false

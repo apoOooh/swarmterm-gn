@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { MANAGED_LABEL } from '@/lib/policy'
+import { usePolicyStore } from '@/store/policy-store'
 import { Button } from '@/components/ui/button'
 import { useModalFocus } from '@/components/ui/use-modal-focus'
 import { handoffTargets } from '@/lib/handoff-flow'
@@ -51,6 +53,8 @@ export function RoutinesDialog(): React.ReactElement | null {
   const prompts = usePromptLibraryStore((s) => s.prompts)
   const accounts = useAgentAccountsStore((s) => s.accounts)
   const [draft, setDraft] = useState<Draft>(emptyDraft)
+  // DisableRoutineCommands: Rust refuses the run; the dialog says why.
+  const commandsLocked = usePolicyStore((s) => s.policy.disableRoutineCommands)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [available, setAvailable] = useState<ReadonlySet<string> | undefined>()
@@ -161,8 +165,13 @@ export function RoutinesDialog(): React.ReactElement | null {
           </div>
           <select aria-label="Routine kind" className={`${field} self-start`} value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value === 'command' ? 'command' : 'agent' })}>
             <option value="agent">Agent with a brief</option>
-            <option value="command">Shell command (no agent, no tokens)</option>
+            <option value="command" disabled={commandsLocked}>
+              {commandsLocked ? `Shell command — ${MANAGED_LABEL}` : 'Shell command (no agent, no tokens)'}
+            </option>
           </select>
+          {draft.kind === 'command' && commandsLocked && (
+            <div className="text-xs font-medium text-amber-500">Command routines: {MANAGED_LABEL}. This routine will not run.</div>
+          )}
           {draft.kind === 'command' ? (
             <>
               <input

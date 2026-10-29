@@ -1,7 +1,6 @@
-# Build a Windows release of Swarmterm: NSIS installer + minisign updater
-# signature. No Authenticode — SmartScreen's "Unknown publisher" flow is
-# accepted and documented in docs/release-windows.md. The updater's trust
-# comes from the minisign signature, not from Windows code signing.
+# Build a Windows release of Swarmterm: the NSIS installer. No Authenticode —
+# SmartScreen's "Unknown publisher" flow is accepted and documented in
+# docs/release-windows.md.
 #
 #   npm run release:win
 #
@@ -25,20 +24,6 @@ if (Test-Path ".env.release") {
 }
 
 $config = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
-if ($config.bundle.createUpdaterArtifacts) {
-  if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
-    Die "TAURI_SIGNING_PRIVATE_KEY is unset - copy .env.release.example to .env.release"
-  }
-  if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
-    Die "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is unset - see .env.release.example"
-  }
-  # The variable accepts the key content or a path; only validate paths.
-  if (($env:TAURI_SIGNING_PRIVATE_KEY -notmatch 'PRIVATE KEY') -and
-      -not (Test-Path $env:TAURI_SIGNING_PRIVATE_KEY)) {
-    Die "TAURI_SIGNING_PRIVATE_KEY is not a file: $($env:TAURI_SIGNING_PRIVATE_KEY)"
-  }
-}
-
 $version = $config.version
 Write-Host "==> building NSIS installer (v$version)"
 # npx, not `npm run tauri -- …`: PowerShell swallows a bare `--`, npm then
@@ -48,9 +33,5 @@ if ($LASTEXITCODE -ne 0) { Die "tauri build failed" }
 
 $setup = "src-tauri/target/release/bundle/nsis/$($config.productName)_${version}_x64-setup.exe"
 if (-not (Test-Path $setup)) { Die "installer not found: $setup" }
-if ($config.bundle.createUpdaterArtifacts -and -not (Test-Path "$setup.sig")) {
-  Die "updater signature not found: $setup.sig - was the build run without the signing key?"
-}
 
 Write-Host "==> release OK: $setup"
-if ($config.bundle.createUpdaterArtifacts) { Write-Host "    next: npm run release:publish" }

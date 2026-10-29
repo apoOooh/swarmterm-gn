@@ -123,8 +123,18 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Fresh profile: a new Claude Code pane starts in normal mode (header shows
       "Default"; Claude asks before an edit).
 - [ ] Settings → Terminal → Default launch mode → Claude Code = Bypass permissions:
-      a new Claude pane starts bypassed; an already running pane is not restarted
-      and keeps its mode. Restart the app: the choice is kept.
+      a confirmation explains the risk; Cancel (or Esc) keeps the old default.
+      Confirm: a new Claude pane starts bypassed; an already running pane is not
+      restarted and keeps its mode. Restart the app: the choice is kept.
+- [ ] Pane header agent menu → Bypass permissions (Codex: YOLO): the confirmation
+      appears and owns the keyboard (typing does not reach the pane); Cancel keeps
+      the mode, confirm restarts in it.
+- [ ] From Settings → Default launch mode, pick Bypass → the confirmation opens;
+      Esc closes only it (Settings stays open) and focus returns to the button. The header shows a red `BYPASS` / `YOLO`
+      badge; switching back to a safe mode removes it and asks nothing.
+- [ ] Worktree mode on, a bypassed Claude pane calls `worktree.spawn` → the
+      worker pane starts in Default (or the Settings default if that is safe),
+      with no red badge.
 - [ ] Pane header → Plan on a Claude pane: Claude restarts in plan mode and
       continues the conversation.
 - [ ] Codex default = Safe: a new Codex pane runs `-s read-only -a on-request`.
@@ -235,6 +245,11 @@ Do not mark them passed from the in-memory fixture alone.
       immediately → characters reach the terminal; Tab triggers shell
       completion instead of walking the focus ring.
 - [ ] **Activity dot:** lights while a pane streams output, clears when quiet.
+- [ ] **Environment filter:** quit Swarmterm, start it from a `cmd` with
+      `set FOO_API_KEY=x` → in a new cmd pane `echo %FOO_API_KEY%` prints
+      `%FOO_API_KEY%` (not set). Add `FOO_API_KEY` to **Settings → Terminal →
+      Environment → Always pass these variables**, open a new pane → prints
+      `x`. A command routine `echo %FOO_API_KEY%` behaves the same.
 
 ## Terminal links
 
@@ -435,8 +450,13 @@ Do not mark them passed from the in-memory fixture alone.
       intro is typed into each pane.
 - [ ] **Probe:** agent A sends a probe → the transcript shows it, idle agent B
       is nudged and reads its inbox.
-- [ ] **Execute:** agent A sends execute → the prompt runs in pane B and the
-      transcript marks it orange.
+- [ ] **Execute off (default):** agent A sends execute → refused with a message
+      telling it to use probe; nothing reaches pane B. The Moderator's own
+      Execute from the composer still runs in pane B.
+- [ ] **Execute:** Settings → Terminal → Agent safety → allow agents to run
+      prompts in other panes; agent A sends execute → the prompt runs in pane B
+      and the transcript marks it orange. Turn it off again → the next execute
+      is refused without restarting anything.
 - [ ] **Revocation:** drag a chip out or press ✕ → the next tool call from that
       pane is refused with "not in the War Room".
 - [ ] **PTY death:** close a member pane → the transcript logs the leave and
@@ -606,21 +626,37 @@ machine that never built Swarmterm. Details in
 
 - [ ] A freshly downloaded `…x64-setup.exe` shows SmartScreen's "Windows
       protected your PC"; **More info → Run anyway** proceeds.
-- [ ] Install completes per-user with no admin prompt; the app launches.
+- [ ] Standard: install completes per-user with no admin prompt; the app launches.
+- [ ] Corp: the installer asks for administrator rights (UAC) and installs to
+      `%ProgramFiles%\Swarmterm GN Corp\`; the app launches.
 - [ ] A terminal pane spawns and runs `dir`; closing the pane leaves no
       orphaned shell in Task Manager.
 - [ ] Uninstall via Settings → Apps removes the Start Menu entry.
+- [ ] Silent install `…x64-setup.exe /S` and silent uninstall
+      `"%LOCALAPPDATA%\Swarmterm GN\uninstall.exe" /S` work without prompts
+      (docs/enterprise-deployment.md).
+- [ ] `gh attestation verify <installer> --repo apoOooh/swarmterm-gn`
+      succeeds for the published installer.
 
-## Auto-update
+## Content Security Policy (release build)
 
-- [ ] GN shows no upstream updater controls or tray entry and makes no upstream
-      update requests. App name and application-data identifier are distinct.
+The release CSP has no dev-server entries and no `http:` images. In an
+installed (or `tauri build`) app, check that none of these shows a blank
+area or a CSP violation in DevTools:
 
-## Telemetry (release builds only)
+- [ ] The app window loads (Welcome screen, fonts, icons, agent logos).
+- [ ] Media panel, popup and zoom show images and play a video.
+- [ ] Annotate opens an image and saves a marked copy.
+- [ ] Markdown preview shows a relative image and an `https:` image (for
+      example a README badge); an `http:` image now shows its alt text.
+- [ ] HTML preview renders a project page with its CSS/JS; SVG preview works.
+- [ ] Web preview and the popout window open an external site.
+- [ ] Links open in the default browser; dialogs (open folder) work.
 
-- [ ] Release build (built with GA keys in `.env.release`): launch, then GA →
-      Reports → Realtime shows 1 active user within ~a minute.
-- [ ] `npm run tauri dev` (no keys): nothing appears in GA Realtime.
+## No self-update
+
+- [ ] GN shows no update controls or tray entry and makes no update
+      requests. App name and application-data identifier are distinct.
 
 ## Agent state detection
 
@@ -753,3 +789,37 @@ Use Task Manager → Details → "Base priority" (or Process Explorer).
       Reopen the saved workspace: still unticked.
 - [ ] Settings → Terminal → **Run terminals in the terminal host** on, new pane → same results as above.
 - [ ] Upgrade from a build with the old "Lower build priority" switched off → mode shows **Off**.
+
+## Administrator policy
+
+Use a test key under HKCU (if `reg add` is denied, run it from an elevated prompt). Quit Swarmterm from the tray and
+start it again after every change; remove the key at the end:
+`reg delete HKCU\Software\Policies\SwarmtermGN /f`.
+
+- [ ] No key: Settings shows no "Managed by your administrator" box; everything works as before.
+- [ ] `reg add HKCU\Software\Policies\SwarmtermGN /v DisableBypassModes /t REG_DWORD /d 1 /f` → Settings lists it;
+      Bypass/YOLO greyed out in Default launch mode and in the pane header menu; the "Spawned workers inherit" switch
+      is off and greyed. A saved workspace with a Bypass pane restored → that pane shows "Launch refused … DisableBypassModes".
+- [ ] Settings → Terminal → Agent safety → **Spawned workers inherit Bypass/YOLO** (no policy): on, Claude pane in
+      Bypass asks `worktree.spawn` → the worker starts in Bypass with the red badge. Off → worker starts in Default.
+- [ ] `DisableWarRoomExecute` = 1: the Agent safety execute switch is greyed; an agent's `war_room.send` execute is
+      refused with a message naming `DisableWarRoomExecute`; probe still works.
+- [ ] `DisableWarRoom` = 1: the War Room tab shows "Managed by your administrator", the execute switch is greyed,
+      and an agent's `war_room.list_peers` / `send` / `read_inbox` / `read_peer` / `wait_peer` are refused with a
+      message naming `DisableWarRoom`.
+- [ ] MCP bearer: in a pane, `$env:SWARMTERM_SESSION` differs from the pane's terminalId; a request to `/status` with
+      `Authorization: Bearer <another pane's terminalId>` answers 401; after a respawn the old secret answers 401.
+- [ ] `DisableWorktreeSpawn` = 1: `worktree.spawn` is refused naming the policy.
+- [ ] `DisableMcp` = 1: new panes have no `SWARMTERM_MCP_URL`; `~/.claude.json` has no `swarmterm` entry after start;
+      Settings → MCP switches are off and greyed.
+- [ ] `DisableCompanion` = 1: Settings → Voice → buzzkey Install / Check for update greyed; no update toast; autostart
+      can be turned off but not on.
+- [ ] `DisableModelDownload` = 1: speech-model Download buttons greyed; downloaded models still selectable.
+- [ ] `DisableRoutineCommands` = 1: "Shell command" kind is greyed in the routine dialog; an existing command routine
+      fails with the policy message in its last result.
+- [ ] `DisablePreviewBrowser` = 1: the right panel's Preview shows "Managed by your administrator"; an agent's
+      `browser.open_preview` is refused.
+- [ ] `reg add … /v EnvPolicy /t REG_SZ /d strict /f` and `reg add … /v EnvAllow /t REG_MULTI_SZ /d CORP_X /f`:
+      the Environment controls are greyed, `set` in a new pane shows only system variables plus `CORP_X`.
+- [ ] `DisableMcp` = `REG_SZ "1"` (wrong type): fails closed, MCP is off; the app log has `policy: DisableMcp: expected REG_DWORD … treated as 1`.
+- [ ] Same value under HKLM = 0 and HKCU = 1 (elevated): HKLM wins, the policy is off.

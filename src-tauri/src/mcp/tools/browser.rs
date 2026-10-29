@@ -98,7 +98,7 @@ use rmcp::handler::server::wrapper::{Json, Parameters};
 // doc of `mcp/server.rs` for the full rationale.
 use rmcp::{schemars, tool, tool_router};
 use serde::Deserialize;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use crate::mcp::server::SwarmtermMcpServer;
 
@@ -138,6 +138,11 @@ impl SwarmtermMcpServer {
         Parameters(args): Parameters<OpenPreviewArgs>,
     ) -> Result<Json<OpenPreviewResult>, rmcp::ErrorData> {
         let terminal = self.caller(&parts)?;
+        self.app
+            .state::<crate::pty::AppState>()
+            .admin_policy
+            .check(crate::policy::Lock::PreviewBrowser)
+            .map_err(|m| rmcp::ErrorData::invalid_request(m, None))?;
         let url = validate_preview_url(&args.url).map_err(|e| match e {
             ToolError::InvalidArgs(m) => rmcp::ErrorData::invalid_params(m, None),
         })?;

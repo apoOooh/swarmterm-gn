@@ -1,4 +1,4 @@
-// Adapted from parsingk/Astera, debc3098; Apache-2.0. See licenses/Astera/.
+// Adapted from parsingk/Astera, debc3098; Apache-2.0. See third-party-licenses/Astera/.
 /** 한글 담당을 스택에 직접 적는다 — 스펙 §4.3, 그리고 themes.test.ts 가 이것을 검사한다. */
 const HANGUL = "'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans CJK KR', sans-serif"
 /** styles.css 의 --mono 값. font.mono 가 null 인 테마는 이것을 쓴다.

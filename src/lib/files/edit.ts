@@ -1,4 +1,4 @@
-// Adapted from parsingk/Astera, debc3098; Apache-2.0. See licenses/Astera/.
+// Adapted from parsingk/Astera, debc3098; Apache-2.0. See third-party-licenses/Astera/.
 // Extension -> CodeMirror 6 language key. Only the languages @codemirror/lang-* covers.
 export type LangKey =
   | 'javascript' | 'python' | 'json' | 'css' | 'html' | 'markdown'

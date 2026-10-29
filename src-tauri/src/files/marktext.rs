@@ -74,7 +74,7 @@ pub fn open(explicit: &str, file: &Path) -> Result<(), String> {
             format!("The configured MarkText path is not a MarkText executable: {explicit}")
         }
     })?;
-    std::process::Command::new(exe)
+    crate::terminal_env::command(exe)
         .arg(file)
         .spawn()
         .map(|_| ())

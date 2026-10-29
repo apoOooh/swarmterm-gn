@@ -1,0 +1,62 @@
+# Swarmterm GN: corporate security review pack (v1.26.0)
+
+Answers to the six findings of the previous security review, for Swarmterm GN **1.26.0**. Every statement links to the
+file in this repository that implements or documents it. German version: [review-pack.de.md](review-pack.de.md).
+
+**Scope.** Swarmterm GN is an independent project. It started as a fork of
+[duongducnguyen/swarmterm](https://github.com/duongducnguyen/swarmterm) and is no longer based on or synced with
+upstream; upstream's website, policies and releases do not apply ([decisions](../decisions.md),
+[README](../../README.md#origin-and-status)). There is no project website: the authoritative documents are in this
+repository.
+
+## The findings
+
+| # | Finding | Status in Swarmterm GN 1.26.0 | Evidence |
+|---|---|---|---|
+| 1 | Privacy policy and terms of use were placeholder templates. | **Fixed in v1.26.0.** Project-specific privacy policy, terms of use and security policy, with every stored file and network connection listed with its source file. They must be updated in the same change as the behaviour they describe. | [PRIVACY.md](../../PRIVACY.md), [TERMS.md](../../TERMS.md), [SECURITY.md](../../SECURITY.md), [decisions](../decisions.md) |
+| 2 | The Claude Code template disabled permission prompts by default. | Agent panes start in the agent's confirming mode (Claude Code `--permission-mode default`, Codex `-s workspace-write -a on-request`). **New in v1.26.0:** bypass modes ("Bypass permissions", "YOLO") need a confirmation dialog, carry a red badge, are not inherited by spawned workers by default, can be locked with the policy `DisableBypassModes`, and are locked in the Corp edition. | [templates.ts](../../src/lib/templates.ts), [DangerousModeDialog.tsx](../../src/components/DangerousModeDialog.tsx), [launch-mode-safety.ts](../../src/lib/launch-mode-safety.ts), [security model](../security-model.md#launch-modes), [admin policy](../admin-policy.md) |
+| 3 | Google Analytics telemetry in official releases contradicted "no telemetry". | **Fixed in v1.26.0.** The analytics code is removed; the app sends no telemetry, analytics, crash reports or identifiers. The release workflow fails if `google-analytics` appears in either edition's executable. | [release.yml](../../.github/workflows/release.yml), [PRIVACY.md](../../PRIVACY.md#summary), [decisions](../decisions.md) |
+| 4 | Child processes inherit the app's environment, including secrets. | **Fixed in v1.26.0.** Panes and command routines do not receive secret-looking variables: secret suffixes (`*_TOKEN`, `*_API_KEY`, `*_SECRET`, `*_PASSWORD`, `*_PASS`, `*_PWD`, `*_KEY`), a `TOKEN`, `SECRET`, `PASSWORD` or `CREDENTIAL` segment anywhere in the name (`AWS_BEARER_TOKEN_BEDROCK`) unless the name only points to a secret (`*_FILE`, `*_PATH`, `*_URL`, `*_HELPER`, `*_STORE`, …), the `SECRET_` prefix and `DATABASE_URL`, `PGPASSWORD`, `MYSQL_PWD`; any variable whose value is a URL with credentials (`http://user:pw@proxy`) or an `Authorization:`/`Bearer ` header is dropped whole. Provider configuration without secrets (`AWS_REGION`, `AWS_PROFILE`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`) passes on purpose; their keys (`AWS_SECRET_ACCESS_KEY`, `ANTHROPIC_API_KEY`) do not, while public keys (`*_PUBLIC_KEY`, `GPG_KEY`) pass. A strict mode passes only Windows system variables plus `__PSLockdownPolicy`, `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (without credentials) and CA bundle variables. Administrators force the filter with `EnvPolicy` and allow names with `EnvAllow`; in Corp it cannot be switched off. | [terminal_env.rs](../../src-tauri/src/terminal_env.rs), [security model](../security-model.md#environment-filtering), [admin policy](../admin-policy.md) |
+| 5 | In-app updates bypass internal software review. | **Fixed in v1.26.0.** The (disabled) updater plugin is removed; the app never checks for or downloads updates of itself. New versions arrive only when IT deploys the installer. The optional buzzkey voice companion installer/updater and the speech-model download are lockable (`DisableCompanion`, `DisableModelDownload`) and compiled out of the Corp edition; the release workflow fails if their endpoints appear in the Corp executable. | [enterprise deployment](../enterprise-deployment.md#updates), [editions](../editions.md), [release.yml](../../.github/workflows/release.yml) |
+| 6 | Internal software-development guidelines (dependency audit, SBOM, licences, security contact). | CI runs `cargo deny` (RustSec advisories, licence allow list, sources), `npm audit` and `npm audit signatures`, a gitleaks secret scan, CodeQL, OpenSSF Scorecard and REUSE licence lint; actions are pinned to commit SHAs. Each release ships CycloneDX SBOMs, `SHA256SUMS.txt` and Sigstore-signed build provenance. Private vulnerability reports via GitHub Security Advisories with response targets; until the maintainer enables private reporting (required before this resubmission, [maintainer to-dos](../maintainer-todos.md)), reporters open a GitHub issue that only asks for a private contact, without details. | [ci.yml](../../.github/workflows/ci.yml), [codeql.yml](../../.github/workflows/codeql.yml), [scorecard.yml](../../.github/workflows/scorecard.yml), [deny.toml](../../src-tauri/deny.toml), [REUSE.toml](../../REUSE.toml), [SECURITY.md](../../SECURITY.md), [THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md) |
+
+**Not provided:** the installers are **not Authenticode-signed** (decision 2026-10-29), so SmartScreen may warn about
+an unknown publisher. Checksums and signed build provenance replace the signature as proof of origin; organisations
+that only allow signed executables may need to allow the installer by hash (AppLocker/WDAC) or sign the verified
+installer internally with their own certificate.
+Swarmterm GN is a volunteer project (GPL-3.0-only) without a support contract or SLA.
+
+## How to verify a download
+
+```powershell
+# 1. Checksum: must equal the installer's line in SHA256SUMS.txt from the release.
+Get-FileHash -Algorithm SHA256 .\Swarmterm.GN.Corp_1.26.0_x64-setup.exe
+# 2. Build provenance (GitHub CLI 2.49+): built by the release workflow of apoOooh/swarmterm-gn.
+gh attestation verify .\Swarmterm.GN.Corp_1.26.0_x64-setup.exe --repo apoOooh/swarmterm-gn `
+  --signer-workflow apoOooh/swarmterm-gn/.github/workflows/release.yml
+```
+
+The same works for `SHA256SUMS.txt` and each SBOM. Details: [enterprise deployment](../enterprise-deployment.md#verify-a-download).
+
+## Recommended deployment for companies
+
+1. Deploy **Swarmterm GN Corp** (`Swarmterm.GN.Corp_<version>_x64-setup.exe`, per machine into Program Files, needs
+   administrator rights, silent with `/S`). Bypass
+   modes, War Room execute by agents, the buzzkey installer and model downloads are locked or compiled out, and the
+   environment filter is always on; no setting or registry value lifts these ([editions](../editions.md)).
+2. Add the **HKLM policy** `HKLM\Software\Policies\SwarmtermGN` through Group Policy (ADMX in
+   [docs/admin/](../admin/)) or Intune for anything else your rules require, for example `EnvPolicy=strict`,
+   `DisableMcp`, `DisableRoutineCommands`, `DisablePreviewBrowser` ([admin policy](../admin-policy.md)).
+3. Uninstall the Standard edition where present (both can be installed side by side).
+
+**What the Corp locks are, and are not.** The Corp bypass lock is a guard against mistakes based on the agent flags
+it recognises, not a security boundary: Swarmterm does not sandbox the agents or the shell, and a user can type a
+bypass flag into a shell pane or start an agent outside Swarmterm ([security model](../security-model.md)). The real
+controls, all required for a corporate deployment:
+
+- the **HKLM policy** (step 2), which applies to both editions;
+- the **agents' own managed settings**: Claude Code managed settings with `"permissions": {
+  "disableBypassPermissionsMode": "disable", "disableAutoMode": "disable" }` (removes Bypass and Auto mode), Codex managed `requirements.toml`;
+- **AppLocker or WDAC** rules that allow only the Corp installer's hash or its Program Files path, so users cannot run
+  a swapped executable or the Standard edition.
+4. Roll out new versions through your software distribution after review; watch GitHub Releases for security fixes.

@@ -237,7 +237,7 @@ impl SwarmtermMcpServer {
             axum::http::request::Parts,
         >,
     ) -> Result<Json<ListPeersResult>, rmcp::ErrorData> {
-        let terminal = self.caller(&parts)?;
+        let terminal = self.war_room_caller(&parts)?;
         let state = self.app.state::<AppState>();
         // Lock scoped to a block so the handshake event is emitted lock-free.
         let (room_id, connected_ev, room_name, peers) = {
@@ -271,7 +271,8 @@ impl SwarmtermMcpServer {
             room: room_name,
             peers,
             note: "Message a peer with war_room.send (mode \"probe\"), or hand one a task \
-                   with mode \"execute\". Peers inspect their own codebase — ask them \
+                   with mode \"execute\" (only if the user allowed it in Settings; otherwise \
+                   it is refused — use probe). Peers inspect their own codebase — ask them \
                    instead of requesting their files. The peer \"Moderator\" is the human \
                    user: probe them for a decision, never send them mode \"execute\" (they \
                    have no terminal)."
@@ -281,7 +282,7 @@ impl SwarmtermMcpServer {
 
     #[tool(
         name = "war_room.send",
-        description = "Send to War Room peers. mode \"probe\" (default): the content goes to the peer's inbox and they are nudged to read it — use for questions, debate, coordination. mode \"execute\": the content is pasted into the peer's terminal and run as their next prompt — use to hand over an agreed task. Omit \"to\" to broadcast a probe to all peers. content is limited to 65536 characters (64k) — send a summary or a file path for anything longer. An execute toward a peer that is blocked on a prompt is refused — war_room.wait_peer for idle/done first."
+        description = "Send to War Room peers. mode \"probe\" (default): the content goes to the peer's inbox and they are nudged to read it — use for questions, debate, coordination. mode \"execute\": the content is pasted into the peer's terminal and run as their next prompt — use to hand over an agreed task. Omit \"to\" to broadcast a probe to all peers. content is limited to 65536 characters (64k) — send a summary or a file path for anything longer. An execute toward a peer that is blocked on a prompt is refused — war_room.wait_peer for idle/done first. mode \"execute\" is off unless the user allowed agents to run prompts in other panes (Settings → Terminal → Agent safety); when refused, use \"probe\"."
     )]
     pub async fn war_room_send(
         &self,
@@ -290,10 +291,25 @@ impl SwarmtermMcpServer {
         >,
         Parameters(args): Parameters<WarRoomSendArgs>,
     ) -> Result<Json<WarRoomSendResult>, rmcp::ErrorData> {
-        let terminal = self.caller(&parts)?;
+        let terminal = self.war_room_caller(&parts)?;
         let mode = MessageMode::parse(args.mode.as_deref())
             .map_err(|m| rmcp::ErrorData::invalid_params(m, None))?;
         let state = self.app.state::<AppState>();
+        // Refused outright, never downgraded to a probe: a silently changed
+        // mode would let the agent believe its task was handed over. The
+        // Moderator's UI sends use `war_room_moderator_send`, not this tool.
+        if mode == MessageMode::Execute {
+            // The admin lock first, so the agent learns it is not the user's
+            // setting and asking them to flip it would not help.
+            state
+                .admin_policy
+                .check(crate::policy::Lock::WarRoomExecute)
+                .map_err(|m| rmcp::ErrorData::invalid_request(m, None))?;
+            state
+                .agent_policy_snapshot()
+                .check_war_room_execute()
+                .map_err(|m| rmcp::ErrorData::invalid_request(m, None))?;
+        }
         // Mirror lookup for the execute→blocked refusal. `peer_states` is its
         // own lock (pty.rs) and must never be taken inside `war_rooms`, so read
         // the target's state here, scoped, and carry only the String across.
@@ -385,7 +401,7 @@ impl SwarmtermMcpServer {
         >,
         Parameters(args): Parameters<ReadInboxArgs>,
     ) -> Result<Json<ReadInboxResult>, rmcp::ErrorData> {
-        let terminal = self.caller(&parts)?;
+        let terminal = self.war_room_caller(&parts)?;
         let state = self.app.state::<AppState>();
         let (room_id, connected_ev, messages, previously_read) = {
             let mut rooms = state.war_rooms.lock().unwrap();

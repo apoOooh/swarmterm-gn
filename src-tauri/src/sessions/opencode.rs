@@ -61,7 +61,7 @@ pub async fn scan(folder: &str) -> Vec<SessionEntry> {
     let Some(bin) = crate::agents::find_agent_binary("opencode") else {
         return Vec::new();
     };
-    let mut cmd = tokio::process::Command::new(bin);
+    let mut cmd = crate::terminal_env::tokio_command(bin);
     cmd.args(["session", "list", "--format", "json"])
         .current_dir(folder)
         .stdin(std::process::Stdio::null())

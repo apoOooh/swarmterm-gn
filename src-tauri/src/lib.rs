@@ -1,8 +1,8 @@
 mod account_status;
 mod accounts;
+mod agent_policy;
 mod agent_process;
 mod agents;
-mod analytics;
 mod child_priority;
 mod clipboard_media;
 mod commands;
@@ -17,6 +17,7 @@ mod links;
 mod marked_media;
 mod mcp;
 mod paste_image;
+mod policy;
 mod preview;
 mod prof;
 mod pty;
@@ -43,7 +44,12 @@ pub fn run() {
     #[cfg(feature = "profiling")]
     install_named_runtime();
     tauri::Builder::default()
-        .manage(AppState::default())
+        // Admin policy is read before anything else runs, so no boot step
+        // (MCP enrollment, restore spawns) can act before the locks apply.
+        .manage(AppState {
+            admin_policy: policy::load(),
+            ..AppState::default()
+        })
         .manage(host_client::HostHub::default())
         .manage(voice::VoiceHub::default())
         .manage(clipboard_media_state())
@@ -71,6 +77,28 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             crate::prof::start(app.handle());
+            // Before any pane, routine or other child process spawns: the
+            // user's env policy from the last run (admin policy applied), not
+            // the built-in default.
+            match app.path().app_data_dir() {
+                Ok(dir) => app
+                    .state::<AppState>()
+                    .load_env_policy(dir.join("env-policy.json")),
+                Err(e) => {
+                    eprintln!("env policy: no app data dir ({e}); the setting is not persisted");
+                    let state = app.state::<AppState>();
+                    crate::terminal_env::publish_child_policy(state.env_policy_snapshot());
+                }
+            }
+            // The window title (taskbar, Alt+Tab) comes from tauri.conf.json,
+            // which is shared by both editions; the edition is a compile-time
+            // fact, so the binary sets it rather than a second config copy of
+            // the whole `windows` array.
+            if policy::EDITION == policy::Edition::Corp {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.set_title(policy::EDITION.product_name());
+                }
+            }
             app.manage(child_priority::ChildPriority::default());
             app.manage(std::sync::Arc::new(files::FileService::new(
                 app.path().app_data_dir()?.join("local-history"),
@@ -99,15 +127,14 @@ pub fn run() {
                 }
             }
             tray::setup_tray(app)?;
-            // Fire-and-forget usage telemetry. Keys are compiled in from
-            // .env.release by the release scripts; dev/community builds have
-            // none, so this is a no-op there. See analytics.rs.
-            analytics::init(app.handle());
             // Register the MCP server at Claude's user scope (~/.claude.json)
             // instead of dropping a .mcp.json into every project. One-shot,
             // idempotent, log-only.
             // The Settings → MCP opt-outs must be known before the first
             // writer runs, or a switched-off profile is re-enrolled at boot.
+            // DisableMcp turns every profile's switch off: the writers below
+            // then remove our entries instead of (re)adding them.
+            crate::mcp::toggle::set_policy_off(app.state::<AppState>().admin_policy.disable_mcp);
             if let Ok(dir) = app.path().app_data_dir() {
                 crate::mcp::toggle::load(dir.join("swarmterm-mcp-disabled.json"));
                 // Before any pane starts: a profile added while the app was
@@ -139,7 +166,13 @@ pub fn run() {
             // preview via MCP just won't work for this run, but Swarmterm as a
             // whole still functions.
             let handle_for_mcp = app.handle().clone();
+            // DisableMcp: no listener at all, so panes get no SWARMTERM_MCP_URL.
+            let mcp_allowed = !app.state::<AppState>().admin_policy.disable_mcp;
             tauri::async_runtime::spawn(async move {
+                if !mcp_allowed {
+                    eprintln!("mcp: disabled by admin policy");
+                    return;
+                }
                 match crate::mcp::start(handle_for_mcp).await {
                     Ok(url) => eprintln!("mcp: listening on {url}"),
                     Err(e) => eprintln!("mcp: {e}"),
@@ -169,6 +202,9 @@ pub fn run() {
             commands::media_open,
             commands::clipboard_media_set_enabled,
             commands::child_priority_set,
+            commands::env_policy_set,
+            commands::agent_policy_set,
+            commands::policy_get,
             commands::media_save_marked,
             commands::media_read_opened_image,
             commands::files_unwatch,

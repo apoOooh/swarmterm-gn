@@ -232,9 +232,8 @@ fn probe_git_bash(path_var: &str) -> ShellEntry {
 #[cfg(windows)]
 fn probe_wsl() -> ShellEntry {
     use std::os::windows::process::CommandExt;
-    use std::process::Command;
     // CREATE_NO_WINDOW = 0x08000000 — keeps the probe from flashing a console.
-    let output = Command::new("wsl.exe")
+    let output = crate::terminal_env::command("wsl.exe")
         .args(["-l", "-q"])
         .creation_flags(0x0800_0000)
         .output();

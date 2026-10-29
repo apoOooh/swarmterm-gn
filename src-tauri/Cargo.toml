@@ -1,8 +1,8 @@
 [package]
 name = "swarmterm"
-version = "1.25.4"
+version = "1.26.0"
 description = "One window for a whole swarm of AI coding agents — split terminals, per-agent git worktrees, live web previews, and a War Room where agents collaborate"
-authors = ["Duong Duc Nguyen"]
+authors = ["Swarmterm GN maintainers"]
 license = "GPL-3.0-only"
 homepage = "https://github.com/apoOooh/swarmterm-gn"
 repository = "https://github.com/apoOooh/swarmterm-gn"
@@ -23,6 +23,10 @@ local-speech = ["dep:whisper-rs"]
 # watchdog, command spans. Off in every normal and A/B build; see
 # docs/perf-profiling.md.
 profiling = []
+# Corp edition (docs/editions.md): compiled-in admin-policy locks
+# (`policy::Edition::locks`) and no buzzkey installer or whisper model
+# download in the binary. Combines with `--no-default-features`.
+corp = []
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -50,11 +54,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 url = "2"
 percent-encoding = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
 rmcp = { version = "2.1", features = ["server", "transport-streamable-http-server"] }
-# Both already in the tree via tauri-plugin-updater — direct deps for analytics.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 uuid = { version = "1", features = ["v4"] }
 axum = "0.8"
@@ -67,7 +69,7 @@ notify = "8.2"
 clipboard-rs = { version = "0.3.5", default-features = false, features = ["image"] }
 dunce = "1"
 sha2 = "0.10"
-# Voice companion (SWA-42): both already in the tree via tauri-plugin-updater.
+# Voice companion (SWA-42): verify and version-compare companion downloads.
 minisign-verify = "0.2"
 semver = "1"
 tempfile = "3"

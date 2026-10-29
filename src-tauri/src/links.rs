@@ -75,13 +75,13 @@ pub fn find_editor(path_var: &str, preferred: &[String]) -> Option<String> {
 pub fn reveal_in_file_manager(path: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut cmd = {
-        let mut c = std::process::Command::new("open");
+        let mut c = crate::terminal_env::command("open");
         c.arg("-R").arg(path);
         c
     };
     #[cfg(target_os = "windows")]
     let mut cmd = {
-        let mut c = std::process::Command::new("explorer");
+        let mut c = crate::terminal_env::command("explorer");
         c.arg(format!("/select,{path}"));
         c
     };
@@ -92,7 +92,7 @@ pub fn reveal_in_file_manager(path: &str) -> Result<(), String> {
             .parent()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| ".".to_string());
-        let mut c = std::process::Command::new("xdg-open");
+        let mut c = crate::terminal_env::command("xdg-open");
         c.arg(parent);
         c
     };
