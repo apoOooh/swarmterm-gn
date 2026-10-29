@@ -35,7 +35,7 @@ can add locks on top but never lift those. See [Editions](editions.md).
 
 | Value | Type | Effect | Enforced in |
 |---|---|---|---|
-| `DisableBypassModes` | DWORD | Refuses any pane whose launch line switches an agent's approval prompts or sandbox off: `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`, any other `--dangerously-*` / `--allow-dangerously-*` flag, `--permission-mode bypassPermissions`, `--yolo`, `-y`, `--approval-mode yolo`, `-s`/`--sandbox danger-full-access`, `-a`/`--ask-for-approval never`. Red launch modes are greyed out, and spawned workers can never inherit them. | `pty.rs` (`spawn_terminal`), `agent_policy` override |
+| `DisableBypassModes` | DWORD | Refuses any pane whose launch line switches an agent's approval prompts or sandbox off. Recognised: any `--dangerously-*` / `--allow-dangerously-*` flag (e.g. `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`), `--yolo`; Claude `--permission-mode bypassPermissions` or `auto` (Auto mode) and inline `--settings` JSON with `defaultMode` `bypassPermissions`/`auto`; Codex `-s`/`--sandbox danger-full-access`, `-a`/`--ask-for-approval never`, `-c`/`--config approval_policy=never` or `sandbox_mode=danger-full-access` (also `-ckey=value`, `--config=key=value`); Gemini/Qwen `-y` (also via `npx @google/gemini-cli` / `@qwen-code/qwen-code`) and `--approval-mode yolo`; Copilot `--allow-all-tools` / `--allow-all`; Cursor `-f`/`--force`. The line is read with each shell's quoting and as plain words. Red launch modes are greyed out, and spawned workers do not inherit them (the `workersInheritBypass` setting is overridden). A guard against mistakes, not a sandbox: a settings file passed by path (`--settings <file>`), an alias, a launcher with the agent beyond its sixth word, a wrapper script or a flag a CLI adds later is not recognised (see `docs/editions.md`). | `pty.rs` (`spawn_terminal`), `agent_policy` override |
 | `DisableWarRoomExecute` | DWORD | Agents cannot run prompts in other panes (War Room `execute`). Probes and the user's own War Room sends still work. | `mcp/tools/warroom.rs` |
 | `DisableWarRoom` | DWORD | Turns the War Room off: panes cannot be added to a room, the user's War Room messages are refused, and every `war_room.*` MCP tool (`list_peers`, `send`, `read_inbox`, `read_peer`, `wait_peer`) is refused. The War Room tab shows "Managed by your administrator". Implies `DisableWarRoomExecute`. | `mcp/server.rs` (`war_room_caller`), `commands.rs` (`war_room_join`, `war_room_moderator_send`) |
 | `DisableWorktreeSpawn` | DWORD | The `worktree.spawn` MCP tool is refused. | `mcp/tools/worktree.rs` |
@@ -52,7 +52,8 @@ can add locks on top but never lift those. See [Editions](editions.md).
 - `DisableBypassModes` checks the command Swarmterm starts a pane with against a list of known flags; a flag an agent
   CLI adds later is not covered until Swarmterm lists it. A user can still type such a flag by hand
   into a plain shell pane. Pair the policy with the agents' own managed settings (for example Claude Code's
-  managed setting `permissions.disableBypassPermissionsMode`) if that matters.
+  managed settings `permissions.disableBypassPermissionsMode` and `permissions.disableAutoMode`, both
+  `"disable"`) if that matters.
 - The policy restricts Swarmterm. It does not sandbox the agents or the shell.
 
 ## Group Policy

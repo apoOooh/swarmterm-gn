@@ -7,7 +7,7 @@
       <string id="SwarmtermGN">Swarmterm GN</string>
       <string id="SUPPORTED_SwarmtermGN">Swarmterm GN with administrator policy support</string>
       <string id="DisableBypassModes">Block Bypass/YOLO launch modes</string>
-      <string id="DisableBypassModes_Help">Refuses to start any pane whose launch line switches an agent's approval prompts or sandbox off (--dangerously-skip-permissions, --dangerously-bypass-approvals-and-sandbox, --permission-mode bypassPermissions, --yolo). The red modes are greyed out and spawned workers can never inherit them.</string>
+      <string id="DisableBypassModes_Help">Refuses to start any pane whose launch line switches an agent's approval prompts or sandbox off (for example --dangerously-skip-permissions, --dangerously-bypass-approvals-and-sandbox, --permission-mode bypassPermissions or auto, --yolo, Codex -a never / -s danger-full-access / -c approval_policy=never, Gemini and Qwen -y, Copilot --allow-all-tools, Cursor --force; full list in docs/admin-policy.md). The red modes are greyed out and spawned workers do not inherit them. This is a guard against mistakes, not a sandbox: a settings file, alias or wrapper script can still start an agent without its prompts.</string>
       <string id="DisableWarRoomExecute">Block War Room execute between agents</string>
       <string id="DisableWarRoomExecute_Help">Agents can no longer run prompts in other panes through the War Room (mode execute). Probe messages and the user's own War Room sends stay available.</string>
       <string id="DisableWarRoom">Turn off the War Room</string>

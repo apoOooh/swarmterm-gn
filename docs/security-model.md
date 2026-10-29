@@ -52,7 +52,7 @@ only what the app sends it, with the environment cleared first.
 
 The MCP server binds only `127.0.0.1` on a random port
 (`src-tauri/src/mcp/mod.rs`). Each pane gets its own bearer token in its environment
-(`SWARMTERM_SESSION`): a random 256-bit secret minted for every spawn and
+(`SWARMTERM_SESSION`): a random secret (two v4 UUIDs, about 244 random bits) minted for every spawn and
 rotated on respawn, separate from the pane id that War Room peers can see
 (`src-tauri/src/mcp/session_tokens.rs`). A request without an
 `Authorization: Bearer` header carrying the token of a live pane is refused,
@@ -224,7 +224,7 @@ mistakes: it refuses the launch flags it recognises for known agents. It is not
 a security boundary, because a user can type any flag into a shell pane or run
 an agent outside the app. Corporate deployments need the HKLM policy, the
 agents' own managed settings (Claude Code `permissions.disableBypassPermissionsMode:
-"disable"`, Codex managed `requirements.toml`) and AppLocker/WDAC rules that
+"disable"` and `permissions.disableAutoMode: "disable"`, Codex managed `requirements.toml`) and AppLocker/WDAC rules that
 allow only the Corp installer's hash or path
 ([enterprise-deployment.md](enterprise-deployment.md#recommended-deployment)).
 
