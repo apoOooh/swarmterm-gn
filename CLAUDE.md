@@ -272,17 +272,12 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   are denied and navigate the same preview in place. Webviews close on
   terminal death in `kill_terminal` AND `read_loop` (belt-and-braces, like the
   War Room auto-leave).
-- **Auto-update.** Disabled in GN. The tag-triggered Windows release workflow
-  publishes standalone installers and checksums without updater artifacts.
-  `scripts/release/publish.mjs` deliberately refuses the current configuration.
-  See `docs/release-process.md`; do not restore upstream update endpoints.
-- **Anonymous telemetry is compile-time gated.** `analytics.rs` sends a GA4
-  Measurement Protocol `app_open` + 5-minute heartbeat, but only when
-  `SWARMTERM_GA_MEASUREMENT_ID` / `SWARMTERM_GA_API_SECRET` were in the env
-  when **cargo compiled** (`option_env!` — the release scripts export them
-  from `.env.release`). Dev and source builds are no-ops; don't add runtime
-  key lookups, and never send more than version + OS (the user-guide
-  Telemetry section is the contract).
+- **No auto-update.** GN never updates itself: no updater plugin, no update
+  checks. The tag-triggered Windows release workflow publishes standalone
+  installers and checksums. Do not add an updater or update endpoints.
+- **No telemetry.** GN sends no telemetry or usage data (user decision
+  2026-10-29). The release workflow fails if the built exe contains
+  `google-analytics`; do not add analytics or usage pings.
 - **Saved workspaces.** Welcome lists up to 24 local snapshots. `saved-workspaces`
   serializes structure only; `saved-workspace-sync` debounces meaningful changes
   and flushes on close/quit. Restore verifies directories and exact session ids,

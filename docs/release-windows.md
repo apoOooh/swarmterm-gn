@@ -4,7 +4,7 @@ Swarmterm GN ships as an NSIS installer (`Swarmterm GN_<version>_x64-setup.exe`)
 Official fork releases are built by the [Windows release workflow](release-process.md).
 This page describes an optional local build. The build is **unsigned** —
 see the SmartScreen section for what users see and why that is acceptable for
-now. GN automatic updates are disabled, so no updater signing key is needed.
+now. The app never updates itself, so no updater signing key is needed.
 
 The overall flow (bump → tag → build → publish) lives in
 [release-process.md](release-process.md).
@@ -26,8 +26,7 @@ npm run release:win        # standalone NSIS installer, with assertions
 ```
 
 The build script asserts that the installer exists and carries the version
-from `tauri.conf.json`. If a fork-owned updater is configured in the future,
-it additionally requires that updater's signing key and `.sig`. Output lands in
+from `tauri.conf.json`. Output lands in
 `src-tauri\target\release\bundle\nsis\`.
 
 To sanity-check the installer locally: run it (per-user install, no admin
@@ -45,21 +44,14 @@ Put a line like this in every release's notes:
 > Windows: the installer is not code-signed yet. SmartScreen will warn —
 > click **More info**, then **Run anyway**.
 
-Two things worth knowing:
-
-- The **auto-updater never re-triggers SmartScreen** — the plugin verifies
-  the minisign signature and runs the installer itself (passive mode), so the
-  warning is a first-install experience only.
-- Buying an Authenticode certificate later slots into `release-windows.ps1`
-  as an extra signing step and changes nothing else in the pipeline — the
-  updater trust chain is independent of it.
+Buying an Authenticode certificate later slots into `release-windows.ps1` as
+an extra signing step and changes nothing else in the pipeline. The app never
+updates itself, so every new version is an installer that users (or IT
+software distribution) run.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `link.exe not found` / C++ toolchain errors | VS Build Tools missing the C++ workload | re-run the Build Tools installer, add *Desktop development with C++* |
-| script dies: `TAURI_SIGNING_PRIVATE_KEY is unset` | `.env.release` missing or empty | copy `.env.release.example`, fill the two updater vars |
-| build succeeds but no `.sig` beside the installer | key env vars not visible to the build | run through `npm run release:win` (it loads `.env.release`), not `tauri build` directly |
-| `gh: not authenticated` from publish | `gh auth login` never ran on this machine | run it once; the token persists |
 | installer runs but app won't start | WebView2 missing (rare — NSIS bundles the bootstrapper) | install the WebView2 Evergreen runtime from Microsoft |

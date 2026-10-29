@@ -2,7 +2,6 @@ mod account_status;
 mod accounts;
 mod agent_process;
 mod agents;
-mod analytics;
 mod child_priority;
 mod clipboard_media;
 mod commands;
@@ -99,10 +98,6 @@ pub fn run() {
                 }
             }
             tray::setup_tray(app)?;
-            // Fire-and-forget usage telemetry. Keys are compiled in from
-            // .env.release by the release scripts; dev/community builds have
-            // none, so this is a no-op there. See analytics.rs.
-            analytics::init(app.handle());
             // Register the MCP server at Claude's user scope (~/.claude.json)
             // instead of dropping a .mcp.json into every project. One-shot,
             // idempotent, log-only.

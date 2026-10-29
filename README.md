@@ -97,7 +97,7 @@ The full list lives in the guide's [known limits](docs/user-guide.md#known-limit
 
 ## Contributing & community
 
-Fork issues belong in [swarmterm-gn/issues](https://github.com/apoOooh/swarmterm-gn/issues). [`CONTRIBUTING.md`](CONTRIBUTING.md) explains the upstream architecture and contribution conventions. Swarmterm is free software under [GPL-3.0](LICENSE); Astera source and bundled fonts retain their notices in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Source builds without analytics environment keys do not send launch telemetry.
+Fork issues belong in [swarmterm-gn/issues](https://github.com/apoOooh/swarmterm-gn/issues). [`CONTRIBUTING.md`](CONTRIBUTING.md) explains the upstream architecture and contribution conventions. Swarmterm is free software under [GPL-3.0](LICENSE); Astera source and bundled fonts retain their notices in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Swarmterm GN sends no telemetry or usage data and never updates itself; new versions are installers from [GitHub Releases](https://github.com/apoOooh/swarmterm-gn/releases).
 
 ---
 

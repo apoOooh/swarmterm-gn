@@ -613,14 +613,8 @@ machine that never built Swarmterm. Details in
 
 ## Auto-update
 
-- [ ] GN shows no upstream updater controls or tray entry and makes no upstream
-      update requests. App name and application-data identifier are distinct.
-
-## Telemetry (release builds only)
-
-- [ ] Release build (built with GA keys in `.env.release`): launch, then GA →
-      Reports → Realtime shows 1 active user within ~a minute.
-- [ ] `npm run tauri dev` (no keys): nothing appears in GA Realtime.
+- [ ] GN shows no update controls or tray entry and makes no update
+      requests. App name and application-data identifier are distinct.
 
 ## Agent state detection
 

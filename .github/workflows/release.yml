@@ -82,6 +82,13 @@ jobs:
       - name: Build NSIS installer
         run: npx tauri build --bundles nsis -- --locked
         shell: bash
+      # GN sends no telemetry (decision 2026-10-29); fail the release if an
+      # analytics endpoint ever finds its way back into the binary.
+      - name: Check exe has no telemetry endpoint
+        shell: pwsh
+        run: |
+          $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes('src-tauri/target/release/swarmterm.exe'))
+          if ($text.Contains('google-analytics')) { throw 'swarmterm.exe contains google-analytics' }
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer

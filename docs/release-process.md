@@ -112,10 +112,9 @@ The first installer is **not Authenticode-signed**. Windows SmartScreen may
 show an unknown publisher warning. This is stated in each release's notes.
 The release supplies SHA-256 checksums alongside the installer.
 
-Upstream automatic updates remain disabled, and this workflow does not upload
-`latest.json` or updater signatures. The old `release:publish` helper requires
-a configured fork-owned updater and deliberately refuses the current GN
-configuration. GitHub Releases is the supported download path.
+The app never updates itself and contains no updater; this workflow uploads no
+`latest.json` or updater signatures. New versions reach users as installers
+from GitHub Releases (or IT software distribution).
 
 For a local installer build, see [release-windows.md](release-windows.md).
 Native clipboard, tray and codec checks remain in

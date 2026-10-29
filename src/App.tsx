@@ -95,9 +95,6 @@ import { FLOATING_LAYER_ID } from '@/lib/floating-panes'
 import { Welcome } from '@/components/Welcome/Welcome'
 import { WorkspaceTabs } from '@/components/WorkspaceTabs/WorkspaceTabs'
 import { useBrowserStore } from '@/store/browser-store'
-import { useUpdaterStore } from '@/store/updater-store'
-import { PERIODIC_CHECK_INTERVAL_MS, STARTUP_CHECK_DELAY_MS } from '@/lib/updater-flow'
-import { onUpdateCheckRequested } from '@/tauri/updater'
 import { showMessage } from '@/tauri/dialog'
 import { useGitStore, type RightPanelMode } from '@/store/git-store'
 import { useRecentsStore } from '@/store/recents-store'
@@ -961,33 +958,9 @@ export default function App(): ReactElement {
   // is a module singleton, this just attaches its listeners for the app's life.
   useEffect(() => wirePreviewEvents(), [])
 
-  // Silent update checks: one a few seconds after boot (never competing with
-  // pty spawn), then periodically — Swarmterm runs for days, and the navbar
-  // update button only ever appears through these. Failures are swallowed by
-  // the flow reducer. The periodic tick only fires from idle so it can never
-  // clobber a known update or an in-flight download.
-  useEffect(() => {
-    const check = () => void useUpdaterStore.getState().check(false)
-    const t = window.setTimeout(check, STARTUP_CHECK_DELAY_MS)
-    const i = window.setInterval(() => {
-      if (useUpdaterStore.getState().state.phase === 'idle') check()
-    }, PERIODIC_CHECK_INTERVAL_MS)
-    return () => {
-      window.clearTimeout(t)
-      window.clearInterval(i)
-    }
-  }, [])
-
   // buzzkey update toast: start + every 24 h, only for an installed and
   // connected buzzkey (rules in lib/buzzkey-update.ts).
   useEffect(() => useBuzzkeyUpdateStore.getState().startWatch(), [])
-
-  // Tray "Check for Updates…" → manual check (talkative: reports up-to-date
-  // and failures in a native dialog).
-  useEffect(() => {
-    const unlisten = onUpdateCheckRequested(() => void useUpdaterStore.getState().check(true))
-    return () => void unlisten.then((fn) => fn())
-  }, [])
 
   // Claude Code hook edges (`swarmterm --hook` → POST /hook → `agent:hook`)
   // feed the pane's detector directly. Mount-once and routed by terminalId so
@@ -1038,27 +1011,8 @@ export default function App(): ReactElement {
     })
   }, [])
 
-  // Manual-check verdicts land as native OS dialogs, not DOM — nothing to
-  // position over the terminal. Subscribed outside the render path so the
-  // per-chunk download progress never re-renders App. Dismiss BEFORE the
-  // dialog: the machine is already idle while the dialog waits for OK.
-  useEffect(() => {
-    return useUpdaterStore.subscribe((cur, prev) => {
-      if (cur.state.phase === prev.state.phase) return
-      if (cur.state.phase === 'upToDate') {
-        useUpdaterStore.getState().dismiss()
-        void showMessage('Swarmterm is up to date.', { title: 'Swarmterm' })
-      } else if (cur.state.phase === 'error') {
-        const detail = cur.state.message
-        useUpdaterStore.getState().dismiss()
-        void showMessage(`Update check failed:\n${detail}`, { title: 'Swarmterm', kind: 'error' })
-      }
-    })
-  }, [])
-
   // Agent notifications — plus long-command notifications for plain panes
-  // (OSC 133 shell marks) — subscribed outside the render path (updater
-  // precedent) so per-tick agent-state churn never re-renders App.
+  // (OSC 133 shell marks) — subscribed outside the render path so per-tick agent-state churn never re-renders App.
   useEffect(() => {
     return startNotificationWatch({
       subscribeAgentStates: (listener) =>

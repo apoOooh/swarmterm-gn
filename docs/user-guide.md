@@ -540,31 +540,14 @@ Hosted panes outlive Swarmterm itself: if the app crashes or is ended from Task 
 
 ## Updates
 
-Swarmterm GN disables the upstream updater, including its tray entry, endpoint
-and update artifacts. Install new versions from this fork's GitHub Releases, or rebuild from its `main` branch (the latest release).
+Swarmterm GN never updates itself and makes no update checks. New versions are
+installers from this fork's [GitHub Releases](https://github.com/apoOooh/swarmterm-gn/releases)
+(or your IT's software distribution); install one over the existing version.
 Upstream Swarmterm releases do not contain the GN additions.
 
 ## Telemetry
 
-Official release builds send an anonymous usage ping so we can see how many
-people actually run Swarmterm: one `app_open` event at launch, then a
-heartbeat every five minutes while the app is open. Each event carries a
-random id, the app version and the OS name (`macos` / `windows` / `linux`) —
-nothing else. No paths, no terminal content, no hostname, no account.
-Google Analytics infers a country from the request's IP, as any website does;
-Swarmterm never sends the IP itself.
-
-The random id lives in one small file so restarts count as the same person —
-`~/Library/Application Support/com.swarmterm.app/telemetry-id` on macOS,
-`%APPDATA%\com.swarmterm.app\telemetry-id` on Windows,
-`~/.config/com.swarmterm.app/telemetry-id` on Linux. Delete it any time to
-start over as a new anonymous user.
-
-**Builds from source contain no telemetry at all.** The analytics keys are
-injected only when official releases are built; compile Swarmterm yourself
-(`npm run tauri dev` or `npm run tauri build`) and the reporting code
-compiles to nothing. Offline use is fine too — a failed ping is silently
-dropped, never retried loudly, and never blocks the app.
+Swarmterm GN sends no telemetry or usage data.
 
 ## What your agents can do
 
