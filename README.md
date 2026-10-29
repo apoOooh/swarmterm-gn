@@ -2,103 +2,115 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.png">
-  <img src="docs/images/logo-light.png" alt="Swarmterm" width="96" height="96">
+  <img src="docs/images/logo-light.png" alt="Swarmterm GN" width="96" height="96">
 </picture>
 
 # Swarmterm GN
 
 **One window for a whole swarm of AI coding agents.**
 
-Real split terminals, one git worktree per agent — and an app your agents can drive themselves.
+Real split terminals, one git worktree per agent, and an app your agents can drive themselves. Windows x64.
 
-<!-- IMAGE: upgrade to docs/images/hero.gif when a ~20s tour is recorded — see docs/images/README.md -->
-<img src="docs/images/hero.png" alt="Swarmterm — one window for a whole swarm of AI coding agents" width="100%">
-
+[![Latest release](https://img.shields.io/github/v/release/apoOooh/swarmterm-gn)](https://github.com/apoOooh/swarmterm-gn/releases/latest)
 [![CI](https://github.com/apoOooh/swarmterm-gn/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/apoOooh/swarmterm-gn/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+
+<!-- IMAGE: upgrade to docs/images/hero.gif when a ~20s tour is recorded; see docs/images/README.md -->
+<img src="docs/images/hero.png" alt="Swarmterm GN with several agent panes, the file explorer and the right panel" width="100%">
+
+[Features](#features) · [Install](#install) · [Quick start](#quick-start) · [Security and privacy](#security-and-privacy) · [User guide](docs/user-guide.md)
 
 </div>
 
 ---
 
-## What it is
+## Features
 
-Swarmterm GN is a **Windows x64** fork of [Duong Duc Nguyen's Swarmterm](https://github.com/duongducnguyen/swarmterm). It adds all seven [Astera](https://github.com/parsingk/Astera) themes and a terminal-linked file explorer, editor, Markdown/media previews and deletion history. Click a terminal in the left sidebar: **Files** follows its project or worktree. Running shells remain alive while you edit files or switch themes.
+**Terminals and workspaces**
+- Workspaces of real split terminal panes (ConPTY), with live titles, activity and agent-state dots, broadcast typing and zoom.
+- Saved workspaces and templates restore layouts, folders and agent sessions; panes can keep running in a separate terminal host across app restarts (optional).
+- Close to tray; everything keeps running until you quit.
 
-See [the migration notes](docs/astera-port.md) for the source mapping, supported operations and verification. `dev` is the fork's integration branch; `main` holds the released state, and every release is tagged on `main` (see [the release process](docs/release-process.md)). Screenshots below show the original Swarmterm interface.
+**Agents**
+- Agent catalogue: Claude Code, Codex, OpenCode, Copilot, Qwen Code, Gemini, Amp, Cursor and more, each with launch modes (from confirming to bypass) and session resume.
+- Worktree isolation: each agent pane works in its own git worktree and branch.
+- Account profiles: several Claude Code or Codex logins side by side, with plan and remaining budget.
+- Prompt library and routines: send saved prompts to agents, or run agents and shell commands on a schedule.
+- Notifications and a bell for agents that finish or wait for input.
 
-Running **one** coding agent in a terminal works anywhere. Running **five** is where ordinary terminals fall apart: tabs hide who is doing what, agents trample each other's edits, and you become the relay pasting prompts and URLs between windows.
+**Agents drive the app (MCP)**
+- Every pane is connected to a local Swarmterm MCP server: agents open a web preview, spawn and remove worktrees, and talk to each other.
+- War Room: panes you drag in can message each other or hand over prompts, with you as moderator.
+- MCP catalogue: add Playwright, GitHub, Context7 and other servers to an agent profile.
 
-Swarmterm is a native desktop app (Tauri 2 + Rust, real PTY terminals, a VS Code-flavoured interface) built around three ideas:
+**Right panel and files**
+- Web preview column per terminal, with address bar and history.
+- Git panel: worktree, branch, changes, inline diff and merge check for the focused pane.
+- File explorer and editor that follow the focused terminal, Markdown/SVG/HTML previews, local deletion history.
+- Media panel: images from pane output as thumbnails, large viewer, annotation, drag into panes.
+- Seven dark themes from Astera.
 
-**See the whole swarm.** A workspace is one window of real split terminal panes — live titles, an activity dot on any pane still producing output, and broadcast typing for when five agents should hear the same thing at once.
+**Voice and system**
+- Dictation into panes via the buzzkey companion or built-in offline speech recognition (whisper.cpp).
+- Spoken announcements when agents finish (Windows voices, opt-in).
+- Builds stay responsive: pane processes run in Job Objects with a lower priority class and optional CPU cap.
 
-<img src="docs/images/split-panes.png" alt="Broadcast ON — one line typed into three agent panes at once, the dev-server pane left out" width="100%">
+The [user guide](docs/user-guide.md) covers every feature, shortcut and setting.
 
-**Keep the work separate.** Flip one switch and every agent pane is born inside its own git worktree, on its own branch — separate, reviewable diffs from the very first edit, with a git panel to read them without leaving the app.
+## Install
 
-<img src="docs/images/git-worktrees.png" alt="The Git panel — one swarm/* worktree per agent, changed files and an inline diff" width="100%">
+1. Download `Swarmterm.GN_<version>_x64-setup.exe` and `SHA256SUMS.txt` from [Releases](https://github.com/apoOooh/swarmterm-gn/releases).
+2. Check the hash: `Get-FileHash .\Swarmterm.GN_*_x64-setup.exe` must match `SHA256SUMS.txt`.
+3. Run the installer. It is not code-signed yet, so Windows SmartScreen may warn about an unknown publisher.
 
-**Agents are users of the app, too.** Every pane is connected to Swarmterm itself, so agents don't just run *in* it: they put a live web preview beside their own pane, spin up isolated worktrees to delegate subtasks, and discuss work with each other — with you moderating.
+Requirements: Windows 10/11 x64 with the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), plus the agent CLIs you want to use (`claude`, `codex`, `opencode`). Missing CLIs show as disabled.
 
-<p>
-  <img src="docs/images/web-preview.png" alt="An agent opened its dev server in the preview column beside its own pane" width="49.5%">
-  <img src="docs/images/war-room.png" alt="The War Room — agents debating a fix, with the user moderating and handing out tasks" width="49.5%">
-</p>
+The app never updates itself. Install a new release over the old one, or distribute it with your IT tools.
 
-Everything else hangs off those three ideas. The full tour — panes, broadcast, session resume, the web preview, the War Room, the status line, shortcuts, troubleshooting — lives in **[the user guide](docs/user-guide.md)**.
+## Quick start
 
----
+1. Pick a project folder on the Welcome screen.
+2. Choose the number of panes and assign agents (Claude Code, Codex, OpenCode or a plain terminal) and their launch mode.
+3. Switch on **Isolate features in git worktrees** to give every agent its own branch.
+4. Press `Ctrl+Enter`. The right panel holds the preview, Git, Media and the War Room.
 
-## Install & run
+Layouts save automatically under **Saved workspaces**. Closing the window hides the app to the tray; tray → **Quit** exits.
 
-Download the Windows x64 installer from [this fork's releases](https://github.com/apoOooh/swarmterm-gn/releases), or build from source. It uses the application name **Swarmterm GN** and identifier `com.apooooh.swarmterm.gn`. Upstream automatic updates are disabled so an upstream release cannot replace the fork. Install whichever agent CLIs you plan to use (`claude`, `codex`, `opencode`) — anything missing appears disabled. The initial installer is unsigned; Windows SmartScreen may show an unknown publisher warning. Release assets include SHA-256 checksums. macOS and Linux are not supported by this fork.
+## Security and privacy
 
-### Build from source
+- **No telemetry, no accounts, no self-update.** The app sends no usage data and never downloads updates for itself.
+- **Network use is listed** in [PRIVACY.md](PRIVACY.md): a local MCP server on `127.0.0.1`, and downloads (buzzkey, speech models) only when you ask for them.
+- **Secrets stay out of panes:** by default panes do not inherit secret-looking environment variables (Settings → Terminal → Environment).
+- **Launch modes are explicit:** agents start in their confirming mode unless you pick a bypass mode. Bypass modes are confirmed before launch and marked on the pane (in this release).
+- **War Room execute** (handing a peer a prompt to run) is off by default (in this release).
+- **Verified downloads:** the buzzkey companion is installed only after a signature and hash check; speech models are hash-checked.
+- **Supply chain:** CI checks advisories and licences (`cargo deny`, `npm audit`); each release ships CycloneDX SBOMs.
+- **Planned:** administrator policy via the Windows registry and a `corp` build variant.
 
-Use Node.js 24, npm and a stable Rust toolchain:
+Documents: [Privacy policy](PRIVACY.md) · [Terms of use](TERMS.md) · [Security policy](SECURITY.md) · [Security model](docs/security-model.md) · [Project decisions](docs/decisions.md)
+
+## Build from source
+
+Node.js 24, npm and stable Rust on Windows:
 
 ```powershell
 git clone --branch dev https://github.com/apoOooh/swarmterm-gn.git
 cd swarmterm-gn
 npm ci
-npm run tauri dev                    # develop / just use it
-npm run tauri build                  # installer / app bundle
+npm run tauri:dev:no-speech   # run without the built-in speech engine (no LLVM needed)
+npm run tauri build           # installer; the speech engine needs LLVM and CMake
 ```
 
-Windows prerequisites: the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), Microsoft C++ Build Tools, CMake and LLVM (for libclang; set `LIBCLANG_PATH` to its `bin` folder if it is not installed under `C:\Program Files\LLVM`) — the built-in speech recognition compiles whisper.cpp. Without LLVM and CMake, build without it: `npm run tauri:dev:no-speech`, `npm run test:rust:no-speech`, or pass `--no-default-features` to `cargo`/`tauri build` (only built-in dictation is missing then). See [Tauri prerequisites](https://tauri.app/start/prerequisites/). The first build compiles the Rust side and takes a few minutes. `npx tauri build --no-bundle` compiles the desktop executable without creating installers or opening the app. Tagged Windows releases are built and published by [GitHub Actions](docs/release-process.md).
+Prerequisites, tests and contribution rules: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-For checks, run `npm test`, `npm run build`, and `npx playwright install chromium && npm run test:e2e`. Browser tests are headless and use an in-memory native bridge. From `src-tauri/`, run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
+## Origin and status
 
----
+Swarmterm GN is an independent project. It started as a fork of [duongducnguyen/swarmterm](https://github.com/duongducnguyen/swarmterm) and added the [Astera](https://github.com/parsingk/Astera) themes and file tools, then grew on its own. It is no longer based on or synced with upstream; upstream's website, policies and releases do not apply to Swarmterm GN.
 
-## First run
+Development happens on `dev`; releases are tagged on `main` ([release process](docs/release-process.md), [changelog](CHANGELOG.md)). Known limits are in the [user guide](docs/user-guide.md#known-limits). Issues: [GitHub issues](https://github.com/apoOooh/swarmterm-gn/issues).
 
-Swarmterm opens on the composer: pick a folder, choose how many terminals, assign **Claude Code**, **Codex** or **OpenCode** to some of them, switch on **Isolate features in git worktrees**, and press `⌘/Ctrl + Enter`. Your panes open with the agents already starting up; the right panel gives you the web preview, the git view, and the War Room.
+## Licence
 
-Workspace layouts save automatically and appear under **Saved workspaces** on Welcome. Claude Code and Codex hooks record each pane's conversation for reopening; review Codex's hooks through `/hooks`. Terminal output and unsaved editor buffers are not saved. **Closing the window hides the app to the tray** with everything still running; tray → **Quit** is what actually exits.
+[GPL-3.0-only](LICENSE). Third-party components keep their licences: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), plus SBOMs attached to each release.
 
-From here, the **[user guide](docs/user-guide.md)** covers the rest.
-
----
-
-## Status
-
-The Astera port adds seven dark themes, file management and editing to the upstream 1.0.4 baseline. Current limits:
-
-- you need terminal scrollback or unsaved editor buffers to survive a restart;
-- the embedded text editor supports **UTF-8 files up to 1 MiB**; binary and larger files are read only;
-- native file clipboard and media codecs need platform smoke tests; Linux/macOS CI checks compilation and Rust tests;
-- deletion history covers **explorer deletions**, not deletions made by shell commands.
-
-The full list lives in the guide's [known limits](docs/user-guide.md#known-limits).
-
----
-
-## Contributing & community
-
-Fork issues belong in [swarmterm-gn/issues](https://github.com/apoOooh/swarmterm-gn/issues). [`CONTRIBUTING.md`](CONTRIBUTING.md) explains the upstream architecture and contribution conventions. Swarmterm is free software under [GPL-3.0](LICENSE); Astera source and bundled fonts retain their notices in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Swarmterm GN sends no telemetry or usage data and never updates itself; new versions are installers from [GitHub Releases](https://github.com/apoOooh/swarmterm-gn/releases).
-
----
-
-<sub>Built on <a href="https://tauri.app">Tauri</a>, <a href="https://xtermjs.org">xterm.js</a> and <a href="https://github.com/wez/wezterm/tree/main/pty">portable-pty</a>; interface styled after VS Code. Working on Swarmterm itself? Start with <a href="CONTRIBUTING.md"><code>CONTRIBUTING.md</code></a>, <a href="CLAUDE.md"><code>CLAUDE.md</code></a>, and the release checklist in <a href="docs/manual-smoke-tests.md"><code>docs/manual-smoke-tests.md</code></a>.</sub>
+<sub>Built on <a href="https://tauri.app">Tauri</a>, <a href="https://xtermjs.org">xterm.js</a> and <a href="https://github.com/wez/wezterm/tree/main/pty">portable-pty</a>.</sub>
