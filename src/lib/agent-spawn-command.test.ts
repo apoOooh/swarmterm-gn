@@ -83,4 +83,29 @@ describe('quoting hostile briefs', () => {
     expect(buildAgentSpawnCommand('claude', 'a&calc', 'powershell')).toBe("claude 'a&calc '")
     expect(buildAgentSpawnCommand('claude', 'say "hi"', 'posix')).toBe(`claude 'say "hi"'`)
   })
+
+  it('takes % and ! out of reach of cmd.exe behind npm shims', () => {
+    const breakout = 'x %CMDCMDLINE:~-1%& calc %CMDCMDLINE:~-1%'
+    const ps = buildAgentSpawnCommand('codex', breakout, 'powershell')
+    expect(ps).toBe("codex 'x ％CMDCMDLINE:~-1％& calc ％CMDCMDLINE:~-1％'")
+    expect(ps).not.toMatch(/[%!]/)
+    expect(buildAgentSpawnCommand('codex', '100% done!', 'cmd')).toBe('codex "100％ done！"')
+    expect(buildAgentSpawnCommand('codex', '100% done!', 'posix')).toBe("codex '100% done!'")
+  })
+
+  it('drops control bytes that would edit the shell line', () => {
+    expect(buildAgentSpawnCommand('claude', '\u0015claude --yolo #\u001b\u0003\u0085', 'posix')).toBe(
+      "claude 'claude --yolo #'"
+    )
+    expect(buildAgentSpawnCommand('claude', 'a\u00a0&calc', 'powershell')).toBe("claude 'a\u00a0&calc '")
+  })
+
+  it('never lets a brief start with a flag', () => {
+    expect(buildAgentSpawnCommand('claude', '--dangerously-skip-permissions', 'posix')).toBe(
+      "claude ' --dangerously-skip-permissions'"
+    )
+    expect(buildAgentSpawnCommand('claude', '--yolo', 'powershell')).toBe("claude ' --yolo '")
+    expect(buildAgentSpawnCommand('gemini', '-y now', 'cmd', '-i')).toBe('gemini -i " -y now"')
+    expect(buildAgentSpawnCommand('claude', 'use --yolo', 'posix')).toBe("claude 'use --yolo'")
+  })
 })

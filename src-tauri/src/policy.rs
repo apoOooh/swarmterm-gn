@@ -422,41 +422,119 @@ impl AdminPolicy {
     }
 }
 
-/// Splits a typed command line into words the way the common shells would:
-/// whitespace separates, `'...'` and `"..."` group (quotes removed, adjacent
-/// parts join, so PowerShell's `''` escape and POSIX `'\''` both collapse
-/// into one word). Of the backslash escapes only `\'` is interpreted. Good enough for a mistake guard.
-pub(crate) fn shell_words(line: &str) -> Vec<String> {
+/// The quoting family of a pane's shell; mirrors `shellFlavor` in
+/// `src/lib/agent-spawn-command.ts` (the renderer quotes a worker's brief
+/// for it, `pty::launch_line_to_check` re-derives that quoting).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellFlavor {
+    Posix,
+    PowerShell,
+    Cmd,
+}
+
+impl ShellFlavor {
+    pub const ALL: [ShellFlavor; 3] = [Self::Posix, Self::PowerShell, Self::Cmd];
+
+    /// `shell_id` as `pty` resolves it: `None` (default or unavailable
+    /// shell) is the platform default, PowerShell on Windows.
+    pub fn from_shell_id(shell_id: Option<&str>) -> Self {
+        match shell_id {
+            Some("git-bash" | "wsl" | "zsh" | "bash" | "fish") => Self::Posix,
+            Some("powershell" | "pwsh") => Self::PowerShell,
+            Some("cmd") => Self::Cmd,
+            _ if cfg!(windows) => Self::PowerShell,
+            _ => Self::Posix,
+        }
+    }
+}
+
+/// PowerShell's tokenizer accepts all of these as single / double quotes.
+const PS_SINGLE: [char; 5] = ['\'', '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'];
+const PS_DOUBLE: [char; 4] = ['"', '\u{201C}', '\u{201D}', '\u{201E}'];
+
+/// Splits a typed command line into words the way `flavor`'s shell does:
+/// - POSIX: `'...'` literal, `"..."` with `\` escaping `"`, `\`, `$` and a
+///   backtick, `\x` outside quotes is `x`.
+/// - PowerShell: every single-quote character (doubling escapes), the
+///   double-quote characters (doubling or a backtick escapes), backtick
+///   escapes outside quotes too.
+/// - cmd: only `"` groups, `^x` outside quotes is `x`.
+///
+/// Adjacent parts join into one word. Variable expansion, globbing and
+/// PowerShell's `--%` are not modelled: this feeds a mistake guard, which
+/// also checks a plain whitespace split (`plain_words`).
+pub(crate) fn shell_words_in(line: &str, flavor: ShellFlavor) -> Vec<String> {
+    #[derive(PartialEq)]
+    enum Q {
+        None,
+        Single,
+        Double,
+    }
+    let is_single = |c: char| match flavor {
+        ShellFlavor::Posix => c == '\'',
+        ShellFlavor::PowerShell => PS_SINGLE.contains(&c),
+        ShellFlavor::Cmd => false,
+    };
+    let is_double = |c: char| match flavor {
+        ShellFlavor::PowerShell => PS_DOUBLE.contains(&c),
+        _ => c == '"',
+    };
+    let escape = match flavor {
+        ShellFlavor::Posix => '\\',
+        ShellFlavor::PowerShell => '`',
+        ShellFlavor::Cmd => '^',
+    };
     let mut words = Vec::new();
     let mut cur = String::new();
     let mut in_word = false;
-    let mut quote: Option<char> = None;
+    let mut q = Q::None;
     let mut chars = line.chars().peekable();
     while let Some(c) = chars.next() {
-        // POSIX `\'` outside quotes is a literal quote (the renderer's
-        // `'\''` escape). Other backslashes stay: Windows paths use them.
-        if quote.is_none() && c == '\\' && chars.peek() == Some(&'\'') {
-            cur.push(chars.next().unwrap_or('\''));
-            in_word = true;
-            continue;
-        }
-        match quote {
-            Some(q) if c == q => quote = None,
-            Some(_) => cur.push(c),
-            None if c == '\'' || c == '"' => {
-                quote = Some(c);
-                in_word = true;
-            }
-            None if c.is_whitespace() => {
+        match q {
+            Q::None if c.is_whitespace() => {
                 if in_word {
                     words.push(std::mem::take(&mut cur));
                     in_word = false;
                 }
             }
-            None => {
-                cur.push(c);
+            Q::None => {
                 in_word = true;
+                if c == escape {
+                    if let Some(n) = chars.next() {
+                        cur.push(n);
+                    }
+                } else if is_single(c) {
+                    q = Q::Single;
+                } else if is_double(c) {
+                    q = Q::Double;
+                } else {
+                    cur.push(c);
+                }
             }
+            // PowerShell: two quote characters in a row are one literal.
+            Q::Single if is_single(c) => match chars.peek() {
+                Some(&n) if flavor == ShellFlavor::PowerShell && is_single(n) => {
+                    cur.push(n);
+                    chars.next();
+                }
+                _ => q = Q::None,
+            },
+            Q::Single => cur.push(c),
+            Q::Double if is_double(c) => match chars.peek() {
+                Some(&n) if flavor == ShellFlavor::PowerShell && is_double(n) => {
+                    cur.push(n);
+                    chars.next();
+                }
+                _ => q = Q::None,
+            },
+            Q::Double if c == escape && flavor != ShellFlavor::Cmd => match chars.peek() {
+                Some(&n) if flavor == ShellFlavor::PowerShell || "\"\\$`".contains(n) => {
+                    cur.push(n);
+                    chars.next();
+                }
+                _ => cur.push(c),
+            },
+            Q::Double => cur.push(c),
         }
     }
     if in_word {
@@ -465,10 +543,72 @@ pub(crate) fn shell_words(line: &str) -> Vec<String> {
     words
 }
 
-/// Program name of a command word: file name, lower case, no `.exe`/`.cmd`.
+/// Whitespace-separated tokens with every quote, backtick and caret removed:
+/// whatever a shell's quoting does, a flag it passes on as its own argument
+/// sits between whitespace here too. Catches lines where `shell_words_in`
+/// and the real shell disagree, at the price of false positives in prose.
+fn plain_words(line: &str) -> Vec<String> {
+    line.split_whitespace()
+        .map(|w| {
+            w.chars()
+                .filter(|c| !PS_SINGLE.contains(c) && !PS_DOUBLE.contains(c) && !"`^".contains(*c))
+                .collect::<String>()
+        })
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// The renderer's quoting of a worker brief, `quoteForShell` in
+/// `src/lib/agent-spawn-command.ts`, byte for byte.
+pub(crate) fn quote_for_shell(text: &str, flavor: ShellFlavor) -> String {
+    match flavor {
+        ShellFlavor::Posix => {
+            let mut out = String::from("'");
+            for c in text.chars() {
+                if c == '\\' || c == '\'' {
+                    out.push_str("'\\");
+                    out.push(c);
+                    out.push('\'');
+                } else {
+                    out.push(c);
+                }
+            }
+            out.push('\'');
+            out
+        }
+        ShellFlavor::PowerShell => {
+            let mut out = String::from("'");
+            for c in text.chars() {
+                out.push(c);
+                if PS_SINGLE.contains(&c) {
+                    out.push(c);
+                }
+            }
+            out.push('\'');
+            out
+        }
+        ShellFlavor::Cmd => text
+            .replace('"', "'")
+            .split('%')
+            .map(|part| {
+                let body = part.trim_end_matches('\\');
+                let quoted = if body.is_empty() {
+                    String::new()
+                } else {
+                    format!("\"{body}\"")
+                };
+                quoted + &part[body.len()..]
+            })
+            .collect::<Vec<_>>()
+            .join("^%"),
+    }
+}
+
+/// Program name of a command word: file name, lower case, no `.exe`/`.cmd`
+/// and no npm `@version` (`@google/gemini-cli@latest` is `gemini-cli`).
 fn program_name(word: &str) -> String {
     let base = word.rsplit(['/', '\\']).next().unwrap_or(word);
-    let base = base.to_ascii_lowercase();
+    let base = base.split('@').next().unwrap_or(base).to_ascii_lowercase();
     for ext in [".exe", ".cmd", ".bat", ".ps1"] {
         if let Some(stem) = base.strip_suffix(ext) {
             return stem.to_string();
@@ -480,24 +620,44 @@ fn program_name(word: &str) -> String {
 /// First word of `line` that starts an agent without its approval prompts
 /// or sandbox (or, for Claude's Auto mode, with per-action prompts handed to
 /// its classifier). Mirrors the `dangerous` modes in `src/lib/templates.ts`
-/// plus the known equivalents of the supported CLIs. A denylist and a guard
-/// against mistakes, not a sandbox: a flag a CLI adds later, a settings file
-/// passed by path, an alias or an obfuscated line are not covered.
+/// plus the known equivalents of the supported CLIs. The line is split the
+/// way each shell family would and as plain whitespace tokens; any split
+/// that shows a flag counts, since the guard cannot know which one the real
+/// shell matches. A denylist and a guard against mistakes, not a sandbox: a
+/// flag a CLI adds later, a settings file passed by path, an alias or an
+/// obfuscated line are not covered.
 pub fn bypass_flag(line: &str) -> Option<String> {
-    let words: Vec<String> = shell_words(line)
+    ShellFlavor::ALL
         .iter()
-        .map(|w| w.to_ascii_lowercase())
-        .collect();
+        .map(|f| shell_words_in(line, *f))
+        .chain(std::iter::once(plain_words(line)))
+        .find_map(|words| bypass_in_words(&words))
+}
+
+fn bypass_in_words(words: &[String]) -> Option<String> {
+    let words: Vec<String> = words.iter().map(|w| w.to_ascii_lowercase()).collect();
     // The agent may sit behind a launcher (`npx gemini`, `& 'C:\..\gemini.exe'`,
-    // `cmd /c gemini`), so look at the first few words, not only the first.
+    // `cmd /c gemini`, `npx --yes --package=@google/gemini-cli gemini`), so look at
+    // the first few
+    // words, not only the first.
     let program = words
         .iter()
-        .take(4)
+        .take(6)
         .map(|w| program_name(w))
-        .find(|p| matches!(p.as_str(), "gemini" | "qwen" | "cursor-agent"))
+        .find_map(|p| match p.as_str() {
+            "gemini" | "gemini-cli" => Some("gemini"),
+            "qwen" | "qwen-code" => Some("qwen"),
+            "cursor-agent" => Some("cursor-agent"),
+            _ => None,
+        })
         .unwrap_or_default();
     for (i, t) in words.iter().enumerate() {
         let (flag, inline) = match t.split_once('=') {
+            // Codex `-ckey=value`: the value attached to the short flag.
+            // Codex `-anever`, `-sdanger-full-access` likewise.
+            _ if t.len() > 2 && ["-c", "-a", "-s"].iter().any(|f| t.starts_with(f)) => {
+                (&t[..2], Some(t[2..].trim_start_matches('=')))
+            }
             Some((f, v)) if f.starts_with('-') => (f, Some(v)),
             _ => (t.as_str(), None),
         };
@@ -512,7 +672,7 @@ pub fn bypass_flag(line: &str) -> Option<String> {
         }
         // Short/generic flags only mean bypass for specific agents; `-y` is
         // also npx's "yes" and `-f` is everyone's "force".
-        let agent_flag = match program.as_str() {
+        let agent_flag = match program {
             "gemini" | "qwen" => flag == "-y",
             "cursor-agent" => flag == "-f" || flag == "--force",
             _ => false,
@@ -1026,6 +1186,21 @@ mod tests {
             "codex --config sandbox_mode=danger-full-access",
             r#"claude --settings '{"permissions": {"defaultMode": "bypassPermissions"}}'"#,
             r#"claude --settings='{"permissions":{"defaultMode":"auto"}}'"#,
+            "npx @google/gemini-cli -y",
+            "npx @google/gemini-cli@latest -y",
+            "npx @qwen-code/qwen-code -y",
+            "codex -capproval_policy=never",
+            "codex --config=approval_policy=never",
+            "codex -anever",
+            "codex -sdanger-full-access",
+            "npx --yes --package=@google/gemini-cli gemini -y",
+            // Lines a naive split reads as one quoted word (review 2026-10-29):
+            // PowerShell closes on the curly quote, cmd has no single quotes,
+            // bash escapes the inner double quote.
+            "claude 'x\u{2019} --dangerously-skip-permissions \u{2019}'",
+            "claude 'a --dangerously-skip-permissions",
+            r#"claude "\"'" --dangerously-skip-permissions"#,
+            "claude --dan'gerously-skip-permissions'",
         ] {
             assert!(bypass_flag(line).is_some(), "{line}");
         }
@@ -1043,6 +1218,47 @@ mod tests {
             r#"claude --settings '{"permissions":{"defaultMode":"plan"}}'"#,
         ] {
             assert!(bypass_flag(line).is_none(), "{line}");
+        }
+    }
+
+    #[test]
+    fn shell_words_follow_each_shell() {
+        use ShellFlavor::*;
+        let w = shell_words_in;
+        // PowerShell: a curly quote closes a straight one; doubling escapes.
+        assert_eq!(
+            w("claude 'x\u{2019} --yolo \u{2019}'", PowerShell),
+            ["claude", "x", "--yolo", ""]
+        );
+        assert_eq!(w("a 'it''s' \"q`\"x\"", PowerShell), ["a", "it's", "q\"x"]);
+        // cmd: ' is a plain character, ^ escapes outside quotes.
+        assert_eq!(w("claude 'a --yolo", Cmd), ["claude", "'a", "--yolo"]);
+        assert_eq!(w("a \"b c\"^%\"d\"", Cmd), ["a", "b c%d"]);
+        // POSIX: \" inside double quotes, '\'' escape.
+        assert_eq!(
+            w(r#"claude "\"'" --yolo"#, Posix),
+            ["claude", "\"'", "--yolo"]
+        );
+        assert_eq!(w(r"x 'it'\''s'", Posix), ["x", "it's"]);
+    }
+
+    #[test]
+    fn quoting_round_trips_through_each_split() {
+        for text in [
+            "plain",
+            "it's ‘a’ ‚b‛ \\ end\\",
+            "50% of %PATH% done",
+            " --yolo leading",
+        ] {
+            for f in ShellFlavor::ALL {
+                let q = quote_for_shell(text, f);
+                let want = if f == ShellFlavor::Cmd {
+                    text.replace('"', "'")
+                } else {
+                    text.to_string()
+                };
+                assert_eq!(shell_words_in(&q, f), [want], "{f:?} {q}");
+            }
         }
     }
 

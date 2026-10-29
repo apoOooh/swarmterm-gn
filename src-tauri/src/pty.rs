@@ -750,8 +750,11 @@ pub fn spawn_terminal(
     // A failed create never reached `terminals`: drop the pending secret it
     // minted (or adopted) so it does not linger. The duplicate check above
     // returned before any mint, so a live pane's secret is never touched.
-    // A concurrent create of the same id that won keeps its secret: skip when
-    // the id is live (lock released before `session_tokens` is taken).
+    // Creates of the same id never race here: `create_terminal` holds a
+    // `SpawnReservation` for the id, so a second one runs only after this one
+    // finished and then stops at the duplicate check. The `live` test is a
+    // second guard for that invariant, not a fix for a race (it could not
+    // be one: the lock is released before `session_tokens` is taken).
     let live = state.terminals.lock().unwrap().contains_key(&id);
     if !result.ok && !live {
         state.forget_session_token(&id);
@@ -768,9 +771,18 @@ fn spawn_terminal_inner(
 ) -> CreateTerminalResult {
     // Admin policy: refuse bypass/YOLO lines here, on the final command, so
     // every path that builds one (menus, restore, worktree.spawn) is covered.
+    // The flavor of the shell the pane really gets: an unavailable shell
+    // falls back to the default one, like `plan_spawn` does.
+    let flavor = crate::policy::ShellFlavor::from_shell_id(
+        options
+            .shell_id
+            .as_deref()
+            .filter(|id| crate::shell::resolve_shell(id).is_some()),
+    );
     if let Some(line) = launch_line_to_check(
         options.initial_command.as_deref(),
         options.launch_line.as_deref(),
+        flavor,
     ) {
         if let Err(e) = state.admin_policy.check_launch_line(line) {
             // A pane of that kind that survived the last app instance in the
@@ -813,11 +825,19 @@ fn spawn_terminal_inner(
     spawn_local(app, state, id, plan, on_data)
 }
 
-/// The line the admin bypass check reads. The renderer's `launch_line` is
-/// trusted only when the typed line is that prefix plus nothing or one
-/// quoted brief (optionally after a short prompt flag such as `-i`, see
-/// `spawnPromptFlag` in templates.ts); otherwise the whole line is checked.
-fn launch_line_to_check<'a>(initial: Option<&'a str>, launch: Option<&'a str>) -> Option<&'a str> {
+/// The line the admin bypass check reads. The renderer's `launch_line`
+/// (blank = absent) is trusted only when the typed line is that prefix plus
+/// nothing, or plus one brief quoted exactly as the renderer quotes it for
+/// this pane's shell (`quote_for_shell`, optionally after the `-i` prompt
+/// flag, see `spawnPromptFlag` in templates.ts), and that brief does not
+/// start with `-` (the renderer puts a space before such a brief, so an
+/// agent never parses it as a flag). Anything else checks the whole line.
+fn launch_line_to_check<'a>(
+    initial: Option<&'a str>,
+    launch: Option<&'a str>,
+    flavor: crate::policy::ShellFlavor,
+) -> Option<&'a str> {
+    let launch = launch.filter(|l| !l.trim().is_empty());
     let (Some(line), Some(prefix)) = (initial, launch) else {
         return initial;
     };
@@ -827,18 +847,22 @@ fn launch_line_to_check<'a>(initial: Option<&'a str>, launch: Option<&'a str>) -
     if rest.is_empty() {
         return Some(prefix);
     }
-    if !rest.starts_with(' ') {
+    let Some(body) = rest.strip_prefix(' ') else {
         return Some(line);
-    }
-    // Exactly one quoted word, or `-i` plus one (the only prompt flag).
-    let quoted = |w: &str| w.starts_with(['\'', '"']);
-    let words = crate::policy::shell_words(rest);
-    let brief = match words.as_slice() {
-        [_] => rest.trim_start(),
-        [flag, _] if flag == "-i" => rest.trim_start().strip_prefix("-i ").unwrap_or(""),
-        _ => return Some(line),
     };
-    if quoted(brief) {
+    let quoted = body.strip_prefix("-i ").unwrap_or(body);
+    let brief_ok = match crate::policy::shell_words_in(quoted, flavor).as_slice() {
+        [text] =>
+        // A control byte (Ctrl-U, Esc, ...) edits the typed line in the
+        // shell's line editor, so the shell may run something else.
+        {
+            !text.starts_with('-')
+                && !text.chars().any(char::is_control)
+                && crate::policy::quote_for_shell(text, flavor) == quoted
+        }
+        _ => false,
+    };
+    if brief_ok {
         Some(prefix)
     } else {
         Some(line)
@@ -1582,7 +1606,9 @@ mod tests {
 
     #[test]
     fn launch_line_skips_only_a_quoted_brief() {
-        use super::launch_line_to_check as pick;
+        use crate::policy::ShellFlavor::{self, Cmd, Posix, PowerShell};
+        let pick = |i, l| super::launch_line_to_check(i, l, Posix);
+        let in_shell = |i, l, f: ShellFlavor| super::launch_line_to_check(Some(i), Some(l), f);
         let base = "claude --permission-mode default";
         let brief = format!("{base} 'run npx -y and never --yolo'");
         assert_eq!(pick(Some(&brief), Some(base)), Some(base));
@@ -1595,9 +1621,36 @@ mod tests {
         }
         let posix = format!(r"{base} 'it'\''s -y'");
         assert_eq!(pick(Some(&posix), Some(base)), Some(base));
-        let flagged = "gemini -i \"use -y\"";
+        let flagged = "gemini -i 'use -y'";
         assert_eq!(pick(Some(flagged), Some("gemini")), Some("gemini"));
         assert_eq!(pick(Some(base), Some(base)), Some(base));
+        // Each shell's own exact quoting is trusted, another one is not.
+        let ps = "claude 'it''s --yolo '";
+        assert_eq!(in_shell(ps, "claude", PowerShell), Some("claude"));
+        let cmd = r#"claude "50"^%" --yolo""#;
+        assert_eq!(in_shell(cmd, "claude", Cmd), Some("claude"));
+        assert_eq!(in_shell(cmd, "claude", Posix), Some(cmd));
+        let dq = "claude \"use --yolo\"";
+        assert_eq!(in_shell(dq, "claude", PowerShell), Some(dq));
+        // A brief that would parse as a flag is never skipped (review
+        // 2026-10-29); the renderer's leading space makes it a brief again.
+        for (line, f) in [
+            ("claude '--dangerously-skip-permissions'", Posix),
+            ("claude '--permission-mode=bypassPermissions'", Posix),
+            ("claude '--yolo '", PowerShell),
+            (r#"claude "--settings=C:\x\evil.json ""#, Cmd),
+        ] {
+            assert_eq!(in_shell(line, "claude", f), Some(line), "{line}");
+        }
+        assert_eq!(
+            in_shell("claude ' --yolo is banned'", "claude", Posix),
+            Some("claude")
+        );
+        // Control bytes would let the shell's line editor rewrite the line.
+        let ctl = "claude '\u{15}claude --yolo #'";
+        assert_eq!(in_shell(ctl, "claude", Posix), Some(ctl));
+        // A blank launch line is no launch line.
+        assert_eq!(pick(Some("claude 'x'"), Some(" ")), Some("claude 'x'"));
         // Anything but a quoted brief after the prefix: check it all.
         let extra = "claude --dangerously-skip-permissions 'x'";
         assert_eq!(pick(Some(extra), Some("claude")), Some(extra));
