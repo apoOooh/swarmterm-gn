@@ -128,6 +128,10 @@ pub struct CreateTerminalOptions {
     pub cwd: Option<String>,
     pub shell_id: Option<String>,
     pub initial_command: Option<String>,
+    /// The part of `initial_command` the admin bypass check reads: the agent
+    /// command plus its launch-mode args, without a worker's task brief (so
+    /// prose in a brief is never taken for a flag). Absent ⇒ the whole line.
+    pub launch_line: Option<String>,
     /// Whether the owning workspace enables MCP worktree tools for this pty.
     pub worktree_mode: Option<bool>,
     /// The workspace's repo folder, recorded so worktree tools can resolve the
@@ -684,8 +688,20 @@ pub fn spawn_terminal(
     }
     // Admin policy: refuse bypass/YOLO lines here, on the final command, so
     // every path that builds one (menus, restore, worktree.spawn) is covered.
-    if let Some(line) = options.initial_command.as_deref() {
+    if let Some(line) = launch_line_to_check(
+        options.initial_command.as_deref(),
+        options.launch_line.as_deref(),
+    ) {
         if let Err(e) = state.admin_policy.check_launch_line(line) {
+            // A pane of that kind that survived the last app instance in the
+            // terminal host must not keep running detached: end it.
+            #[cfg(windows)]
+            if let Some((_, client)) = app
+                .try_state::<crate::host_client::HostHub>()
+                .and_then(|hub| hub.take_detached(&id))
+            {
+                client.conn.kill(&id);
+            }
             return CreateTerminalResult::err(e);
         }
     }
@@ -715,6 +731,38 @@ pub fn spawn_terminal(
         return spawn_hosted(state, id, plan, on_data, client);
     }
     spawn_local(app, state, id, plan, on_data)
+}
+
+/// The line the admin bypass check reads. The renderer's `launch_line` is
+/// trusted only when the typed line is that prefix plus nothing or one
+/// quoted brief (optionally after a short prompt flag such as `-i`, see
+/// `spawnPromptFlag` in templates.ts); otherwise the whole line is checked.
+fn launch_line_to_check<'a>(initial: Option<&'a str>, launch: Option<&'a str>) -> Option<&'a str> {
+    let (Some(line), Some(prefix)) = (initial, launch) else {
+        return initial;
+    };
+    let Some(rest) = line.strip_prefix(prefix) else {
+        return Some(line);
+    };
+    if rest.is_empty() {
+        return Some(prefix);
+    }
+    if !rest.starts_with(' ') {
+        return Some(line);
+    }
+    // Exactly one quoted word, or `-i` plus one (the only prompt flag).
+    let quoted = |w: &str| w.starts_with(['\'', '"']);
+    let words = crate::policy::shell_words(rest);
+    let brief = match words.as_slice() {
+        [_] => rest.trim_start(),
+        [flag, _] if flag == "-i" => rest.trim_start().strip_prefix("-i ").unwrap_or(""),
+        _ => return Some(line),
+    };
+    if quoted(brief) {
+        Some(prefix)
+    } else {
+        Some(line)
+    }
 }
 
 /// Everything a pane is started with, resolved once for either backend.
@@ -1412,6 +1460,35 @@ pub fn finish_generation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn launch_line_skips_only_a_quoted_brief() {
+        use super::launch_line_to_check as pick;
+        let base = "claude --permission-mode default";
+        let brief = format!("{base} 'run npx -y and never --yolo'");
+        assert_eq!(pick(Some(&brief), Some(base)), Some(base));
+        for (line, prefix) in [
+            ("gemini -y 'x'", "gemini"),
+            ("cursor-agent -f 'x'", "cursor-agent"),
+            ("claude 'a' --yolo 'b'", "claude"),
+        ] {
+            assert_eq!(pick(Some(line), Some(prefix)), Some(line));
+        }
+        let posix = format!(r"{base} 'it'\''s -y'");
+        assert_eq!(pick(Some(&posix), Some(base)), Some(base));
+        let flagged = "gemini -i \"use -y\"";
+        assert_eq!(pick(Some(flagged), Some("gemini")), Some("gemini"));
+        assert_eq!(pick(Some(base), Some(base)), Some(base));
+        // Anything but a quoted brief after the prefix: check it all.
+        let extra = "claude --dangerously-skip-permissions 'x'";
+        assert_eq!(pick(Some(extra), Some("claude")), Some(extra));
+        assert_eq!(
+            pick(Some("codex -a never"), Some("claude")),
+            Some("codex -a never")
+        );
+        assert_eq!(pick(Some(base), None), Some(base));
+        assert_eq!(pick(None, Some(base)), None);
+    }
+
     #[test]
     fn env_policy_defaults_to_filtering_and_snapshot_follows_writes() {
         use crate::terminal_env::{EnvPlan, EnvPolicy};

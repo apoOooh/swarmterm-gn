@@ -3,7 +3,7 @@ import type { LaunchModePrefs } from '@/lib/agent-pref'
 
 /**
  * Rules for the launch modes that switch an agent's own safety net off
- * (Claude "Bypass permissions", Codex "YOLO"). They stay available, but only
+ * (Claude "Bypass permissions" and "Auto", Codex "YOLO"). They stay available, but only
  * as a deliberate user choice for one pane: never inherited by agent-spawned
  * workers, always confirmed, always visible.
  */
@@ -28,7 +28,9 @@ export function dangerousModeWarning(agentId: string, modeId: string): Dangerous
   return {
     title: `Start ${agent.name} in "${mode.label}"?`,
     body:
-      `In this mode ${agent.name} runs commands and edits files without asking you first` +
+      (agentId === 'claude-code' && modeId === 'auto'
+        ? `In this mode ${agent.name}'s own classifier, not you, approves each command and file edit`
+        : `In this mode ${agent.name} runs commands and edits files without asking you first`) +
       (agentId === 'codex' ? ', outside its sandbox' : '') +
       '. Faulty or manipulated instructions — from a web page, a file, a dependency or another agent — ' +
       'can then run unwanted commands on this machine with your rights. Use it only in a disposable ' +

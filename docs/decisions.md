@@ -5,6 +5,12 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
 
 ## 2026-10-29
 
+- **Claude Code "Auto" counts as a dangerous launch mode.** Auto turns the
+  per-action prompts off and lets Claude's own classifier approve, so it is
+  treated like Bypass/YOLO: confirmation dialog, red badge, not inherited by
+  `worktree.spawn` workers unless the user setting allows it, and blocked by
+  `DisableBypassModes` (always on in the Corp edition), in Rust too. The
+  backend launch-line check is a guard against mistakes, not a sandbox.
 - **Administrator policy keys.** Organisations lock features through
   `HKLM\Software\Policies\SwarmtermGN` (and HKCU; HKLM wins per value), read
   once at start: `DisableBypassModes`, `DisableWarRoomExecute`,

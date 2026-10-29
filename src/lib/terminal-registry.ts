@@ -125,6 +125,9 @@ export interface AttachConfig {
   cwd?: string
   shellId?: import('@/lib/terminal-pref').ShellId
   initialCommand?: string
+  /** The agent command plus launch-mode args, without a worker's brief: the
+   *  part the backend admin bypass check reads (pty.rs launch_line). */
+  launchLine?: string
   worktreeMode?: boolean
   repoRoot?: string
   agentId?: string
