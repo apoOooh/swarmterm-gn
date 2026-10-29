@@ -33,12 +33,14 @@ identifier is `com.apooooh.swarmterm.gn`.
 | Terminal host and voice settings, Swarmterm MCP opt-outs | `%APPDATA%\com.apooooh.swarmterm.gn\terminal-host.json`, `voice-settings.json`, `swarmterm-mcp-disabled.json` | `src-tauri/src/host_client/mod.rs`, `src-tauri/src/voice/mod.rs`, `src-tauri/src/lib.rs` |
 | Local deletion history (copies of files you delete in the file explorer) | `%APPDATA%\com.apooooh.swarmterm.gn\local-history\` | `src-tauri/src/lib.rs`, `src-tauri/src/files/history.rs` |
 | Speech recognition models you download | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\models\` | `src-tauri/src/voice/speech/mod.rs` |
+| Terminal host endpoint (`host-endpoint.json`: pipe name, token) when the terminal host is on | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\` | `src-tauri/src/host_client/launch.rs` |
 | Voice endpoint description (pipe name, per-launch token, process id) | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\` | `src-tauri/src/voice/pipe.rs` |
 | Pasted clipboard images, annotated image copies, clipboard media | `%TEMP%\swarmterm-paste\`, `%TEMP%\swarmterm-marked\`, `%TEMP%\swarmterm-clipboard\` | `src-tauri/src/paste_image.rs`, `src-tauri/src/marked_media.rs`, `src-tauri/src/clipboard_media.rs` |
 
 Saved workspaces store structure only (folders, pane layout, agent choice,
 session ids). Terminal output, prompts, startup commands and unsaved editor
-buffers are not saved. The application writes no log files of its own.
+buffers are not saved. Release builds write no log files of their own (a debug-only developer log
+exists behind the `SWARMTERM_DEV_LOG` variable, `src-tauri/src/devlog.rs`).
 
 The application reads, but does not copy or send, the agent CLIs' own files:
 session lists for resuming conversations and, for the Accounts panel, login
@@ -65,7 +67,7 @@ contains telemetry or personal data beyond what any HTTPS request carries
 | Local MCP server on `127.0.0.1` (random port). Panes and their agents connect to it with a per-pane token. It is not reachable from other computers. | Always, while the app runs | On (`src-tauri/src/mcp/mod.rs`) |
 | Status line and hook commands call the same local server on `127.0.0.1` | When an agent CLI runs them | On (`src-tauri/src/statusline/probe.rs`, `src-tauri/src/hook/post.rs`) |
 | `api.github.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`: lists and downloads releases of the buzzkey voice companion (`apoOooh/buzzkey`) | When you click Check or Install in Settings → Voice; and, only if buzzkey is installed and connected, one release check 20 seconds after start and then every 24 hours | Install: off until you click. Update check: only with buzzkey connected. Automatic install: off (`src-tauri/src/voice/companion/`, `src/lib/buzzkey-update.ts`) |
-| `huggingface.co` (`ggerganov/whisper.cpp`): downloads a speech recognition model | When you click to download a model in Settings → Voice | Off (`src-tauri/src/voice/speech/model.rs`) |
+| `huggingface.co` (`ggerganov/whisper.cpp`) and the Hugging Face download hosts it redirects to (for example `cdn-lfs.hf.co`, `*.xethub.hf.co`): downloads a speech recognition model | When you click to download a model in Settings → Voice | Off (`src-tauri/src/voice/speech/model.rs`) |
 | Web preview: loads the address you or an agent in your pane open; text that is not an address becomes a Google search (`www.google.com`) | When a preview is opened | Off until opened (`src-tauri/src/preview.rs`, `src/lib/web-url.ts`) |
 | Images linked from Markdown or HTML files you preview | When you open such a preview | Follows the files you open |
 | Links you click (documentation, file links) open in your default browser | On click | Off |

@@ -8,10 +8,12 @@ targets = ["x86_64-pc-windows-msvc"]
 all-features = true
 
 [advisories]
-# RustSec advisory database. Vulnerabilities always fail; unmaintained or
-# yanked crates fail too unless listed in `ignore` with a reason.
+# RustSec advisory database. Vulnerabilities, unsound and unmaintained
+# crates (anywhere in the tree) and yanked versions fail unless listed in
+# `ignore` with a written reason.
 version = 2
 yanked = "deny"
+unmaintained = "all"
 ignore = []
 
 [licenses]

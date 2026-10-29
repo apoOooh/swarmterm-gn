@@ -85,7 +85,8 @@ confirmations and are the user's responsibility.
 
 By default panes and command routines do not inherit secret-looking variables
 (names such as `*_TOKEN`, `*_API_KEY`, `*_SECRET`, `*_PASSWORD`, `*_PRIVATE_KEY`,
-`DATABASE_URL` and the `AWS_`, `ANTHROPIC_`, `OPENAI_` families) from the application's environment; a strict mode keeps only
+`DATABASE_URL` and the `AWS_`, `ANTHROPIC_`, `OPENAI_`, `AZURE_OPENAI_` and
+`SECRET_` prefixes) from the application's environment; a strict mode keeps only
 system variables, and an allow list passes named variables
 (`src-tauri/src/terminal_env.rs`, Settings → Terminal → Environment).
 Internal helpers (git, hook CLIs) keep the full environment.
@@ -94,7 +95,8 @@ Internal helpers (git, hook CLIs) keep the full environment.
 
 The voice companion talks to the app over a named pipe restricted to the
 current user, with a per-launch token, and can only insert text into a pane (the
-focused one, or one the user names by number or name); it cannot run commands (`src-tauri/src/voice/`).
+focused one, or one the user names by number or name); it cannot run
+commands (`src-tauri/src/voice/`).
 
 ### Companion installer
 
@@ -114,9 +116,10 @@ the Rust and npm dependencies with SHA-256 checksums.
 
 ## Planned
 
-- Permission hardening: confirmation and a visible badge for bypass launch
-  modes, worktree.spawn not inheriting a bypass mode, War Room execute off by
-  default, stricter MCP bearer handling (in progress).
+- Permission hardening, landing in this release from a parallel change:
+  confirmation and a visible badge for bypass launch modes, worktree.spawn not
+  inheriting a bypass mode, War Room execute off by default, stricter MCP
+  bearer handling. Move these into Controls when that change merges.
 - Administrator policy via `HKLM`/`HKCU\Software\Policies\SwarmtermGN` and a
   `corp` build variant with restricted defaults.
 

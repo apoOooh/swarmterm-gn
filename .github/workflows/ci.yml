@@ -91,7 +91,8 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
       # Policy in src-tauri/deny.toml: RustSec advisories, licence allow list
-      # (GPL-3.0 compatible), crate sources; duplicate versions only warn.
+      # (GPL-3.0 compatible), crate sources; duplicate versions only warn,
+      # wildcard version requirements are allowed.
       - name: cargo deny
         working-directory: src-tauri
         run: cargo deny check advisories licenses bans sources
