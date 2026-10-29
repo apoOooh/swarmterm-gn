@@ -16,7 +16,7 @@ Both release assets are Tauri NSIS installers. They differ in install mode:
 |---|---|---|
 | Install mode | **per user** (Tauri's default `currentUser`), no administrator rights | **per machine** (`installMode: perMachine` in `src-tauri/tauri.corp.conf.json`), needs administrator rights |
 | Install directory | `%LOCALAPPDATA%\Swarmterm GN\` | `%ProgramFiles%\Swarmterm GN Corp\` (not writable by users) |
-| Files | `swarmterm.exe`, `swarmterm-host.exe`, `uninstall.exe` | same |
+| Files | `swarmterm.exe`, `uninstall.exe` (the optional terminal host `swarmterm-host.exe` is not in the installer yet) | same |
 | Start menu entry | per user | all users |
 | Uninstall registration | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\` | `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\` |
 | Prerequisite | Microsoft WebView2 Runtime (preinstalled on Windows 11; the installer fetches Microsoft's bootstrapper if it is missing) | same |

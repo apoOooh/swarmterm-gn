@@ -60,7 +60,7 @@ The [user guide](docs/user-guide.md) covers every feature, shortcut and setting.
 
 ## Install
 
-1. Download `Swarmterm.GN_<version>_x64-setup.exe` and `SHA256SUMS.txt` from [Releases](https://github.com/apoOooh/swarmterm-gn/releases).
+1. Download `Swarmterm.GN_<version>_x64-setup.exe` (or the Corp edition, `Swarmterm.GN.Corp_<version>_x64-setup.exe`) and `SHA256SUMS.txt` from [Releases](https://github.com/apoOooh/swarmterm-gn/releases).
 2. Check the hash: `Get-FileHash .\Swarmterm.GN_*_x64-setup.exe` must match `SHA256SUMS.txt`. Optionally check the signed build provenance: `gh attestation verify .\Swarmterm.GN_<version>_x64-setup.exe --repo apoOooh/swarmterm-gn` ([details](docs/enterprise-deployment.md#verify-a-download)).
 3. Run the installer. It is not code-signed yet, so Windows SmartScreen may warn about an unknown publisher.
 
@@ -83,7 +83,8 @@ Layouts save automatically under **Saved workspaces**. Closing the window hides 
 - **Network use is listed** in [PRIVACY.md](PRIVACY.md): a local MCP server on `127.0.0.1`, and downloads (buzzkey, speech models) only when you ask for them.
 - **Secrets stay out of panes:** by default panes do not inherit secret-looking environment variables (Settings → Terminal → Environment).
 - **Launch modes are explicit:** agents start in their confirming mode unless you pick a bypass mode. Bypass modes are confirmed before launch and marked on the pane.
-- **War Room execute** (handing a peer a prompt to run) is off by default.
+- **War Room execute** (handing a peer a prompt to run) is off by default, and the local MCP server only accepts each pane's own secret Bearer token.
+- **Previews are sandboxed from the app:** web preview webviews have no access to the app's IPC, and a strict content security policy blocks plain `http:` images.
 - **Verified downloads:** the buzzkey companion is installed only after a signature and hash check; speech models are hash-checked.
 - **Supply chain:** CI checks advisories and licences (`cargo deny`, `npm audit`, `npm audit signatures`, REUSE) and runs CodeQL and OpenSSF Scorecard; workflow actions are pinned to commit SHAs and the Rust toolchain to one version. Each release ships CycloneDX SBOMs and signed build provenance.
 - **Administrator policy:** organisations can lock features (bypass modes, War Room execute, MCP, downloads, routines, preview, environment filter) through Group Policy or Intune; see [Administrator policy](docs/admin-policy.md).

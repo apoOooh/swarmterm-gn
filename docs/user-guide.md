@@ -542,7 +542,7 @@ Configure it in **Settings → Terminal → Environment**:
 - **Filter**: **Hide secrets** drops only secret-looking names; **System variables only** keeps just the Windows variables a shell needs (`PATH`, `SystemRoot`, `TEMP`, `USERPROFILE`, `ProgramFiles`, `PROCESSOR_*`, …), so proxy settings and tool variables are dropped too.
 - **Always pass these variables**: names that always pass in either filter, one per line or comma-separated, case-insensitive; `MY_TOOL_*` matches a prefix. Use it for a key a tool in a pane really needs, or for `HTTP_PROXY` with credentials (and, under **System variables only**, `AWS_PROFILE` or `ANTHROPIC_BASE_URL`).
 
-Changes apply to the next pane or routine that starts; running panes keep the environment they started with. Panes restored at startup may open before your setting is loaded and then start with the default filter (secrets hidden, no allowlist); restart such a pane if it needs an allowlisted variable. Git operations and **Open in editor** still run with Swarmterm's full environment: they are started by Swarmterm itself and need your credential helpers and editor settings.
+Changes apply to the next pane or routine that starts; running panes keep the environment they started with. The setting is saved, so panes restored at startup use it too; only the first start after upgrading from a version before 1.26.0 uses the default filter (secrets hidden, no allowlist) until Settings saves your choice. Git operations, **Open in editor** and the other helper programs Swarmterm starts get the same filtered environment. Files and links opened in their default Windows application are the exception: Windows starts that application, and it may see Swarmterm's full environment.
 
 ## Settings, tray and quitting
 
