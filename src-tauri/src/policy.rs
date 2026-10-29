@@ -576,6 +576,11 @@ pub mod registry {
                 Entry::End => break,
                 Entry::Failed(rc) => {
                     eprintln!("policy: registry enumeration stopped at {index} (error {rc})");
+                    // The unread rest may hold EnvPolicy: fail closed (an
+                    // unreadable EnvPolicy parses as strict).
+                    if !out.keys().any(|k| k.eq_ignore_ascii_case("EnvPolicy")) {
+                        out.insert("EnvPolicy".into(), RegValue::Other);
+                    }
                     break;
                 }
             }
@@ -750,6 +755,10 @@ mod tests {
         });
         assert_eq!(calls, 2);
         assert_eq!(out.len(), 1);
+        // An error before EnvPolicy was read locks the filter (strict).
+        let out = scan(|_| Entry::Failed(5));
+        assert_eq!(out.get("EnvPolicy"), Some(&RegValue::Other));
+        assert_eq!(parse(&out).0.env_policy, Some(FilterMode::Strict));
         // MORE_DATA records the name as unusable and goes on.
         let out = scan(|i| match i {
             0 => Entry::TooLarge("DisableMcp".into()),

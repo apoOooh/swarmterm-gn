@@ -84,7 +84,8 @@ pub fn run() {
                 Ok(dir) => app
                     .state::<AppState>()
                     .load_env_policy(dir.join("env-policy.json")),
-                Err(_) => {
+                Err(e) => {
+                    eprintln!("env policy: no app data dir ({e}); the setting is not persisted");
                     let state = app.state::<AppState>();
                     crate::terminal_env::publish_child_policy(state.env_policy_snapshot());
                 }

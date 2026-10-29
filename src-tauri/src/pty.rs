@@ -571,9 +571,15 @@ impl AppState {
     /// renderer's push already use it. Without a file the secure default
     /// stays; either way the effective policy is published.
     pub fn load_env_policy(&self, path: std::path::PathBuf) {
-        let user = crate::terminal_env::load_persisted(&path).unwrap_or_default();
+        self.read_persisted_env_policy(&path);
         crate::terminal_env::set_store_path(path);
-        self.set_env_policy(user);
+        crate::terminal_env::publish_child_policy(self.env_policy_snapshot());
+    }
+
+    /// The state part of `load_env_policy`, without the process globals.
+    fn read_persisted_env_policy(&self, path: &std::path::Path) {
+        let user = crate::terminal_env::load_persisted(path).unwrap_or_default();
+        *self.env_policy.write().unwrap_or_else(|e| e.into_inner()) = user;
     }
 
     /// A copy of the agent policy; a poisoned lock yields the last value.
@@ -1440,7 +1446,8 @@ mod tests {
         };
         crate::terminal_env::save_persisted(&path, &user).unwrap();
         let state = AppState::default();
-        state.load_env_policy(path);
+        // Not `load_env_policy`: it sets process globals other tests share.
+        state.read_persisted_env_policy(&path);
         // The first spawn (restored pane) reads this snapshot.
         assert_eq!(state.env_policy_snapshot(), user);
     }

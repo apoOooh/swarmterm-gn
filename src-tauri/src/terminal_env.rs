@@ -118,8 +118,8 @@ pub enum FilterMode {
 /// config directory. `OPENCODE_CONFIG_CONTENT` is not here: the app sets its
 /// own value after filtering, and one inherited from the app's parent is
 /// arbitrary user config (it can carry inline provider keys), so it follows
-/// the mode like any other name (passes Default, dropped by Strict). Never filtered, so logins and the MCP wiring keep
-/// working in every mode.
+/// the mode like any other name (passes Default, dropped by Strict).
+/// Never filtered, so logins and the MCP wiring keep working in every mode.
 const APP_SET: &[&str] = &[
     "SWARMTERM_SESSION",
     "SWARMTERM_MCP_URL",
@@ -150,6 +150,7 @@ const SECRET_SUFFIXES: &[&str] = &[
     "AUTH",
     "DSN",
     "COOKIE",
+    "HEADERS",
 ];
 
 /// Short suffixes that are only a secret after a `_` (`MYSQL_PWD`,
@@ -236,7 +237,23 @@ pub fn is_secret_name(name: &str) -> bool {
         || SECRET_SUFFIXES_AFTER_UNDERSCORE
             .iter()
             .any(after_underscore)
-        || n.split('_').any(|seg| SECRET_SEGMENTS.contains(&seg))
+        || (!names_a_location(&n) && n.split('_').any(|seg| SECRET_SEGMENTS.contains(&seg)))
+}
+
+/// `AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`: a path to a
+/// secret is config a tool needs (EKS/IRSA), not the secret itself. Only the
+/// segment rule yields to it; suffix rules never match these names anyway.
+fn names_a_location(upper: &str) -> bool {
+    ["_FILE", "_PATH", "_DIR"]
+        .iter()
+        .any(|s| upper.ends_with(s))
+}
+
+/// Header blobs (`ANTHROPIC_CUSTOM_HEADERS=Authorization: Bearer …`) carry
+/// credentials under a harmless name, so the value is checked too.
+fn has_auth_header(value: &str) -> bool {
+    let v = value.to_ascii_lowercase();
+    v.contains("authorization:") || v.contains("bearer ")
 }
 
 /// Whether `value` holds a URL with credentials in it
@@ -308,7 +325,7 @@ impl EnvPolicy {
         let upper = name.to_ascii_uppercase();
         APP_SET.contains(&upper.as_str())
             || self.allowed_by_user(&upper)
-            || !has_url_credentials(value)
+            || !(has_url_credentials(value) || has_auth_header(value))
     }
 
     /// `plan` with everything this policy withholds removed.
@@ -363,10 +380,8 @@ fn command_with(policy: &EnvPolicy, program: impl AsRef<std::ffi::OsStr>) -> std
 
 /// `command` for tokio.
 pub fn tokio_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.env_clear();
-    cmd.envs(child_policy().inherited().iter());
-    cmd
+    // tokio's Command wraps std's, so it gets exactly `command`'s setup.
+    tokio::process::Command::from(command(program))
 }
 
 /// Where the user's policy is kept on the Rust side, so the first spawn
@@ -394,8 +409,17 @@ pub fn save_persisted(path: &std::path::Path, policy: &EnvPolicy) -> std::io::Re
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    // One writer at a time (Tauri runs commands on a pool), and the data is
+    // on disk before the rename, so a crash never leaves an empty file.
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(policy)?)?;
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(&serde_json::to_vec_pretty(policy)?)?;
+        f.sync_all()?;
+    }
     std::fs::rename(&tmp, path)
 }
 
@@ -519,6 +543,7 @@ mod tests {
             "AZURE_CREDENTIAL",
             "GCP_CREDENTIALS",
             "AWS_BEARER_TOKEN_BEDROCK",
+            "ANTHROPIC_CUSTOM_HEADERS",
             // Provider secrets still caught without the family prefixes.
             "AWS_SECRET_ACCESS_KEY",
             "AWS_ACCESS_KEY_ID",
@@ -558,6 +583,9 @@ mod tests {
             "SSL_CERT_FILE",
             "NODE_EXTRA_CA_CERTS",
             "REQUESTS_CA_BUNDLE",
+            "AWS_SHARED_CREDENTIALS_FILE",
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
         ] {
             assert!(!is_secret_name(n), "{n}");
         }
@@ -735,6 +763,11 @@ mod tests {
             ..EnvPolicy::default()
         };
         assert!(allow.passes_var("HTTP_PROXY", "http://me:pw@proxy"));
+        // Auth headers under any name are withheld too.
+        let d = EnvPolicy::default();
+        assert!(!d.passes_var("MY_EXTRA", "Authorization: Bearer x"));
+        assert!(!d.passes_var("X_OPTS", "--header=bearer abc"));
+        assert!(d.passes_var("X_OPTS", "--verbose"));
     }
 
     #[test]
@@ -760,6 +793,13 @@ mod tests {
             ..EnvPolicy::default()
         };
         let cmd = command_with(&strict, "x");
+        assert_eq!(
+            tokio::process::Command::from(command_with(&strict, "x"))
+                .as_std()
+                .get_envs()
+                .count(),
+            cmd.get_envs().count()
+        );
         let envs: Vec<_> = cmd.get_envs().collect();
         // env_clear + explicit set: nothing removed-by-omission inherits.
         assert!(envs.iter().all(|(_, v)| v.is_some()));

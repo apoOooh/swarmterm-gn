@@ -100,8 +100,12 @@ from the application's environment: names ending in `_TOKEN`, `_API_KEY`,
 `CREDENTIAL` segment anywhere (`AWS_BEARER_TOKEN_BEDROCK`), the `SECRET_`
 prefix, and `DATABASE_URL`, `PGPASSWORD`, `MYSQL_PWD`. Any variable whose value
 is a URL with credentials (`http://user:pw@proxy`, `redis://:pw@host`,
-`https://token@host`) is dropped whole rather than redacted, since a URL
-without its password fails anyway. Provider configuration such as
+`https://token@host`) or an `Authorization:`/`Bearer ` header
+(`ANTHROPIC_CUSTOM_HEADERS`, any `*_HEADERS`) is dropped whole rather than
+redacted, since a URL without its password fails anyway. Paths to secrets
+(`AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`) pass. Other
+config blobs, such as an inherited `OPENCODE_CONFIG_CONTENT`, pass Default
+mode even if they embed keys; Strict drops them. Provider configuration such as
 `AWS_REGION`, `AWS_PROFILE`, `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` passes
 (Bedrock and corporate LLM gateways need it), as do `PATH`, system variables,
 proxies without credentials and certificate variables (`SSL_CERT_FILE`,
@@ -130,6 +134,10 @@ shell offers no way to pass a filtered one.
 
 Git run by Swarmterm itself always passes `-c core.fsmonitor=`, so a repository
 config written by an agent cannot make Swarmterm run a program on every status.
+Only fsmonitor is overridden: Swarmterm's calls are local, non-interactive and
+read porcelain output, so they do not reach `core.pager`, `core.sshCommand`,
+`credential.helper`, `diff.external` or textconv; a repo config can still set
+`core.hooksPath` for the hooks below.
 Hooks still run where git runs them (`worktree add` → `post-checkout`), since
 users rely on LFS or setup hooks there; they get the filtered environment.
 
