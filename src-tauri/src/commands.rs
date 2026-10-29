@@ -472,6 +472,7 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     // exists to show. Drop it here and in `read_loop`, mirroring the two
     // places the terminal leaves `AppState.terminals`.
     state.mcp_clients.lock().unwrap().forget(&id);
+    state.forget_session_token(&id);
     // The context chip too: a respawned Claude must not inherit the old %.
     state.context_usage.lock().unwrap().forget(&id);
     state.rate_limit_usage.lock().unwrap().forget(&id);
@@ -950,6 +951,7 @@ pub fn war_room_join(
     cwd: String,
     display_name: String,
 ) -> Result<(), String> {
+    state.admin_policy.check(crate::policy::Lock::WarRoom)?;
     let joined_id = terminal_id.clone();
     // TOCTOU: this liveness check and the `war_rooms.join` insert below take
     // two separate mutexes with no lock held across both, so a pane that dies
@@ -1221,6 +1223,7 @@ pub fn war_room_moderator_send(
     content: String,
     mode: Option<String>,
 ) -> Result<usize, String> {
+    state.admin_policy.check(crate::policy::Lock::WarRoom)?;
     let mode = crate::warroom::MessageMode::parse(mode.as_deref())?;
     let (event, deliveries) = {
         let mut reg = state.war_rooms.lock().unwrap();

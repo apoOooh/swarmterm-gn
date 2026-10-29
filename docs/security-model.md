@@ -51,10 +51,16 @@ only what the app sends it, with the environment cleared first.
 ### Local MCP server
 
 The MCP server binds only `127.0.0.1` on a random port
-(`src-tauri/src/mcp/mod.rs`). Each pane gets its own bearer token (its session
-id) in its environment; a request without an `Authorization: Bearer` header
-carrying the token of a live pane is refused,
+(`src-tauri/src/mcp/mod.rs`). Each pane gets its own bearer token in its environment
+(`SWARMTERM_SESSION`): a random 256-bit secret minted for every spawn and
+rotated on respawn, separate from the pane id that War Room peers can see
+(`src-tauri/src/mcp/session_tokens.rs`). A request without an
+`Authorization: Bearer` header carrying the token of a live pane is refused,
 and the token stops working when the pane ends (`src-tauri/src/mcp/server.rs`).
+The same check guards `/hook` and `/status`, so one pane cannot act as another.
+Exception: a pane that survived in the terminal host from a build before
+per-pane secrets keeps its id as bearer until it is respawned (logged as
+`no session secret in meta`).
 Tools: open a web preview (http/https URLs only), list/spawn/remove worktrees
 (only in workspaces with worktree isolation on; removal refuses uncommitted
 changes and paths outside `<repo>.worktrees`), and the War Room tools.

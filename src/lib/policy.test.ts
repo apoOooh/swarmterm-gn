@@ -28,6 +28,9 @@ describe('parseAdminPolicy', () => {
     expect(p.envPolicy).toBe('strict')
     expect(p.envAllow).toEqual(['CORP_PROXY'])
     expect(p.locked).toBe(true)
+    expect(p.disableWarRoom).toBe(false)
+    expect(parseAdminPolicy({ disableWarRoom: true }).disableWarRoom).toBe(true)
+    expect(POLICY_DESCRIPTIONS.DisableWarRoom).toBe('The War Room is off')
   })
 })
 
