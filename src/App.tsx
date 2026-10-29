@@ -146,6 +146,7 @@ import { staleKeys } from '@/lib/stale-sweep'
 import { VOICE_ALERT_ID, createInputDropThrottle, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
 import { BuzzkeyUpdateToast } from '@/components/BuzzkeyUpdateToast'
 import { useBuzzkeyUpdateStore } from '@/store/buzzkey-update-store'
+import { usePolicyStore } from '@/store/policy-store'
 
 // Platform never changes at runtime, so a module-level constant is fine.
 const isMac = isMacPlatform()
@@ -978,7 +979,22 @@ export default function App(): ReactElement {
 
   // buzzkey update toast: start + every 24 h, only for an installed and
   // connected buzzkey (rules in lib/buzzkey-update.ts).
-  useEffect(() => useBuzzkeyUpdateStore.getState().startWatch(), [])
+  // DisableCompanion (admin policy): no update checks at all, so the watch
+  // waits for the policy instead of starting before it is known.
+  useEffect(() => {
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void usePolicyStore
+      .getState()
+      .load()
+      .then((policy) => {
+        if (!cancelled && !policy.disableCompanion) stop = useBuzzkeyUpdateStore.getState().startWatch()
+      })
+    return () => {
+      cancelled = true
+      stop?.()
+    }
+  }, [])
 
   // Claude Code hook edges (`swarmterm --hook` → POST /hook → `agent:hook`)
   // feed the pane's detector directly. Mount-once and routed by terminalId so

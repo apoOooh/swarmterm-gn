@@ -45,6 +45,9 @@ export interface WorkerModeInput {
   requesterMode?: string
   /** Settings defaults per agent. */
   prefs: LaunchModePrefs
+  /** User opted in (Agent safety) to workers inheriting a dangerous mode of
+   *  the same agent; callers pass false under the admin bypass lock. */
+  inheritBypass?: boolean
 }
 
 /**
@@ -54,6 +57,8 @@ export interface WorkerModeInput {
  * dangerous requester mode or Settings default is skipped and the worker
  * falls back to the next safe choice — safe requester mode (same agent only,
  * mode ids are per-agent) → safe Settings default → template default.
+ * With `inheritBypass` (user setting, default off) a same-agent worker takes
+ * the requester's mode even when dangerous; the Settings default never leaks.
  */
 export function workerLaunchMode(input: WorkerModeInput): string | undefined {
   const { agentId } = input
@@ -61,7 +66,11 @@ export function workerLaunchMode(input: WorkerModeInput): string | undefined {
   const known = (id: string | undefined): id is string =>
     TEMPLATES.find((t) => t.id === agentId)?.launchModes?.some((m) => m.id === id) === true
   const safe = (id: string | undefined): id is string => known(id) && !isDangerousLaunchMode(agentId, id)
-  if (input.requesterAgentId === agentId && safe(input.requesterMode)) return input.requesterMode
+  if (input.requesterAgentId === agentId) {
+    if (safe(input.requesterMode)) return input.requesterMode
+    // Opt-in only: the user chose that a bypassed agent may multiply itself.
+    if (input.inheritBypass === true && known(input.requesterMode)) return input.requesterMode
+  }
   const pref = input.prefs[agentId]
   if (safe(pref)) return pref
   return launchMode(agentId, undefined)!.id

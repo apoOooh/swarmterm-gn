@@ -1,4 +1,6 @@
 // src/components/RightPanel/RightPanel.tsx
+import { MANAGED_LABEL } from '@/lib/policy'
+import { usePolicyStore } from '@/store/policy-store'
 import { useRef, type ReactElement } from 'react'
 import { useSidebarPeekStore } from '@/store/sidebar-peek-store'
 import { useEdgePeek } from '@/components/use-edge-peek'
@@ -32,6 +34,8 @@ interface RightPanelProps {
 
 export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}): ReactElement {
   const mode = useGitStore((s) => s.mode)
+  // DisablePreviewBrowser: Rust refuses preview_open; no webview column at all.
+  const previewLocked = usePolicyStore((s) => s.policy.disablePreviewBrowser)
   const setPanelOpen = useGitStore((s) => s.setPanelOpen)
 
   function handleClose(): void {
@@ -131,8 +135,13 @@ export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}):
 
       {/* Mode content */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {mode === 'browser' && !peek && <BrowserColumn />}
-        {mode === 'browser' && peek && (
+        {mode === 'browser' && previewLocked && (
+          <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
+            Web preview: {MANAGED_LABEL}
+          </div>
+        )}
+        {mode === 'browser' && !peek && !previewLocked && <BrowserColumn />}
+        {mode === 'browser' && peek && !previewLocked && (
           // The native preview webview paints above all page content, so it
           // cannot live inside a floating overlay — dock the panel to use it.
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { MANAGED_LABEL, isLaunchModeLocked } from '@/lib/policy'
+import { usePolicyStore } from '@/store/policy-store'
 import { Folder, Terminal as ShellIcon, Check, Columns2, Rows2, Radio, X, GitBranch, History, Maximize2, Minimize2, Archive, PictureInPicture2, ClipboardList, MessagesSquare, MoreHorizontal, Mic, Loader2 } from 'lucide-react'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 import { AgentIcon } from '@/components/AgentIcon'
@@ -144,6 +146,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
   const floatMove = useFloatMove()
   const { agentId, shellId, resolvedCwd, hasCwdOverride, worktreeBranch, ctxPct } = props
   const accounts = useAgentAccountsStore(s => s.accounts)
+  const admin = usePolicyStore((s) => s.policy)
   const hiddenCount = props.zoomHiddenCount ?? 0
   const layoutOrder = useHeaderLayoutStore(s => s.order)
   const layoutCore = useHeaderLayoutStore(s => s.core)
@@ -300,12 +303,21 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
               <>
                 <div role="separator" className="my-1 h-px bg-border" />
                 <div className="px-2 py-1 text-xs text-muted-foreground">Mode (restarts, keeps session)</div>
-                {agent.launchModes.map((m) => (
-                  <DropdownMenuItem key={m.id} onSelect={() => props.onLaunchModeChange(m.id)}>
-                    <Check aria-hidden="true" className={cn('h-3.5 w-3.5', m.id === mode.id ? 'opacity-100' : 'opacity-0')} />
-                    <span className={cn(m.dangerous && 'text-red-500')}>{m.label}</span>
-                  </DropdownMenuItem>
-                ))}
+                {agent.launchModes.map((m) => {
+                  const locked = isLaunchModeLocked(admin, m.dangerous === true)
+                  return (
+                    <DropdownMenuItem
+                      key={m.id}
+                      disabled={locked}
+                      title={locked ? MANAGED_LABEL : undefined}
+                      onSelect={() => props.onLaunchModeChange(m.id)}
+                    >
+                      <Check aria-hidden="true" className={cn('h-3.5 w-3.5', m.id === mode.id ? 'opacity-100' : 'opacity-0')} />
+                      <span className={cn(m.dangerous && 'text-red-500')}>{m.label}</span>
+                      {locked && <span className="ml-auto text-[10px] text-muted-foreground">{MANAGED_LABEL}</span>}
+                    </DropdownMenuItem>
+                  )
+                })}
               </>
             )}
             {agent.continueCommand !== undefined && (

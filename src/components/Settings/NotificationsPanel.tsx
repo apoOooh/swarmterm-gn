@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react'
+import { MANAGED_LABEL } from '@/lib/policy'
 import { AgentIcon } from '@/components/AgentIcon'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { agentNotificationsEnabled } from '@/lib/notification-pref'
@@ -13,9 +14,11 @@ interface ToggleRowProps {
   checked: boolean
   onChange: (on: boolean) => void
   icon?: ReactElement
+  /** Locked by the admin policy: the switch is disabled and says so. */
+  managed?: boolean
 }
 
-export function ToggleRow({ label, description, checked, onChange, icon }: ToggleRowProps): ReactElement {
+export function ToggleRow({ label, description, checked, onChange, icon, managed }: ToggleRowProps): ReactElement {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
       <div className="flex min-w-0 items-center gap-2">
@@ -23,6 +26,7 @@ export function ToggleRow({ label, description, checked, onChange, icon }: Toggl
         <div className="min-w-0">
           <div className="text-sm text-foreground">{label}</div>
           {description && <div className="text-xs text-muted-foreground">{description}</div>}
+          {managed && <div className="text-xs font-medium text-amber-500">{MANAGED_LABEL}</div>}
         </div>
       </div>
       <button
@@ -30,8 +34,10 @@ export function ToggleRow({ label, description, checked, onChange, icon }: Toggl
         role="switch"
         aria-checked={checked}
         aria-label={label}
+        disabled={managed}
         onClick={() => onChange(!checked)}
         className={cn(
+          'disabled:cursor-not-allowed disabled:opacity-50',
           'relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
           checked ? 'bg-primary' : 'bg-muted'
         )}
