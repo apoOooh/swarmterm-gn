@@ -58,7 +58,8 @@ reference machine before a wide rollout.
 2. The real controls, all required for a corporate deployment:
    - the **HKLM administrator policy** ([below](#administrator-policy); applies to both editions);
    - the **agents' own managed settings**: Claude Code managed settings with
-     `"permissions": { "disableBypassPermissionsMode": "disable" }`, Codex managed `requirements.toml`;
+     `"permissions": { "disableBypassPermissionsMode": "disable", "disableAutoMode": "disable" }`
+     (removes Bypass and Auto mode), Codex managed `requirements.toml`;
    - **AppLocker or WDAC** rules that allow only the Corp installer's hash or its Program Files path, so users
      cannot run a swapped executable or the Standard edition. The installers are not Authenticode-signed: allow
      them by hash or sign them internally ([Verify a download](#verify-a-download)).

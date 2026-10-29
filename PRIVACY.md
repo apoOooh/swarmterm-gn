@@ -94,7 +94,10 @@ Panes and the other programs Swarmterm GN starts (git, editors, probes) do
 not inherit secret-looking environment variables (tokens, keys, passwords,
 URLs with credentials) from the application by default. See Settings →
 Terminal → Environment. The setting itself (mode and allow-listed names, never
-values) is stored locally in `env-policy.json` in the app data folder.
+values) is stored locally in `env-policy.json` in the app data folder. Files
+opened in their default application and links opened in your default browser
+are handed to the Windows shell, which cannot pass a filtered environment; the
+program it starts may receive Swarmterm GN's full environment.
 
 ## Changes and contact
 
