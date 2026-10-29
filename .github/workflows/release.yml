@@ -95,10 +95,9 @@ jobs:
           cache: npm
       # Toolchain, components and target come from rust-toolchain.toml.
       - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: src-tauri
-          key: ${{ matrix.edition }}
+      # No build cache here: release binaries compile from a clean tree so a
+      # poisoned cache entry (written by any workflow run) cannot reach them.
+      # ci.yml keeps its cache for speed.
       # Only esbuild needs its install script; signatures are checked first.
       - run: npm ci --ignore-scripts && npm rebuild esbuild && npm audit signatures
       - name: Build NSIS installer
@@ -107,25 +106,36 @@ jobs:
         run: npx tauri build --bundles nsis ${{ matrix.tauri_args }} -- --locked ${{ matrix.cargo_args }}
         shell: bash
       # GN sends no telemetry (decision 2026-10-29); fail the release if an
-      # analytics endpoint ever finds its way back into either edition's binary.
-      - name: Check exe has no telemetry endpoint
+      # analytics endpoint ever finds its way back into either edition. The
+      # scan covers both Rust executables and the built renderer in dist/
+      # (the plain files the exe embeds; this matrix leg built them with its
+      # own edition's `vite --mode`).
+      - name: Check build has no telemetry endpoint
         shell: pwsh
         run: |
-          $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes('src-tauri/target/release/swarmterm.exe'))
-          if ($text.Contains('google-analytics')) { throw 'swarmterm.exe contains google-analytics' }
+          $files = @('src-tauri/target/release/swarmterm.exe', 'src-tauri/target/release/swarmterm-host.exe') +
+            (Get-ChildItem dist -Recurse -File).FullName
+          foreach ($f in $files) {
+            $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($f))
+            if ($text.Contains('google-analytics')) { throw "$f contains google-analytics" }
+          }
       # Corp compiles the buzzkey installer and the model download out
-      # (docs/editions.md); their endpoints in the exe would mean the Rust
-      # code leaked back. Scope: the Rust side only. rustc drops consts nobody
-      # references, so this also fails if a corp path starts using one. The
-      # embedded renderer is compressed and not scanned; its download
-      # buttons are hidden, and Rust refuses the commands regardless.
-      - name: Check corp exe has no download endpoints
+      # (docs/editions.md); their endpoints in either exe or in the Corp
+      # renderer (dist/ from `npm run build:corp`) would mean the code leaked
+      # back. rustc drops consts nobody references, so this also fails if a
+      # corp path starts using one. Full URLs: the Corp Settings text may name
+      # the model host without a scheme.
+      - name: Check corp build has no download endpoints
         if: matrix.edition == 'corp'
         shell: pwsh
         run: |
-          $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes('src-tauri/target/release/swarmterm.exe'))
-          foreach ($s in 'api.github.com/repos/apoOooh/buzzkey', 'huggingface.co/ggerganov') {
-            if ($text.Contains($s)) { throw "corp swarmterm.exe contains $s" }
+          $files = @('src-tauri/target/release/swarmterm.exe', 'src-tauri/target/release/swarmterm-host.exe') +
+            (Get-ChildItem dist -Recurse -File).FullName
+          foreach ($f in $files) {
+            $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($f))
+            foreach ($s in 'https://api.github.com/repos/apoOooh/buzzkey', 'https://huggingface.co/ggerganov') {
+              if ($text.Contains($s)) { throw "corp $f contains $s" }
+            }
           }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -169,8 +179,13 @@ jobs:
           # separate workspace member with its own file.
           mv src-tauri/swarmterm.cdx.json release-assets/sbom-rust.cdx.json
           mv src-tauri/host/swarmterm-host.cdx.json release-assets/sbom-rust-host.cdx.json
-          # The SBOMs cover both editions: `--all-features` includes `corp`,
-          # which adds no dependencies (docs/editions.md).
+          # The SBOMs describe the dependency trees resolved from the tagged
+          # source and lockfiles (Cargo.lock, package-lock.json), not a scan of
+          # the built installers. The build jobs use the same tag and
+          # `--locked`/`npm ci`, so the trees match. They cover both editions:
+          # `--all-features` includes `corp`, which adds no dependencies
+          # (docs/editions.md); it also lists optional crates such as the
+          # `local-speech` engine, which every release build includes.
           # npm sbom reads the installed tree; scripts are not needed for it.
           npm ci --ignore-scripts
           npm audit signatures

@@ -6,8 +6,12 @@ do them (the GitHub API answers 404). They come from the corporate-readiness wor
 
 ## GitHub settings
 
+**Must be done before the corporate resubmission** (review pack finding 6): private vulnerability reporting below.
+Until then `SECURITY.md` and the review pack point reporters to a fallback (a GitHub issue asking for a private
+contact, without details).
+
 - [ ] **Private vulnerability reporting** (Settings → Code security → Private vulnerability reporting → Enable).
-      `SECURITY.md` points reporters there.
+      `SECURITY.md` points reporters there. **Required before the corporate resubmission.**
 
   ```powershell
   gh api -X PUT repos/apoOooh/swarmterm-gn/private-vulnerability-reporting

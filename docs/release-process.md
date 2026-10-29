@@ -106,8 +106,9 @@ and the publisher name. Nothing in this repository submits on its own.
      --sums winget-tmp/SHA256SUMS.txt --out winget-tmp/manifests
    ```
 
-   They describe the per-user NSIS installer (`InstallerType: nullsoft`,
-   `Scope: user`). Validate with `winget validate winget-tmp/manifests`,
+   They describe the Standard edition's per-user NSIS installer
+   (`InstallerType: nullsoft`, `Scope: user`); a Corp manifest would need
+   `Scope: machine`. Validate with `winget validate winget-tmp/manifests`,
    test with `winget install --manifest winget-tmp/manifests`, then submit
    (for example with `komac new` or `wingetcreate submit`).
 2. Once the package is accepted, enable automatic updates: fork

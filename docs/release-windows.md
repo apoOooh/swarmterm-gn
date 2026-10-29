@@ -29,8 +29,8 @@ The build script asserts that the installer exists and carries the version
 from `tauri.conf.json`. Output lands in
 `src-tauri\target\release\bundle\nsis\`.
 
-To sanity-check the installer locally: run it (per-user install, no admin
-prompt), launch Swarmterm, then uninstall via Settings → Apps.
+To sanity-check the installer locally: run it (Standard: per-user install, no admin
+prompt; Corp: per-machine install with a UAC prompt), launch Swarmterm, then uninstall via Settings → Apps.
 
 ## SmartScreen: what unsigned means
 
