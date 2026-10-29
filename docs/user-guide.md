@@ -330,7 +330,7 @@ See the [Codex hook documentation](https://learn.chatgpt.com/docs/hooks).
 A missing working folder stops reopening and shows a notice. A missing pane or
 worktree folder falls back to the working folder with a fresh session. A missing
 conversation starts the same agent fresh; an unavailable agent opens a plain
-terminal. An unavailable shell uses the default shell. These fallbacks are shown
+terminal. An unavailable shell uses the default shell; a pane with an initial command or worker brief is refused instead. These fallbacks are shown
 in a notice. Saved data stays on this computer; terminal output, prompts, file
 tabs and unsaved editor buffers are not saved. Closing the window hides it to
 the tray; use **Quit** to test a full app restart.
