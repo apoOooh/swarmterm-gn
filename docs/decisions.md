@@ -66,3 +66,7 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
 - **Enforcement for organisations.** Administrator policy through the
   registry (see the 2026-10-29 entry above); a `corp` build variant with
   restricted defaults is planned.
+- **Direct merges, no pull requests.** Feature branches are merged into `dev`
+  locally and `dev` is pushed directly; releases merge `dev` into `main` the
+  same way (`docs/release-process.md`). Branch rulesets therefore only block
+  deletion and force-push, and do not require pull requests or status checks.
