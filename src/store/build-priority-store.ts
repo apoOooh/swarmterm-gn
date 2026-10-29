@@ -1,17 +1,18 @@
 import { create } from 'zustand'
-import { readLowerBuildPriority, storeLowerBuildPriority } from '@/lib/build-priority'
+import { DEFAULT_PRIORITY, parsePriority, readPriority, storePriority, type PrioritySettings } from '@/lib/build-priority'
 
 export interface BuildPriorityStore {
-  /** Settings → Terminal "Lower build priority" (on by default). */
-  lowerBuildPriority: boolean
-  setLowerBuildPriority: (on: boolean) => void
+  /** Settings → Terminal "Process priority" (strict by default). */
+  priority: PrioritySettings
+  setPriority: (patch: Partial<PrioritySettings>) => void
 }
 
 /** Persisted in localStorage; App.tsx pushes it (plus the workspace opt-outs) to Rust. */
-export const useBuildPriorityStore = create<BuildPriorityStore>((set) => ({
-  lowerBuildPriority: typeof window === 'undefined' ? true : readLowerBuildPriority(window.localStorage),
-  setLowerBuildPriority: (on) => {
-    storeLowerBuildPriority(window.localStorage, on)
-    set({ lowerBuildPriority: on })
+export const useBuildPriorityStore = create<BuildPriorityStore>((set, get) => ({
+  priority: typeof window === 'undefined' ? { ...DEFAULT_PRIORITY } : readPriority(window.localStorage),
+  setPriority: (patch) => {
+    const next = parsePriority({ ...get().priority, ...patch })
+    storePriority(window.localStorage, next)
+    set({ priority: next })
   }
 }))

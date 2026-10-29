@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { Check, Minus, Plus } from 'lucide-react'
 import { platformShells, type ShellId, type ShellMeta } from '@/lib/terminal-pref'
 import {
@@ -17,6 +17,7 @@ import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useStatuslineStore } from '@/store/statusline-store'
 import { useBuildPriorityStore } from '@/store/build-priority-store'
+import type { PriorityLevel, PriorityMode } from '@/lib/build-priority'
 import { ToggleRow } from './NotificationsPanel'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
@@ -31,6 +32,11 @@ import {
   type TerminalHostStatus
 } from '@/tauri/terminal-host'
 import { describeHostStatus } from '@/lib/terminal-host-status'
+import {
+  getHostStatusSnapshot,
+  setHostStatus,
+  subscribeHostStatus
+} from '@/lib/host-status-store'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -299,25 +305,22 @@ function StatusLineSettings(): ReactElement {
   )
 }
 
+/** Terminal host status, fetched on mount and refreshed while mounted. */
+function useHostStatus(): [
+  TerminalHostStatus | null,
+  (s: TerminalHostStatus | null) => void
+] {
+  const status = useSyncExternalStore(subscribeHostStatus, getHostStatusSnapshot)
+  return [status, setHostStatus]
+}
+
 /**
  * Terminal host (SWA-55, ADR 0001 phase 2): new panes spawn in the separate
  * `swarmterm-host.exe` instead of inside the app. Off by default until
  * panes can survive a restart (phase 3/4); running panes keep their backend.
  */
 function TerminalHostSettings(): ReactElement | null {
-  const [status, setStatus] = useState<TerminalHostStatus | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    getTerminalHostStatus()
-      .then((s) => {
-        if (!cancelled) setStatus(s)
-      })
-      .catch((err) => console.error('[TerminalPanel] terminal host status failed', err))
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const [status, setStatus] = useHostStatus()
 
   if (!status) return null
   const enabled = status.enabled
@@ -699,19 +702,125 @@ function TextPreview({ text }: { text: TerminalTextPref }): ReactElement {
   )
 }
 
-/** "Lower build priority" — processes an agent starts run at BelowNormal. */
+const PRIORITY_MODES: { id: PriorityMode; label: string; description: string }[] = [
+  {
+    id: 'strict',
+    label: 'Strict (recommended)',
+    description:
+      'Everything in a pane, the agent included, runs below normal from the moment it starts; builds and tools an agent starts run lower still. Windows enforces it, so no process in the pane can raise itself back.'
+  },
+  {
+    id: 'agent-normal',
+    label: 'Agent at normal',
+    description:
+      'The shell and the agent keep normal priority; everything the agent starts runs at the build level. Tools in an unrecognised agent may stay normal.'
+  },
+  { id: 'off', label: 'Off', description: 'No limits: everything runs at normal priority.' }
+]
+
+const PRIORITY_LEVELS: { id: PriorityLevel; label: string }[] = [
+  { id: 'below-normal', label: 'Below normal' },
+  { id: 'idle', label: 'Low (idle)' }
+]
+
+const SELECT_CLASS = 'w-full rounded-md border border-pane-border bg-card px-2.5 py-1.5 text-sm text-foreground disabled:opacity-50'
+
+/** "Process priority" — Job Object limits for everything a pane runs (ADR 0005). */
 function BuildPrioritySettings(): ReactElement {
-  const on = useBuildPriorityStore((s) => s.lowerBuildPriority)
-  const setOn = useBuildPriorityStore((s) => s.setLowerBuildPriority)
+  const p = useBuildPriorityStore((s) => s.priority)
+  const setPriority = useBuildPriorityStore((s) => s.setPriority)
+  const off = p.mode === 'off'
+  const mode = PRIORITY_MODES.find((m) => m.id === p.mode) ?? PRIORITY_MODES[0]
+  const [capDraft, setCapDraft] = useState<number | null>(null)
+  const [hostStatus] = useHostStatus()
+  const hostNote = hostStatus?.enabled ? hostStatus.priorityUnsupported : null
+  const commitCap = (): void => {
+    if (capDraft !== null && capDraft !== p.cpuCap) setPriority({ cpuCap: capDraft })
+    setCapDraft(null)
+  }
   return (
     <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
-      <h2 className="text-sm font-semibold text-foreground">Responsiveness</h2>
-      <ToggleRow
-        label="Lower build priority"
-        description="Builds and tools an agent starts run at below-normal CPU priority, so typing and the agent stay responsive. Swarmterm, the shell and the agent itself keep normal priority. A workspace can opt out from its ⋮ menu."
-        checked={on}
-        onChange={setOn}
-      />
+      <h2 className="text-sm font-semibold text-foreground">Process priority</h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Keeps heavy builds and tools started in a pane from making Windows unresponsive. Applies live to running
+        panes. A workspace can opt out from its ⋮ menu.
+      </p>
+      {hostNote && <p className="mt-2 text-xs text-amber-500">{hostNote}</p>}
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <label className="block sm:col-span-2">
+          <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Mode</span>
+          <select
+            value={p.mode}
+            onChange={(e) => setPriority({ mode: e.target.value as PriorityMode })}
+            className={SELECT_CLASS}
+          >
+            {PRIORITY_MODES.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1.5 block text-xs text-muted-foreground">{mode.description}</span>
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Pane priority (strict)</span>
+          <select
+            value={p.paneLevel}
+            disabled={p.mode !== 'strict'}
+            onChange={(e) => setPriority({ paneLevel: e.target.value as PriorityLevel })}
+            className={SELECT_CLASS}
+          >
+            {PRIORITY_LEVELS.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Builds and tools an agent starts</span>
+          <select
+            value={p.buildLevel}
+            disabled={off}
+            onChange={(e) => setPriority({ buildLevel: e.target.value as PriorityLevel })}
+            className={SELECT_CLASS}
+          >
+            {PRIORITY_LEVELS.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="sm:col-span-2">
+          <ToggleRow
+            label="Cap CPU per pane"
+            description="Hard limit on the share of the whole machine one pane may use, even when the CPU is otherwise idle."
+            checked={!off && p.cpuCap !== null}
+            onChange={(on) => setPriority({ cpuCap: on ? 50 : null })}
+          />
+          {!off && p.cpuCap !== null && (
+            <label className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
+              <input
+                type="range"
+                min={5}
+                max={95}
+                step={5}
+                value={capDraft ?? p.cpuCap}
+                // Dragging only moves the draft; the value is committed on
+                // release, so one drag is one push to every pane's job.
+                onChange={(e) => setCapDraft(Number(e.target.value))}
+                onPointerUp={commitCap}
+                onKeyUp={commitCap}
+                onBlur={commitCap}
+                className="flex-1"
+                aria-label="CPU cap per pane"
+              />
+              <span className="w-10 text-right tabular-nums text-foreground">{capDraft ?? p.cpuCap} %</span>
+            </label>
+          )}
+        </div>
+      </div>
     </section>
   )
 }

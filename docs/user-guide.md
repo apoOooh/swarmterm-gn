@@ -516,16 +516,20 @@ if ($env:SWARMTERM_SESSION) {
 
 The marks are `A` (prompt drawn), `C` (command started) and `D;<exit>` (command ended); `B` (end of prompt) is optional and omitted above. The very first prompt's `D` is ignored, and a machine you `ssh` into without the snippet simply sends nothing until you are back.
 
-### Builds don't freeze your panes
+### Builds don't freeze Windows
 
-A CPU-heavy build started by an agent (for example `cargo build` with dozens of jobs) used to compete with Swarmterm, the console and the agent itself, so typing and the agent's menus stalled. Swarmterm now runs everything an agent starts at **below-normal** CPU priority: builds still use every idle core, but your keystrokes and the agent come first. Swarmterm, the shell and the agent itself keep normal priority; nothing is raised.
+A CPU-heavy build or tool started in a pane (for example `cargo build` with dozens of jobs, or a test run an agent starts) used to compete at normal priority with Swarmterm, the console, the agent and the rest of Windows, so the whole machine could stop responding. Swarmterm now puts every pane in a Windows **job** that sets its CPU priority. Windows enforces the limit for every process in the pane, including ones started a split second ago, ones whose parent has already exited, and ones that try to raise their own priority. Builds still use every idle core, but your keystrokes, the agent and the desktop come first.
 
-- Below a recognised agent CLI (Claude, Codex, Cursor, …) every process is lowered.
-- In a plain Terminal pane (or before an agent has started) shells and script hosts such as `node`, `cmd`, `pwsh`, `python` and `bash` keep normal priority, because an agent may be running inside one of them; the first other program and everything it starts are lowered (`cargo`, `msbuild`, compilers). A heavy `python` or `node` script typed straight into the shell therefore keeps normal priority, while the tools it starts are lowered. Interactive programs (`ssh`, `vim`, `nvim`, `less`, `nano`) also keep normal priority; other programs you start by hand, such as `git`, run below normal like a build.
-- Processes you set to a higher priority yourself, or that are already below normal or idle, are left alone.
-- Windows passes the lowered priority on to everything a lowered process starts later.
+Choose how strict it is in **Settings → Terminal → Process priority**:
 
-Switch it off in **Settings → Terminal → Responsiveness → Lower build priority**, or for one workspace from its **⋮** menu (**Lower build priority**, checked = on; the opt-out is saved with the workspace). Switching off only stops lowering new processes; ones already lowered keep their priority until they exit.
+- **Strict (recommended, default):** everything in the pane runs at the **pane priority** (Below normal by default, or Low/idle), the agent included. Builds and tools below an agent run at the **build priority** (Low/idle by default), so they also yield to the agent. Nothing a pane runs can reach normal priority.
+- **Agent at normal:** the shell and the agent keep normal priority; everything a recognised agent starts runs at the build priority. In a plain Terminal pane, shells and script hosts (`node`, `cmd`, `pwsh`, `python`, `bash`, …) and interactive programs (`ssh`, `vim`, `less`, …) stay normal, and the first other program with everything it starts runs at the build priority. Agents installed through npm (`node …/@anthropic-ai/claude-code/…`, `@openai/codex`, `@google/gemini-cli`, …) are recognised by their command line.
+- **Off:** no limits.
+- **Cap CPU per pane** (optional, off by default): a hard limit on the share of the whole machine one pane may use, even when the rest of the CPU is idle.
+
+Changes apply at once to running panes; lifting a limit (switching to Off, or opting a workspace out) raises the pane's processes back to normal. A workspace can opt out from its **⋮** menu (**Lower build priority**, checked = on; the opt-out is saved with the workspace).
+
+Known limits: programs that Windows starts on a pane's behalf outside the pane are not covered: processes created through WMI (`Win32_Process.Create`), scheduled tasks and services, out-of-process COM servers, and anything opened through Explorer (`start` of a document or URL hands it to Explorer). A terminal host that was already running before an update keeps its own panes unlimited until it exits; while it runs, new panes open inside Swarmterm instead (limited), and **Process priority** says so. In **Agent at normal** mode, the programs a Node-based agent starts directly (its shell tool, for example) stay normal; what they start runs at the build priority. A program your shell profile starts in the first instant of a new pane that already sits in a job of its own (a Node tool, for example) cannot be put into the pane's job: Swarmterm sets its priority by hand and resets it twice a second, but it is not stopped when the pane closes.
 
 ## Settings, tray and quitting
 

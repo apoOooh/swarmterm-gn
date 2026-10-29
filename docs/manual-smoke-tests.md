@@ -735,11 +735,23 @@ It restores previous shortcut settings and removes only its own workspaces.
 - [ ] Start again, click the pill's Stop: nothing is typed.
 - [ ] Windows microphone access off for desktop apps: the bell reports "no microphone available".
 
-## Lower build priority
+## Process priority
 
-- [ ] Agent pane: let the agent run `cargo build -j 8`; Task Manager → Details → Base priority shows
-      cargo/rustc "Below normal", the agent CLI, its shell and Swarmterm "Normal". Typing in another pane stays smooth.
-- [ ] Terminal pane: `cargo build` directly in the shell → cargo is "Below normal", the shell "Normal".
-- [ ] Workspace ⋮ → untick **Lower build priority**, start a new build there → "Normal".
+Use Task Manager → Details → "Base priority" (or Process Explorer).
+
+- [ ] Default (Strict): agent pane, let the agent run `cargo build -j 8` → cargo/rustc "Low", the agent CLI and its
+      shell "Below normal", Swarmterm "Normal". Typing in another pane and the desktop stay smooth.
+- [ ] Terminal pane: `cargo build` directly in the shell → cargo "Low", the shell "Below normal".
+- [ ] In a pane, `powershell -c "$p=[Diagnostics.Process]::GetCurrentProcess(); $p.PriorityClass='Normal'; $p.Refresh(); $p.PriorityClass"`
+      prints "BelowNormal".
+- [ ] npm-installed Claude Code (`node …\@anthropic-ai\claude-code\cli.js`): its `node` "Below normal", a build it
+      starts "Low".
+- [ ] Settings → Terminal → Process priority → **Agent at normal**: the running agent and shell turn "Normal" at once,
+      the running build stays "Low".
+- [ ] Pane priority **Low (idle)** (Strict): the whole pane turns "Low" at once.
+- [ ] **Cap CPU per pane** at 25 %: a `cargo build -j 16` stays near 25 % total CPU in Task Manager.
+- [ ] **Off**: running pane processes return to "Normal"; new builds stay "Normal".
+- [ ] Workspace ⋮ → untick **Lower build priority** → that workspace's processes return to "Normal".
       Reopen the saved workspace: still unticked.
-- [ ] Settings → Terminal → Responsiveness: switch off → new builds in every workspace stay "Normal".
+- [ ] Settings → Terminal → **Run terminals in the terminal host** on, new pane → same results as above.
+- [ ] Upgrade from a build with the old "Lower build priority" switched off → mode shows **Off**.
