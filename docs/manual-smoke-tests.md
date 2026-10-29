@@ -626,7 +626,9 @@ machine that never built Swarmterm. Details in
 
 - [ ] A freshly downloaded `…x64-setup.exe` shows SmartScreen's "Windows
       protected your PC"; **More info → Run anyway** proceeds.
-- [ ] Install completes per-user with no admin prompt; the app launches.
+- [ ] Standard: install completes per-user with no admin prompt; the app launches.
+- [ ] Corp: the installer asks for administrator rights (UAC) and installs to
+      `%ProgramFiles%\Swarmterm GN Corp\`; the app launches.
 - [ ] A terminal pane spawns and runs `dir`; closing the pane leaves no
       orphaned shell in Task Manager.
 - [ ] Uninstall via Settings → Apps removes the Start Menu entry.

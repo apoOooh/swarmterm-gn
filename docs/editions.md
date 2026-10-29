@@ -10,6 +10,16 @@ Swarmterm GN is built in two editions from the same source and released together
 Both editions read the same [administrator policy](admin-policy.md), so an organisation can lock more features in
 either one.
 
+**What the Corp locks are, and are not.** The Corp bypass lock is a guard against mistakes: it refuses the launch
+flags it recognises for the agents it knows. It is not a security boundary: a user can still type an agent's bypass
+flag into a shell pane or start an agent outside Swarmterm. For a corporate deployment the real controls are:
+
+1. the **HKLM administrator policy** ([admin-policy.md](admin-policy.md)), which applies to both editions;
+2. the **agents' own managed settings**, required for corporate deployment: Claude Code managed settings with
+   `"permissions": { "disableBypassPermissionsMode": "disable" }`, Codex managed `requirements.toml`;
+3. **AppLocker or WDAC** rules that allow only the Corp installer's hash or install path, so users cannot run a
+   swapped executable or the Standard edition.
+
 ## Which one to choose
 
 | You are… | Install |
@@ -55,6 +65,7 @@ change for that.
 | SBOMs | `sbom-rust.cdx.json`, `sbom-rust-host.cdx.json`, `sbom-npm.cdx.json` | same files (the `corp` feature adds no dependencies) |
 | App identifier | `com.apooooh.swarmterm.gn` | `com.apooooh.swarmterm.gn.corp` |
 | Product name, window title, Start menu | Swarmterm GN | Swarmterm GN Corp |
+| Install mode | per user, no administrator rights, `%LOCALAPPDATA%\Swarmterm GN\` | per machine, needs administrator rights, `%ProgramFiles%\Swarmterm GN Corp\` (not writable by users) |
 | Settings and saved workspaces | `%APPDATA%\com.apooooh.swarmterm.gn\` | `%APPDATA%\com.apooooh.swarmterm.gn.corp\` |
 | Registry policy key | `Software\Policies\SwarmtermGN` | same key |
 

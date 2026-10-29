@@ -2,7 +2,7 @@
 name = "swarmterm"
 version = "1.25.4"
 description = "One window for a whole swarm of AI coding agents — split terminals, per-agent git worktrees, live web previews, and a War Room where agents collaborate"
-authors = ["Duong Duc Nguyen"]
+authors = ["Swarmterm GN maintainers"]
 license = "GPL-3.0-only"
 homepage = "https://github.com/apoOooh/swarmterm-gn"
 repository = "https://github.com/apoOooh/swarmterm-gn"
