@@ -2,7 +2,7 @@
 
 For IT and security teams rolling Swarmterm GN out to Windows x64 machines. Swarmterm GN is a volunteer open-source
 project (GPL-3.0-only) without a vendor contract or paid support; this page collects the facts a deployment review
-usually asks for and points to the authoritative documents.
+usually asks for and points to the authoritative documents. For a resubmission to a security review, see the review pack ([English](corp-review/review-pack.en.md), [Deutsch](corp-review/review-pack.de.md)).
 
 ## Editions
 

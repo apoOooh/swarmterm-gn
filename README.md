@@ -96,7 +96,7 @@ Layouts save automatically under **Saved workspaces**. Closing the window hides 
   | Environment filter | on by default, user can switch off | always on |
   | Routines, worktree spawn, preview, MCP | policy-lockable | policy-lockable |
 
-Documents: [Privacy policy](PRIVACY.md) · [Terms of use](TERMS.md) · [Security policy](SECURITY.md) · [Security model](docs/security-model.md) · [Enterprise deployment](docs/enterprise-deployment.md) · [Project decisions](docs/decisions.md)
+Documents: [Privacy policy](PRIVACY.md) · [Terms of use](TERMS.md) · [Security policy](SECURITY.md) · [Security model](docs/security-model.md) · [Enterprise deployment](docs/enterprise-deployment.md) · [Project decisions](docs/decisions.md) · [Corporate review pack](docs/corp-review/review-pack.en.md) ([Deutsch](docs/corp-review/review-pack.de.md))
 
 ## Build from source
 
