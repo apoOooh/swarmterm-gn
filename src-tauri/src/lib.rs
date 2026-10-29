@@ -17,6 +17,7 @@ mod links;
 mod marked_media;
 mod mcp;
 mod paste_image;
+mod policy;
 mod preview;
 mod prof;
 mod pty;
@@ -43,7 +44,12 @@ pub fn run() {
     #[cfg(feature = "profiling")]
     install_named_runtime();
     tauri::Builder::default()
-        .manage(AppState::default())
+        // Admin policy is read before anything else runs, so no boot step
+        // (MCP enrollment, restore spawns) can act before the locks apply.
+        .manage(AppState {
+            admin_policy: policy::load(),
+            ..AppState::default()
+        })
         .manage(host_client::HostHub::default())
         .manage(voice::VoiceHub::default())
         .manage(clipboard_media_state())
@@ -104,6 +110,9 @@ pub fn run() {
             // idempotent, log-only.
             // The Settings → MCP opt-outs must be known before the first
             // writer runs, or a switched-off profile is re-enrolled at boot.
+            // DisableMcp turns every profile's switch off: the writers below
+            // then remove our entries instead of (re)adding them.
+            crate::mcp::toggle::set_policy_off(app.state::<AppState>().admin_policy.disable_mcp);
             if let Ok(dir) = app.path().app_data_dir() {
                 crate::mcp::toggle::load(dir.join("swarmterm-mcp-disabled.json"));
                 // Before any pane starts: a profile added while the app was
@@ -135,7 +144,13 @@ pub fn run() {
             // preview via MCP just won't work for this run, but Swarmterm as a
             // whole still functions.
             let handle_for_mcp = app.handle().clone();
+            // DisableMcp: no listener at all, so panes get no SWARMTERM_MCP_URL.
+            let mcp_allowed = !app.state::<AppState>().admin_policy.disable_mcp;
             tauri::async_runtime::spawn(async move {
+                if !mcp_allowed {
+                    eprintln!("mcp: disabled by admin policy");
+                    return;
+                }
                 match crate::mcp::start(handle_for_mcp).await {
                     Ok(url) => eprintln!("mcp: listening on {url}"),
                     Err(e) => eprintln!("mcp: {e}"),
@@ -167,6 +182,7 @@ pub fn run() {
             commands::child_priority_set,
             commands::env_policy_set,
             commands::agent_policy_set,
+            commands::policy_get,
             commands::media_save_marked,
             commands::media_read_opened_image,
             commands::files_unwatch,

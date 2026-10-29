@@ -299,6 +299,12 @@ impl SwarmtermMcpServer {
         // mode would let the agent believe its task was handed over. The
         // Moderator's UI sends use `war_room_moderator_send`, not this tool.
         if mode == MessageMode::Execute {
+            // The admin lock first, so the agent learns it is not the user's
+            // setting and asking them to flip it would not help.
+            state
+                .admin_policy
+                .check(crate::policy::Lock::WarRoomExecute)
+                .map_err(|m| rmcp::ErrorData::invalid_request(m, None))?;
             state
                 .agent_policy_snapshot()
                 .check_war_room_execute()

@@ -14,6 +14,12 @@ pub struct AgentPolicy {
     /// an execute runs a prompt in another pane, which may be in a bypass
     /// mode, so one bad instruction would otherwise spread across panes.
     pub allow_war_room_execute: bool,
+    /// `worktree.spawn` workers of the same agent inherit the requester's
+    /// Bypass/YOLO mode (user decision 2026-10-29, default off). The
+    /// renderer applies it when building the worker's line; Rust carries it
+    /// so the admin lock (DisableBypassModes) can force it off, and the
+    /// spawn-time line check refuses such a worker anyway under that lock.
+    pub workers_inherit_bypass: bool,
 }
 
 /// Returned to the agent verbatim; it names the allowed alternative so the
@@ -47,6 +53,7 @@ mod tests {
     fn execute_passes_when_allowed() {
         let p = AgentPolicy {
             allow_war_room_execute: true,
+            ..Default::default()
         };
         assert_eq!(p.check_war_room_execute(), Ok(()));
     }
