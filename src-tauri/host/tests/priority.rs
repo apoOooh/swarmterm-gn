@@ -14,9 +14,9 @@ use swarmterm_host::job::{Assign, JobHandle};
 use swarmterm_host::priority::{Level, Limits, Memo, Mode, Registry, Settings};
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::Threading::{
-    GetPriorityClass, OpenProcess, SetPriorityClass, BELOW_NORMAL_PRIORITY_CLASS,
+    GetPriorityClass, OpenProcess, SetPriorityClass, TerminateProcess, BELOW_NORMAL_PRIORITY_CLASS,
     IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SET_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
+    PROCESS_SET_INFORMATION, PROCESS_TERMINATE,
 };
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -109,13 +109,19 @@ fn child_is_born_with_the_job_class_and_cannot_be_raised() {
     let job = JobHandle::capturing_with(shell.id(), &strict()).unwrap();
     // Running members are moved to the class at once, too.
     assert_eq!(class(shell.id()), BELOW_NORMAL_PRIORITY_CLASS);
-    let m = wait_members(&job, |m| m.iter().filter(|(_, n)| n == "ping.exe").count() == 1);
+    let m = wait_members(&job, |m| {
+        m.iter().filter(|(_, n)| n == "ping.exe").count() == 1
+    });
     let ping = pid_of(&m, "ping.exe");
     assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
     // Raising from outside does not stick either.
     // SAFETY: handle opened and closed here.
     unsafe {
-        let h = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, 0, ping);
+        let h = OpenProcess(
+            PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            ping,
+        );
         SetPriorityClass(h, NORMAL_PRIORITY_CLASS);
         CloseHandle(h);
     }
@@ -140,7 +146,10 @@ fn process_raising_itself_stays_capped() {
     let out = child.wait_with_output().unwrap();
     drop(job);
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.trim_end().ends_with("BelowNormal"), "powershell said {text:?}");
+    assert!(
+        text.trim_end().ends_with("BelowNormal"),
+        "powershell said {text:?}"
+    );
 }
 
 #[test]
@@ -152,7 +161,10 @@ fn orphan_stays_in_the_job_and_capped() {
     let _ = shell.wait();
     let m = wait_members(&job, |m| m.iter().any(|(_, n)| n == "ping.exe"));
     let ping = pid_of(&m, "ping.exe");
-    assert!(!m.iter().any(|(p, _)| *p == shell.id()), "shell still alive: {m:?}");
+    assert!(
+        !m.iter().any(|(p, _)| *p == shell.id()),
+        "shell still alive: {m:?}"
+    );
     assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
     job.terminate();
 }
@@ -310,7 +322,10 @@ fn child_started_before_capture_is_swept_into_the_job() {
     let mut shell = cmd("ping -n 60 127.0.0.1");
     let deadline = Instant::now() + WAIT;
     let ping = loop {
-        if let Some((p, _)) = children_of(shell.id()).into_iter().find(|(_, n)| n == "ping.exe") {
+        if let Some((p, _)) = children_of(shell.id())
+            .into_iter()
+            .find(|(_, n)| n == "ping.exe")
+        {
             break p;
         }
         assert!(Instant::now() < deadline, "ping never started");
@@ -330,7 +345,10 @@ fn wait_child(parent: u32, exe: &str) -> u32 {
         if let Some((p, _)) = children_of(parent).into_iter().find(|(_, n)| n == exe) {
             return p;
         }
-        assert!(Instant::now() < deadline, "{exe} below {parent} never started");
+        assert!(
+            Instant::now() < deadline,
+            "{exe} below {parent} never started"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -339,12 +357,18 @@ fn wait_child(parent: u32, exe: &str) -> u32 {
 /// capture is assigned along with its parent.
 #[test]
 fn grandchild_started_before_capture_is_swept_into_the_job() {
-    let mut shell = cmd(&format!("\"{}\" /d /c ping -n 60 127.0.0.1", sys32("cmd.exe")));
+    let mut shell = cmd(&format!(
+        "\"{}\" /d /c ping -n 60 127.0.0.1",
+        sys32("cmd.exe")
+    ));
     let inner = wait_child(shell.id(), "cmd.exe");
     let ping = wait_child(inner, "ping.exe");
     let job = JobHandle::capturing_with(shell.id(), &strict()).unwrap();
     let pids = job.pids();
-    assert!(pids.contains(&inner) && pids.contains(&ping), "members {pids:?}");
+    assert!(
+        pids.contains(&inner) && pids.contains(&ping),
+        "members {pids:?}"
+    );
     assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
     assert!(job.strays().is_empty());
     job.terminate();
@@ -389,10 +413,16 @@ fn grandchild_started_during_the_first_round_is_swept_by_the_second() {
     })
     .unwrap();
     let second = second.expect("hook never ran");
-    assert!(!job.strays().contains(&first), "killed first ping counted as a stray");
+    assert!(
+        !job.strays().contains(&first),
+        "killed first ping counted as a stray"
+    );
     assert!(rounds.len() >= 2, "rounds {rounds:?}");
     let pids = job.pids();
-    assert!(pids.contains(&inner) && pids.contains(&second), "members {pids:?}");
+    assert!(
+        pids.contains(&inner) && pids.contains(&second),
+        "members {pids:?}"
+    );
     assert_eq!(class(second), BELOW_NORMAL_PRIORITY_CLASS);
     assert!(job.strays().is_empty());
     job.terminate();
@@ -409,7 +439,10 @@ fn require_node() {
         .creation_flags(CREATE_NO_WINDOW)
         .status()
         .is_ok_and(|s| s.success());
-    assert!(ok, "node not on PATH: the libuv job tests need Node.js installed");
+    assert!(
+        ok,
+        "node not on PATH: the libuv job tests need Node.js installed"
+    );
 }
 
 /// A fake npm agent package whose cli.js only spawns `cmd /c ping`.
@@ -482,7 +515,10 @@ fn early_child_with_its_own_job_is_forced_to_the_pane_class() {
     let registry = Registry::without_watcher();
     let job = registry.capture("pane", shell.id()).unwrap();
     let strays = job.strays();
-    assert!(strays.contains(&node) && strays.contains(&inner), "strays {strays:?}");
+    assert!(
+        strays.contains(&node) && strays.contains(&inner),
+        "strays {strays:?}"
+    );
     assert!(!job.pids().contains(&node));
     assert!(job.pids().contains(&ping), "ping not captured");
     assert_eq!(class(node), BELOW_NORMAL_PRIORITY_CLASS);
@@ -544,7 +580,10 @@ fn build_job_nests_under_the_pane_not_under_node() {
     let dir = tempfile::tempdir().unwrap();
     let script = node_agent_script(dir.path());
     let registry = Registry::without_watcher();
-    let mut shell = cmd(&format!("ping -n 2 127.0.0.1 >nul & node \"{}\"", script.display()));
+    let mut shell = cmd(&format!(
+        "ping -n 2 127.0.0.1 >nul & node \"{}\"",
+        script.display()
+    ));
     let job = registry.capture("pane", shell.id()).unwrap();
     let m = wait_members(&job, |m| {
         m.iter().any(|(_, n)| n == "node.exe")
