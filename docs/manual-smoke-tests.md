@@ -653,7 +653,7 @@ area or a CSP violation in DevTools:
 - [ ] Web preview and the popout window open an external site.
 - [ ] Links open in the default browser; dialogs (open folder) work.
 
-## Auto-update
+## No self-update
 
 - [ ] GN shows no update controls or tray entry and makes no update
       requests. App name and application-data identifier are distinct.

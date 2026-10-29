@@ -2,9 +2,15 @@
 
 ## Supported versions
 
+| Version | Supported |
+|---|---|
+| 1.26.x | Yes |
+| < 1.26 | No |
+
 Only the latest release on
 [GitHub Releases](https://github.com/apoOooh/swarmterm-gn/releases) receives
 security fixes. Fixes ship as a new release; older versions are not patched.
+Both editions (Swarmterm GN and Swarmterm GN Corp) are covered.
 Swarmterm GN supports Windows x64 only.
 
 ## Reporting a vulnerability

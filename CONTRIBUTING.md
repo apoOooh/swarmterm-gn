@@ -36,7 +36,7 @@ locally first:
 | Rust tests | `cargo test` *(from `src-tauri/`)* |
 | Rust formatting | `cargo fmt --check` *(from `src-tauri/`)* |
 | Rust lints | `cargo clippy --all-targets -- -D warnings` *(from `src-tauri/`)* |
-| Rust advisories, licences, sources | `cargo deny check advisories licenses sources` *(from `src-tauri/`, needs `cargo install cargo-deny`)* |
+| Rust advisories, licences, bans, sources | `cargo deny check advisories licenses bans sources` *(from `src-tauri/`, needs `cargo install cargo-deny`)* |
 | npm advisories | `npm audit --omit=dev --audit-level=high` |
 | npm registry signatures | `npm audit signatures` |
 | Licence metadata (REUSE) | `reuse lint` *(`pipx install reuse`)* |

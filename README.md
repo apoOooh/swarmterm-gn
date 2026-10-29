@@ -60,8 +60,8 @@ The [user guide](docs/user-guide.md) covers every feature, shortcut and setting.
 
 ## Install
 
-1. Download `Swarmterm.GN_<version>_x64-setup.exe` and `SHA256SUMS.txt` from [Releases](https://github.com/apoOooh/swarmterm-gn/releases).
-2. Check the hash: `Get-FileHash .\Swarmterm.GN_*_x64-setup.exe` must match `SHA256SUMS.txt`. Optionally check the signed build provenance: `gh attestation verify .\Swarmterm.GN_<version>_x64-setup.exe --repo apoOooh/swarmterm-gn` ([details](docs/enterprise-deployment.md#verify-a-download)).
+1. Download `Swarmterm.GN_<version>_x64-setup.exe` (or the Corp edition, `Swarmterm.GN.Corp_<version>_x64-setup.exe`) and `SHA256SUMS.txt` from [Releases](https://github.com/apoOooh/swarmterm-gn/releases).
+2. **Verify the download:** `Get-FileHash .\Swarmterm.GN_*_x64-setup.exe` must match `SHA256SUMS.txt`. Optionally check the signed build provenance: `gh attestation verify .\Swarmterm.GN_<version>_x64-setup.exe --repo apoOooh/swarmterm-gn` ([details](docs/enterprise-deployment.md#verify-a-download)).
 3. Run the installer. It is not code-signed yet, so Windows SmartScreen may warn about an unknown publisher.
 
 Requirements: Windows 10/11 x64 with the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), plus the agent CLIs you want to use (`claude`, `codex`, `opencode`). Missing CLIs show as disabled.
@@ -83,7 +83,8 @@ Layouts save automatically under **Saved workspaces**. Closing the window hides 
 - **Network use is listed** in [PRIVACY.md](PRIVACY.md): a local MCP server on `127.0.0.1`, and downloads (buzzkey, speech models) only when you ask for them.
 - **Secrets stay out of panes:** by default panes do not inherit secret-looking environment variables (Settings → Terminal → Environment).
 - **Launch modes are explicit:** agents start in their confirming mode unless you pick a bypass mode. Bypass modes are confirmed before launch and marked on the pane.
-- **War Room execute** (handing a peer a prompt to run) is off by default.
+- **War Room execute** (handing a peer a prompt to run) is off by default, and the local MCP server only accepts each pane's own secret Bearer token.
+- **Previews are sandboxed from the app:** web preview webviews have no access to the app's IPC, and a strict content security policy blocks plain `http:` images.
 - **Verified downloads:** the buzzkey companion is installed only after a signature and hash check; speech models are hash-checked.
 - **Supply chain:** CI checks advisories and licences (`cargo deny`, `npm audit`, `npm audit signatures`, REUSE) and runs CodeQL and OpenSSF Scorecard; workflow actions are pinned to commit SHAs and the Rust toolchain to one version. Each release ships CycloneDX SBOMs and signed build provenance.
 - **Administrator policy:** organisations can lock features (bypass modes, War Room execute, MCP, downloads, routines, preview, environment filter) through Group Policy or Intune; see [Administrator policy](docs/admin-policy.md).
@@ -119,11 +120,15 @@ Swarmterm GN is an independent project. It started as a fork of [duongducnguyen/
 
 Development happens on `dev`; releases are tagged on `main` ([release process](docs/release-process.md), [changelog](CHANGELOG.md)). Known limits are in the [user guide](docs/user-guide.md#known-limits).
 
+## Contributing
+
+Bug fixes and features are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for building, tests and the CI contract; discuss anything non-trivial in an issue first.
+
 ## Help and community
 
 - Questions and bugs: [GitHub issues](https://github.com/apoOooh/swarmterm-gn/issues). Search first; include the version and steps to reproduce. This is a volunteer project without paid support.
 - Security vulnerabilities: privately, as described in [SECURITY.md](SECURITY.md), never in a public issue.
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Licence
 

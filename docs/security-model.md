@@ -1,6 +1,6 @@
 # Security model
 
-Last updated: 2026-10-29 (version 1.25.4). For reporting vulnerabilities see
+Last updated: 2026-10-29 (version 1.26.0). For reporting vulnerabilities see
 [SECURITY.md](../SECURITY.md); for data and network use see
 [PRIVACY.md](../PRIVACY.md).
 
