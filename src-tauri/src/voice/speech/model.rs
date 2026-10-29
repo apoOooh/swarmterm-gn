@@ -8,6 +8,11 @@
 //! "Ready" therefore means "the file exists": the hash was checked once, on
 //! the way in, and is not re-read (500 MB) on every status query.
 
+// Corp builds compile the model download out (`speech::download`); the
+// URL and `.part` hashing then only serve tests. Models an administrator
+// places in the models folder still load.
+#![cfg_attr(feature = "corp", allow(dead_code))]
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 

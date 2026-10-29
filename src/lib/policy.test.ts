@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { describeActivePolicies, isLaunchModeLocked, parseAdminPolicy, UNMANAGED_POLICY } from './policy'
+import {
+  describeActivePolicies,
+  isLaunchModeLocked,
+  parseAdminPolicy,
+  POLICY_DESCRIPTIONS,
+  splitActivePolicies,
+  UNMANAGED_POLICY
+} from './policy'
 
 describe('parseAdminPolicy', () => {
   it('reads a malformed answer as unmanaged', () => {
@@ -46,5 +53,33 @@ describe('isLaunchModeLocked', () => {
     expect(isLaunchModeLocked(locked, true)).toBe(true)
     expect(isLaunchModeLocked(locked, false)).toBe(false)
     expect(isLaunchModeLocked(UNMANAGED_POLICY, true)).toBe(false)
+  })
+})
+
+describe('edition fields', () => {
+  it('reads edition and built-in names, defaulting to standard', () => {
+    expect(parseAdminPolicy({}).edition).toBe('standard')
+    expect(parseAdminPolicy({ edition: 'bogus' }).edition).toBe('standard')
+    const p = parseAdminPolicy({
+      edition: 'corp',
+      disableCompanion: true,
+      disablePreviewBrowser: true,
+      active: ['DisableCompanion', 'DisablePreviewBrowser'],
+      builtIn: ['DisableCompanion', 7]
+    })
+    expect(p.edition).toBe('corp')
+    expect(p.builtIn).toEqual(['DisableCompanion'])
+  })
+
+  it('splits active policies into built-in and administrator lines', () => {
+    const p = parseAdminPolicy({
+      edition: 'corp',
+      active: ['DisableCompanion', 'DisablePreviewBrowser'],
+      builtIn: ['DisableCompanion', 'DisableModelDownload']
+    })
+    expect(splitActivePolicies(p)).toEqual({
+      builtIn: [POLICY_DESCRIPTIONS.DisableCompanion],
+      admin: [POLICY_DESCRIPTIONS.DisablePreviewBrowser]
+    })
   })
 })

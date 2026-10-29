@@ -146,6 +146,7 @@ import { staleKeys } from '@/lib/stale-sweep'
 import { VOICE_ALERT_ID, createInputDropThrottle, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
 import { BuzzkeyUpdateToast } from '@/components/BuzzkeyUpdateToast'
 import { useBuzzkeyUpdateStore } from '@/store/buzzkey-update-store'
+import { BUILD_EDITION, editionFeatures, effectiveEdition } from '@/lib/edition'
 import { usePolicyStore } from '@/store/policy-store'
 
 // Platform never changes at runtime, so a module-level constant is fine.
@@ -988,7 +989,9 @@ export default function App(): ReactElement {
       .getState()
       .load()
       .then((policy) => {
-        if (!cancelled && !policy.disableCompanion) stop = useBuzzkeyUpdateStore.getState().startWatch()
+        // Corp compiles the companion updater out: never start the watch.
+        if (!cancelled && !policy.disableCompanion && editionFeatures(effectiveEdition(BUILD_EDITION, policy.edition)).companion)
+          stop = useBuzzkeyUpdateStore.getState().startWatch()
       })
     return () => {
       cancelled = true

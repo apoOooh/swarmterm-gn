@@ -6,8 +6,15 @@ import path from "node:path";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig(async ({ mode }) => ({
   plugins: [react()],
+  // Edition (docs/editions.md): `--mode corp` (npm run build:corp, used by
+  // src-tauri/tauri.corp.conf.json) builds the Corp renderer. Defined from the
+  // mode, not read from the environment, so a stray variable cannot flip a
+  // standard build; the dead branches are dropped from the bundle.
+  define: {
+    "import.meta.env.VITE_SWARMTERM_EDITION": JSON.stringify(mode === "corp" ? "corp" : "standard"),
+  },
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
   // Scan every entry up front, including the e2e fixture page and lazy
   // imports. A dependency first met mid-session makes Vite re-optimize and

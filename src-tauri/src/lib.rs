@@ -77,6 +77,15 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             crate::prof::start(app.handle());
+            // The window title (taskbar, Alt+Tab) comes from tauri.conf.json,
+            // which is shared by both editions; the edition is a compile-time
+            // fact, so the binary sets it rather than a second config copy of
+            // the whole `windows` array.
+            if policy::EDITION == policy::Edition::Corp {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.set_title(policy::EDITION.product_name());
+                }
+            }
             app.manage(child_priority::ChildPriority::default());
             app.manage(std::sync::Arc::new(files::FileService::new(
                 app.path().app_data_dir()?.join("local-history"),

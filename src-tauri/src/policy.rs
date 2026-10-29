@@ -6,8 +6,9 @@
 //! renderer only greys controls out (`policy_get`).
 //!
 //! The parse step is a pure function over a value map so it is testable
-//! without touching the registry. A later `corp` build reuses `combine` to
-//! OR compiled-in locks with the registry ones.
+//! without touching the registry. The `corp` build (Cargo feature `corp`,
+//! `docs/editions.md`) ORs its compiled-in locks with the registry ones via
+//! `combine`, so a registry value can add locks but never lift one.
 
 use std::collections::BTreeMap;
 
@@ -74,6 +75,63 @@ pub struct PolicyView {
     /// True when any value is set (Settings shows the "managed" section).
     pub locked: bool,
     pub active: Vec<&'static str>,
+    /// `"standard"` or `"corp"`: which edition this binary was built as.
+    pub edition: &'static str,
+    /// Value names locked by the edition itself (compiled in), so Settings
+    /// can tell "built into this edition" from "set by your administrator".
+    pub built_in: Vec<&'static str>,
+}
+
+/// The edition this binary was built as. Fixed at compile time so no
+/// registry value, setting or file can turn a corp build back into the
+/// standard one.
+pub const EDITION: Edition = if cfg!(feature = "corp") {
+    Edition::Corp
+} else {
+    Edition::Standard
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edition {
+    Standard,
+    Corp,
+}
+
+impl Edition {
+    pub fn id(self) -> &'static str {
+        match self {
+            Edition::Standard => "standard",
+            Edition::Corp => "corp",
+        }
+    }
+
+    /// Product name shown in the window title and in refusals.
+    pub fn product_name(self) -> &'static str {
+        match self {
+            Edition::Standard => "Swarmterm GN",
+            Edition::Corp => "Swarmterm GN Corp",
+        }
+    }
+
+    /// Locks an edition carries without any registry key. Corp locks what
+    /// infosec rejected: agents switching their own safety net off or
+    /// driving other panes, third-party binaries fetched at runtime
+    /// (buzzkey, whisper models), and an unfiltered environment. Routines,
+    /// worktree spawn, the preview and MCP stay available but lockable by
+    /// policy: they are core workflow and run only what the user starts.
+    pub fn locks(self) -> AdminPolicy {
+        match self {
+            Edition::Standard => AdminPolicy::default(),
+            Edition::Corp => AdminPolicy {
+                disable_bypass_modes: true,
+                disable_war_room_execute: true,
+                disable_companion: true,
+                disable_model_download: true,
+                env_policy: Some(FilterMode::Default),
+                ..Default::default()
+            },
+        }
+    }
 }
 
 /// Lock names for `AdminPolicy::check`; the string is the registry value
@@ -236,11 +294,19 @@ impl AdminPolicy {
     }
 
     pub fn view(&self) -> PolicyView {
+        self.view_for(EDITION)
+    }
+
+    /// `view` for a given edition (pure, so both editions are testable from
+    /// one build).
+    pub fn view_for(&self, edition: Edition) -> PolicyView {
         let active = self.active();
         PolicyView {
             policy: self.clone(),
             locked: !active.is_empty(),
             active,
+            edition: edition.id(),
+            built_in: edition.locks().active(),
         }
     }
 
@@ -259,14 +325,28 @@ impl AdminPolicy {
 
     /// `Err` with a message naming the registry value when `lock` is set.
     pub fn check(&self, lock: Lock) -> Result<(), String> {
-        if self.is_locked(lock) {
+        self.check_for(EDITION, lock)
+    }
+
+    /// `check` for a given edition. A lock the edition carries is reported
+    /// as such: telling a corp user to ask their administrator about
+    /// something no registry value can lift would send them in circles.
+    pub fn check_for(&self, edition: Edition, lock: Lock) -> Result<(), String> {
+        if !self.is_locked(lock) {
+            Ok(())
+        } else if edition.locks().is_locked(lock) {
+            Err(format!(
+                "{} not available in {} (built-in policy {}).",
+                lock.what(),
+                edition.product_name(),
+                lock.value_name()
+            ))
+        } else {
             Err(format!(
                 "{} disabled by your administrator (policy {}).",
                 lock.what(),
                 lock.value_name()
             ))
-        } else {
-            Ok(())
         }
     }
 
@@ -316,10 +396,11 @@ impl AdminPolicy {
             return Ok(());
         }
         match bypass_flag(line) {
+            // Same wording as `check`, so a corp build names the edition
+            // instead of an administrator.
             Some(flag) => Err(format!(
-                "Launch refused: \"{flag}\" — {} (policy {}).",
-                "bypass/YOLO launch modes are disabled by your administrator",
-                Lock::BypassModes.value_name()
+                "Launch refused: \"{flag}\" — {}",
+                self.check(Lock::BypassModes).unwrap_err()
             )),
             None => Ok(()),
         }
@@ -368,10 +449,10 @@ pub fn bypass_flag(line: &str) -> Option<String> {
     None
 }
 
-/// Locks compiled into the binary. Empty for the normal build; the planned
-/// `corp` build fills it so its defaults hold even without any registry key.
+/// Locks compiled into the binary. Empty for the standard build; the `corp`
+/// build fills it so its defaults hold even without any registry key.
 fn compiled_in() -> AdminPolicy {
-    AdminPolicy::default()
+    EDITION.locks()
 }
 
 /// Read both hives once (HKLM wins per value), add the compiled-in locks and
@@ -392,7 +473,11 @@ pub fn load() -> AdminPolicy {
     }
     let active = policy.active();
     if !active.is_empty() {
-        eprintln!("policy: active {}", active.join(", "));
+        eprintln!(
+            "policy: {} edition, active {}",
+            EDITION.id(),
+            active.join(", ")
+        );
     }
     policy
 }
@@ -742,6 +827,82 @@ mod tests {
         assert!(!AdminPolicy::default().view().locked);
         let err = admin.check(Lock::PreviewBrowser).unwrap_err();
         assert!(err.contains("DisablePreviewBrowser") && err.contains("administrator"));
+    }
+
+    #[test]
+    fn corp_edition_locks_what_infosec_rejected() {
+        let corp = Edition::Corp.locks();
+        for lock in [
+            Lock::BypassModes,
+            Lock::WarRoomExecute,
+            Lock::Companion,
+            Lock::ModelDownload,
+        ] {
+            assert!(corp.is_locked(lock), "{lock:?}");
+        }
+        assert_eq!(corp.env_policy, Some(FilterMode::Default));
+        // Core workflow stays available, lockable by the registry.
+        for lock in [
+            Lock::RoutineCommands,
+            Lock::WorktreeSpawn,
+            Lock::PreviewBrowser,
+            Lock::Mcp,
+        ] {
+            assert!(!corp.is_locked(lock), "{lock:?}");
+        }
+        assert_eq!(Edition::Standard.locks(), AdminPolicy::default());
+    }
+
+    #[test]
+    fn registry_can_tighten_but_never_loosen_corp_locks() {
+        let registry = AdminPolicy {
+            disable_preview_browser: true,
+            env_policy: Some(FilterMode::Strict),
+            ..Default::default()
+        };
+        let p = Edition::Corp.locks().combine(&registry);
+        assert!(p.disable_preview_browser && p.disable_companion);
+        assert_eq!(p.env_policy, Some(FilterMode::Strict));
+        // An explicit 0 in the registry parses to "not set", which combine
+        // cannot use to clear a compiled-in lock.
+        let zero: BTreeMap<String, RegValue> =
+            [("DisableCompanion".to_string(), RegValue::Dword(0))].into();
+        let (unlocked, _) = parse(&zero);
+        assert!(Edition::Corp.locks().combine(&unlocked).disable_companion);
+    }
+
+    #[test]
+    fn corp_refusal_names_the_edition_not_the_administrator() {
+        let p = Edition::Corp.locks().combine(&AdminPolicy {
+            disable_mcp: true,
+            ..Default::default()
+        });
+        let built_in = p.check_for(Edition::Corp, Lock::Companion).unwrap_err();
+        assert!(built_in.contains("Swarmterm GN Corp") && built_in.contains("DisableCompanion"));
+        assert!(!built_in.contains("administrator"));
+        let admin = p.check_for(Edition::Corp, Lock::Mcp).unwrap_err();
+        assert!(admin.contains("administrator"));
+    }
+
+    #[test]
+    fn view_reports_edition_and_built_in_locks() {
+        let corp = Edition::Corp.locks().view_for(Edition::Corp);
+        assert_eq!(corp.edition, "corp");
+        assert!(corp.locked);
+        assert_eq!(
+            corp.built_in,
+            vec![
+                "DisableBypassModes",
+                "DisableWarRoomExecute",
+                "DisableCompanion",
+                "DisableModelDownload",
+                "EnvPolicy"
+            ]
+        );
+        let standard = AdminPolicy::default().view_for(Edition::Standard);
+        assert_eq!(standard.edition, "standard");
+        assert!(standard.built_in.is_empty() && !standard.locked);
+        assert_eq!(compiled_in(), EDITION.locks());
     }
 
     #[test]

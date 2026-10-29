@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { UNMANAGED_POLICY, type AdminPolicy } from '@/lib/policy'
 import { getAdminPolicy } from '@/tauri/policy'
+import { BUILD_EDITION, effectiveEdition, type Edition } from '@/lib/edition'
 
 export interface PolicyStore {
   /** Admin policy; unmanaged until `load` answers (Rust enforces meanwhile). */
@@ -28,3 +29,9 @@ export const usePolicyStore = create<PolicyStore>((set) => ({
     return pending
   }
 }))
+
+/** The running edition: the renderer build's, or corp once the backend says
+ *  so (lib/edition.ts). */
+export function useEdition(): Edition {
+  return usePolicyStore((s) => effectiveEdition(BUILD_EDITION, s.policy.edition))
+}

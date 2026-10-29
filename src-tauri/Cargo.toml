@@ -23,6 +23,10 @@ local-speech = ["dep:whisper-rs"]
 # watchdog, command spans. Off in every normal and A/B build; see
 # docs/perf-profiling.md.
 profiling = []
+# Corp edition (docs/editions.md): compiled-in admin-policy locks
+# (`policy::Edition::locks`) and no buzzkey installer or whisper model
+# download in the binary. Combines with `--no-default-features`.
+corp = []
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary

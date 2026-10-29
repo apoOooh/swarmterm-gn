@@ -1,0 +1,8 @@
+{
+  "identifier": "com.apooooh.swarmterm.gn.corp",
+  "productName": "Swarmterm GN Corp",
+  "build": {
+    "beforeDevCommand": "npm run dev -- --mode corp",
+    "beforeBuildCommand": "npm run build:corp"
+  }
+}
