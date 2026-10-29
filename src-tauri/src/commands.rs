@@ -482,16 +482,22 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     state.peer_wake.notify_waiters();
 }
 
-/// Settings → Terminal "Lower build priority" plus the per-workspace opt-outs,
-/// flattened by the renderer into the exempt panes' terminal ids. Cheap (one
-/// short lock), so sync is fine.
+/// Settings → Terminal "Process priority" plus the per-workspace opt-outs,
+/// flattened by the renderer into the exempt panes' terminal ids (ADR 0005).
+/// Applied to the in-process panes' jobs at once and forwarded to the
+/// terminal host on a worker thread.
 #[tauri::command]
 pub fn child_priority_set(
+    app: AppHandle,
     state: State<'_, crate::child_priority::ChildPriority>,
-    enabled: bool,
-    exempt: Vec<String>,
+    settings: crate::child_priority::Settings,
 ) {
-    state.set(enabled, exempt);
+    state.set(settings);
+    // Off the main thread: the host client lock may be held by a connect.
+    #[cfg(windows)]
+    crate::child_priority::forward_to_host(app);
+    #[cfg(not(windows))]
+    let _ = app;
 }
 
 /// Screen-independent proof that the pane's agent CLI is still running: a

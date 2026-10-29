@@ -18,3 +18,4 @@ Each record has these sections:
 | [0002](0002-builtin-speech-source.md) | Built-in speech source | Accepted |
 | [0003](0003-builtin-announcements.md) | Built-in spoken announcements | Accepted |
 | [0004](0004-reading-agent-output.md) | Reading the agent's reply | Accepted |
+| [0005](0005-job-object-priority.md) | Process priority enforced by Job Objects | Accepted |

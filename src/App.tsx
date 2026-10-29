@@ -919,16 +919,17 @@ export default function App(): ReactElement {
     }
   }, [deferReturnFocusToTerminal])
 
-  // Lower build priority: keep the Rust watcher in step with the setting and
-  // the panes of opted-out workspaces. The selector returns a JSON string so
-  // a workspace change that leaves the set alone neither re-renders nor pushes.
-  const lowerBuildPriority = useBuildPriorityStore((s) => s.lowerBuildPriority)
+  // Process priority: keep the panes' job limits in Rust in step with the
+  // setting and the panes of opted-out workspaces. The selector returns a
+  // JSON string so a workspace change that leaves the set alone neither
+  // re-renders nor pushes.
+  const priority = useBuildPriorityStore((s) => s.priority)
   const exemptKey = useAppStore((s) => JSON.stringify(exemptTerminalIds(s.workspaces)))
   useEffect(() => {
-    setChildPriority(lowerBuildPriority, JSON.parse(exemptKey) as string[]).catch((err) =>
-      console.warn('[priority] watcher settings:', err)
+    setChildPriority(priority, JSON.parse(exemptKey) as string[]).catch((err) =>
+      console.warn('[priority] settings:', err)
     )
-  }, [lowerBuildPriority, exemptKey])
+  }, [priority, exemptKey])
 
   // Clipboard images (opt-in): keep the backend watcher in step with the
   // setting, and add each saved image to the gallery without taking the

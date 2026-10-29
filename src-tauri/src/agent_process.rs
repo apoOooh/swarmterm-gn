@@ -30,7 +30,7 @@ fn native_stem(agent_id: &str) -> Option<&'static str> {
 /// host. A bare `node`/`bun` proves nothing (a dev server or profile hook
 /// would fake liveness), so the host only counts when its command line names
 /// the agent's own package. Agents without a marker are accepted natively only.
-fn script_markers(agent_id: &str) -> &'static [&'static str] {
+pub(crate) fn script_markers(agent_id: &str) -> &'static [&'static str] {
     match agent_id {
         "claude-code" => &["@anthropic-ai/claude-code", "claude-code/cli.js"],
         "codex" => &["@openai/codex"],
@@ -108,51 +108,12 @@ pub fn agent_alive_in(
     false
 }
 
-/// Command line of `pid` via `NtQueryInformationProcess`
-/// (`ProcessCommandLineInformation`, Windows 8.1+). `None` on any failure —
-/// the caller then fails closed.
+/// Command line of `pid` (`NtQueryInformationProcess`,
+/// `ProcessCommandLineInformation`); shared with the host's priority watcher.
+/// `None` on any failure — the caller then fails closed.
 #[cfg(windows)]
 pub fn command_line(pid: u32) -> Option<String> {
-    use windows_sys::Wdk::System::Threading::{
-        NtQueryInformationProcess, ProcessCommandLineInformation,
-    };
-    use windows_sys::Win32::Foundation::{CloseHandle, UNICODE_STRING};
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    unsafe {
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if h.is_null() {
-            return None;
-        }
-        let mut len: u32 = 0;
-        NtQueryInformationProcess(
-            h,
-            ProcessCommandLineInformation,
-            std::ptr::null_mut(),
-            0,
-            &mut len,
-        );
-        let mut result = None;
-        if len as usize >= std::mem::size_of::<UNICODE_STRING>() && len < 1 << 20 {
-            // u64 backing keeps the UNICODE_STRING header aligned.
-            let mut buf = vec![0u64; (len as usize).div_ceil(8)];
-            let status = NtQueryInformationProcess(
-                h,
-                ProcessCommandLineInformation,
-                buf.as_mut_ptr().cast(),
-                len,
-                &mut len,
-            );
-            if status >= 0 {
-                let us = &*(buf.as_ptr() as *const UNICODE_STRING);
-                if !us.Buffer.is_null() {
-                    let chars = std::slice::from_raw_parts(us.Buffer, (us.Length / 2) as usize);
-                    result = Some(String::from_utf16_lossy(chars));
-                }
-            }
-        }
-        CloseHandle(h);
-        result
-    }
+    swarmterm_host::priority::command_line(pid)
 }
 
 #[cfg(not(windows))]

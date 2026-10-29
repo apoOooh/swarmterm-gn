@@ -72,7 +72,6 @@ pub fn run() {
         .setup(|app| {
             crate::prof::start(app.handle());
             app.manage(child_priority::ChildPriority::default());
-            child_priority::start(app.handle().clone());
             app.manage(std::sync::Arc::new(files::FileService::new(
                 app.path().app_data_dir()?.join("local-history"),
             )));

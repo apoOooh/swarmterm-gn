@@ -68,6 +68,10 @@ pub struct Conn {
     pub app_state: Value,
     /// The host gates output on acks (`flow-control`), so `ack` is sent.
     flow_control: bool,
+    /// The host announced `priority` (ADR 0005): it understands
+    /// `set_priority` and limits its panes. A host from before that ignores
+    /// the op and runs new panes unlimited, so the hub spawns in-process.
+    pub priority: bool,
     /// Ends the reader task (`close`): the sink holds the connection, so
     /// dropping every outside handle never closes the pipe by itself.
     closing: Arc<tokio::sync::Notify>,
@@ -137,13 +141,8 @@ impl Conn {
             .unwrap_or("?")
             .to_string();
         let app_state = v.get("appState").cloned().unwrap_or(Value::Null);
-        let flow_control = v
-            .get("capabilities")
-            .and_then(Value::as_array)
-            .is_some_and(|c| {
-                c.iter()
-                    .any(|c| c == swarmterm_host::protocol::FLOW_CONTROL)
-            });
+        let flow_control = has_cap(&v, swarmterm_host::protocol::FLOW_CONTROL);
+        let priority = has_cap(&v, swarmterm_host::protocol::PRIORITY);
 
         let closing = Arc::new(tokio::sync::Notify::new());
         let conn = Arc::new(Conn {
@@ -154,6 +153,7 @@ impl Conn {
             host_version,
             app_state,
             flow_control,
+            priority,
             closing: closing.clone(),
         });
         tokio::spawn(async move {
@@ -249,6 +249,19 @@ impl Conn {
     pub fn set_app_state(&self, state: Value) {
         let _ = self.enqueue(
             json!({"op": "set_app_state", "state": state}),
+            Waiter::Ignore,
+        );
+    }
+
+    /// Fire and forget, like `set_app_state`. Not sent to a host without the
+    /// `priority` capability (it would answer `unknown-op`); the hub spawns
+    /// new panes in-process then (`HostHub::for_spawn`).
+    pub fn set_priority(&self, settings: &swarmterm_host::priority::Settings) {
+        if !self.priority {
+            return;
+        }
+        let _ = self.enqueue(
+            json!({"op": "set_priority", "settings": settings}),
             Waiter::Ignore,
         );
     }
@@ -427,6 +440,14 @@ fn handle(waiters: &Mutex<HashMap<u64, Waiter>>, sink: &dyn Sink, f: Frame) {
     }
 }
 
+/// The hello answer lists `cap` among its capabilities.
+pub(super) fn has_cap(hello: &Value, cap: &str) -> bool {
+    hello
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|c| c.iter().any(|c| c == cap))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,6 +556,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         panic!("timed out; events: {:?}", rec.events.lock().unwrap());
+    }
+
+    #[test]
+    fn current_host_announces_priority() {
+        let h = start_host();
+        let conn = connect(&h, Arc::new(Recorder::default()));
+        assert!(conn.priority, "this host enforces priority; the hub must use it");
+        let _ = h.stop.send(true);
     }
 
     #[test]

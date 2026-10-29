@@ -22,12 +22,15 @@ pub const CAPABILITIES: &[&str] = &[
     "attach",
     "binary-data",
     "flow-control",
+    "priority",
     "write-checked",
 ];
 /// Capability a CLIENT announces in its `hello` when its renderer acks
 /// parsed output (`ack`). Only such a client's panes are flow-gated; an
 /// older app never acks, and gating it would stall every pane.
 pub const FLOW_CONTROL: &str = "flow-control";
+/// Host capability: understands `set_priority` (ADR 0005).
+pub const PRIORITY: &str = "priority";
 /// Upper bound for one `set_app_state` payload: it is a handful of numbers
 /// (the MCP port), not a store.
 pub const MAX_APP_STATE: usize = 4096;
@@ -115,6 +118,12 @@ pub enum Op {
         spawn_id: String,
         bytes: u64,
     },
+    /// Process priority settings (ADR 0005), applied to running panes at once
+    /// and to every later spawn. Until the first one a host enforces the
+    /// defaults (strict), never nothing.
+    SetPriority {
+        settings: crate::priority::Settings,
+    },
 }
 
 const KNOWN_OPS: &[&str] = &[
@@ -128,6 +137,7 @@ const KNOWN_OPS: &[&str] = &[
     "attach",
     "set_app_state",
     "ack",
+    "set_priority",
 ];
 
 #[derive(Debug, PartialEq)]
@@ -337,6 +347,19 @@ mod tests {
         };
         assert_eq!(state.get("mcpPort"), Some(&json!(5000)));
         assert!(req(json!({"v": 1, "id": 2, "op": "set_app_state", "state": 5})).is_err());
+    }
+
+    #[test]
+    fn parses_set_priority() {
+        let r = req(json!({"v": 1, "id": 2, "op": "set_priority",
+            "settings": {"mode": "agent-normal", "exempt": ["t"]}}))
+        .unwrap();
+        let Op::SetPriority { settings } = r.op else {
+            panic!("not set_priority")
+        };
+        assert_eq!(settings.mode, crate::priority::Mode::AgentNormal);
+        assert_eq!(settings.exempt, vec!["t".to_string()]);
+        assert!(CAPABILITIES.contains(&PRIORITY));
     }
 
     #[test]

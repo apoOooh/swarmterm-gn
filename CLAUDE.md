@@ -494,16 +494,20 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `spawned`. Pane ids are saved only while the switch is on (`paneIds`).
   MCP rebinds the port kept in the host's app state (`set_app_state`,
   returned by hello).
-  `input.rs`, `job.rs` and `output.rs` are copies of `pty.rs` parts until
-  the in-process backend goes away: change both or neither.
-- **Child process priority.** `src-tauri/src/child_priority.rs` lowers
-  every process below a pane's agent (builds, compilers) to BelowNormal so a
-  `cargo -j32` cannot starve the UI; Swarmterm and the agent are never raised
-  or lowered. Pure rule in `plan`; launchers stay Normal outside a recognised
-  agent. Driven by Settings → Terminal "Lower build priority"
-  (`build-priority-store`) plus a per-workspace opt-out (navbar), merged in
-  `src/lib/build-priority.ts` and pushed via `child_priority_set`. Turning it
-  off does not raise processes already lowered.
+  `input.rs` and `output.rs` are copies of `pty.rs` parts until the
+  in-process backend goes away: change both or neither (`job.rs` is shared).
+- **Child process priority (`docs/adr/0005`).** Enforced by the pane's
+  kill-on-close Job Object (`host/src/job.rs`, used by the host AND the
+  in-process backend via `pty::job`): `JOB_OBJECT_LIMIT_PRIORITY_CLASS`
+  from birth (strict mode), a nested build job for processes below an
+  agent (`host/src/priority.rs` watcher, pure rule `plan` over the job's
+  PID list, agents by exe or npm command-line marker), optional hard CPU
+  cap. Settings (mode off/strict/agent-normal, pane/build level, cpuCap)
+  live in `build-priority-store` + `src/lib/build-priority.ts`, merged with
+  the per-workspace opt-out and pushed via `child_priority_set`, which also
+  forwards `set_priority` to the host (and on every host connect).
+  `AGENT_EXES`/`AGENT_MARKERS` mirror the app catalog; a test keeps them
+  in step. Normal and above are not representable.
 - **`profiling` Cargo feature (dev only).** `prof.rs` spans/counters/lock
   timers compile to the plain operation without it, so normal and A/B builds
   are unchanged; never enable it in a release. Use it via

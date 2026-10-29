@@ -15,6 +15,7 @@ pub mod input;
 pub mod job;
 pub mod modes;
 pub mod output;
+pub mod priority;
 pub mod protocol;
 pub mod resize;
 pub mod ring;
