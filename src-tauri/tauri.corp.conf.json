@@ -4,5 +4,12 @@
   "build": {
     "beforeDevCommand": "npm run dev -- --mode corp",
     "beforeBuildCommand": "npm run build:corp"
+  },
+  "bundle": {
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    }
   }
 }

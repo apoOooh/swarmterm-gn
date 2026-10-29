@@ -10,18 +10,27 @@ Which build to deploy (standard or the `corp` build with restricted defaults), a
 
 ## Install
 
-The release asset `Swarmterm.GN_<version>_x64-setup.exe` is a Tauri NSIS installer in **per-user** mode
-(Tauri's default `installMode: currentUser`; `src-tauri/tauri.conf.json` sets no other mode). It needs no
-administrator rights and installs for the user who runs it.
+Both release assets are Tauri NSIS installers. They differ in install mode:
 
-| Item | Value |
-|---|---|
-| Install directory | `%LOCALAPPDATA%\Swarmterm GN\` (`swarmterm.exe`, `swarmterm-host.exe`, `uninstall.exe`) |
-| Start menu entry | per user |
-| Uninstall registration | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\` |
-| Prerequisite | Microsoft WebView2 Runtime (preinstalled on Windows 11; the installer fetches Microsoft's bootstrapper if it is missing) |
+| Item | Standard (`Swarmterm.GN_<version>_x64-setup.exe`) | Corp (`Swarmterm.GN.Corp_<version>_x64-setup.exe`) |
+|---|---|---|
+| Install mode | **per user** (Tauri's default `currentUser`), no administrator rights | **per machine** (`installMode: perMachine` in `src-tauri/tauri.corp.conf.json`), needs administrator rights |
+| Install directory | `%LOCALAPPDATA%\Swarmterm GN\` | `%ProgramFiles%\Swarmterm GN Corp\` (not writable by users) |
+| Files | `swarmterm.exe`, `swarmterm-host.exe`, `uninstall.exe` | same |
+| Start menu entry | per user | all users |
+| Uninstall registration | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\` | `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\` |
+| Prerequisite | Microsoft WebView2 Runtime (preinstalled on Windows 11; the installer fetches Microsoft's bootstrapper if it is missing) | same |
 
-Silent install, run in the user's context (for example an Intune Win32 app with install behaviour **User**):
+Settings and data stay per user in both editions (see [Data locations](#data-locations)).
+
+Silent install of **Corp**, elevated (for example an Intune Win32 app with install behaviour **System**, or an
+administrator PowerShell):
+
+```powershell
+.\Swarmterm.GN.Corp_<version>_x64-setup.exe /S
+```
+
+Silent install of **Standard**, run in the user's context (Intune install behaviour **User**):
 
 ```powershell
 .\Swarmterm.GN_<version>_x64-setup.exe /S
@@ -31,14 +40,29 @@ NSIS's `/D=<path>` (last argument, no quotes) selects another directory. Install
 upgrades it in place; settings are kept. Deploy WebView2 beforehand (Evergreen Standalone installer) on machines
 without internet access.
 
-Silent uninstall:
+Silent uninstall (Corp elevated, Standard as the user):
 
 ```powershell
+& "$env:ProgramFiles\Swarmterm GN Corp\uninstall.exe" /S
 & "$env:LOCALAPPDATA\Swarmterm GN\uninstall.exe" /S
 ```
 
 Uninstalling leaves the user data listed below; delete those folders for a full removal. Test both commands on a
 reference machine before a wide rollout.
+
+## Recommended deployment
+
+1. Deploy **Swarmterm GN Corp** per machine (above). Its compiled-in locks are a guard against mistakes based on the
+   agent flags it recognises, **not a security boundary**: a user can still type a bypass flag into a shell pane or
+   start an agent outside Swarmterm ([editions](editions.md)).
+2. The real controls, all required for a corporate deployment:
+   - the **HKLM administrator policy** ([below](#administrator-policy); applies to both editions);
+   - the **agents' own managed settings**: Claude Code managed settings with
+     `"permissions": { "disableBypassPermissionsMode": "disable" }`, Codex managed `requirements.toml`;
+   - **AppLocker or WDAC** rules that allow only the Corp installer's hash or its Program Files path, so users
+     cannot run a swapped executable or the Standard edition. The installers are not Authenticode-signed: allow
+     them by hash or sign them internally ([Verify a download](#verify-a-download)).
+3. Uninstall the Standard edition where present (both can be installed side by side).
 
 ## Updates
 
@@ -49,7 +73,7 @@ Custom → Releases) for new versions and security fixes; only the latest releas
 
 ## Data locations
 
-All data belongs to the Windows user; nothing is written machine-wide. The full table with sources is in
+All data belongs to the Windows user; apart from the Corp program files, nothing is written machine-wide. The full table with sources is in
 [PRIVACY.md](../PRIVACY.md#data-stored-on-your-computer):
 
 - `%APPDATA%\com.apooooh.swarmterm.gn\`: settings files, account profiles (no credentials), local deletion history.
@@ -119,8 +143,8 @@ organisation's certificate or allow it by hash.
 | Encryption | No data leaves the device through the app except the listed HTTPS downloads (TLS). Data at rest relies on Windows (BitLocker, user profile ACLs); the app adds no encryption of its own. |
 | Code integrity | Open source (GPL-3.0-only); releases built only by GitHub Actions from tagged commits on `main`, with SHA-256 checksums, SBOMs and signed provenance. No Authenticode signature. |
 | Secure development | CI: types, unit and browser tests, clippy, `cargo deny` (advisories, licences, sources), `npm audit` and registry signatures, gitleaks secret scan, CodeQL, OpenSSF Scorecard, REUSE licence lint. Actions pinned to commit SHAs; Dependabot updates. Threat model: [security-model.md](security-model.md). |
-| Vulnerability handling | Private reports via GitHub Security Advisories; targets: acknowledge in 5 working days, fix critical/high in 30 days ([SECURITY.md](../SECURITY.md)). Advisories are published with the fixed release. |
+| Vulnerability handling | Private reports via GitHub Security Advisories (until private reporting is enabled: a GitHub issue that only asks for a private contact, without details); targets: acknowledge in 5 working days, fix critical/high in 30 days ([SECURITY.md](../SECURITY.md)). Advisories are published with the fixed release. |
 | Third-party components | Listed in the release SBOMs; copied code and bundled assets in [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md). Dependency licences are checked against an allow list in CI. |
-| Privileges | Runs as the user; no service, driver, elevation or machine-wide change. |
+| Privileges | The app runs as the user; no service or driver. The Corp installer needs administrator rights and writes to Program Files; the Standard installer is per user and needs none. |
 | Central control | Registry policy (HKLM) through Group Policy or Intune ([admin-policy.md](admin-policy.md)). |
 | Support | Community support through GitHub issues; no SLA. |

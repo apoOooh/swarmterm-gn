@@ -94,6 +94,7 @@ Layouts save automatically under **Saved workspaces**. Closing the window hides 
   | Bypass modes, War Room execute by agents | available, policy-lockable | locked (built in) |
   | buzzkey installer/updates, speech model download | on click, policy-lockable | not in the program |
   | Environment filter | on by default, user can switch off | always on |
+  | Installs | per user, no administrator rights | per machine (Program Files), needs administrator rights |
   | Routines, worktree spawn, preview, MCP | policy-lockable | policy-lockable |
 
 Documents: [Privacy policy](PRIVACY.md) · [Terms of use](TERMS.md) · [Security policy](SECURITY.md) · [Security model](docs/security-model.md) · [Enterprise deployment](docs/enterprise-deployment.md) · [Project decisions](docs/decisions.md) · [Corporate review pack](docs/corp-review/review-pack.en.md) ([Deutsch](docs/corp-review/review-pack.de.md))

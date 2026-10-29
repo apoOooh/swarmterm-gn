@@ -93,6 +93,12 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   settings cannot reach a Corp one, and IT can tell them apart in software
   inventory. Settings are not migrated. Every release publishes both
   installers.
+- **Corp installs per machine** (lead decision 2026-10-29). The Corp
+  installer uses NSIS `installMode: "perMachine"`
+  (`src-tauri/tauri.corp.conf.json`): it needs administrator rights and
+  installs to `%ProgramFiles%\Swarmterm GN Corp\`, which users cannot write,
+  so a user cannot swap the executable. The Standard installer stays per user.
+  Settings and data stay per user in both editions.
 - **Direct merges, no pull requests.** Feature branches are merged into `dev`
   locally and `dev` is pushed directly; releases merge `dev` into `main` the
   same way (`docs/release-process.md`). Branch rulesets therefore only block
