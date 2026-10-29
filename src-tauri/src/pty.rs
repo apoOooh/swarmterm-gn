@@ -533,6 +533,21 @@ pub struct AppState {
     /// `Notify` carries no payload on purpose: waiters re-read the snapshot
     /// after each wake, which makes a lost intermediate change harmless.
     pub peer_wake: tokio::sync::Notify,
+    /// Settings → Terminal "Environment": what of the app's environment a
+    /// pane or command routine inherits. Read once per spawn and cloned, so
+    /// the lock is never held across a spawn or nested with `terminals`.
+    pub env_policy: std::sync::RwLock<crate::terminal_env::EnvPolicy>,
+}
+
+impl AppState {
+    /// A copy of the current env policy; a poisoned lock still yields the
+    /// last value rather than failing every spawn.
+    pub fn env_policy_snapshot(&self) -> crate::terminal_env::EnvPolicy {
+        self.env_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
 }
 
 impl Default for AppState {
@@ -547,6 +562,7 @@ impl Default for AppState {
             rate_limit_usage: Mutex::new(Default::default()),
             peer_states: Mutex::new(crate::mcp::peer_state::PeerStates::default()),
             peer_wake: tokio::sync::Notify::new(),
+            env_policy: Default::default(),
         }
     }
 }
@@ -727,11 +743,13 @@ fn plan_spawn(
         .and_then(crate::shell::resolve_shell);
     let (shell, args) = resolved.clone().unwrap_or_else(default_shell);
 
-    // Inherit the parent environment, then advertise truecolor so CLIs emit
-    // 24-bit color sequences that ConPTY forwards and xterm renders verbatim.
-    // The plan is complete on purpose: the host clears its own environment
-    // and spawns exactly this (SWA-54 `CreateSpec.env`).
-    let mut env = crate::terminal_env::EnvPlan::inherited();
+    // Inherit the parent environment minus what the env policy withholds
+    // (secrets by default), then advertise truecolor so CLIs emit 24-bit
+    // color sequences that ConPTY forwards and xterm renders verbatim. The
+    // filter runs before the app's own variables are set, so those always
+    // reach the pane. The plan is complete on purpose: the host clears its
+    // own environment and spawns exactly this (SWA-54 `CreateSpec.env`).
+    let mut env = state.env_policy_snapshot().inherited();
     if let Some(account) = &account {
         crate::accounts::apply_environment(&mut env, account);
     }
@@ -760,6 +778,8 @@ fn plan_spawn(
     // user-configured PROMPT_COMMAND still runs.
     if shell.to_lowercase().contains("bash") {
         let osc7 = r#"printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-}" "$PWD""#;
+        // Read from the app env, not the filtered plan: a prompt hook is
+        // not a secret and the env policy never names it.
         let existing = std::env::var("PROMPT_COMMAND").unwrap_or_default();
         let combined = if existing.is_empty() {
             osc7.to_string()
@@ -1363,6 +1383,23 @@ pub fn finish_generation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn env_policy_defaults_to_filtering_and_snapshot_follows_writes() {
+        use crate::terminal_env::{EnvPlan, EnvPolicy};
+        let state = AppState::default();
+        let secret = || EnvPlan::from_vars([("FOO_API_KEY".to_string(), "x".to_string())]);
+        assert_eq!(state.env_policy_snapshot(), EnvPolicy::default());
+        assert_eq!(
+            state.env_policy_snapshot().filter(secret()).iter().count(),
+            0
+        );
+        state.env_policy.write().unwrap().allow = vec!["FOO_API_KEY".into()];
+        assert_eq!(
+            state.env_policy_snapshot().filter(secret()).iter().count(),
+            1
+        );
+    }
+
     use super::*;
 
     #[test]

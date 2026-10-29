@@ -482,6 +482,14 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     state.peer_wake.notify_waiters();
 }
 
+/// Settings → Terminal "Environment" (what panes and command routines
+/// inherit from the app). Takes effect for the next spawn; running panes keep
+/// the environment they started with.
+#[tauri::command]
+pub fn env_policy_set(state: State<'_, AppState>, policy: crate::terminal_env::EnvPolicy) {
+    *state.env_policy.write().unwrap_or_else(|e| e.into_inner()) = policy;
+}
+
 /// Settings → Terminal "Process priority" plus the per-workspace opt-outs,
 /// flattened by the renderer into the exempt panes' terminal ids (ADR 0005).
 /// Applied to the in-process panes' jobs at once and forwarded to the
@@ -1519,6 +1527,7 @@ pub async fn set_swarmterm_mcp(
 #[tauri::command]
 pub async fn run_routine_command(
     webview: tauri::Webview,
+    state: State<'_, AppState>,
     command: String,
     cwd: String,
     timeout_secs: u64,
@@ -1527,8 +1536,14 @@ pub async fn run_routine_command(
         return Err("Routines are available only in the main application".into());
     }
     crate::routine_cmd::validate(&command, &cwd, timeout_secs)?;
+    let env = state.env_policy_snapshot().inherited();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::routine_cmd::run(&command, &cwd, std::time::Duration::from_secs(timeout_secs))
+        crate::routine_cmd::run(
+            &command,
+            &cwd,
+            std::time::Duration::from_secs(timeout_secs),
+            &env,
+        )
     })
     .await
     .map_err(|e| e.to_string())?

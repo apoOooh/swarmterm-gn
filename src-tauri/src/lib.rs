@@ -164,6 +164,7 @@ pub fn run() {
             commands::media_open,
             commands::clipboard_media_set_enabled,
             commands::child_priority_set,
+            commands::env_policy_set,
             commands::media_save_marked,
             commands::media_read_opened_image,
             commands::files_unwatch,

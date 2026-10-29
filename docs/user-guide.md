@@ -528,6 +528,18 @@ Changes apply at once to running panes; lifting a limit (switching to Off, or op
 
 Known limits: programs that Windows starts on a pane's behalf outside the pane are not covered: processes created through WMI (`Win32_Process.Create`), scheduled tasks and services, out-of-process COM servers, and anything opened through Explorer (`start` of a document or URL hands it to Explorer). A terminal host that was already running before an update keeps its own panes unlimited until it exits; while it runs, new panes open inside Swarmterm instead (limited), and **Process priority** says so. In **Agent at normal** mode, the programs a Node-based agent starts directly (its shell tool, for example) stay normal; what they start runs at the build priority. A program your shell profile starts in the first instant of a new pane that already sits in a job of its own (a Node tool, for example) cannot be put into the pane's job: Swarmterm sets its priority by hand and resets it twice a second, but it is not stopped when the pane closes.
 
+### What panes inherit
+
+Panes and command routines start with a copy of Swarmterm's own environment, minus variables whose names follow common secret patterns. Agents that log in through their own configuration folders (the usual `/login`, and Swarmterm accounts) are not affected. What Swarmterm no longer passes on is everything else it happened to be started with: API keys, tokens and passwords such as `FOO_API_KEY`, `GITHUB_TOKEN`, `DB_PASSWORD`, `SENTRY_DSN`, `AWS_*`, `ANTHROPIC_*` or `OPENAI_*`. If an agent authenticates or routes through such a variable (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`), add it to the allowlist below. The filter matches names only, so a secret under an unremarkable name still passes; use **System variables only** to be sure. A variable your shell profile sets inside the pane is unaffected.
+
+Configure it in **Settings → Terminal → Environment**:
+
+- **Pass secrets from Swarmterm's environment to panes** (off by default): on passes everything unfiltered, as older versions did.
+- **Filter**: **Hide secrets** drops only secret-looking names; **System variables only** keeps just the Windows variables a shell needs (`PATH`, `SystemRoot`, `TEMP`, `USERPROFILE`, `ProgramFiles`, `PROCESSOR_*`, …), so proxy settings and tool variables are dropped too.
+- **Always pass these variables**: names that always pass in either filter, one per line or comma-separated, case-insensitive; `MY_TOOL_*` matches a prefix. Use it for a key a tool in a pane really needs, or for `ANTHROPIC_BASE_URL`, `AWS_PROFILE` or `HTTP_PROXY`.
+
+Changes apply to the next pane or routine that starts; running panes keep the environment they started with. Panes restored at startup may open before your setting is loaded and then start with the default filter (secrets hidden, no allowlist); restart such a pane if it needs an allowlisted variable. Git operations and **Open in editor** still run with Swarmterm's full environment: they are started by Swarmterm itself and need your credential helpers and editor settings.
+
 ## Settings, tray and quitting
 
 **Settings** (from the navbar) covers appearance, terminal font and default shell with a live preview, the status line toggle, and the full shortcut list — these preferences persist between launches.
