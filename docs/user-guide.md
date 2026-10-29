@@ -530,7 +530,7 @@ Known limits: programs that Windows starts on a pane's behalf outside the pane a
 
 ### What panes inherit
 
-Panes and command routines start with a copy of Swarmterm's own environment, minus anything that looks like a secret. Agents are not affected: Claude Code, Codex and the others log in through their own configuration folders (and Swarmterm accounts point them there), not through Swarmterm's environment. What Swarmterm no longer passes on is everything else it happened to be started with: API keys, tokens and passwords such as `FOO_API_KEY`, `GITHUB_TOKEN`, `DB_PASSWORD`, `AWS_*`, `ANTHROPIC_*` or `OPENAI_*`. A variable your shell profile sets inside the pane is unaffected.
+Panes and command routines start with a copy of Swarmterm's own environment, minus variables whose names follow common secret patterns. Agents that log in through their own configuration folders (the usual `/login`, and Swarmterm accounts) are not affected. What Swarmterm no longer passes on is everything else it happened to be started with: API keys, tokens and passwords such as `FOO_API_KEY`, `GITHUB_TOKEN`, `DB_PASSWORD`, `SENTRY_DSN`, `AWS_*`, `ANTHROPIC_*` or `OPENAI_*`. If an agent authenticates or routes through such a variable (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`), add it to the allowlist below. The filter matches names only, so a secret under an unremarkable name still passes; use **System variables only** to be sure. A variable your shell profile sets inside the pane is unaffected.
 
 Configure it in **Settings → Terminal → Environment**:
 
@@ -538,7 +538,7 @@ Configure it in **Settings → Terminal → Environment**:
 - **Filter**: **Hide secrets** drops only secret-looking names; **System variables only** keeps just the Windows variables a shell needs (`PATH`, `SystemRoot`, `TEMP`, `USERPROFILE`, `ProgramFiles`, `PROCESSOR_*`, …), so proxy settings and tool variables are dropped too.
 - **Always pass these variables**: names that always pass in either filter, one per line or comma-separated, case-insensitive; `MY_TOOL_*` matches a prefix. Use it for a key a tool in a pane really needs, or for `ANTHROPIC_BASE_URL`, `AWS_PROFILE` or `HTTP_PROXY`.
 
-Changes apply to the next pane or routine that starts; running panes keep the environment they started with. Git operations and **Open in editor** still run with Swarmterm's full environment: they are started by Swarmterm itself and need your credential helpers and editor settings.
+Changes apply to the next pane or routine that starts; running panes keep the environment they started with. Panes restored at startup may open before your setting is loaded and then start with the default filter (secrets hidden, no allowlist); restart such a pane if it needs an allowlisted variable. Git operations and **Open in editor** still run with Swarmterm's full environment: they are started by Swarmterm itself and need your credential helpers and editor settings.
 
 ## Settings, tray and quitting
 

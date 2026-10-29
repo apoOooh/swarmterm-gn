@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_ENV_POLICY, ENV_POLICY_KEY, parseAllowList, parseEnvPolicy, readEnvPolicy, storeEnvPolicy } from './env-policy'
+import {
+  DEFAULT_ENV_POLICY,
+  ENV_POLICY_KEY,
+  ignoredAllowEntries,
+  parseAllowList, parseEnvPolicy,
+  readEnvPolicy,
+  storeEnvPolicy
+} from './env-policy'
 
 function memory(initial: Record<string, string> = {}) {
   const data = new Map(Object.entries(initial))
@@ -27,6 +34,10 @@ describe('env-policy', () => {
 
   it('splits the allowlist on commas, spaces and newlines, drops invalid names and duplicates', () => {
     expect(parseAllowList('FOO_API_KEY, my_*\nBAR  foo_api_key bad=name *')).toEqual(['FOO_API_KEY', 'my_*', 'BAR'])
+  })
+
+  it('lists the entries it ignores so the user sees why they vanished', () => {
+    expect(ignoredAllowEntries(' A, bad=name\n*  B ')).toEqual(['bad=name', '*'])
   })
 
   it('round-trips through storage and survives garbage', () => {

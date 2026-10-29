@@ -778,6 +778,8 @@ fn plan_spawn(
     // user-configured PROMPT_COMMAND still runs.
     if shell.to_lowercase().contains("bash") {
         let osc7 = r#"printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-}" "$PWD""#;
+        // Read from the app env, not the filtered plan: a prompt hook is
+        // not a secret and the env policy never names it.
         let existing = std::env::var("PROMPT_COMMAND").unwrap_or_default();
         let combined = if existing.is_empty() {
             osc7.to_string()
@@ -1381,6 +1383,23 @@ pub fn finish_generation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn env_policy_defaults_to_filtering_and_snapshot_follows_writes() {
+        use crate::terminal_env::{EnvPlan, EnvPolicy};
+        let state = AppState::default();
+        let secret = || EnvPlan::from_vars([("FOO_API_KEY".to_string(), "x".to_string())]);
+        assert_eq!(state.env_policy_snapshot(), EnvPolicy::default());
+        assert_eq!(
+            state.env_policy_snapshot().filter(secret()).iter().count(),
+            0
+        );
+        state.env_policy.write().unwrap().allow = vec!["FOO_API_KEY".into()];
+        assert_eq!(
+            state.env_policy_snapshot().filter(secret()).iter().count(),
+            1
+        );
+    }
+
     use super::*;
 
     #[test]

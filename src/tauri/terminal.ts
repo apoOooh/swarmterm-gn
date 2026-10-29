@@ -185,15 +185,15 @@ export const isTerminalAgentAlive = (id: string): Promise<boolean> =>
 export const writeTerminalChecked = (id: string, expectedSpawnId: string, data: string): Promise<void> =>
   invoke('write_terminal_checked', { id, expectedSpawnId, data })
 
-/**
- * Process priority settings (ADR 0005) plus the terminal ids of panes whose
- * workspace opted out; Rust applies them to every pane's Job Object.
- */
 /** Settings → Terminal "Environment": applies to the next spawned pane or routine. */
 export function setEnvPolicy(policy: EnvPolicy): Promise<void> {
   return invoke('env_policy_set', { policy })
 }
 
+/**
+ * Process priority settings (ADR 0005) plus the terminal ids of panes whose
+ * workspace opted out; Rust applies them to every pane's Job Object.
+ */
 export function setChildPriority(settings: PrioritySettings, exempt: string[]): Promise<void> {
   return invoke('child_priority_set', { settings: { ...settings, exempt } })
 }

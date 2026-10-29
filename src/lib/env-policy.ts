@@ -40,6 +40,11 @@ export function parseAllowList(text: string): string[] {
   return cleanNames(text.split(/[\s,]+/))
 }
 
+/** Entries of the text box that are not variable names (shown, not stored). */
+export function ignoredAllowEntries(text: string): string[] {
+  return text.split(/[\s,]+/).filter((t) => t !== '' && !NAME.test(t))
+}
+
 /** Field-wise validation: a bad field falls back to the secure default. */
 export function parseEnvPolicy(raw: unknown): EnvPolicy {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>

@@ -513,7 +513,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   the inherited env in `plan_spawn` (both backends) and `run_routine_command`
   BEFORE the app sets its own vars; `APP_SET` names are never filtered. New
   spawners of user/agent code must use `state.env_policy_snapshot()`, never
-  `EnvPlan::inherited()`. Git and editor launches keep the full env on purpose.
+  `EnvPlan::inherited()`. App-internal helpers (git, editor launch, hook
+  and session CLIs, voice companion) keep the full env on purpose. Restored
+  panes may spawn before the first push, so they get the Rust default.
 - **`profiling` Cargo feature (dev only).** `prof.rs` spans/counters/lock
   timers compile to the plain operation without it, so normal and A/B builds
   are unchanged; never enable it in a release. Use it via

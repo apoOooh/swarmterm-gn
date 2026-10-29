@@ -19,7 +19,7 @@ import { useStatuslineStore } from '@/store/statusline-store'
 import { useBuildPriorityStore } from '@/store/build-priority-store'
 import type { PriorityLevel, PriorityMode } from '@/lib/build-priority'
 import { useEnvPolicyStore } from '@/store/env-policy-store'
-import { parseAllowList, type EnvFilterMode } from '@/lib/env-policy'
+import { ignoredAllowEntries, parseAllowList, type EnvFilterMode } from '@/lib/env-policy'
 import { ToggleRow } from './NotificationsPanel'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
@@ -847,13 +847,14 @@ function EnvironmentSettings(): ReactElement {
   const setPolicy = useEnvPolicyStore((s) => s.setPolicy)
   const [allowDraft, setAllowDraft] = useState<string | null>(null)
   const mode = ENV_MODES.find((m) => m.id === policy.mode) ?? ENV_MODES[0]
-  // Typing only edits the draft; the list is parsed and stored on blur so a
-  // half-typed name never lands in the setting.
-  const commitAllow = (): void => {
-    if (allowDraft === null) return
-    setPolicy({ allow: parseAllowList(allowDraft) })
-    setAllowDraft(null)
+  // Every edit is stored at once (nothing is lost if Settings closes while
+  // the box has focus); the raw text stays as the draft until blur so
+  // parsing never rewrites what is being typed.
+  const editAllow = (text: string): void => {
+    setAllowDraft(text)
+    setPolicy({ allow: parseAllowList(text) })
   }
+  const ignored = allowDraft === null ? [] : ignoredAllowEntries(allowDraft)
   return (
     <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
       <h2 className="text-sm font-semibold text-foreground">Environment</h2>
@@ -889,8 +890,8 @@ function EnvironmentSettings(): ReactElement {
           <textarea
             value={allowDraft ?? policy.allow.join('\n')}
             disabled={policy.passSecrets}
-            onChange={(e) => setAllowDraft(e.target.value)}
-            onBlur={commitAllow}
+            onChange={(e) => editAllow(e.target.value)}
+            onBlur={() => setAllowDraft(null)}
             rows={3}
             spellCheck={false}
             placeholder={'MY_SERVICE_TOKEN\nHTTP_PROXY\nMY_TOOL_*'}
@@ -898,8 +899,12 @@ function EnvironmentSettings(): ReactElement {
             aria-label="Always pass these variables"
           />
           <span className="mt-1.5 block text-xs text-muted-foreground">
-            One name per line (or comma-separated), case-insensitive; a trailing * matches a prefix.
+            One name per line (or comma-separated), case-insensitive; a trailing * matches a prefix. Add the
+            variables an agent logs in with (for example ANTHROPIC_API_KEY) if it does not use its own login.
           </span>
+          {ignored.length > 0 && (
+            <span className="mt-1 block text-xs text-amber-500">Not variable names, ignored: {ignored.join(', ')}</span>
+          )}
         </label>
       </div>
     </section>

@@ -144,11 +144,15 @@ const SECRET_SUFFIXES: &[&str] = &[
     "ACCESS_KEY_ID",
     "ACCOUNT_KEY",
     "CONNECTION_STRING",
+    "PAT",
+    "AUTH",
+    "DSN",
+    "COOKIE",
 ];
 
 /// Whole provider families (`AWS_PROFILE`, `ANTHROPIC_BASE_URL` too: users
 /// who need one add it to the allowlist).
-const SECRET_PREFIXES: &[&str] = &["AWS_", "ANTHROPIC_", "OPENAI_", "AZURE_OPENAI_"];
+const SECRET_PREFIXES: &[&str] = &["AWS_", "ANTHROPIC_", "OPENAI_", "AZURE_OPENAI_", "SECRET_"];
 
 /// Exact names that carry credentials without a telling suffix.
 const SECRET_NAMES: &[&str] = &["DATABASE_URL"];
@@ -347,6 +351,12 @@ mod tests {
             "DATABASE_URL",
             "TOKEN",
             "PASSWORD",
+            "AZDO_PAT",
+            "NPM_AUTH",
+            "SENTRY_DSN",
+            "SESSION_COOKIE",
+            "SECRET_KEY_BASE",
+            "CLAUDE_CODE_OAUTH_TOKEN",
         ] {
             assert!(is_secret_name(n), "{n}");
         }
@@ -359,6 +369,8 @@ mod tests {
             "SECRETARY",
             "PASSWORDLESS",
             "OLDPWD",
+            "PATCH_LEVEL",
+            "AUTHOR",
         ] {
             assert!(!is_secret_name(n), "{n}");
         }
