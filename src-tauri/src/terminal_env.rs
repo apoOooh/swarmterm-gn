@@ -240,11 +240,11 @@ pub fn is_secret_name(name: &str) -> bool {
         || (!names_a_location(&n) && n.split('_').any(|seg| SECRET_SEGMENTS.contains(&seg)))
 }
 
-/// `AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`: a path to a
-/// secret is config a tool needs (EKS/IRSA), not the secret itself. Only the
+/// `AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`,
+/// `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`: where a secret lives is config a tool needs (EKS/IRSA), not the secret itself. Only the
 /// segment rule yields to it; suffix rules never match these names anyway.
 fn names_a_location(upper: &str) -> bool {
-    ["_FILE", "_PATH", "_DIR"]
+    ["_FILE", "_PATH", "_DIR", "_URI", "_URL"]
         .iter()
         .any(|s| upper.ends_with(s))
 }

@@ -103,7 +103,9 @@ is a URL with credentials (`http://user:pw@proxy`, `redis://:pw@host`,
 `https://token@host`) or an `Authorization:`/`Bearer ` header
 (`ANTHROPIC_CUSTOM_HEADERS`, any `*_HEADERS`) is dropped whole rather than
 redacted, since a URL without its password fails anyway. Paths to secrets
-(`AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`) pass. Other
+(`AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`,
+`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`; names ending `_FILE`, `_PATH`, `_DIR`,
+`_URI`, `_URL`) pass unless their value embeds credentials. Other
 config blobs, such as an inherited `OPENCODE_CONFIG_CONTENT`, pass Default
 mode even if they embed keys; Strict drops them. Provider configuration such as
 `AWS_REGION`, `AWS_PROFILE`, `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` passes
