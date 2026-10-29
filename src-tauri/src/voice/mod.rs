@@ -1209,6 +1209,9 @@ pub fn voice_speech_status(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn voice_model_download(app: AppHandle, id: String) -> Result<(), String> {
+    app.state::<crate::pty::AppState>()
+        .admin_policy
+        .check(crate::policy::Lock::ModelDownload)?;
     #[cfg(windows)]
     return speech::download(&app, &id);
     #[cfg(not(windows))]

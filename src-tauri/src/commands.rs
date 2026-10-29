@@ -500,6 +500,13 @@ pub fn agent_policy_set(state: State<'_, AppState>, policy: crate::agent_policy:
         .unwrap_or_else(|e| e.into_inner()) = policy;
 }
 
+/// Admin policy for the renderer: greys out locked controls. Display only —
+/// every lock is enforced again at its point of action in Rust.
+#[tauri::command]
+pub fn policy_get(state: State<'_, AppState>) -> crate::policy::PolicyView {
+    state.admin_policy.view()
+}
+
 /// Settings → Terminal "Process priority" plus the per-workspace opt-outs,
 /// flattened by the renderer into the exempt panes' terminal ids (ADR 0005).
 /// Applied to the in-process panes' jobs at once and forwarded to the
@@ -1498,6 +1505,13 @@ pub async fn set_swarmterm_mcp(
     enabled: bool,
 ) -> Result<(), String> {
     files_main_only(&window)?;
+    // Switching on under DisableMcp is refused here with the policy message;
+    // `toggle::set_enabled` refuses it again as the backstop.
+    if enabled {
+        app.state::<AppState>()
+            .admin_policy
+            .check(crate::policy::Lock::Mcp)?;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(id) = account_id.as_deref() {
             crate::accounts::resolve(&app, id, Some(&agent_id))?;
@@ -1545,6 +1559,9 @@ pub async fn run_routine_command(
     if webview.label() != "main" {
         return Err("Routines are available only in the main application".into());
     }
+    state
+        .admin_policy
+        .check(crate::policy::Lock::RoutineCommands)?;
     crate::routine_cmd::validate(&command, &cwd, timeout_secs)?;
     let env = state.env_policy_snapshot().inherited();
     tauri::async_runtime::spawn_blocking(move || {

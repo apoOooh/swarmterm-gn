@@ -209,6 +209,9 @@ pub fn voice_companion_status(app: AppHandle) -> CompanionStatus {
 /// counts as available (fresh install).
 #[tauri::command]
 pub async fn voice_companion_check(app: AppHandle) -> Result<UpdateCheck, String> {
+    app.state::<crate::pty::AppState>()
+        .admin_policy
+        .check(crate::policy::Lock::Companion)?;
     let latest = latest_release().await?;
     let current = app
         .state::<VoiceHub>()
@@ -269,6 +272,9 @@ pub async fn voice_companion_install(
     unattended: Option<bool>,
 ) -> Result<CompanionStatus, String> {
     let unattended = unattended.unwrap_or(false);
+    app.state::<crate::pty::AppState>()
+        .admin_policy
+        .check(crate::policy::Lock::Companion)?;
     update_gate(unattended, dictating(&app))?;
     let companion = app.state::<Companion>();
     if companion.busy.swap(true, Ordering::Relaxed) {
@@ -393,6 +399,12 @@ pub fn voice_companion_quit(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn voice_companion_set_autostart(app: AppHandle, on: bool) -> Result<CompanionStatus, String> {
+    // Switching autostart OFF stays allowed: it only removes our Run entry.
+    if on {
+        app.state::<crate::pty::AppState>()
+            .admin_policy
+            .check(crate::policy::Lock::Companion)?;
+    }
     let dir = system::install_dir().ok_or("no-install-dir")?;
     if on && !dir.join(release::EXE).is_file() {
         return Err("not-installed".into());

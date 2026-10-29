@@ -74,3 +74,44 @@ describe('workerLaunchMode', () => {
     expect(workerLaunchMode({ agentId: undefined, prefs: {} })).toBeUndefined()
   })
 })
+
+describe('workerLaunchMode with inheritBypass', () => {
+  it('inherits a dangerous requester mode of the same agent when opted in', () => {
+    expect(
+      workerLaunchMode({
+        agentId: 'claude-code',
+        requesterAgentId: 'claude-code',
+        requesterMode: 'bypass',
+        prefs: {},
+        inheritBypass: true
+      })
+    ).toBe('bypass')
+    expect(
+      workerLaunchMode({ agentId: 'codex', requesterAgentId: 'codex', requesterMode: 'yolo', prefs: {}, inheritBypass: true })
+    ).toBe('yolo')
+  })
+
+  it('never inherits across agents or from a dangerous Settings default', () => {
+    expect(
+      workerLaunchMode({
+        agentId: 'codex',
+        requesterAgentId: 'claude-code',
+        requesterMode: 'bypass',
+        prefs: { codex: 'yolo' },
+        inheritBypass: true
+      })
+    ).toBe('auto')
+  })
+
+  it('ignores an unknown requester mode', () => {
+    expect(
+      workerLaunchMode({
+        agentId: 'claude-code',
+        requesterAgentId: 'claude-code',
+        requesterMode: 'nope',
+        prefs: {},
+        inheritBypass: true
+      })
+    ).toBe('default')
+  })
+})

@@ -23,6 +23,8 @@ import type { ShellId } from '@/lib/terminal-pref'
 import { withCloseGuard } from '@/lib/close-guard'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { workerLaunchMode } from '@/lib/launch-mode-safety'
+import { useAgentPolicyStore } from '@/store/agent-policy-store'
+import { usePolicyStore } from '@/store/policy-store'
 import type { LaunchModePrefs } from '@/lib/agent-pref'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { clearWorktree } from '@/tauri/git'
@@ -859,7 +861,12 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         agentId,
         requesterAgentId: requester.agentId,
         requesterMode: requester.launchMode,
-        prefs: p.launchModePrefs ?? useAgentPrefStore.getState().defaultLaunchModes
+        prefs: p.launchModePrefs ?? useAgentPrefStore.getState().defaultLaunchModes,
+        // The admin bypass lock overrides the user's opt-in (Rust would refuse
+        // the line anyway; this keeps the worker on a safe mode instead).
+        inheritBypass:
+          useAgentPolicyStore.getState().policy.workersInheritBypass &&
+          !usePolicyStore.getState().policy.disableBypassModes
       })
       const newLeaf: LeafNode = {
         type: 'leaf',

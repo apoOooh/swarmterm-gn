@@ -205,7 +205,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   downgraded; the Moderator's `war_room_moderator_send` is not gated.
   Bypass/YOLO launch modes (`dangerous` in `templates.ts`) are confirmed on
   selection, badged red, and never inherited by `worktree.spawn` workers
-  (`lib/launch-mode-safety.ts`). Codex enrollment rewrites `~/.codex/config.toml` with
+  (`lib/launch-mode-safety.ts`) unless the user turns on
+  `AgentPolicy.workersInheritBypass` (same agent only, default off, user
+  decision 2026-10-29). Codex enrollment rewrites `~/.codex/config.toml` with
   the concrete URL on every boot (`mcp/config.rs::register_codex`).
   "Connected" is set by the first inbound MCP request carrying the pane's
   bearer (`record_client` middleware → `connect_war_room_member`) and again
@@ -525,6 +527,15 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `EnvPlan::inherited()`. App-internal helpers (git, editor launch, hook
   and session CLIs, voice companion) keep the full env on purpose. Restored
   panes may spawn before the first push, so they get the Rust default.
+- **Admin policy (`policy.rs`, `docs/admin-policy.md`).** Read once at start
+  from `HKLM\Software\Policies\SwarmtermGN` then HKCU (HKLM wins per value)
+  into the immutable `AppState.admin_policy`. Enforce every new lock in Rust at
+  the point of action (`admin_policy.check(Lock::…)`), never UI-only; the
+  renderer (`policy-store`, `policy_get`) only greys out. Env and agent policy
+  snapshots apply it on read, so `env_policy_set`/`agent_policy_set` pushes
+  cannot loosen a lock; `DisableMcp` goes through `mcp::toggle` (`POLICY_OFF`)
+  so every MCP writer removes our entries. New values: `FLAGS` in
+  `policy.rs`, `lib/policy.ts`, the ADMX/ADML in `docs/admin/`.
 - **`profiling` Cargo feature (dev only).** `prof.rs` spans/counters/lock
   timers compile to the plain operation without it, so normal and A/B builds
   are unchanged; never enable it in a release. Use it via

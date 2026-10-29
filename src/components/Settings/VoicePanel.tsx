@@ -1,4 +1,6 @@
 import { useEffect, useState, type ReactElement } from 'react'
+import { MANAGED_LABEL } from '@/lib/policy'
+import { usePolicyStore } from '@/store/policy-store'
 import {
   cancelVoiceModel,
   deleteVoiceModel,
@@ -45,6 +47,8 @@ const megabytes = (bytes: number): string => `${Math.round(bytes / 1_000_000)} M
  * queue, the stop rules and who speaks (buzzkey only as a fallback).
  */
 export function VoicePanel(): ReactElement {
+  // DisableModelDownload: Rust refuses voice_model_download; buttons say why.
+  const downloadLocked = usePolicyStore((s) => s.policy.disableModelDownload)
   const [settings, setSettings] = useState<VoiceSettings | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tts, setTts] = useState<TtsStatus | null>(null)
@@ -222,7 +226,12 @@ export function VoicePanel(): ReactElement {
                   {settings.model === recommended.id && recommended.ready ? (
                     <span className="text-xs text-muted-foreground">in use</span>
                   ) : (
-                    <button className={action} disabled={recommended.downloading} onClick={useRecommended}>
+                    <button
+                      className={action}
+                      disabled={recommended.downloading || (!recommended.ready && downloadLocked)}
+                      title={!recommended.ready && downloadLocked ? MANAGED_LABEL : undefined}
+                      onClick={useRecommended}
+                    >
                       {recommended.ready ? 'Use' : 'Download and use'}
                     </button>
                   )}
@@ -271,7 +280,14 @@ export function VoicePanel(): ReactElement {
                     ) : m.ready ? (
                       <button className={action} onClick={() => run(deleteVoiceModel(m.id))}>Delete</button>
                     ) : (
-                      <button className={action} onClick={() => { setPickAfterDownload(m.id); run(downloadVoiceModel(m.id)) }}>Download</button>
+                      <button
+                        className={action}
+                        disabled={downloadLocked}
+                        title={downloadLocked ? MANAGED_LABEL : undefined}
+                        onClick={() => { setPickAfterDownload(m.id); run(downloadVoiceModel(m.id)) }}
+                      >
+                        Download
+                      </button>
                     )}
                   </div>
                 </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react'
+import { AdminPolicySection } from '@/components/Settings/AdminPolicySection'
 import { Bell, FileText, Images, Keyboard, LayoutGrid, Mic, Palette, PanelTop, Terminal, Users, Plug, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -113,6 +114,7 @@ export function SettingsView({ onClose, initialCategory }: SettingsViewProps): R
 
           <div className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-3xl px-8 py-8">
+              <AdminPolicySection />
               {activeCategory === 'accounts' && <AccountsPanel onLogin={onClose} />}
               {activeCategory === 'appearance' && <AppearancePanel />}
               {activeCategory === 'terminal' && <TerminalPanel />}

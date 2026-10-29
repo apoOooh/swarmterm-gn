@@ -541,24 +541,32 @@ pub struct AppState {
     /// execute). Starts at the restrictive default until the renderer pushes
     /// the user's choice, so an early MCP call is never more permissive.
     pub agent_policy: std::sync::RwLock<crate::agent_policy::AgentPolicy>,
+    /// Admin policy (`policy.rs`), read once at startup and never written
+    /// afterwards: the snapshots below apply it on every read, so a renderer
+    /// push can never loosen a lock.
+    pub admin_policy: crate::policy::AdminPolicy,
 }
 
 impl AppState {
     /// A copy of the current env policy; a poisoned lock still yields the
     /// last value rather than failing every spawn.
     pub fn env_policy_snapshot(&self) -> crate::terminal_env::EnvPolicy {
-        self.env_policy
+        let user = self
+            .env_policy
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
+            .clone();
+        self.admin_policy.apply_env(user)
     }
 
     /// A copy of the agent policy; a poisoned lock yields the last value.
     pub fn agent_policy_snapshot(&self) -> crate::agent_policy::AgentPolicy {
-        self.agent_policy
+        let user = self
+            .agent_policy
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
+            .clone();
+        self.admin_policy.apply_agent(user)
     }
 }
 
@@ -576,6 +584,7 @@ impl Default for AppState {
             peer_wake: tokio::sync::Notify::new(),
             env_policy: Default::default(),
             agent_policy: Default::default(),
+            admin_policy: Default::default(),
         }
     }
 }
@@ -672,6 +681,13 @@ pub fn spawn_terminal(
 ) -> CreateTerminalResult {
     if state.terminals.lock().unwrap().contains_key(&id) {
         return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
+    }
+    // Admin policy: refuse bypass/YOLO lines here, on the final command, so
+    // every path that builds one (menus, restore, worktree.spawn) is covered.
+    if let Some(line) = options.initial_command.as_deref() {
+        if let Err(e) = state.admin_policy.check_launch_line(line) {
+            return CreateTerminalResult::err(e);
+        }
     }
     // A pane that survived the last app instance in the terminal host
     // (SWA-56): take it over instead of starting a new one. No template line,

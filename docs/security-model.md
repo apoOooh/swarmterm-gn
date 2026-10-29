@@ -85,8 +85,11 @@ workspace-write with on-request approval). Bypass modes ("Bypass
 permissions", "YOLO") are explicit choices; they disable the agent's own
 confirmations and are the user's responsibility. Choosing one asks for
 confirmation first, and a pane running one carries a red badge in its header.
-Worker panes an agent starts with `worktree.spawn` never inherit a bypass mode;
-they start in the agent's confirming mode.
+Worker panes an agent starts with `worktree.spawn` do not inherit a bypass mode
+by default; they start in the agent's confirming mode. The user can opt in
+(Settings → Terminal → Agent safety, "Spawned workers inherit Bypass/YOLO",
+default off) to let a worker of the same agent inherit the requester's bypass
+mode; the administrator policy `DisableBypassModes` forces this off.
 
 ### Environment filtering
 
@@ -121,10 +124,22 @@ and `npm audit` for production dependencies on every push and pull request,
 plus a secret scan of the history. Each release attaches CycloneDX SBOMs for
 the Rust and npm dependencies with SHA-256 checksums.
 
+### Administrator policy
+
+Organisations can lock features through `HKLM\Software\Policies\SwarmtermGN`
+(GPO/Intune; ADMX in `docs/admin/`) and, weaker, the same key under HKCU; HKLM
+wins per value. The policy is read once at start and cannot be changed while
+the app runs. Each lock is enforced in the backend at the point of action
+(`src-tauri/src/policy.rs`): bypass launch lines, War Room execute,
+`worktree.spawn`, the MCP server and its enrollment, companion install and
+updates, speech-model downloads, command routines, the web preview, and a
+forced environment filter with an admin allow list. The renderer only greys out
+locked controls. Details: [admin-policy.md](admin-policy.md).
+
 ## Planned
 
-- Administrator policy via `HKLM`/`HKCU\Software\Policies\SwarmtermGN` and a
-  `corp` build variant with restricted defaults.
+- A `corp` build variant with the administrator policy's locks compiled in as
+  defaults.
 
 ## The user's responsibility
 
