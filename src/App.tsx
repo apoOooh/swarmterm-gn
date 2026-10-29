@@ -40,7 +40,8 @@ import { templateById } from '@/lib/templates'
 import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
 import { ClearGuard, clearInputSequence } from '@/lib/clear-input'
 import { shellFlavor } from '@/lib/agent-spawn-command'
-import { setChildPriority, setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
+import { setChildPriority, setEnvPolicy, setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
+import { useEnvPolicyStore } from '@/store/env-policy-store'
 import { exemptTerminalIds } from '@/lib/build-priority'
 import { useBuildPriorityStore } from '@/store/build-priority-store'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
@@ -930,6 +931,14 @@ export default function App(): ReactElement {
       console.warn('[priority] settings:', err)
     )
   }, [priority, exemptKey])
+
+  // Environment policy: Rust starts filtered (secure default), so a pane
+  // restored before this push is never less protected; the push only adds
+  // the user's allowlist or switches the filter off.
+  const envPolicy = useEnvPolicyStore((s) => s.policy)
+  useEffect(() => {
+    setEnvPolicy(envPolicy).catch((err) => console.warn('[env] policy:', err))
+  }, [envPolicy])
 
   // Clipboard images (opt-in): keep the backend watcher in step with the
   // setting, and add each saved image to the gallery without taking the

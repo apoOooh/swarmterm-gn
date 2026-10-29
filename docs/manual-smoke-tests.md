@@ -235,6 +235,11 @@ Do not mark them passed from the in-memory fixture alone.
       immediately → characters reach the terminal; Tab triggers shell
       completion instead of walking the focus ring.
 - [ ] **Activity dot:** lights while a pane streams output, clears when quiet.
+- [ ] **Environment filter:** quit Swarmterm, start it from a `cmd` with
+      `set FOO_API_KEY=x` → in a new cmd pane `echo %FOO_API_KEY%` prints
+      `%FOO_API_KEY%` (not set). Add `FOO_API_KEY` to **Settings → Terminal →
+      Environment → Always pass these variables**, open a new pane → prints
+      `x`. A command routine `echo %FOO_API_KEY%` behaves the same.
 
 ## Terminal links
 

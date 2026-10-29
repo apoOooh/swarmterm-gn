@@ -508,6 +508,12 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   forwards `set_priority` to the host (and on every host connect).
   `AGENT_EXES`/`AGENT_MARKERS` mirror the app catalog; a test keeps them
   in step. Normal and above are not representable.
+- **Environment filter.** `terminal_env::EnvPolicy` (in `AppState.env_policy`,
+  secure default, pushed by `env-policy-store` via `env_policy_set`) filters
+  the inherited env in `plan_spawn` (both backends) and `run_routine_command`
+  BEFORE the app sets its own vars; `APP_SET` names are never filtered. New
+  spawners of user/agent code must use `state.env_policy_snapshot()`, never
+  `EnvPlan::inherited()`. Git and editor launches keep the full env on purpose.
 - **`profiling` Cargo feature (dev only).** `prof.rs` spans/counters/lock
   timers compile to the plain operation without it, so normal and A/B builds
   are unchanged; never enable it in a release. Use it via

@@ -1,6 +1,7 @@
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { ShellId } from '@/lib/terminal-pref'
+import type { EnvPolicy } from '@/lib/env-policy'
 import type { PrioritySettings } from '@/lib/build-priority'
 
 /**
@@ -188,6 +189,11 @@ export const writeTerminalChecked = (id: string, expectedSpawnId: string, data: 
  * Process priority settings (ADR 0005) plus the terminal ids of panes whose
  * workspace opted out; Rust applies them to every pane's Job Object.
  */
+/** Settings → Terminal "Environment": applies to the next spawned pane or routine. */
+export function setEnvPolicy(policy: EnvPolicy): Promise<void> {
+  return invoke('env_policy_set', { policy })
+}
+
 export function setChildPriority(settings: PrioritySettings, exempt: string[]): Promise<void> {
   return invoke('child_priority_set', { settings: { ...settings, exempt } })
 }
