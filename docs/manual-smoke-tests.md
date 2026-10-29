@@ -128,7 +128,9 @@ Do not mark them passed from the in-memory fixture alone.
       restarted and keeps its mode. Restart the app: the choice is kept.
 - [ ] Pane header agent menu → Bypass permissions (Codex: YOLO): the confirmation
       appears and owns the keyboard (typing does not reach the pane); Cancel keeps
-      the mode, confirm restarts in it. The header shows a red `BYPASS` / `YOLO`
+      the mode, confirm restarts in it.
+- [ ] From Settings → Default launch mode, pick Bypass → the confirmation opens;
+      Esc closes only it (Settings stays open) and focus returns to the button. The header shows a red `BYPASS` / `YOLO`
       badge; switching back to a safe mode removes it and asks nothing.
 - [ ] Worktree mode on, a bypassed Claude pane calls `worktree.spawn` → the
       worker pane starts in Default (or the Settings default if that is safe),

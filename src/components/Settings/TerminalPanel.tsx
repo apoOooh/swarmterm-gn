@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type ReactElement } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { Check, Minus, Plus } from 'lucide-react'
 import { platformShells, type ShellId, type ShellMeta } from '@/lib/terminal-pref'
 import {
@@ -211,9 +211,19 @@ function DefaultLaunchModeSettings(): ReactElement {
   const agents = TEMPLATES.filter((t) => t.launchModes !== undefined && t.launchModes.length > 0)
   // Bypass / YOLO as the default for every new pane is confirmed first.
   const [pending, setPending] = useState<PendingDangerousMode | undefined>(undefined)
-  const choose = (agentId: string, modeId: string, active: boolean): void => {
-    if (!active && isDangerousLaunchMode(agentId, modeId)) setPending({ agentId, modeId })
-    else setDefaultLaunchMode(agentId, modeId)
+  // Settings owns the keyboard (no terminal to return to), so focus goes back
+  // to the mode button that opened the dialog instead of falling to <body>.
+  const trigger = useRef<HTMLElement | null>(null)
+  const choose = (agentId: string, modeId: string, active: boolean, el: HTMLElement): void => {
+    if (!active && isDangerousLaunchMode(agentId, modeId)) {
+      trigger.current = el
+      setPending({ agentId, modeId })
+    } else setDefaultLaunchMode(agentId, modeId)
+  }
+  const close = (): void => {
+    setPending(undefined)
+    const el = trigger.current
+    setTimeout(() => el?.focus(), 0)
   }
 
   return (
@@ -243,7 +253,7 @@ function DefaultLaunchModeSettings(): ReactElement {
                       key={m.id}
                       type="button"
                       aria-pressed={active}
-                      onClick={() => choose(t.id, m.id, active)}
+                      onClick={(e) => choose(t.id, m.id, active, e.currentTarget)}
                       className={cn(
                         'flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm transition-colors',
                         active
@@ -268,10 +278,10 @@ function DefaultLaunchModeSettings(): ReactElement {
       </p>
       <DangerousModeDialog
         pending={pending}
-        onCancel={() => setPending(undefined)}
+        onCancel={close}
         onConfirm={() => {
           if (pending) setDefaultLaunchMode(pending.agentId, pending.modeId)
-          setPending(undefined)
+          close()
         }}
       />
     </section>
@@ -293,7 +303,8 @@ function AgentSafetySettings(): ReactElement {
           label="Allow agents to run prompts in other panes"
           description={
             'War Room "execute": an agent pastes a prompt into another pane and runs it. Off: agents can only send ' +
-            'messages (probe) that the other agent reads and decides on. Your own sends from the War Room are not affected.'
+            'messages (probe) that the other agent reads and decides on. Your own sends from the War Room are not affected. ' +
+            'Not covered: the task prompt an agent gives a new worker pane it spawns (worktree.spawn), which always starts in a safe mode.'
           }
           checked={policy.allowWarRoomExecute}
           onChange={(on) => setPolicy({ allowWarRoomExecute: on })}

@@ -1091,6 +1091,20 @@ describe('worktree panes', () => {
     expect(leaves.find((l) => l.worktreeBranch === 'other')?.launchMode).toBe('auto')
   })
 
+  it('spawnWorktreePane skips a bypass Settings default when the requester has no own mode', () => {
+    const store = workspaceWithWorktrees()
+    const requester = collectLeaves(store.getState().workspaces[0].layout)[0]
+    store.getState().spawnWorktreePane({
+      requesterTerminalId: requester.terminalId,
+      path: 'C:/dev/myapp.worktrees/c',
+      branch: 'c',
+      prompt: 'x',
+      launchModePrefs: { 'claude-code': 'bypass' }
+    })
+    const worker = collectLeaves(store.getState().workspaces[0].layout).find((l) => l.worktreeBranch === 'c')
+    expect(worker?.launchMode).toBe('default')
+  })
+
   it('spawnWorktreePane inherits a safe requester mode and skips a bypass Settings default', () => {
     const store = workspaceWithWorktrees()
     const requester = collectLeaves(store.getState().workspaces[0].layout)[0]

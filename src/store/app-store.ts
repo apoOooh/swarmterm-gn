@@ -24,6 +24,7 @@ import { withCloseGuard } from '@/lib/close-guard'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { workerLaunchMode } from '@/lib/launch-mode-safety'
 import type { LaunchModePrefs } from '@/lib/agent-pref'
+import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { clearWorktree } from '@/tauri/git'
 import { isTransientLock } from '@/lib/worktree-cleanup'
 import { awaitTerminalRelocated } from '@/lib/terminal-registry'
@@ -241,7 +242,8 @@ export interface AppActions {
     branch: string
     agentId?: string
     prompt: string
-    /** Settings → default launch mode per agent (lib/launch-mode-safety). */
+    /** Settings → default launch mode per agent (lib/launch-mode-safety);
+     *  omitted = read from the pref store, so no caller skips it silently. */
     launchModePrefs?: LaunchModePrefs
   }) => void
   clearWorktreeBinding: (path: string) => void
@@ -857,7 +859,7 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         agentId,
         requesterAgentId: requester.agentId,
         requesterMode: requester.launchMode,
-        prefs: p.launchModePrefs ?? {}
+        prefs: p.launchModePrefs ?? useAgentPrefStore.getState().defaultLaunchModes
       })
       const newLeaf: LeafNode = {
         type: 'leaf',
