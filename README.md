@@ -85,7 +85,7 @@ Layouts save automatically under **Saved workspaces**. Closing the window hides 
 - **War Room execute** (handing a peer a prompt to run) is off by default.
 - **Verified downloads:** the buzzkey companion is installed only after a signature and hash check; speech models are hash-checked.
 - **Supply chain:** CI checks advisories and licences (`cargo deny`, `npm audit`); each release ships CycloneDX SBOMs.
-- **Planned:** administrator policy via the Windows registry and a `corp` build variant.
+- **Administrator policy:** organisations can lock features (bypass modes, War Room execute, MCP, downloads, routines, preview, environment filter) through Group Policy or Intune; see [Administrator policy](docs/admin-policy.md). Planned: a `corp` build variant.
 
 Documents: [Privacy policy](PRIVACY.md) · [Terms of use](TERMS.md) · [Security policy](SECURITY.md) · [Security model](docs/security-model.md) · [Project decisions](docs/decisions.md)
 
