@@ -31,6 +31,8 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm test
       - run: npm run build
+      # Corp renderer (docs/editions.md); must type-check and bundle too.
+      - run: npm run build:corp
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v4
@@ -68,6 +70,11 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       # The build without the speech engine (no LLVM) must stay warning-free too.
       - run: cargo clippy --all-targets --no-default-features -- -D warnings
+      # Corp edition (docs/editions.md): its cfg branches compile only with
+      # the feature. Without speech keeps it quick; speech code is the same
+      # in both editions and covered above.
+      - run: cargo clippy --all-targets --no-default-features --features corp -- -D warnings
+      - run: cargo test --no-default-features --features corp --lib
       - run: cargo test
       - name: Compile desktop application
         run: npx tauri build --no-bundle -- --locked
