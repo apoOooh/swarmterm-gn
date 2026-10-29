@@ -490,6 +490,16 @@ pub fn env_policy_set(state: State<'_, AppState>, policy: crate::terminal_env::E
     *state.env_policy.write().unwrap_or_else(|e| e.into_inner()) = policy;
 }
 
+/// Settings → Terminal → Agent safety (War Room execute between agents). Checked per MCP call,
+/// so a change applies to the next call without restarting any pane.
+#[tauri::command]
+pub fn agent_policy_set(state: State<'_, AppState>, policy: crate::agent_policy::AgentPolicy) {
+    *state
+        .agent_policy
+        .write()
+        .unwrap_or_else(|e| e.into_inner()) = policy;
+}
+
 /// Settings → Terminal "Process priority" plus the per-workspace opt-outs,
 /// flattened by the renderer into the exempt panes' terminal ids (ADR 0005).
 /// Applied to the in-process panes' jobs at once and forwarded to the

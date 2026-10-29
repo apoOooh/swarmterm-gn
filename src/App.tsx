@@ -40,8 +40,10 @@ import { templateById } from '@/lib/templates'
 import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
 import { ClearGuard, clearInputSequence } from '@/lib/clear-input'
 import { shellFlavor } from '@/lib/agent-spawn-command'
-import { setChildPriority, setEnvPolicy, setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
+import { setAgentPolicy, setChildPriority, setEnvPolicy, setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
 import { useEnvPolicyStore } from '@/store/env-policy-store'
+import { useAgentPolicyStore } from '@/store/agent-policy-store'
+import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { exemptTerminalIds } from '@/lib/build-priority'
 import { useBuildPriorityStore } from '@/store/build-priority-store'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
@@ -937,6 +939,13 @@ export default function App(): ReactElement {
     setEnvPolicy(envPolicy).catch((err) => console.warn('[env] policy:', err))
   }, [envPolicy])
 
+  // Agent policy (War Room execute): Rust starts restrictive, so an MCP call
+  // before this push is refused rather than allowed.
+  const agentPolicy = useAgentPolicyStore((s) => s.policy)
+  useEffect(() => {
+    setAgentPolicy(agentPolicy).catch((err) => console.warn('[agent] policy:', err))
+  }, [agentPolicy])
+
   // Clipboard images (opt-in): keep the backend watcher in step with the
   // setting, and add each saved image to the gallery without taking the
   // viewer or the panel — the overlay (if enabled) is the only announcement.
@@ -1149,7 +1158,8 @@ export default function App(): ReactElement {
         path: e.path,
         branch: e.branch,
         agentId: e.agent ?? undefined,
-        prompt: e.prompt
+        prompt: e.prompt,
+        launchModePrefs: useAgentPrefStore.getState().defaultLaunchModes
       })
     })
     const unRemoved = onWorktreeRemoved((e) => {

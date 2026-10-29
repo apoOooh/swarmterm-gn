@@ -537,6 +537,10 @@ pub struct AppState {
     /// pane or command routine inherits. Read once per spawn and cloned, so
     /// the lock is never held across a spawn or nested with `terminals`.
     pub env_policy: std::sync::RwLock<crate::terminal_env::EnvPolicy>,
+    /// Settings → Terminal → Agent safety: what an agent may make other panes do (War Room
+    /// execute). Starts at the restrictive default until the renderer pushes
+    /// the user's choice, so an early MCP call is never more permissive.
+    pub agent_policy: std::sync::RwLock<crate::agent_policy::AgentPolicy>,
 }
 
 impl AppState {
@@ -544,6 +548,14 @@ impl AppState {
     /// last value rather than failing every spawn.
     pub fn env_policy_snapshot(&self) -> crate::terminal_env::EnvPolicy {
         self.env_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// A copy of the agent policy; a poisoned lock yields the last value.
+    pub fn agent_policy_snapshot(&self) -> crate::agent_policy::AgentPolicy {
+        self.agent_policy
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
@@ -563,6 +575,7 @@ impl Default for AppState {
             peer_states: Mutex::new(crate::mcp::peer_state::PeerStates::default()),
             peer_wake: tokio::sync::Notify::new(),
             env_policy: Default::default(),
+            agent_policy: Default::default(),
         }
     }
 }

@@ -1,5 +1,6 @@
 mod account_status;
 mod accounts;
+mod agent_policy;
 mod agent_process;
 mod agents;
 mod child_priority;
@@ -165,6 +166,7 @@ pub fn run() {
             commands::clipboard_media_set_enabled,
             commands::child_priority_set,
             commands::env_policy_set,
+            commands::agent_policy_set,
             commands::media_save_marked,
             commands::media_read_opened_image,
             commands::files_unwatch,
