@@ -272,14 +272,16 @@ mod spawn_reservation_tests {
     #[test]
     fn same_id_waits_for_the_first_create() {
         let first = SpawnReservation::take("res-test-a").unwrap();
-        let t = std::thread::spawn(|| {
-            let t0 = Instant::now();
+        // Timed from before the spawn: a thread that starts late on a busy
+        // machine must not shorten the measured wait.
+        let t0 = Instant::now();
+        let t = std::thread::spawn(move || {
             let _second = SpawnReservation::take("res-test-a").unwrap();
             t0.elapsed()
         });
         std::thread::sleep(Duration::from_millis(100));
         drop(first);
-        assert!(t.join().unwrap() >= Duration::from_millis(90));
+        assert!(t.join().unwrap() >= Duration::from_millis(100));
     }
 
     #[test]
