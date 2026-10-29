@@ -51,25 +51,25 @@ describe('media open (user action)', () => {
     useMediaStore.setState({ items: [], selectedPath: null, overlayItems: [], unseen: {} })
   })
 
-  it('detection alone registers nothing; opening registers once and selects', async () => {
-    const m = useMediaStore.getState()
-    m.detect({ ...item('C:\\a.png'), terminalId: 't', opened: false })
-    expect(registerOpenedMedia).not.toHaveBeenCalled()
+  it('detection registers once for the thumbnail without selecting; opening then only selects', async () => {
     registerOpenedMedia.mockResolvedValue('C:\\a.png')
+    const m = useMediaStore.getState()
+    useMediaStore.setState({ selectedPath: 'C:\\other.png' })
+    m.detect({ ...item('C:\\a.png'), terminalId: 't', opened: false })
+    await vi.waitFor(() => expect(useMediaStore.getState().items[0].opened).toBe(true))
+    expect(registerOpenedMedia).toHaveBeenCalledTimes(1)
+    expect(useMediaStore.getState().selectedPath).toBe('C:\\other.png')
     expect(await m.open('C:\\a.png')).toBe(true)
     expect(registerOpenedMedia).toHaveBeenCalledTimes(1)
-    expect(useMediaStore.getState().items[0].opened).toBe(true)
     expect(useMediaStore.getState().selectedPath).toBe('C:\\a.png')
-    await m.open('C:\\a.png')
-    expect(registerOpenedMedia).toHaveBeenCalledTimes(1)
   })
 
-  it('a refused registration drops the item', async () => {
-    useMediaStore.getState().detect({ ...item('C:\\b.png'), terminalId: 't', opened: false })
+  it('a refused registration drops the detected item', async () => {
     registerOpenedMedia.mockRejectedValue('gone')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
+    useMediaStore.getState().detect({ ...item('C:\\b.png'), terminalId: 't', opened: false })
+    await vi.waitFor(() => expect(useMediaStore.getState().items).toEqual([]))
     expect(await useMediaStore.getState().open('C:\\b.png')).toBe(false)
-    expect(useMediaStore.getState().items).toEqual([])
   })
 })
 

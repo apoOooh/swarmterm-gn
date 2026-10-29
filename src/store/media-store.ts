@@ -17,7 +17,9 @@ interface MediaState {
   /**
    * A path found in pane output: joins the strip WITHOUT taking the viewer
    * (the user may be looking at something else) and counts toward the pane
-   * badge. A path already in the gallery only moves to the front.
+   * badge. A path already in the gallery only moves to the front. An
+   * unopened item is registered for serving right away so the strip shows
+   * its thumbnail (user decision 2026-10-29: no click-to-load gate).
    */
   detect: (item: MediaItem) => void
   /** A clipboard image: joins the strip without taking the viewer, no pane badge. */
@@ -43,6 +45,30 @@ export const CLIPBOARD_SOURCE = 'clipboard'
 const has = (items: MediaItem[], path: string): boolean => items.some((i) => samePath(i.path, path))
 
 /**
+ * Registers a path for serving unless it is already known opened, then marks
+ * it opened everywhere. False (and the item dropped, so it is not offered
+ * again) when the file is gone, no longer media, or the cap is reached.
+ */
+async function register(path: string): Promise<boolean> {
+  const { items, overlayItems } = useMediaStore.getState()
+  // An overlay row may outlive its strip entry (strip cap): register unless known opened.
+  if ([...items, ...overlayItems].some((i) => i.opened && samePath(i.path, path))) return true
+  try {
+    await registerOpenedMedia(path)
+  } catch (err) {
+    console.warn('[media] open:', err)
+    useMediaStore.setState((s) => ({
+      items: s.items.filter((i) => !samePath(i.path, path)),
+      overlayItems: s.overlayItems.filter((i) => !samePath(i.path, path)),
+      selectedPath: s.selectedPath !== null && samePath(s.selectedPath, path) ? null : s.selectedPath,
+    }))
+    return false
+  }
+  useMediaStore.setState((s) => ({ items: markOpened(s.items, path), overlayItems: markOpened(s.overlayItems, path) }))
+  return true
+}
+
+/**
  * One timer for the app's single overlay. It lives beside the store, not in
  * the component, so an item announced while the overlay is unmounted (hidden)
  * still arms it, and the timeout is read from prefs at every arm.
@@ -59,14 +85,17 @@ export const useMediaStore = create<MediaState>((set) => ({
   overlayItems: [],
   overlayVisible: false,
   show: (item) => set((s) => ({ items: addMediaItem(s.items, item), selectedPath: item.path })),
-  detect: (item) => set((s) => {
-    const fresh = !has(s.items, item.path)
-    return {
-      items: addMediaItem(s.items, item),
-      selectedPath: s.selectedPath ?? item.path,
-      unseen: fresh ? { ...s.unseen, [item.terminalId]: (s.unseen[item.terminalId] ?? 0) + 1 } : s.unseen,
-    }
-  }),
+  detect: (item) => {
+    set((s) => {
+      const fresh = !has(s.items, item.path)
+      return {
+        items: addMediaItem(s.items, item),
+        selectedPath: s.selectedPath ?? item.path,
+        unseen: fresh ? { ...s.unseen, [item.terminalId]: (s.unseen[item.terminalId] ?? 0) + 1 } : s.unseen,
+      }
+    })
+    if (!item.opened) void register(item.path)
+  },
   add: (item) => set((s) => ({ items: addMediaItem(s.items, item), selectedPath: s.selectedPath ?? item.path })),
   clearUnseen: (terminalId) => set((s) => {
     if (!(terminalId in s.unseen)) return s
@@ -83,24 +112,7 @@ export const useMediaStore = create<MediaState>((set) => ({
     return { selectedPath: path, unseen }
   }),
   open: async (path) => {
-    const { items, overlayItems } = useMediaStore.getState()
-    // An overlay row may outlive its strip entry (strip cap): register unless known opened.
-    const known = [...items, ...overlayItems].some((i) => i.opened && samePath(i.path, path))
-    if (!known) {
-      try {
-        await registerOpenedMedia(path)
-      } catch (err) {
-        // Gone or no longer media: drop it so it is not offered again.
-        console.warn('[media] open:', err)
-        useMediaStore.setState((s) => ({
-          items: s.items.filter((i) => !samePath(i.path, path)),
-          overlayItems: s.overlayItems.filter((i) => !samePath(i.path, path)),
-          selectedPath: s.selectedPath !== null && samePath(s.selectedPath, path) ? null : s.selectedPath,
-        }))
-        return false
-      }
-      useMediaStore.setState((s) => ({ items: markOpened(s.items, path), overlayItems: markOpened(s.overlayItems, path) }))
-    }
+    if (!(await register(path))) return false
     useMediaStore.getState().select(path)
     return true
   },

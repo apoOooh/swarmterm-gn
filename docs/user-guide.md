@@ -149,11 +149,10 @@ Swarmterm notices media paths a pane prints: absolute paths
 (`C:\...\shot.png`, spaces included), quoted paths and paths relative to the
 pane's starting folder, also inside tables whose cells the agent wrapped over
 several lines (such as Claude Code's bordered tables). If such a file exists,
-its **name** joins the Media strip with a placeholder icon, and the pane shows
-a **N new images/videos** pill
-in its top-right corner. Swarmterm does not load the file until you open it:
-click the pill (opens the newest), the strip item, the popup item, or
-Ctrl+click the path in the terminal. Only then is that one file shown. Ctrl+click
+it joins the Media strip with its thumbnail (videos show a film icon), and the
+pane shows a **N new images/videos** pill
+in its top-right corner. To view it large, click the pill (opens the newest),
+the strip item, the popup item, or Ctrl+click the path in the terminal. Ctrl+click
 on a media path outside the project opens it straight in the Media tab. The panel
 never opens by itself, and your keyboard stays in the terminal. Only
 PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local drives are
@@ -172,8 +171,7 @@ over it (Esc is otherwise left to your terminal, so agents can still be
 interrupted). It never takes the keyboard from your terminal. While it is up,
 an open web preview is hidden, because the preview would otherwise cover it.
 You can choose how many items it lists and turn it off separately for paths
-printed in a pane and clipboard images. Items not opened yet show a
-placeholder icon instead of a thumbnail.
+printed in a pane and clipboard images.
 
 **Zoom an image.** With the pointer over an image in the Media tab (or an
 image opened as a file, or while annotating), the mouse wheel zooms in and out
@@ -197,8 +195,7 @@ keyboard. Claude Code and Codex panes receive it as a paste, exactly like
 Ctrl+V of a screenshot, so the agent attaches the image; other panes get the
 quoted path, as when you drop a file from Explorer. Releasing anywhere else
 (including over the web preview) or pressing Esc cancels. A short click still
-opens the item. Dragging an item you have not opened only types its path; it
-does not show or open the file. Paths containing a quote or line break cannot
+opens the item. Paths containing a quote or line break cannot
 be inserted.
 
 **Annotate an image.** With an opened image in the Media tab, click
