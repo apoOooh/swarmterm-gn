@@ -475,6 +475,10 @@ async fn dispatch(
             spawn_id,
             bytes,
         } => host.ack(client, &terminal_id, &spawn_id, bytes),
+        Op::SetPriority { settings } => {
+            host.set_priority(settings);
+            answer(Ok(json!({})));
+        }
         Op::SetAppState { state } => {
             let size = serde_json::to_vec(&state).map_or(usize::MAX, |b| b.len());
             if size > protocol::MAX_APP_STATE {

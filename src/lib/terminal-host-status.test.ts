@@ -7,7 +7,8 @@ const base: TerminalHostStatus = {
   supported: true,
   connected: false,
   hostVersion: null,
-  error: null
+  error: null,
+  priorityUnsupported: null
 }
 
 describe('describeHostStatus', () => {

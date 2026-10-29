@@ -77,6 +77,10 @@ pub struct HostStatus {
     pub connected: bool,
     pub host_version: Option<String>,
     pub error: Option<String>,
+    /// Why new panes run in-process although the host is on: the running
+    /// host predates process priority (ADR 0005) and would run them
+    /// unlimited. Shown under Settings → Terminal → Process priority.
+    pub priority_unsupported: Option<String>,
 }
 
 impl HostHub {
@@ -96,13 +100,13 @@ impl HostHub {
         }
         let mut slot = crate::prof::lock("lock.host_hub.client", &self.client);
         if let Some(c) = slot.as_ref().filter(|c| c.conn.is_alive()) {
-            return Some(c.clone());
+            return Self::enforced(c.clone());
         }
         match connect(app, true, false) {
             Ok(c) => {
                 *slot = Some(c.clone());
                 *self.last_error.lock().unwrap() = None;
-                Some(c)
+                Self::enforced(c)
             }
             Err(e) => {
                 eprintln!("[host] falling back to in-process terminals: {e}");
@@ -110,6 +114,15 @@ impl HostHub {
                 None
             }
         }
+    }
+
+    /// A host adopted after an update may predate ADR 0005: it ignores
+    /// `set_priority` and its new panes would run unlimited. Those spawn
+    /// in-process, where the job limits are enforced; the host keeps its
+    /// own panes until it idles out, and the next host is current.
+    #[cfg(windows)]
+    fn enforced(c: Client) -> Option<Client> {
+        spawn_on_host(c.conn.priority, &c.conn.host_version).then_some(c)
     }
 
     #[cfg(not(windows))]
@@ -194,18 +207,30 @@ impl HostHub {
 
     pub fn status(&self) -> HostStatus {
         #[cfg(windows)]
-        let (connected, host_version) = match self.current() {
-            Some(c) => (true, Some(c.conn.host_version.clone())),
-            None => (false, None),
+        let (connected, host_version, priority_unsupported) = match self.current() {
+            Some(c) => (
+                true,
+                Some(c.conn.host_version.clone()),
+                (!c.conn.priority).then(|| {
+                    format!(
+                        "The running terminal host ({}) predates process priority: panes already \
+                         running on it stay unlimited until that host exits, and new panes run \
+                         in-process (limited) meanwhile.",
+                        c.conn.host_version
+                    )
+                }),
+            ),
+            None => (false, None, None),
         };
         #[cfg(not(windows))]
-        let (connected, host_version) = (false, None);
+        let (connected, host_version, priority_unsupported) = (false, None, None);
         HostStatus {
             enabled: self.enabled(),
             supported: cfg!(windows),
             connected,
             host_version,
             error: self.last_error.lock().unwrap().clone(),
+            priority_unsupported,
         }
     }
 }
@@ -237,6 +262,10 @@ fn connect(app: &AppHandle, start: bool, adopt: bool) -> Result<Client, String> 
                 } else {
                     reap(app, &c);
                 }
+                // Before any create on this connection (requests are FIFO),
+                // so new hosted panes are born with the user's settings.
+                c.conn
+                    .set_priority(&app.state::<crate::child_priority::ChildPriority>().settings());
                 if let Some(port) = *app.state::<HostHub>().mcp_port.lock().unwrap() {
                     c.conn.set_app_state(serde_json::json!({ "mcpPort": port }));
                 }
@@ -707,9 +736,43 @@ pub fn terminal_host_set_settings(
     Ok(settings)
 }
 
+/// Async, so it runs off the main thread: Settings polls it while open,
+/// and `status` waits on the client lock, which a connect can hold for
+/// seconds (host start, retries).
 #[tauri::command]
-pub fn terminal_host_status(hub: tauri::State<'_, HostHub>) -> HostStatus {
-    hub.status()
+pub async fn terminal_host_status(app: AppHandle) -> Result<HostStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<HostHub>().status())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Whether new panes may go to a host that announced (or not) the
+/// `priority` capability: an older host would run them unlimited.
+#[cfg(windows)]
+fn spawn_on_host(priority: bool, host_version: &str) -> bool {
+    if !priority {
+        eprintln!("[host] host {host_version} lacks process priority: new panes run in-process");
+    }
+    priority
+}
+
+#[cfg(all(test, windows))]
+mod capability_tests {
+    use super::{conn::has_cap, spawn_on_host};
+    use serde_json::json;
+
+    /// A host from before ADR 0005: `for_spawn` falls back to in-process.
+    #[test]
+    fn old_host_without_priority_is_not_used_for_new_panes() {
+        let old = json!({"ok": true, "hostVersion": "1.24.2", "capabilities": ["flow-control"]});
+        let p = has_cap(&old, swarmterm_host::protocol::PRIORITY);
+        assert!(!p);
+        assert!(!spawn_on_host(p, "1.24.2"));
+        let none = json!({"ok": true, "hostVersion": "1.0.0"});
+        assert!(!spawn_on_host(has_cap(&none, swarmterm_host::protocol::PRIORITY), "1.0.0"));
+        let new = json!({"ok": true, "capabilities": ["flow-control", swarmterm_host::protocol::PRIORITY]});
+        assert!(spawn_on_host(has_cap(&new, swarmterm_host::protocol::PRIORITY), "x"));
+    }
 }
 
 /// Decodes `bytes` replacing every invalid byte with one `?`, so the result

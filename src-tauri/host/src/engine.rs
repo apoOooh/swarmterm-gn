@@ -183,6 +183,9 @@ pub struct Host {
     ring_cap: usize,
     /// `FlowGate` ack timeout (`flow::FLOW_ACK_TIMEOUT`; tests stretch it).
     flow_timeout: std::time::Duration,
+    /// Priority settings and the pane jobs they apply to (ADR 0005).
+    #[cfg(windows)]
+    priority: Arc<crate::priority::Registry>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -205,7 +208,20 @@ impl Host {
             client: Mutex::new(None),
             next_client: std::sync::atomic::AtomicU64::new(1),
             ring_cap,
+            #[cfg(windows)]
+            priority: crate::priority::Registry::new(),
         })
+    }
+
+    /// `set_priority`: new settings for every pane, running ones included.
+    #[cfg(windows)]
+    pub fn set_priority(&self, settings: crate::priority::Settings) {
+        self.priority.set(settings);
+    }
+
+    #[cfg(windows)]
+    pub fn priority(&self) -> &Arc<crate::priority::Registry> {
+        &self.priority
     }
 
     /// Make `tx` the current client. The previous client's sender is dropped,
@@ -375,9 +391,10 @@ impl Host {
             }
         };
         // Capture the shell in a job BEFORE it runs any command, so every
-        // process the command tree spawns is born inside the job.
+        // process the command tree spawns is born inside the job, with the
+        // pane's priority limits already in force (ADR 0005).
         #[cfg(windows)]
-        let job = pid.and_then(crate::job::JobHandle::capturing);
+        let job = pid.and_then(|p| self.priority.capture(&spec.terminal_id, p));
 
         let output = Arc::new(Mutex::new(Output::new(self.ring_cap, Some(client))));
         let flow = Arc::new(FlowGate::with_timeout(self.flow_timeout));

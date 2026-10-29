@@ -1,6 +1,7 @@
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { ShellId } from '@/lib/terminal-pref'
+import type { PrioritySettings } from '@/lib/build-priority'
 
 /**
  * Output streamed from a pty: UTF-8 bytes, then a final exit. Arrives as a
@@ -184,9 +185,9 @@ export const writeTerminalChecked = (id: string, expectedSpawnId: string, data: 
   invoke('write_terminal_checked', { id, expectedSpawnId, data })
 
 /**
- * Lower-build-priority watcher settings: on/off plus the terminal ids of panes
- * whose workspace opted out (see `child_priority.rs`).
+ * Process priority settings (ADR 0005) plus the terminal ids of panes whose
+ * workspace opted out; Rust applies them to every pane's Job Object.
  */
-export function setChildPriority(enabled: boolean, exempt: string[]): Promise<void> {
-  return invoke('child_priority_set', { enabled, exempt })
+export function setChildPriority(settings: PrioritySettings, exempt: string[]): Promise<void> {
+  return invoke('child_priority_set', { settings: { ...settings, exempt } })
 }
