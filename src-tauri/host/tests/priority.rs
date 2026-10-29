@@ -38,34 +38,52 @@ fn class(pid: u32) -> u32 {
     }
 }
 
-/// The inherited PATH with System32 first. CI runs `cargo test` from Git
-/// Bash, whose PATH the GitHub windows runner hands to cmd without System32,
-/// so a bare `ping` there failed with "'ping' is not recognized", the tree
-/// exited at once and the job stayed empty. Every test tree starts through
-/// `cmd`, so this one PATH covers nested shells and node's `cmd` as well.
-fn test_path() -> std::ffi::OsString {
-    let mut dirs = vec![std::path::PathBuf::from(sys32(""))];
-    if let Some(p) = std::env::var_os("PATH") {
-        dirs.extend(std::env::split_paths(&p));
-    }
-    std::env::join_paths(dirs).expect("PATH joins")
-}
-
-/// `cmd /c <line>` hidden, with stdout discarded.
+/// `cmd /d /s /c "<line>"` hidden, with stdout discarded. Every command in a
+/// line is an absolute path (`ping()`, `node_exe()`): the GitHub windows
+/// runner's cmd failed to resolve a bare `ping` even with System32 first on
+/// PATH, so the tests no longer depend on PATH lookup at all. `/s` plus the
+/// outer quotes keep cmd's quote stripping from breaking quoted paths.
 fn cmd(line: &str) -> std::process::Child {
+    report_cmd_env_once();
     Command::new(sys32("cmd.exe"))
-        .env("PATH", test_path())
-        // cmd resolves a bare `ping` only through PATHEXT; keep the inherited
-        // one and fall back to cmd's defaults on a runner that does not set it.
-        .env(
-            "PATHEXT",
-            std::env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into()),
-        )
-        .raw_arg(format!("/d /c {line}"))
+        .raw_arg(format!("/d /s /c \"{line}\""))
         .stdout(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .unwrap()
+}
+
+/// `"<System32>\PING.EXE"`, quoted for a cmd line.
+fn ping() -> String {
+    format!("\"{}\"", sys32("PING.EXE"))
+}
+
+/// Diagnostics for the CI runner (why cmd could not resolve `ping`): the
+/// lookup variables as a child cmd sees them, written once straight to the
+/// process stderr so libtest's capture does not hide them on a pass.
+fn report_cmd_env_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        use std::io::Write;
+        let out = Command::new(sys32("cmd.exe"))
+            .raw_arg("/d /c set")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        let mut text = String::from("[priority diag] cmd env:\n");
+        match out {
+            Ok(o) => {
+                for l in String::from_utf8_lossy(&o.stdout).lines() {
+                    let key = l.split('=').next().unwrap_or("").to_ascii_uppercase();
+                    if ["PATH", "PATHEXT", "SYSTEMROOT", "COMSPEC"].contains(&key.as_str()) {
+                        let short: String = l.chars().take(400).collect();
+                        text.push_str(&format!("  {short} (len {})\n", l.len()));
+                    }
+                }
+            }
+            Err(e) => text.push_str(&format!("  cmd /c set failed: {e}\n")),
+        }
+        let _ = std::io::stderr().write_all(text.as_bytes());
+    });
 }
 
 /// Exe names of the job's members (Toolhelp), polled until `pred` holds.
@@ -126,11 +144,14 @@ fn strict() -> Limits {
 }
 
 /// The ping that starts after the first one finished, i.e. after capture.
-const LATE_PING: &str = "ping -n 2 127.0.0.1 >nul & ping -n 60 127.0.0.1";
+fn late_ping() -> String {
+    let p = ping();
+    format!("{p} -n 2 127.0.0.1 >nul & {p} -n 60 127.0.0.1")
+}
 
 #[test]
 fn child_is_born_with_the_job_class_and_cannot_be_raised() {
-    let mut shell = cmd(LATE_PING);
+    let mut shell = cmd(&late_ping());
     let job = JobHandle::capturing_with(shell.id(), &strict()).unwrap();
     // Running members are moved to the class at once, too.
     assert_eq!(class(shell.id()), BELOW_NORMAL_PRIORITY_CLASS);
@@ -181,7 +202,10 @@ fn process_raising_itself_stays_capped() {
 fn orphan_stays_in_the_job_and_capped() {
     // `start /b` launches ping and cmd exits at once: ping's parent is gone.
     // The first ping delays that until after capture.
-    let mut shell = cmd("ping -n 2 127.0.0.1 >nul & start /b ping -n 60 127.0.0.1");
+    let mut shell = cmd(&format!(
+        "{p} -n 2 127.0.0.1 >nul & start \"\" /b {p} -n 60 127.0.0.1",
+        p = ping()
+    ));
     let job = JobHandle::capturing_with(shell.id(), &strict()).unwrap();
     let _ = shell.wait();
     let m = wait_members(&job, |m| m.iter().any(|(_, n)| n == "ping.exe"));
@@ -196,7 +220,7 @@ fn orphan_stays_in_the_job_and_capped() {
 
 #[test]
 fn live_limit_changes_apply_and_lifting_raises_back() {
-    let mut shell = cmd(LATE_PING);
+    let mut shell = cmd(&late_ping());
     let job = JobHandle::capturing_with(shell.id(), &strict()).unwrap();
     let m = wait_members(&job, |m| m.iter().any(|(_, n)| n == "ping.exe"));
     let ping = pid_of(&m, "ping.exe");
@@ -232,7 +256,7 @@ fn live_limit_changes_apply_and_lifting_raises_back() {
 
 #[test]
 fn nested_build_job_lowers_further_and_cpu_cap_is_accepted() {
-    let mut shell = cmd(LATE_PING);
+    let mut shell = cmd(&late_ping());
     let limits = Limits {
         cpu_cap: Some(50),
         ..strict()
@@ -289,8 +313,9 @@ fn agent_normal_keeps_the_agent_and_idles_its_child() {
         ..Settings::default()
     });
     let mut shell = cmd(&format!(
-        "ping -n 2 127.0.0.1 >nul & \"{}\" /d /c ping -n 60 127.0.0.1",
-        fake.display()
+        "{p} -n 2 127.0.0.1 >nul & \"{}\" /d /s /c \"{p} -n 60 127.0.0.1\"",
+        fake.display(),
+        p = ping()
     ));
     let job = registry.capture("pane", shell.id()).unwrap();
     let m = wait_members(&job, |m| {
@@ -344,7 +369,7 @@ fn children_of(parent: u32) -> Vec<(u32, String)> {
 fn child_started_before_capture_is_swept_into_the_job() {
     // The shell starts ping at once; capture comes only after ping runs,
     // like a profile hook's child in the window between spawn and capture.
-    let mut shell = cmd("ping -n 60 127.0.0.1");
+    let mut shell = cmd(&format!("{} -n 60 127.0.0.1", ping()));
     let deadline = Instant::now() + WAIT;
     let ping = loop {
         if let Some((p, _)) = children_of(shell.id())
@@ -383,8 +408,9 @@ fn wait_child(parent: u32, exe: &str) -> u32 {
 #[test]
 fn grandchild_started_before_capture_is_swept_into_the_job() {
     let mut shell = cmd(&format!(
-        "\"{}\" /d /c ping -n 60 127.0.0.1",
-        sys32("cmd.exe")
+        "\"{}\" /d /s /c \"{} -n 60 127.0.0.1\"",
+        sys32("cmd.exe"),
+        ping()
     ));
     let inner = wait_child(shell.id(), "cmd.exe");
     let ping = wait_child(inner, "ping.exe");
@@ -407,9 +433,12 @@ fn grandchild_started_before_capture_is_swept_into_the_job() {
 /// cmd starts the second ping before cmd itself is assigned.
 #[test]
 fn grandchild_started_during_the_first_round_is_swept_by_the_second() {
+    // The `&` is inside the inner quotes, so the outer cmd keeps it literal
+    // and only the inner cmd (after `/s` strips them) splits on it.
     let mut shell = cmd(&format!(
-        "\"{}\" /d /c ping -n 60 127.0.0.1 ^& ping -n 60 127.0.0.1",
-        sys32("cmd.exe")
+        "\"{}\" /d /s /c \"{p} -n 60 127.0.0.1 & {p} -n 60 127.0.0.1\"",
+        sys32("cmd.exe"),
+        p = ping()
     ));
     let inner = wait_child(shell.id(), "cmd.exe");
     let first = wait_child(inner, "ping.exe");
@@ -454,32 +483,55 @@ fn grandchild_started_during_the_first_round_is_swept_by_the_second() {
     let _ = shell.wait();
 }
 
+/// Absolute path of `<name>.exe` on PATH, so the command lines below need
+/// no PATH lookup of their own. Only `.exe`: a `node.cmd` shim would never
+/// show up as the `node.exe` member the tests wait for.
+fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(format!("{name}.exe")))
+        .find(|c| c.is_file())
+}
+
 /// Node is installed on the development machine; a missing node is a
-/// broken test setup, not a pass.
-fn require_node() {
-    let ok = Command::new("node")
+/// broken test setup, not a pass. PATH first, then the default installer
+/// location, so a runner with a broken PATH still finds it.
+fn node_exe() -> std::path::PathBuf {
+    let default = std::env::var_os("ProgramFiles")
+        .map(|d| std::path::Path::new(&d).join(r"nodejs\node.exe"))
+        .filter(|p| p.is_file());
+    let node = find_on_path("node").or(default).unwrap_or_else(|| {
+        panic!(
+            r"node.exe not found on PATH or in %ProgramFiles%\nodejs: the libuv job tests need Node.js installed"
+        )
+    });
+    let ok = Command::new(&node)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .status()
         .is_ok_and(|s| s.success());
-    assert!(
-        ok,
-        "node not on PATH: the libuv job tests need Node.js installed"
-    );
+    assert!(ok, "{} --version failed", node.display());
+    node
 }
 
-/// A fake npm agent package whose cli.js only spawns `cmd /c ping`.
+/// A fake npm agent package whose cli.js only spawns `cmd /c ping`, both
+/// by absolute path.
 fn node_agent_script(dir: &std::path::Path) -> std::path::PathBuf {
     let pkg = dir.join("@anthropic-ai").join("claude-code");
     std::fs::create_dir_all(&pkg).unwrap();
     let script = pkg.join("cli.js");
+    let js = |p: String| p.replace('\\', "\\\\");
     std::fs::write(
         &script,
-        "require('child_process').spawn(process.env.ComSpec || 'cmd.exe', \
-         ['/d', '/c', 'ping -n 60 127.0.0.1 >nul'], { stdio: 'ignore', windowsHide: true });\n\
-         setInterval(() => {}, 1000);\n",
+        format!(
+            "require('child_process').spawn('{}', \
+             ['/d', '/s', '/c', '{} -n 60 127.0.0.1 >nul'], {{ stdio: 'ignore', windowsHide: true }});\n\
+             setInterval(() => {{}}, 1000);\n",
+            js(sys32("cmd.exe")),
+            js(sys32("PING.EXE"))
+        ),
     )
     .unwrap();
     script
@@ -530,10 +582,10 @@ fn set_class(pid: u32, c: u32) {
 /// watcher pass; node's grandchild (broken away from libuv) is captured.
 #[test]
 fn early_child_with_its_own_job_is_forced_to_the_pane_class() {
-    require_node();
+    let node = node_exe();
     let dir = tempfile::tempdir().unwrap();
     let script = node_agent_script(dir.path());
-    let mut shell = cmd(&format!("node \"{}\"", script.display()));
+    let mut shell = cmd(&format!("\"{}\" \"{}\"", node.display(), script.display()));
     let node = wait_child(shell.id(), "node.exe");
     let inner = wait_child(node, "cmd.exe");
     let ping = wait_child(inner, "ping.exe");
@@ -567,10 +619,10 @@ fn early_child_with_its_own_job_is_forced_to_the_pane_class() {
 /// itself stays lowered across watcher passes (no raise back to Normal).
 #[test]
 fn stray_that_lowered_itself_stays_lowered_while_priority_is_off() {
-    require_node();
+    let node = node_exe();
     let dir = tempfile::tempdir().unwrap();
     let script = node_agent_script(dir.path());
-    let mut shell = cmd(&format!("node \"{}\"", script.display()));
+    let mut shell = cmd(&format!("\"{}\" \"{}\"", node.display(), script.display()));
     let node = wait_child(shell.id(), "node.exe");
     let inner = wait_child(node, "cmd.exe");
     wait_child(inner, "ping.exe");
@@ -601,12 +653,14 @@ fn stray_that_lowered_itself_stays_lowered_while_priority_is_off() {
 /// grandchild (outside the libuv job) goes Idle and survives the agent.
 #[test]
 fn build_job_nests_under_the_pane_not_under_node() {
-    require_node();
+    let node = node_exe();
     let dir = tempfile::tempdir().unwrap();
     let script = node_agent_script(dir.path());
     let registry = Registry::without_watcher();
     let mut shell = cmd(&format!(
-        "ping -n 2 127.0.0.1 >nul & node \"{}\"",
+        "{} -n 2 127.0.0.1 >nul & \"{}\" \"{}\"",
+        ping(),
+        node.display(),
         script.display()
     ));
     let job = registry.capture("pane", shell.id()).unwrap();
