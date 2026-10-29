@@ -769,19 +769,8 @@ fn spawn_terminal_inner(
     options: CreateTerminalOptions,
     on_data: Channel<PtyOut>,
 ) -> CreateTerminalResult {
-    // The renderer quotes a brief for the shell the pane asked for. If that
-    // shell is unavailable, `plan_spawn` falls back to the default one, which
-    // would parse a POSIX-quoted brief differently (`'a''' ; calc ; '''b'`
-    // runs `calc` in PowerShell). Refuse such a launch instead.
     let shell_id = options.shell_id.as_deref();
     let shell_available = shell_id.map(|id| crate::shell::resolve_shell(id).is_some());
-    if let Err(e) = check_shell_for_line(
-        shell_id,
-        shell_available,
-        options.initial_command.as_deref(),
-    ) {
-        return CreateTerminalResult::err(e);
-    }
     // Admin policy: refuse bypass/YOLO lines here, on the final command, so
     // every path that builds one (menus, restore, worktree.spawn) is covered.
     let flavor = crate::policy::ShellFlavor::from_shell_id(
@@ -819,6 +808,19 @@ fn spawn_terminal_inner(
         },
         None => on_data,
     };
+    // The renderer quotes a brief for the shell the pane asked for. If that
+    // shell is unavailable, `plan_spawn` falls back to the default one, which
+    // would parse a POSIX-quoted brief differently (`'a'\'' ; calc ; '\''b'`
+    // runs `calc` in PowerShell). Refuse such a launch instead. Only here,
+    // after the reattach above: a surviving host pane never retypes its line,
+    // so a shell probe hiccup must not refuse it and leave it windowless.
+    if let Err(e) = check_shell_for_line(
+        options.shell_id.as_deref(),
+        shell_available,
+        options.initial_command.as_deref(),
+    ) {
+        return CreateTerminalResult::err(e);
+    }
     let plan = match plan_spawn(app, state, &id, options) {
         Ok(plan) => plan,
         Err(e) => return CreateTerminalResult::err(e),
@@ -1717,7 +1719,7 @@ mod tests {
     #[test]
     fn unavailable_shell_refuses_a_line_quoted_for_it() {
         use super::check_shell_for_line as check;
-        let brief = Some(r"claude 'a''' ; calc ; '''b'");
+        let brief = Some(r"claude 'a'\'' ; calc ; '\''b'");
         let err = check(Some("git-bash"), Some(false), brief).unwrap_err();
         assert!(err.starts_with("shell-unavailable"), "{err}");
         assert!(check(Some("wsl"), Some(false), brief).is_err());
