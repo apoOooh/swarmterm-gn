@@ -22,15 +22,15 @@
 // that edition (docs/editions.md).
 #[cfg(not(feature = "corp"))]
 mod install;
+mod names;
 #[cfg(not(feature = "corp"))]
 pub mod release;
 /// Corp keeps only the file names status, autostart and the hardware
 /// probe need; release selection and signature checks serve the
-/// compiled-out installer. Same values as `release.rs`.
+/// compiled-out installer.
 #[cfg(feature = "corp")]
 mod release {
-    pub const EXE: &str = "buzzkey.exe";
-    pub const CONSOLE_EXE: &str = "buzzkey-console.exe";
+    pub use super::names::{CONSOLE_EXE, EXE};
 }
 mod system;
 
