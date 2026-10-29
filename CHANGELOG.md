@@ -18,8 +18,11 @@ second **Swarmterm GN Corp** installer and a verifiable supply chain. Read
   **Hide secrets** (default) drops secret-looking names (`*_API_KEY`,
   `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_PAT`, `*_DSN`, `PGPASSWORD`,
   `MYSQL_PWD`, credential variables under the `AWS_`/`ANTHROPIC_`/`OPENAI_`/
-  `AZURE_OPENAI_` prefixes and more; settings such as `AWS_REGION` pass) and values that are URLs with credentials; **System variables
-  only** keeps just the Windows variables a shell needs; **Always pass these
+  `AZURE_OPENAI_` prefixes and more; provider settings such as `AWS_REGION`,
+  `AWS_PROFILE` or `ANTHROPIC_BASE_URL` pass) and values that are URLs with credentials; **System variables
+  only** keeps just the Windows variables a shell needs plus
+  `__PSLockdownPolicy`, proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
+  `NO_PROXY`, without credentials) and CA certificate variables; **Always pass these
   variables** is an allow list (prefixes with `*`). The policy is saved in
   the app data folder (`env-policy.json`) and applies to panes restored at
   startup. Git run by Swarmterm always passes `-c core.fsmonitor=`.
@@ -35,7 +38,8 @@ second **Swarmterm GN Corp** installer and a verifiable supply chain. Read
   `DisableWorktreeSpawn`, `DisableMcp`, `DisableCompanion`,
   `DisableModelDownload`, `DisableRoutineCommands`, `DisablePreviewBrowser`,
   `EnvPolicy` (`default`/`strict`) and `EnvAllow`. Invalid or unreadable
-  values fail closed. Locked controls are greyed out with "Managed by your
+  values, and registry read errors, fail closed (`Disable*` counts as on,
+  `EnvPolicy` as `strict`). Locked controls are greyed out with "Managed by your
   administrator" and Settings lists the active policies. ADMX/ADML
   templates for Group Policy and Intune are in `docs/admin/`
   ([admin-policy.md](docs/admin-policy.md)).
@@ -88,7 +92,9 @@ upgrading.
   <token>`; other schemes are refused. Each pane gets a random secret token
   (`SWARMTERM_SESSION`, rotated on respawn) that is separate from the public
   pane id shown to War Room peers. A pane started by an older version and
-  still running in the terminal host may need a restart to reach MCP.
+  reattached from the terminal host keeps its pane id as its token until
+  its next respawn, so it keeps working (with the weaker protection
+  described in the [security model](docs/security-model.md)).
 - **Behaviour change:** Markdown and other previews no longer load plain
   `http:` images (the alt text shows instead); `https:`, relative and data
   images still load. The release CSP also gains `object-src 'none'`,
@@ -125,6 +131,17 @@ upgrading.
   ignore worker briefs only when they are safely quoted; briefs are quoted
   safely for PowerShell, cmd, POSIX shells and fish. A refused launch also
   stops a surviving detached host pane.
+- A pane launch with an initial command (worker brief) is refused when the
+  requested shell is unavailable, instead of falling back to PowerShell,
+  which would read the brief's quoting differently.
+- In worker briefs sent to cmd or PowerShell panes, `%` and `!` become
+  full-width characters (`％`, `！`) so the shell cannot expand them;
+  control characters are stripped and a brief starting with `-` gets a
+  leading space.
+- The docs describe Claude Code's managed settings
+  `permissions.disableBypassPermissionsMode` and
+  `permissions.disableAutoMode` for organisations that want the agent itself
+  to refuse those modes ([admin-policy.md](docs/admin-policy.md)).
 - Licensing is REUSE compliant (`REUSE.toml`, `LICENSES/`,
   `third-party-licenses/`).
 
