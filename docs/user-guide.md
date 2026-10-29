@@ -284,7 +284,9 @@ The list records independently of the sound and banner settings above, so muting
 
 Claude Code and Codex panes run in a **launch mode** that sets how much the agent may do without asking. The current mode is shown next to the agent icon, and the agent menu in the pane header switches it: the pane restarts the CLI with the new flags and continues the conversation (the pane's own session id or the folder's latest session). **Resume previous chat…** in the same menu restarts the pane into the CLI's own session picker (current mode kept), so an older conversation can be taken over.
 
-**Settings → Terminal → Default launch mode** picks, per provider, the mode new panes start in. It applies to new panes only — running panes keep the mode they started with. Worker panes spawned by an agent (`worktree.spawn`) inherit the spawning pane's mode when they run the same agent.
+**Settings → Terminal → Default launch mode** picks, per provider, the mode new panes start in. It applies to new panes only — running panes keep the mode they started with. Worker panes spawned by an agent (`worktree.spawn`) inherit the spawning pane's mode when they run the same agent — except **Bypass permissions** and **YOLO**, which are never inherited: such a worker starts in your Settings default for that agent, or in the agent's first mode (Claude **Default**, Codex **Auto**) if that default is itself Bypass/YOLO. An agent cannot multiply its own unchecked mode.
+
+**Bypass permissions** (Claude) and **YOLO** (Codex) let the agent run commands and edit files without asking — Codex also outside its sandbox. Faulty or manipulated instructions (from a web page, a file, a dependency or another agent) can then run unwanted commands with your rights. They stay available, but choosing one — in a pane's agent menu or as the Settings default — first shows a confirmation explaining this risk (Cancel is focused; Esc cancels). Both are shown in red in the menus, and a pane running in one of them carries a red badge with the mode in its header.
 
 ### Claude Code
 
@@ -360,6 +362,8 @@ Agents talk in two modes:
 
 - **Probe** — lands in the peer's inbox and nudges it to read: questions, debate, coordination.
 - **Execute** — pasted into the peer's terminal and run as its next prompt: a handover ("we agreed, now do it"). Refused if the target is a plain shell.
+
+**Agents may only use Execute if you allow it.** **Settings → Terminal → Agent safety → Allow agents to run prompts in other panes** is off by default: an agent's `war_room.send` in execute mode is then refused by Swarmterm with a message telling it to use probe instead (the mode is never silently changed). Probe still works, and your own sends as Moderator from the composer — Execute included — are not affected. Turn it on only when you want agents to hand tasks to each other directly; an execute into a pane in Bypass/YOLO runs without any prompt. The setting does not cover `worktree.spawn`: an agent can still start a new worker pane with a task prompt, but that worker never starts in Bypass/YOLO (see [Launch modes](#launch-modes)).
 
 You are a member too — the **Moderator**. The composer at the bottom of the Discussion tab sends to one agent or the whole room, in either mode; replies land in the transcript instead of someone's terminal.
 
@@ -563,7 +567,7 @@ Swarmterm GN sends no telemetry or usage data.
 
 ## What your agents can do
 
-Every pane is automatically connected to the app over MCP for exactly as long as it lives — nothing to configure for Claude Code, Codex and Qwen Code, which Swarmterm enrolls automatically; other MCP-capable CLIs can be pointed at the per-pane URL by hand (the War Room panel shows the hint). Enrolled agents can drive Swarmterm themselves: **open a web preview** beside their own pane, **spawn / list / remove worktrees** to hand tasks to fresh parallel agents (removal refuses uncommitted changes), and use the **War Room** — list peers, message them in probe or execute mode, read their inbox and reply, wait for a peer to need input or finish (`wait_peer`) and peek at what its screen shows (`read_peer`). An execute hand-off to a peer that is sitting on a prompt is refused until that prompt is answered — the sender is told to wait first.
+Every pane is automatically connected to the app over MCP for exactly as long as it lives — nothing to configure for Claude Code, Codex and Qwen Code, which Swarmterm enrolls automatically; other MCP-capable CLIs can be pointed at the per-pane URL by hand (the War Room panel shows the hint). Enrolled agents can drive Swarmterm themselves: **open a web preview** beside their own pane, **spawn / list / remove worktrees** to hand tasks to fresh parallel agents (removal refuses uncommitted changes), and use the **War Room** — list peers, message them in probe or execute mode, read their inbox and reply, wait for a peer to need input or finish (`wait_peer`) and peek at what its screen shows (`read_peer`). An execute hand-off to a peer that is sitting on a prompt is refused until that prompt is answered — the sender is told to wait first. Agents can send execute at all only when **Settings → Terminal → Agent safety** allows it (off by default).
 
 War Room abilities only work for panes you dragged into a room, worktree abilities only in workspaces with isolation enabled — and removing a pane from a room revokes its access instantly.
 
@@ -632,6 +636,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **An agent is missing from the composer** — its CLI isn't on your `PATH`; install it and reopen the composer. A default or template that assigns it uses those slots for plain terminals meanwhile, and picks the agent up again once it's installed — unless you edit and save that default or template before then.
 - **A War Room message never arrived** — look for the pill in the pane or `⏸N` on the room tab: it's held behind an unsubmitted prompt line, or the agent is working / sitting on a prompt (the pill says which). Press Enter or click "Deliver now" for a typing hold; answer the prompt or wait for the agent to finish otherwise.
 - **An agent says its execute was refused** — the target pane is blocked on a permission or question; answer that prompt (or let the sending agent `wait_peer`) and the hand-off goes through on re-send.
+- **An agent says execute is disabled** — **Allow agents to run prompts in other panes** (Settings → Terminal → Agent safety) is off, the default. The agent should use probe; turn the setting on only if you want agents to run prompts in each other's panes.
 - **A War Room send was refused for a "control character"** — the message contained an escape code or other terminal control byte, which Swarmterm never types into a pane (it could break out of the paste and run as keystrokes). Resend as plain text; quote escape sequences as the literal text `ESC[…` instead.
 - **An agent says it isn't in the War Room** — its pane was removed or restarted; drag it back in.
 - **A relative path isn't clickable after `cd`** — a PowerShell quirk; absolute paths (everything agents print) still work.

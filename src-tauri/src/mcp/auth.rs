@@ -22,12 +22,13 @@ pub fn resolve(token: &str, is_live: impl Fn(&str) -> bool) -> Result<TerminalId
     Ok(TerminalId(trimmed.to_owned()))
 }
 
-/// Pull the token out of an `Authorization` header value. Tolerates a bare
-/// token (no `Bearer ` prefix) because both the MCP client and our own status
-/// probe are first-party, and a missing scheme is not worth a 401 of its own —
-/// `resolve` still rejects anything that is not a live terminal id.
+/// Pull the token out of an `Authorization` header value. Only the
+/// `Bearer <token>` form is accepted: every first-party writer (MCP configs,
+/// hook CLI, status probe) sends the scheme, and a bare token is treated as
+/// missing (empty → `AuthError::Missing`) so the header follows RFC 6750
+/// strictly rather than accepting whatever a client happens to send.
 pub fn bearer(header: &str) -> &str {
-    header.strip_prefix("Bearer ").unwrap_or(header)
+    header.strip_prefix("Bearer ").unwrap_or("")
 }
 
 #[cfg(test)]
@@ -71,8 +72,15 @@ mod tests {
     }
 
     #[test]
-    fn bearer_passes_through_a_bare_token() {
-        assert_eq!(bearer("abc-123"), "abc-123");
+    fn bearer_rejects_a_bare_token() {
+        assert_eq!(bearer("abc-123"), "");
+        assert_eq!(resolve(bearer("abc-123"), is_live), Err(AuthError::Missing));
+    }
+
+    #[test]
+    fn bearer_rejects_other_schemes() {
+        assert_eq!(bearer("Basic abc-123"), "");
+        assert_eq!(bearer("bearerabc-123"), "");
     }
 
     #[test]

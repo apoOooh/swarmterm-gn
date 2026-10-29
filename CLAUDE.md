@@ -191,7 +191,14 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   short nudge is typed into an idle pane (sustained idle, `NUDGE_IDLE_MS`),
   via `deliverPromptToTerminal` which bypasses broadcast fan-out on purpose.
   `mode: "execute"` pastes + runs a full prompt and is server-rejected toward
-  plain-shell members. Codex enrollment rewrites `~/.codex/config.toml` with
+  plain-shell members. Agent (MCP) executes are also refused unless
+  `AppState.agent_policy` (`agent_policy.rs`, default off, pushed by
+  `agent-policy-store` via `agent_policy_set`, Settings → Terminal → Agent
+  safety) allows them — refused with a "use probe" message, never silently
+  downgraded; the Moderator's `war_room_moderator_send` is not gated.
+  Bypass/YOLO launch modes (`dangerous` in `templates.ts`) are confirmed on
+  selection, badged red, and never inherited by `worktree.spawn` workers
+  (`lib/launch-mode-safety.ts`). Codex enrollment rewrites `~/.codex/config.toml` with
   the concrete URL on every boot (`mcp/config.rs::register_codex`).
   "Connected" is set by the first inbound MCP request carrying the pane's
   bearer (`record_client` middleware → `connect_war_room_member`) and again

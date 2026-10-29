@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type ReactElement } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { Check, Minus, Plus } from 'lucide-react'
 import { platformShells, type ShellId, type ShellMeta } from '@/lib/terminal-pref'
 import {
@@ -26,6 +26,9 @@ import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { setSavedPaneIds } from '@/store/saved-workspaces-store'
 import { TEMPLATES, isTemplateAvailable, launchMode } from '@/lib/templates'
 import { AgentIcon } from '@/components/AgentIcon'
+import { DangerousModeDialog, type PendingDangerousMode } from '@/components/DangerousModeDialog'
+import { isDangerousLaunchMode } from '@/lib/launch-mode-safety'
+import { useAgentPolicyStore } from '@/store/agent-policy-store'
 import { listAvailableShells, type AvailableShell } from '@/tauri/shell'
 import {
   getTerminalHostSettings,
@@ -131,6 +134,8 @@ export function TerminalPanel(): ReactElement {
 
       <DefaultLaunchModeSettings />
 
+      <AgentSafetySettings />
+
       <BuildPrioritySettings />
       <EnvironmentSettings />
       <StatusLineSettings />
@@ -204,6 +209,22 @@ function DefaultLaunchModeSettings(): ReactElement {
   const prefs = useAgentPrefStore((s) => s.defaultLaunchModes)
   const setDefaultLaunchMode = useAgentPrefStore((s) => s.setDefaultLaunchMode)
   const agents = TEMPLATES.filter((t) => t.launchModes !== undefined && t.launchModes.length > 0)
+  // Bypass / YOLO as the default for every new pane is confirmed first.
+  const [pending, setPending] = useState<PendingDangerousMode | undefined>(undefined)
+  // Settings owns the keyboard (no terminal to return to), so focus goes back
+  // to the mode button that opened the dialog instead of falling to <body>.
+  const trigger = useRef<HTMLElement | null>(null)
+  const choose = (agentId: string, modeId: string, active: boolean, el: HTMLElement): void => {
+    if (!active && isDangerousLaunchMode(agentId, modeId)) {
+      trigger.current = el
+      setPending({ agentId, modeId })
+    } else setDefaultLaunchMode(agentId, modeId)
+  }
+  const close = (): void => {
+    setPending(undefined)
+    const el = trigger.current
+    setTimeout(() => el?.focus(), 0)
+  }
 
   return (
     <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
@@ -232,12 +253,13 @@ function DefaultLaunchModeSettings(): ReactElement {
                       key={m.id}
                       type="button"
                       aria-pressed={active}
-                      onClick={() => setDefaultLaunchMode(t.id, m.id)}
+                      onClick={(e) => choose(t.id, m.id, active, e.currentTarget)}
                       className={cn(
                         'flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm transition-colors',
                         active
                           ? 'border-primary/50 text-foreground ring-2 ring-primary/15'
-                          : 'border-pane-border text-muted-foreground hover:bg-muted/40'
+                          : 'border-pane-border text-muted-foreground hover:bg-muted/40',
+                        m.dangerous && 'text-red-500'
                       )}
                     >
                       {m.label}
@@ -249,6 +271,44 @@ function DefaultLaunchModeSettings(): ReactElement {
             </div>
           )
         })}
+      </div>
+      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+        Panes started by another agent (worktree.spawn) never start in a red mode: they fall back to this default, or
+        to the provider's first mode if this default is red.
+      </p>
+      <DangerousModeDialog
+        pending={pending}
+        onCancel={close}
+        onConfirm={() => {
+          if (pending) setDefaultLaunchMode(pending.agentId, pending.modeId)
+          close()
+        }}
+      />
+    </section>
+  )
+}
+
+/**
+ * "Agent safety": what one agent may make other panes do. Stored here,
+ * enforced in Rust (agent_policy.rs) so an agent cannot route around it.
+ */
+function AgentSafetySettings(): ReactElement {
+  const policy = useAgentPolicyStore((s) => s.policy)
+  const setPolicy = useAgentPolicyStore((s) => s.setPolicy)
+  return (
+    <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+      <h2 className="text-sm font-semibold text-foreground">Agent safety</h2>
+      <div className="mt-4 grid gap-4">
+        <ToggleRow
+          label="Allow agents to run prompts in other panes"
+          description={
+            'War Room "execute": an agent pastes a prompt into another pane and runs it. Off: agents can only send ' +
+            'messages (probe) that the other agent reads and decides on. Your own sends from the War Room are not affected. ' +
+            'Not covered: the task prompt an agent gives a new worker pane it spawns (worktree.spawn), which always starts in a safe mode.'
+          }
+          checked={policy.allowWarRoomExecute}
+          onChange={(on) => setPolicy({ allowWarRoomExecute: on })}
+        />
       </div>
     </section>
   )

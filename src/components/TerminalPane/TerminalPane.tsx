@@ -21,6 +21,8 @@ import { MediaBadge } from '@/components/TerminalPane/MediaBadge'
 import { SearchOverlay } from '@/components/TerminalPane/SearchOverlay'
 import { PaneHeader } from './PaneHeader'
 import { HandoffBriefDialog } from './HandoffBriefDialog'
+import { DangerousModeDialog, type PendingDangerousMode } from '@/components/DangerousModeDialog'
+import { isDangerousLaunchMode } from '@/lib/launch-mode-safety'
 import { ThreadDialog } from './ThreadDialog'
 import { canShowThread } from '@/lib/thread-view'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
@@ -254,6 +256,8 @@ export function TerminalPane({
   const paneShellFlavor = shellFlavor(resolvedShellId, isWindowsPlatform())
 
   const [status, setStatus] = useState<TerminalStatus>(() => getTerminalStatus(terminalId))
+  // Bypass / YOLO picked from the agent menu waits here for confirmation.
+  const [pendingMode, setPendingMode] = useState<PendingDangerousMode | undefined>(undefined)
 
   // Attach the live terminal to this pane's container and mirror its status.
   // Keyed on terminalId only: remounts (sibling close → tree collapse) re-attach
@@ -470,7 +474,15 @@ export function TerminalPane({
         hasCwdOverride={leaf.cwd !== undefined}
         launchModeId={resolvedLaunchMode}
         onAgentChange={(id) => setPaneAgent(leafId, id)}
-        onLaunchModeChange={(id) => setPaneLaunchMode(leafId, id)}
+        onLaunchModeChange={(id) => {
+          // Re-picking the running mode is no new risk; only a switch into
+          // Bypass / YOLO asks first.
+          if (id !== resolvedLaunchMode && isDangerousLaunchMode(resolvedAgentId, id)) {
+            setPendingMode({ agentId: resolvedAgentId, modeId: id })
+          } else {
+            setPaneLaunchMode(leafId, id)
+          }
+        }}
         onPickSession={() => pickPaneSession(leafId)}
         onShellChange={(id) => setPaneShell(leafId, id)}
         onChoosePath={() => void handleChoosePath()}
@@ -511,6 +523,16 @@ export function TerminalPane({
         paneNumber={paneNumber}
         ctxPct={ctxPct}
         warRoom={warRoomStatus}
+      />
+
+      <DangerousModeDialog
+        pending={pendingMode}
+        returnTo={terminalId}
+        onCancel={() => setPendingMode(undefined)}
+        onConfirm={() => {
+          if (pendingMode) setPaneLaunchMode(leafId, pendingMode.modeId)
+          setPendingMode(undefined)
+        }}
       />
 
       <HandoffBriefDialog

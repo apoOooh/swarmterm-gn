@@ -2,6 +2,7 @@ import { invoke, Channel } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { ShellId } from '@/lib/terminal-pref'
 import type { EnvPolicy } from '@/lib/env-policy'
+import type { AgentPolicy } from '@/lib/agent-policy'
 import type { PrioritySettings } from '@/lib/build-priority'
 
 /**
@@ -188,6 +189,11 @@ export const writeTerminalChecked = (id: string, expectedSpawnId: string, data: 
 /** Settings → Terminal "Environment": applies to the next spawned pane or routine. */
 export function setEnvPolicy(policy: EnvPolicy): Promise<void> {
   return invoke('env_policy_set', { policy })
+}
+
+/** Settings → Terminal → Agent safety: checked by Rust on every agent MCP call (War Room execute). */
+export function setAgentPolicy(policy: AgentPolicy): Promise<void> {
+  return invoke('agent_policy_set', { policy })
 }
 
 /**

@@ -123,8 +123,18 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Fresh profile: a new Claude Code pane starts in normal mode (header shows
       "Default"; Claude asks before an edit).
 - [ ] Settings → Terminal → Default launch mode → Claude Code = Bypass permissions:
-      a new Claude pane starts bypassed; an already running pane is not restarted
-      and keeps its mode. Restart the app: the choice is kept.
+      a confirmation explains the risk; Cancel (or Esc) keeps the old default.
+      Confirm: a new Claude pane starts bypassed; an already running pane is not
+      restarted and keeps its mode. Restart the app: the choice is kept.
+- [ ] Pane header agent menu → Bypass permissions (Codex: YOLO): the confirmation
+      appears and owns the keyboard (typing does not reach the pane); Cancel keeps
+      the mode, confirm restarts in it.
+- [ ] From Settings → Default launch mode, pick Bypass → the confirmation opens;
+      Esc closes only it (Settings stays open) and focus returns to the button. The header shows a red `BYPASS` / `YOLO`
+      badge; switching back to a safe mode removes it and asks nothing.
+- [ ] Worktree mode on, a bypassed Claude pane calls `worktree.spawn` → the
+      worker pane starts in Default (or the Settings default if that is safe),
+      with no red badge.
 - [ ] Pane header → Plan on a Claude pane: Claude restarts in plan mode and
       continues the conversation.
 - [ ] Codex default = Safe: a new Codex pane runs `-s read-only -a on-request`.
@@ -440,8 +450,13 @@ Do not mark them passed from the in-memory fixture alone.
       intro is typed into each pane.
 - [ ] **Probe:** agent A sends a probe → the transcript shows it, idle agent B
       is nudged and reads its inbox.
-- [ ] **Execute:** agent A sends execute → the prompt runs in pane B and the
-      transcript marks it orange.
+- [ ] **Execute off (default):** agent A sends execute → refused with a message
+      telling it to use probe; nothing reaches pane B. The Moderator's own
+      Execute from the composer still runs in pane B.
+- [ ] **Execute:** Settings → Terminal → Agent safety → allow agents to run
+      prompts in other panes; agent A sends execute → the prompt runs in pane B
+      and the transcript marks it orange. Turn it off again → the next execute
+      is refused without restarting anything.
 - [ ] **Revocation:** drag a chip out or press ✕ → the next tool call from that
       pane is refused with "not in the War Room".
 - [ ] **PTY death:** close a member pane → the transcript logs the leave and

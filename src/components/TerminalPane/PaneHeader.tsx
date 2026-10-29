@@ -303,7 +303,7 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
                 {agent.launchModes.map((m) => (
                   <DropdownMenuItem key={m.id} onSelect={() => props.onLaunchModeChange(m.id)}>
                     <Check aria-hidden="true" className={cn('h-3.5 w-3.5', m.id === mode.id ? 'opacity-100' : 'opacity-0')} />
-                    <span>{m.label}</span>
+                    <span className={cn(m.dangerous && 'text-red-500')}>{m.label}</span>
                   </DropdownMenuItem>
                 ))}
               </>
@@ -316,11 +316,22 @@ export function PaneHeader(props: PaneHeaderProps): React.ReactElement {
             )}
           </DropdownMenuContent>
         </DropdownMenu>
-        {mode !== undefined && (
-          <span className="px-0.5 text-[10px] uppercase text-muted-foreground" title={`Mode: ${mode.label}`}>
-            {mode.id}
-          </span>
-        )}
+        {mode !== undefined &&
+          (mode.dangerous ? (
+            // Red, filled badge: a pane that runs commands unchecked must be
+            // recognisable at a glance, not by reading a grey mode id.
+            <span
+              className="rounded bg-red-600 px-1 text-[10px] font-semibold uppercase text-white"
+              title={`Mode: ${mode.label} — runs commands without asking`}
+              aria-label={`${mode.label} mode: runs commands without asking`}
+            >
+              {mode.id}
+            </span>
+          ) : (
+            <span className="px-0.5 text-[10px] uppercase text-muted-foreground" title={`Mode: ${mode.label}`}>
+              {mode.id}
+            </span>
+          ))}
       </div>
     )
   })
