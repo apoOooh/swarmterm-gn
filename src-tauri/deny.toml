@@ -14,7 +14,23 @@ all-features = true
 version = 2
 yanked = "deny"
 unmaintained = "all"
-ignore = []
+ignore = [
+    # Unmaintained, no vulnerability. The unic-* crates are pulled only by
+    # urlpattern 0.3 <- tauri-utils 2.9 (tauri, tauri-build); no urlpattern
+    # release without them is reachable from tauri 2.11. They do Unicode
+    # identifier tables for URL patterns, compiled in, no untrusted input
+    # from us. Revisit when tauri-utils moves off urlpattern 0.3.
+    { id = "RUSTSEC-2025-0075", reason = "unic-char-range: unmaintained, via urlpattern <- tauri-utils; no fixed tauri release yet" },
+    { id = "RUSTSEC-2025-0080", reason = "unic-common: unmaintained, via urlpattern <- tauri-utils; no fixed tauri release yet" },
+    { id = "RUSTSEC-2025-0081", reason = "unic-char-property: unmaintained, via urlpattern <- tauri-utils; no fixed tauri release yet" },
+    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: unmaintained, via urlpattern <- tauri-utils; no fixed tauri release yet" },
+    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: unmaintained, via urlpattern <- tauri-utils; no fixed tauri release yet" },
+    # Unmaintained, no vulnerability. serial 0.4 is an unconditional
+    # dependency of portable-pty 0.8 (our direct dep, in swarmterm and
+    # swarmterm-host); we never open serial ports, only ConPTY. Fixed by the
+    # portable-pty 0.9 upgrade, which is an API change tracked separately.
+    { id = "RUSTSEC-2017-0008", reason = "serial: unmaintained, via portable-pty 0.8; serial ports unused; revisit with portable-pty 0.9 upgrade" },
+]
 
 [licenses]
 version = 2
