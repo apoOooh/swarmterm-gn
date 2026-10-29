@@ -69,7 +69,7 @@ contains telemetry or personal data beyond what any HTTPS request carries
 | `api.github.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`: lists and downloads releases of the buzzkey voice companion (`apoOooh/buzzkey`) | When you click Check or Install in Settings → Voice; and, only if buzzkey is installed and connected, one release check 20 seconds after start and then every 24 hours | Install: off until you click. Update check: only with buzzkey connected. Automatic install: off (`src-tauri/src/voice/companion/`, `src/lib/buzzkey-update.ts`) |
 | `huggingface.co` (`ggerganov/whisper.cpp`) and the Hugging Face download hosts it redirects to (for example `cdn-lfs.hf.co`, `*.xethub.hf.co`): downloads a speech recognition model | When you click to download a model in Settings → Voice | Off (`src-tauri/src/voice/speech/model.rs`) |
 | Web preview: loads the address you or an agent in your pane open; text that is not an address becomes a Google search (`www.google.com`) | When a preview is opened | Off until opened (`src-tauri/src/preview.rs`, `src/lib/web-url.ts`) |
-| Images linked from Markdown (`https:` only) or HTML files you preview | When you open such a preview | Follows the files you open |
+| Images linked from Markdown files you preview (`https:` only), and anything an HTML file you preview loads inside its sandboxed frame | When you open such a preview | Follows the files you open |
 | Links you click (documentation, file links) open in your default browser | On click | Off |
 
 Downloads of buzzkey are checked against a signature and SHA-256 hashes before

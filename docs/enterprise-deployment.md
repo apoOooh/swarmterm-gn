@@ -6,7 +6,7 @@ usually asks for and points to the authoritative documents.
 
 ## Editions
 
-Which build to deploy, and what differs between them: [editions.md](editions.md).
+Which build to deploy (standard or the `corp` build with restricted defaults), and what differs between them: [editions.md](editions.md).
 
 ## Install
 
