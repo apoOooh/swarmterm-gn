@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-## [1.25.2] - 2026-10-29
+## [1.25.3] - 2026-10-30
 
-1.25.0 and 1.25.1 were tagged but never published: their release checks failed (Rust formatting and one Clippy lint, then the new priority tests could not find `ping` on the CI runner). 1.25.2 ships the same changes.
+1.25.0, 1.25.1 and 1.25.2 were tagged but never published: their release checks failed (Rust formatting and one Clippy lint, then the new priority tests could not find `ping` and `node` on the CI runner; the tests now start every program by its full path). 1.25.3 ships the same changes.
 
 ## [1.25.0] - 2026-10-29
 
