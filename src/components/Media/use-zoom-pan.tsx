@@ -230,7 +230,7 @@ export function ZoomableImage({ src, alt, className, onError }: { src: string; a
   const img = useRef<HTMLImageElement>(null)
   const zoom = useZoomPan({ container, img, enabled: true, mode: 'view', resetKey: src })
   // overflow-hidden: a transformed child would otherwise grow the scroll area.
-  return <div ref={container} className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden ${className}`}>
+  return <div ref={container} className={`relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden ${className}`}>
     <img key={src} ref={img} src={src} alt={alt} className="max-h-full max-w-full select-none object-contain" draggable={false} onError={onError} />
     <ZoomControls zoom={zoom} />
   </div>

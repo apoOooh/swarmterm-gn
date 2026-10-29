@@ -50,13 +50,16 @@ export function MediaPanel(): ReactElement {
     return () => el.removeEventListener('wheel', onWheel)
   }, [hasItems])
   if (!selected) {
-    return <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
+    return <div className="flex min-w-0 flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
       <p>Images and videos whose paths appear in a pane, and clipboard images (if enabled), show up here. Nothing here is visible to agents.</p>
     </div>
   }
   const canAnnotate = selected.opened && selected.kind === 'image'
   const annotate = canAnnotate && annotating !== null && samePath(annotating, selected.path)
-  return <div className="flex min-h-0 flex-1 flex-col">
+  // min-w-0: the panel body is a flex row, and without it this column grows to
+  // the image's natural width (its min-content), so a large image is centred
+  // in a box wider than the clipped panel and shows up off to the right.
+  return <div className="flex min-h-0 min-w-0 flex-1 flex-col">
     <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1 text-xs text-muted-foreground">
       <span className="min-w-0 flex-1 truncate" title={selected.path}>{itemName(selected)} · {selected.source} · {time(selected.shownAt)}</span>
       {/* Only an opened image: never fetch an unopened item, and videos have no single frame to mark. */}
