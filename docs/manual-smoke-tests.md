@@ -305,15 +305,13 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] The Swarmterm MCP server lists no `media.*` tool, and its instructions do
       not mention the Media panel.
 - [ ] Run `echo C:\path with spaces\shot.png` (existing file) in a pane:
-      a "1 new image/video" pill appears, the strip shows `shot.png` with a
-      placeholder icon (no thumbnail), the Media panel does not open, typing
-      continues in the shell.
-- [ ] Before opening it, the devtools network log shows no request for the
-      file; requesting its `swarmterm-media://localhost/unrooted?path=...` URL
-      is refused (403).
+      a "1 new image/video" pill appears, the strip shows `shot.png` with its
+      thumbnail, the Media panel does not open, typing continues in the shell.
+- [ ] A large image (wider than the panel) shown in the Media tab is centred
+      and scaled to fit the viewer, never shifted off to the right.
 - [ ] Click the pill: the Media tab opens on that image and shows it, the pill
       is gone and keystrokes still land in the terminal.
-- [ ] Click a second, unopened strip item: it loads and shows. An MP4 plays
+- [ ] Click a second strip item: it loads and shows. An MP4 plays
       and seeking works (range requests).
 - [ ] Ctrl+click a media path outside the project in the terminal: the Media
       tab opens on it. Ctrl+click a `.txt` path still opens the editor/file
@@ -377,8 +375,8 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Press Esc while hovering: the popup closes and the agent does NOT receive
       the Esc. Esc with the pointer elsewhere goes to the terminal.
 - [ ] Click an item: the Media tab opens on it, the popup closes, typing still
-      goes to the terminal and the image loads. Unopened rows show the
-      placeholder icon; an opened video row shows the film icon.
+      goes to the terminal and the image loads. Image rows show thumbnails;
+      a video row shows the film icon.
 - [ ] With the web preview open, trigger the popup: the preview hides while the
       popup is up and comes back after it hides.
 - [ ] Turn on Clipboard images, press Win+Shift+S and snip: a `clipboard` item
