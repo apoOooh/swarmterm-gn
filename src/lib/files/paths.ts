@@ -1,4 +1,4 @@
-// Adapted from parsingk/Astera, debc3098; Apache-2.0. See licenses/Astera/.
+// Adapted from parsingk/Astera, debc3098; Apache-2.0. See third-party-licenses/Astera/.
 /** The parent directory of a path — handles both backslashes and slashes, keeps the original
  *  separator. A pure string helper with no runtime dependency such as node:path, so the renderer
  *  (web tsconfig) can import it safely too. */
