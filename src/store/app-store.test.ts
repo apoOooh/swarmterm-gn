@@ -1072,7 +1072,7 @@ describe('worktree panes', () => {
     expect(after.focusedLeafId).toBe(worker.id)
   })
 
-  it('spawnWorktreePane inherits the requester launch mode for the same agent only', () => {
+  it('spawnWorktreePane never lets a worker inherit bypass, and keeps safe modes per agent', () => {
     const store = workspaceWithWorktrees()
     const requester = collectLeaves(store.getState().workspaces[0].layout)[0]
     store.getState().seedPaneLaunchMode(requester.id, 'bypass')
@@ -1087,8 +1087,31 @@ describe('worktree panes', () => {
     spawn('same')
     spawn('other', 'codex')
     const leaves = collectLeaves(store.getState().workspaces[0].layout)
-    expect(leaves.find((l) => l.worktreeBranch === 'same')?.launchMode).toBe('bypass')
-    expect(leaves.find((l) => l.worktreeBranch === 'other')?.launchMode).toBeUndefined()
+    expect(leaves.find((l) => l.worktreeBranch === 'same')?.launchMode).toBe('default')
+    expect(leaves.find((l) => l.worktreeBranch === 'other')?.launchMode).toBe('auto')
+  })
+
+  it('spawnWorktreePane inherits a safe requester mode and skips a bypass Settings default', () => {
+    const store = workspaceWithWorktrees()
+    const requester = collectLeaves(store.getState().workspaces[0].layout)[0]
+    store.getState().seedPaneLaunchMode(requester.id, 'plan')
+    store.getState().spawnWorktreePane({
+      requesterTerminalId: requester.terminalId,
+      path: 'C:/dev/myapp.worktrees/a',
+      branch: 'a',
+      prompt: 'x'
+    })
+    store.getState().spawnWorktreePane({
+      requesterTerminalId: requester.terminalId,
+      path: 'C:/dev/myapp.worktrees/b',
+      branch: 'b',
+      prompt: 'x',
+      agentId: 'codex',
+      launchModePrefs: { codex: 'yolo' }
+    })
+    const leaves = collectLeaves(store.getState().workspaces[0].layout)
+    expect(leaves.find((l) => l.worktreeBranch === 'a')?.launchMode).toBe('plan')
+    expect(leaves.find((l) => l.worktreeBranch === 'b')?.launchMode).toBe('auto')
   })
 
   it('spawnWorktreePane is a no-op when worktreeMode is off or requester unknown', () => {

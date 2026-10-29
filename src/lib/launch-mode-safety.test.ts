@@ -1,0 +1,76 @@
+import { describe, it, expect } from 'vitest'
+import { dangerousModeWarning, isDangerousLaunchMode, workerLaunchMode } from './launch-mode-safety'
+
+describe('isDangerousLaunchMode', () => {
+  it('flags Claude bypass and Codex YOLO only', () => {
+    expect(isDangerousLaunchMode('claude-code', 'bypass')).toBe(true)
+    expect(isDangerousLaunchMode('codex', 'yolo')).toBe(true)
+    expect(isDangerousLaunchMode('claude-code', 'default')).toBe(false)
+    expect(isDangerousLaunchMode('claude-code', 'auto')).toBe(false)
+    expect(isDangerousLaunchMode('codex', 'auto')).toBe(false)
+  })
+
+  it('is false for unknown ids and agents without modes', () => {
+    expect(isDangerousLaunchMode('claude-code', 'nope')).toBe(false)
+    expect(isDangerousLaunchMode('terminal', 'bypass')).toBe(false)
+    expect(isDangerousLaunchMode(undefined, undefined)).toBe(false)
+  })
+})
+
+describe('dangerousModeWarning', () => {
+  it('names the mode and the risk for a dangerous mode', () => {
+    const w = dangerousModeWarning('claude-code', 'bypass')
+    expect(w?.title).toContain('Bypass permissions')
+    expect(w?.body).toMatch(/without asking/)
+  })
+
+  it('is undefined for a safe mode', () => {
+    expect(dangerousModeWarning('codex', 'auto')).toBeUndefined()
+  })
+})
+
+describe('workerLaunchMode', () => {
+  it('never inherits a bypass requester mode: falls back to the template default', () => {
+    expect(
+      workerLaunchMode({ agentId: 'claude-code', requesterAgentId: 'claude-code', requesterMode: 'bypass', prefs: {} })
+    ).toBe('default')
+    expect(workerLaunchMode({ agentId: 'codex', requesterAgentId: 'codex', requesterMode: 'yolo', prefs: {} })).toBe(
+      'auto'
+    )
+  })
+
+  it('uses the settings default when the requester is bypassed and the default is safe', () => {
+    expect(
+      workerLaunchMode({
+        agentId: 'claude-code',
+        requesterAgentId: 'claude-code',
+        requesterMode: 'bypass',
+        prefs: { 'claude-code': 'acceptEdits' }
+      })
+    ).toBe('acceptEdits')
+  })
+
+  it('ignores a dangerous settings default too', () => {
+    expect(
+      workerLaunchMode({ agentId: 'claude-code', requesterAgentId: 'claude-code', prefs: { 'claude-code': 'bypass' } })
+    ).toBe('default')
+    expect(workerLaunchMode({ agentId: 'codex', requesterAgentId: 'claude-code', prefs: { codex: 'yolo' } })).toBe('auto')
+  })
+
+  it('keeps a safe requester mode for a same-agent worker', () => {
+    expect(
+      workerLaunchMode({ agentId: 'claude-code', requesterAgentId: 'claude-code', requesterMode: 'plan', prefs: {} })
+    ).toBe('plan')
+  })
+
+  it('does not carry a mode across agents (mode ids are per-agent)', () => {
+    expect(
+      workerLaunchMode({ agentId: 'codex', requesterAgentId: 'claude-code', requesterMode: 'auto', prefs: { codex: 'safe' } })
+    ).toBe('safe')
+  })
+
+  it('is undefined for agents without modes', () => {
+    expect(workerLaunchMode({ agentId: 'terminal', requesterAgentId: 'terminal', prefs: {} })).toBeUndefined()
+    expect(workerLaunchMode({ agentId: undefined, prefs: {} })).toBeUndefined()
+  })
+})

@@ -22,6 +22,8 @@ import {
 import type { ShellId } from '@/lib/terminal-pref'
 import { withCloseGuard } from '@/lib/close-guard'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
+import { workerLaunchMode } from '@/lib/launch-mode-safety'
+import type { LaunchModePrefs } from '@/lib/agent-pref'
 import { clearWorktree } from '@/tauri/git'
 import { isTransientLock } from '@/lib/worktree-cleanup'
 import { awaitTerminalRelocated } from '@/lib/terminal-registry'
@@ -239,6 +241,8 @@ export interface AppActions {
     branch: string
     agentId?: string
     prompt: string
+    /** Settings → default launch mode per agent (lib/launch-mode-safety). */
+    launchModePrefs?: LaunchModePrefs
   }) => void
   clearWorktreeBinding: (path: string) => void
   clearWorktrees: (targets: ClearTarget[]) => Promise<void>
@@ -849,6 +853,12 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       // Fall back to the requester's agent; a plain-shell requester yields a
       // plain shell in the worktree — visible, never a silent drop.
       const agentId = p.agentId ?? requester.agentId
+      const launchMode = workerLaunchMode({
+        agentId,
+        requesterAgentId: requester.agentId,
+        requesterMode: requester.launchMode,
+        prefs: p.launchModePrefs ?? {}
+      })
       const newLeaf: LeafNode = {
         type: 'leaf',
         id: uid(),
@@ -860,12 +870,11 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         cwd: p.path,
         worktreeBranch: p.branch,
         initialPrompt: p.prompt,
-        // A worker runs unattended: inherit the requester's mode (same agent
-        // only — mode ids are per-agent) so a bypassed orchestrator doesn't
-        // spawn workers that stall on the first permission prompt.
-        ...(agentId === requester.agentId && requester.launchMode !== undefined
-          ? { launchMode: requester.launchMode }
-          : {})
+        // A safe requester mode carries over (same agent only), but bypass /
+        // YOLO never does: an agent asked over MCP must not be able to
+        // multiply its own unchecked mode. Explicit, so a bypass Settings
+        // default cannot apply to the worker later either.
+        ...(launchMode !== undefined ? { launchMode } : {})
       }
       return {
         workspaces: s.workspaces.map((w) =>
