@@ -35,8 +35,9 @@ can add locks on top but never lift those. See [Editions](editions.md).
 |---|---|---|---|
 | `DisableBypassModes` | DWORD | Refuses any pane whose launch line switches an agent's approval prompts or sandbox off: `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`, any other `--dangerously-*` / `--allow-dangerously-*` flag, `--permission-mode bypassPermissions`, `--yolo`, `-y`, `--approval-mode yolo`, `-s`/`--sandbox danger-full-access`, `-a`/`--ask-for-approval never`. Red launch modes are greyed out, and spawned workers can never inherit them. | `pty.rs` (`spawn_terminal`), `agent_policy` override |
 | `DisableWarRoomExecute` | DWORD | Agents cannot run prompts in other panes (War Room `execute`). Probes and the user's own War Room sends still work. | `mcp/tools/warroom.rs` |
+| `DisableWarRoom` | DWORD | Turns the War Room off: panes cannot be added to a room, the user's War Room messages are refused, and every `war_room.*` MCP tool (`list_peers`, `send`, `read_inbox`, `read_peer`, `wait_peer`) is refused. The War Room tab shows "Managed by your administrator". Implies `DisableWarRoomExecute`. | `mcp/server.rs` (`war_room_caller`), `commands.rs` (`war_room_join`, `war_room_moderator_send`) |
 | `DisableWorktreeSpawn` | DWORD | The `worktree.spawn` MCP tool is refused. | `mcp/tools/worktree.rs` |
-| `DisableMcp` | DWORD | The local MCP server is not started, and Swarmterm removes its own entries from the agents' MCP configuration at start (entries it does not recognise as its own are never touched). The Settings → MCP switches stay off. | `lib.rs`, `mcp/toggle.rs` |
+| `DisableMcp` | DWORD | The local MCP server is not started, and Swarmterm removes its own entries from the agents' MCP configuration at start (entries it does not recognise as its own are never touched). The Settings → MCP switches stay off. The `/hook` and `/status` routes live on the same local server, so they go too: Claude Code hook events (agent state from hooks) and the status line's `mcp`/`ctx` reports stop, and panes fall back to reading the screen. | `lib.rs`, `mcp/toggle.rs` |
 | `DisableCompanion` | DWORD | No install or update of the buzzkey voice companion, no update checks, and its Windows autostart cannot be turned on (turning it off still works). An installed buzzkey can still be started and quit. | `voice/companion/mod.rs` |
 | `DisableModelDownload` | DWORD | No speech-model downloads for built-in dictation. Already downloaded models stay usable. | `voice/mod.rs` (`voice_model_download`) |
 | `DisableRoutineCommands` | DWORD | Routines of kind "Shell command" are refused. Agent routines are not affected. | `commands.rs` (`run_routine_command`) |
@@ -74,6 +75,7 @@ Windows Registry Editor Version 5.00
 [HKEY_LOCAL_MACHINE\Software\Policies\SwarmtermGN]
 "DisableBypassModes"=dword:00000001
 "DisableWarRoomExecute"=dword:00000001
+"DisableWarRoom"=dword:00000001
 "DisableWorktreeSpawn"=dword:00000001
 "DisableCompanion"=dword:00000001
 "DisableModelDownload"=dword:00000001

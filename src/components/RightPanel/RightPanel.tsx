@@ -36,6 +36,8 @@ export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}):
   const mode = useGitStore((s) => s.mode)
   // DisablePreviewBrowser: Rust refuses preview_open; no webview column at all.
   const previewLocked = usePolicyStore((s) => s.policy.disablePreviewBrowser)
+  // DisableWarRoom: Rust refuses joins, Moderator sends and every war_room.* tool.
+  const warRoomLocked = usePolicyStore((s) => s.policy.disableWarRoom)
   const setPanelOpen = useGitStore((s) => s.setPanelOpen)
 
   function handleClose(): void {
@@ -155,7 +157,12 @@ export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}):
           </div>
         )}
         {mode === 'git' && <GitPanel />}
-        {mode === 'warroom' && <WarRoomPanel />}
+        {mode === 'warroom' && warRoomLocked && (
+          <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
+            War Room: {MANAGED_LABEL}
+          </div>
+        )}
+        {mode === 'warroom' && !warRoomLocked && <WarRoomPanel />}
         {mode === 'media' && <MediaPanel />}
       </div>
     </div>

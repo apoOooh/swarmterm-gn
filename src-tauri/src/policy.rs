@@ -36,6 +36,7 @@ pub enum RegValue {
 pub struct AdminPolicy {
     pub disable_bypass_modes: bool,
     pub disable_war_room_execute: bool,
+    pub disable_war_room: bool,
     pub disable_worktree_spawn: bool,
     pub disable_mcp: bool,
     pub disable_companion: bool,
@@ -55,6 +56,7 @@ type FlagField = fn(&mut AdminPolicy) -> &mut bool;
 const FLAGS: &[(&str, FlagField)] = &[
     ("DisableBypassModes", |p| &mut p.disable_bypass_modes),
     ("DisableWarRoomExecute", |p| &mut p.disable_war_room_execute),
+    ("DisableWarRoom", |p| &mut p.disable_war_room),
     ("DisableWorktreeSpawn", |p| &mut p.disable_worktree_spawn),
     ("DisableMcp", |p| &mut p.disable_mcp),
     ("DisableCompanion", |p| &mut p.disable_companion),
@@ -140,6 +142,7 @@ impl Edition {
 pub enum Lock {
     BypassModes,
     WarRoomExecute,
+    WarRoom,
     WorktreeSpawn,
     Mcp,
     Companion,
@@ -153,6 +156,7 @@ impl Lock {
         match self {
             Lock::BypassModes => "DisableBypassModes",
             Lock::WarRoomExecute => "DisableWarRoomExecute",
+            Lock::WarRoom => "DisableWarRoom",
             Lock::WorktreeSpawn => "DisableWorktreeSpawn",
             Lock::Mcp => "DisableMcp",
             Lock::Companion => "DisableCompanion",
@@ -166,6 +170,7 @@ impl Lock {
         match self {
             Lock::BypassModes => "Bypass/YOLO launch modes are",
             Lock::WarRoomExecute => "War Room execute is",
+            Lock::WarRoom => "The War Room is",
             Lock::WorktreeSpawn => "worktree.spawn is",
             Lock::Mcp => "The Swarmterm MCP server is",
             Lock::Companion => "The voice companion (buzzkey) install and update are",
@@ -321,6 +326,7 @@ impl AdminPolicy {
         match lock {
             Lock::BypassModes => self.disable_bypass_modes,
             Lock::WarRoomExecute => self.disable_war_room_execute,
+            Lock::WarRoom => self.disable_war_room,
             Lock::WorktreeSpawn => self.disable_worktree_spawn,
             Lock::Mcp => self.disable_mcp,
             Lock::Companion => self.disable_companion,
@@ -385,7 +391,7 @@ impl AdminPolicy {
         user: crate::agent_policy::AgentPolicy,
     ) -> crate::agent_policy::AgentPolicy {
         let mut out = user;
-        if self.disable_war_room_execute {
+        if self.disable_war_room_execute || self.disable_war_room {
             out.allow_war_room_execute = false;
         }
         if self.disable_bypass_modes {
@@ -395,9 +401,11 @@ impl AdminPolicy {
     }
 
     /// Refuses a pane launch line that switches an agent's own safety net
-    /// off. The renderer appends launch-mode args to the template command,
-    /// so checking the final line here also covers `worktree.spawn` workers,
-    /// restores and hand-edited templates.
+    /// off. `line` is the agent command plus its launch-mode args (the
+    /// renderer passes it apart from a worker's task brief, see
+    /// `pty::launch_line_to_check`), so prose in a brief is never parsed as
+    /// flags. A guard against mistakes and stale settings, not a sandbox: a
+    /// hand-edited or obfuscated template can still evade it.
     pub fn check_launch_line(&self, line: &str) -> Result<(), String> {
         if !self.disable_bypass_modes {
             return Ok(());
@@ -414,43 +422,132 @@ impl AdminPolicy {
     }
 }
 
-/// First token of `line` that starts an agent without its approval prompts
-/// or sandbox. Mirrors the `dangerous` modes in `src/lib/templates.ts` plus
-/// the known equivalents of Claude Code, Codex and Gemini-style CLIs. A
-/// denylist: a flag a CLI adds later is not covered until it is listed here.
+/// Splits a typed command line into words the way the common shells would:
+/// whitespace separates, `'...'` and `"..."` group (quotes removed, adjacent
+/// parts join, so PowerShell's `''` escape and POSIX `'\''` both collapse
+/// into one word). Of the backslash escapes only `\'` is interpreted. Good enough for a mistake guard.
+pub(crate) fn shell_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        // POSIX `\'` outside quotes is a literal quote (the renderer's
+        // `'\''` escape). Other backslashes stay: Windows paths use them.
+        if quote.is_none() && c == '\\' && chars.peek() == Some(&'\'') {
+            cur.push(chars.next().unwrap_or('\''));
+            in_word = true;
+            continue;
+        }
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => cur.push(c),
+            None if c == '\'' || c == '"' => {
+                quote = Some(c);
+                in_word = true;
+            }
+            None if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            None => {
+                cur.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if in_word {
+        words.push(cur);
+    }
+    words
+}
+
+/// Program name of a command word: file name, lower case, no `.exe`/`.cmd`.
+fn program_name(word: &str) -> String {
+    let base = word.rsplit(['/', '\\']).next().unwrap_or(word);
+    let base = base.to_ascii_lowercase();
+    for ext in [".exe", ".cmd", ".bat", ".ps1"] {
+        if let Some(stem) = base.strip_suffix(ext) {
+            return stem.to_string();
+        }
+    }
+    base
+}
+
+/// First word of `line` that starts an agent without its approval prompts
+/// or sandbox (or, for Claude's Auto mode, with per-action prompts handed to
+/// its classifier). Mirrors the `dangerous` modes in `src/lib/templates.ts`
+/// plus the known equivalents of the supported CLIs. A denylist and a guard
+/// against mistakes, not a sandbox: a flag a CLI adds later, a settings file
+/// passed by path, an alias or an obfuscated line are not covered.
 pub fn bypass_flag(line: &str) -> Option<String> {
-    let tokens: Vec<String> = line
-        .split_whitespace()
-        .map(|t| {
-            t.trim_matches(|c| c == '"' || c == '\'')
-                .to_ascii_lowercase()
-        })
+    let words: Vec<String> = shell_words(line)
+        .iter()
+        .map(|w| w.to_ascii_lowercase())
         .collect();
-    for (i, t) in tokens.iter().enumerate() {
-        let flag = t.split('=').next().unwrap_or(t);
+    // The agent may sit behind a launcher (`npx gemini`, `& 'C:\..\gemini.exe'`,
+    // `cmd /c gemini`), so look at the first few words, not only the first.
+    let program = words
+        .iter()
+        .take(4)
+        .map(|w| program_name(w))
+        .find(|p| matches!(p.as_str(), "gemini" | "qwen" | "cursor-agent"))
+        .unwrap_or_default();
+    for (i, t) in words.iter().enumerate() {
+        let (flag, inline) = match t.split_once('=') {
+            Some((f, v)) if f.starts_with('-') => (f, Some(v)),
+            _ => (t.as_str(), None),
+        };
         if flag.starts_with("--dangerously-")
             || flag.starts_with("--allow-dangerously-")
             || flag == "--yolo"
+            // Copilot CLI: approve every tool without asking.
+            || flag == "--allow-all-tools"
+            || flag == "--allow-all"
         {
             return Some(flag.to_string());
         }
-        if flag == "-y" {
+        // Short/generic flags only mean bypass for specific agents; `-y` is
+        // also npx's "yes" and `-f` is everyone's "force".
+        let agent_flag = match program.as_str() {
+            "gemini" | "qwen" => flag == "-y",
+            "cursor-agent" => flag == "-f" || flag == "--force",
+            _ => false,
+        };
+        if agent_flag {
             return Some(flag.to_string());
         }
         // Option + value pairs, as `--opt value` or `--opt=value`.
-        let value = || match t.split_once('=') {
-            Some((_, v)) => Some(v.to_string()),
-            None => tokens.get(i + 1).cloned(),
-        };
+        let value = inline
+            .map(str::to_string)
+            .or_else(|| words.get(i + 1).cloned())
+            .unwrap_or_default();
         let bad = match flag {
-            "--permission-mode" => value().as_deref() == Some("bypasspermissions"),
-            "-s" | "--sandbox" => value().as_deref() == Some("danger-full-access"),
-            "-a" | "--ask-for-approval" => value().as_deref() == Some("never"),
-            "--approval-mode" => value().as_deref() == Some("yolo"),
+            "--permission-mode" => matches!(value.as_str(), "bypasspermissions" | "auto"),
+            "-s" | "--sandbox" => value == "danger-full-access",
+            "-a" | "--ask-for-approval" => value == "never",
+            "--approval-mode" => value == "yolo",
+            // Codex config overrides: `-c key=value`, value maybe quoted.
+            "-c" | "--config" => {
+                let kv: String = value
+                    .chars()
+                    .filter(|c| !c.is_whitespace() && *c != '"' && *c != '\'')
+                    .collect();
+                kv == "approval_policy=never" || kv == "sandbox_mode=danger-full-access"
+            }
+            // Claude: inline settings JSON that switches the default mode.
+            "--settings" => {
+                let json: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+                json.contains("\"defaultmode\":\"bypasspermissions\"")
+                    || json.contains("\"defaultmode\":\"auto\"")
+            }
             _ => false,
         };
         if bad {
-            return Some(format!("{flag} {}", value().unwrap_or_default()));
+            return Some(format!("{flag} {value}"));
         }
     }
     None
@@ -887,6 +984,11 @@ mod tests {
         let eff = admin.apply_agent(agent.clone());
         assert!(!eff.allow_war_room_execute);
         assert!(eff.workers_inherit_bypass);
+        let room_off = AdminPolicy {
+            disable_war_room: true,
+            ..Default::default()
+        };
+        assert!(!room_off.apply_agent(agent.clone()).allow_war_room_execute);
         let bypass = AdminPolicy {
             disable_bypass_modes: true,
             ..Default::default()
@@ -910,6 +1012,20 @@ mod tests {
             "codex --ask-for-approval never",
             "gemini -y",
             "qwen --approval-mode yolo",
+            "claude --permission-mode=\"bypassPermissions\"",
+            "claude --permission-mode auto",
+            "copilot --allow-all-tools",
+            "copilot --allow-all",
+            "cursor-agent --force",
+            "cursor-agent -f",
+            r"C:/tools/cursor-agent.exe -f",
+            "npx gemini -y",
+            r"& 'C:\bin\qwen.exe' -y",
+            "codex -c approval_policy=never",
+            "codex -c 'approval_policy=\"never\"'",
+            "codex --config sandbox_mode=danger-full-access",
+            r#"claude --settings '{"permissions": {"defaultMode": "bypassPermissions"}}'"#,
+            r#"claude --settings='{"permissions":{"defaultMode":"auto"}}'"#,
         ] {
             assert!(bypass_flag(line).is_some(), "{line}");
         }
@@ -920,6 +1036,11 @@ mod tests {
             "gemini --approval-mode default",
             "claude",
             "echo dangerously",
+            "npx -y create-vite",
+            "rm -f build.log",
+            "claude -y",
+            "codex -c model=o3",
+            r#"claude --settings '{"permissions":{"defaultMode":"plan"}}'"#,
         ] {
             assert!(bypass_flag(line).is_none(), "{line}");
         }
@@ -956,6 +1077,18 @@ mod tests {
     }
 
     #[test]
+    fn disable_war_room_parses_and_locks_only_the_war_room() {
+        let values: BTreeMap<String, RegValue> =
+            [("DisableWarRoom".to_string(), RegValue::Dword(1))].into();
+        let (p, _) = parse(&values);
+        assert!(p.disable_war_room && !p.disable_war_room_execute);
+        assert_eq!(p.active(), vec!["DisableWarRoom"]);
+        let err = p.check(Lock::WarRoom).unwrap_err();
+        assert!(err.contains("DisableWarRoom") && err.contains("War Room"));
+        assert!(p.check(Lock::Mcp).is_ok());
+    }
+
+    #[test]
     fn corp_edition_locks_what_infosec_rejected() {
         let corp = Edition::Corp.locks();
         for lock in [
@@ -973,6 +1106,8 @@ mod tests {
             Lock::WorktreeSpawn,
             Lock::PreviewBrowser,
             Lock::Mcp,
+            // Lockable by policy only (decision 2026-10-29).
+            Lock::WarRoom,
         ] {
             assert!(!corp.is_locked(lock), "{lock:?}");
         }

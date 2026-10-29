@@ -99,14 +99,24 @@ impl SwarmtermMcpServer {
             .unwrap_or("");
         let token = auth::bearer(header);
         let state = self.app.state::<AppState>();
-        let terminals = state
-            .terminals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        auth::resolve(token, |id| terminals.contains_key(id)).map_err(|e| match e {
+        auth::resolve(token, |t| state.live_session_owner(t)).map_err(|e| match e {
             AuthError::Missing => rmcp::ErrorData::invalid_request("missing bearer token", None),
             AuthError::Unknown => rmcp::ErrorData::invalid_request("unknown session", None),
         })
+    }
+
+    /// `caller` for every `war_room.*` tool: refused outright while the
+    /// `DisableWarRoom` policy is set, before the bearer is even resolved.
+    pub(crate) fn war_room_caller(
+        &self,
+        parts: &axum::http::request::Parts,
+    ) -> Result<TerminalId, rmcp::ErrorData> {
+        self.app
+            .state::<AppState>()
+            .admin_policy
+            .check(crate::policy::Lock::WarRoom)
+            .map_err(|m| rmcp::ErrorData::invalid_request(m, None))?;
+        self.caller(parts)
     }
 
     /// Gate + context for worktree tools: the calling terminal must belong to
@@ -228,7 +238,8 @@ pub fn axum_router(app: AppHandle) -> axum::Router {
         .with_state(app)
 }
 
-/// Middleware: stamp the caller's token into `AppState.mcp_clients`.
+/// Middleware: stamp the caller's pane id (resolved from its bearer secret)
+/// into `AppState.mcp_clients`.
 async fn record_client(
     AxumState(app): AxumState<AppHandle>,
     req: axum::extract::Request,
@@ -239,27 +250,22 @@ async fn record_client(
         .get(AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
     {
-        let token = auth::bearer(header).to_owned();
         let state = app.state::<AppState>();
-        // Only live pane ids are recorded: `seen` is pruned per PTY, so an
-        // arbitrary loopback token would otherwise stay in it forever.
-        let live = state
-            .terminals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(token.trim());
-        let first = live
-            && state
+        // Only live panes are recorded, keyed by pane id (never the secret):
+        // `seen` is pruned per PTY, so an arbitrary loopback token would
+        // otherwise stay in it forever.
+        if let Some(id) = state.live_session_owner(auth::bearer(header)) {
+            let first = state
                 .mcp_clients
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .touch(&token);
-        // A client reaching us (usually `initialize`) is the handshake: a
-        // member dragged in earlier flips to connected without first having
-        // to call a war_room tool (SWA-30). The token is only trusted as a
-        // room member id, and only live panes are members.
-        if first {
-            crate::commands::connect_war_room_member(&app, token.trim());
+                .touch(&id);
+            // A client reaching us (usually `initialize`) is the handshake: a
+            // member dragged in earlier flips to connected without first
+            // having to call a war_room tool (SWA-30).
+            if first {
+                crate::commands::connect_war_room_member(&app, &id);
+            }
         }
     }
     next.run(req).await
@@ -272,11 +278,7 @@ async fn record_client(
 fn live_caller(app: &AppHandle, headers: &HeaderMap) -> Option<String> {
     let token = auth::bearer(bearer_header(headers));
     let state = app.state::<AppState>();
-    let terminals = state
-        .terminals
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    auth::resolve(token, |id| terminals.contains_key(id))
+    auth::resolve(token, |t| state.live_session_owner(t))
         .ok()
         .map(|TerminalId(id)| id)
 }
@@ -357,13 +359,12 @@ async fn status_handler(
         &terminal_id,
         rate_limits::parse_query(query.as_deref()),
     );
-    let token = auth::bearer(bearer_header(&headers));
     let connected = app
         .state::<AppState>()
         .mcp_clients
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .has_seen(token);
+        .has_seen(&terminal_id);
     (
         StatusCode::OK,
         // The probe reads to EOF rather than implementing keep-alive framing.

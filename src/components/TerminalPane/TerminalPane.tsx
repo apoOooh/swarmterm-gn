@@ -246,6 +246,9 @@ export function TerminalPane({
           templateById(resolvedAgentId).spawnPromptFlag
         )
       : baseCommand)
+  // Same line without the brief, so prose in a brief never trips the
+  // backend's bypass-flag check.
+  const launchLine = leaf.startupCommand ?? resumeCommand ?? baseCommand
   useEffect(() => {
     if (leaf.launchMode === undefined && resolvedLaunchMode !== undefined) {
       seedPaneLaunchMode(leaf.id, resolvedLaunchMode)
@@ -270,6 +273,7 @@ export function TerminalPane({
       cwd: resolvedCwd,
       shellId: resolvedShellId,
       initialCommand: resolvedCommand,
+      launchLine,
       worktreeMode: worktreeMode || undefined,
       repoRoot: worktreeMode ? cwd : undefined,
       agentId: resolvedAgentId,
@@ -319,6 +323,7 @@ export function TerminalPane({
       cwd: resolvedCwd,
       shellId: resolvedShellId,
       initialCommand: resolvedCommand,
+      launchLine,
       worktreeMode: worktreeMode || undefined,
       repoRoot: worktreeMode ? cwd : undefined,
       agentId: resolvedAgentId,
@@ -327,7 +332,7 @@ export function TerminalPane({
     // A same-id respawn (agent/cwd/shell switch) starts a new session; the old
     // agent's title no longer describes it. Clear it — the new agent re-titles.
     useTerminalTitleStore.getState().clearTitle(terminalId)
-  }, [terminalId, resolvedCwd, resolvedShellId, resolvedCommand, resolvedAgentId, leaf.accountId])
+  }, [terminalId, resolvedCwd, resolvedShellId, resolvedCommand, launchLine, resolvedAgentId, leaf.accountId])
 
   // Pull keyboard focus into xterm when this pane becomes the focused one.
   useEffect(() => {

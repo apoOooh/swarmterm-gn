@@ -178,11 +178,13 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
 - **MCP server & session token.** On boot the Rust process binds a random
   loopback port and runs an `rmcp` Streamable-HTTP MCP server. Each PTY is
   spawned with `SWARMTERM_MCP_URL=http://127.0.0.1:<port>/mcp` and
-  `SWARMTERM_SESSION=<terminalId>`. The session UUID doubles as the bearer
-  token — the terminal's env is the only place it appears, and it stops
-  authorising the moment the PTY is killed (auth resolver checks the live
-  terminal map). To add a tool: drop it into `src-tauri/src/mcp/tools/` and
-  add one `mod` line.
+  `SWARMTERM_SESSION=<secret>`: a random bearer minted per spawn
+  (`mcp/session_tokens.rs`, rotated on respawn, kept in the host's `meta` for
+  reattach), never the terminalId — `war_room.list_peers` shows ids to peers.
+  Auth maps secret → pane id and stops the moment the PTY is killed (the
+  resolver checks the live terminal map); `mcp_clients` is keyed by pane id.
+  To add a tool: drop it into `src-tauri/src/mcp/tools/` and add one `mod`
+  line.
 - **War Room.** Multiple named rooms on `AppState.war_rooms` (`warroom.rs`:
   `WarRooms` registry over per-room `WarRoom` instances; default room seeded
   at boot, last room undeletable). A pane is in at most one room — drag onto

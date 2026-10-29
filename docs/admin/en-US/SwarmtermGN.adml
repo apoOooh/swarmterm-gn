@@ -10,10 +10,12 @@
       <string id="DisableBypassModes_Help">Refuses to start any pane whose launch line switches an agent's approval prompts or sandbox off (--dangerously-skip-permissions, --dangerously-bypass-approvals-and-sandbox, --permission-mode bypassPermissions, --yolo). The red modes are greyed out and spawned workers can never inherit them.</string>
       <string id="DisableWarRoomExecute">Block War Room execute between agents</string>
       <string id="DisableWarRoomExecute_Help">Agents can no longer run prompts in other panes through the War Room (mode execute). Probe messages and the user's own War Room sends stay available.</string>
+      <string id="DisableWarRoom">Turn off the War Room</string>
+      <string id="DisableWarRoom_Help">Panes cannot be added to the War Room, the user's War Room messages are refused, and agents get no War Room tools (list_peers, send, read_inbox, read_peer, wait_peer are refused). Includes blocking War Room execute.</string>
       <string id="DisableWorktreeSpawn">Block worktree.spawn</string>
       <string id="DisableWorktreeSpawn_Help">Agents cannot open new worker panes in git worktrees through the worktree.spawn MCP tool.</string>
       <string id="DisableMcp">Turn off the Swarmterm MCP server</string>
-      <string id="DisableMcp_Help">Swarmterm does not start its local MCP server and removes its own MCP entries from the agents' configuration files on start. War Room tools, worktree tools and the browser preview tool are unavailable to agents.</string>
+      <string id="DisableMcp_Help">Swarmterm does not start its local MCP server and removes its own MCP entries from the agents' configuration files on start. War Room tools, worktree tools and the browser preview tool are unavailable to agents. The same local server also carries the Claude Code hook and status line routes, so hook-based agent state, notifications driven by hooks and the status line's MCP/context reports stop as well.</string>
       <string id="DisableCompanion">Block the voice companion install and updates</string>
       <string id="DisableCompanion_Help">Swarmterm will not install or update the buzzkey dictation companion, does not check for its updates and cannot turn its Windows autostart on.</string>
       <string id="DisableModelDownload">Block speech model downloads</string>

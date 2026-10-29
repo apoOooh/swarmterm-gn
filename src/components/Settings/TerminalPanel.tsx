@@ -317,8 +317,8 @@ function AgentSafetySettings(): ReactElement {
             'messages (probe) that the other agent reads and decides on. Your own sends from the War Room are not affected. ' +
             'Not covered: the task prompt an agent gives a new worker pane it spawns (worktree.spawn).'
           }
-          checked={policy.allowWarRoomExecute && !admin.disableWarRoomExecute}
-          managed={admin.disableWarRoomExecute}
+          checked={policy.allowWarRoomExecute && !admin.disableWarRoomExecute && !admin.disableWarRoom}
+          managed={admin.disableWarRoomExecute || admin.disableWarRoom}
           onChange={(on) => setPolicy({ allowWarRoomExecute: on })}
         />
         <ToggleRow

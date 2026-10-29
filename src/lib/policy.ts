@@ -11,6 +11,7 @@ export type EnvPolicyMode = 'default' | 'strict'
 export interface AdminPolicy {
   disableBypassModes: boolean
   disableWarRoomExecute: boolean
+  disableWarRoom: boolean
   disableWorktreeSpawn: boolean
   disableMcp: boolean
   disableCompanion: boolean
@@ -35,6 +36,7 @@ export const MANAGED_LABEL = 'Managed by your administrator'
 export const UNMANAGED_POLICY: AdminPolicy = {
   disableBypassModes: false,
   disableWarRoomExecute: false,
+  disableWarRoom: false,
   disableWorktreeSpawn: false,
   disableMcp: false,
   disableCompanion: false,
@@ -52,6 +54,7 @@ export const UNMANAGED_POLICY: AdminPolicy = {
 const FLAGS = [
   'disableBypassModes',
   'disableWarRoomExecute',
+  'disableWarRoom',
   'disableWorktreeSpawn',
   'disableMcp',
   'disableCompanion',
@@ -80,6 +83,7 @@ export function parseAdminPolicy(raw: unknown): AdminPolicy {
 export const POLICY_DESCRIPTIONS: Record<string, string> = {
   DisableBypassModes: 'Bypass/YOLO launch modes are blocked',
   DisableWarRoomExecute: 'Agents cannot run prompts in other panes (War Room execute)',
+  DisableWarRoom: 'The War Room is off',
   DisableWorktreeSpawn: 'Agents cannot spawn worktree workers',
   DisableMcp: 'The Swarmterm MCP server is off',
   DisableCompanion: 'Voice companion install, updates and autostart are blocked',

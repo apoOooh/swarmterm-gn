@@ -237,7 +237,7 @@ impl SwarmtermMcpServer {
             axum::http::request::Parts,
         >,
     ) -> Result<Json<ListPeersResult>, rmcp::ErrorData> {
-        let terminal = self.caller(&parts)?;
+        let terminal = self.war_room_caller(&parts)?;
         let state = self.app.state::<AppState>();
         // Lock scoped to a block so the handshake event is emitted lock-free.
         let (room_id, connected_ev, room_name, peers) = {
@@ -291,7 +291,7 @@ impl SwarmtermMcpServer {
         >,
         Parameters(args): Parameters<WarRoomSendArgs>,
     ) -> Result<Json<WarRoomSendResult>, rmcp::ErrorData> {
-        let terminal = self.caller(&parts)?;
+        let terminal = self.war_room_caller(&parts)?;
         let mode = MessageMode::parse(args.mode.as_deref())
             .map_err(|m| rmcp::ErrorData::invalid_params(m, None))?;
         let state = self.app.state::<AppState>();
@@ -401,7 +401,7 @@ impl SwarmtermMcpServer {
         >,
         Parameters(args): Parameters<ReadInboxArgs>,
     ) -> Result<Json<ReadInboxResult>, rmcp::ErrorData> {
-        let terminal = self.caller(&parts)?;
+        let terminal = self.war_room_caller(&parts)?;
         let state = self.app.state::<AppState>();
         let (room_id, connected_ev, messages, previously_read) = {
             let mut rooms = state.war_rooms.lock().unwrap();

@@ -15,38 +15,36 @@
 
 use std::collections::HashSet;
 
-/// Terminal ids (which double as session bearer tokens) an MCP client has
-/// called in with. Entries die with the PTY — see `forget`.
+/// Terminal ids (resolved from the caller's bearer secret) an MCP client
+/// has called in with. Entries die with the PTY — see `forget`.
 #[derive(Debug, Default)]
 pub struct McpClients {
     seen: HashSet<String>,
 }
 
 impl McpClients {
-    /// Record an inbound MCP request from `token`. Blank tokens are dropped so
+    /// Record an inbound MCP request from pane `id` (resolved from its bearer). Blank ids are dropped so
     /// a header-less request can never manufacture a `connected` verdict.
-    /// Trimming matches `auth::resolve`, which is the function that decides
-    /// whether the same string is a live terminal.
     /// Returns true only on the first sighting, so the caller can run the
     /// War Room auto-connect once per pane instead of on every request.
-    pub fn touch(&mut self, token: &str) -> bool {
-        let t = token.trim();
+    pub fn touch(&mut self, id: &str) -> bool {
+        let t = id.trim();
         if t.is_empty() {
             return false;
         }
         self.seen.insert(t.to_owned())
     }
 
-    /// Has any MCP client ever called in with this token during the pane's life?
-    pub fn has_seen(&self, token: &str) -> bool {
-        self.seen.contains(token.trim())
+    /// Has any MCP client ever called in for this pane during its life?
+    pub fn has_seen(&self, id: &str) -> bool {
+        self.seen.contains(id.trim())
     }
 
     /// Drop a pane's footprint. Called wherever the terminal leaves
     /// `AppState.terminals`, so a same-id respawn starts from "no client yet"
     /// instead of inheriting the previous shell's verdict.
-    pub fn forget(&mut self, token: &str) {
-        self.seen.remove(token.trim());
+    pub fn forget(&mut self, id: &str) {
+        self.seen.remove(id.trim());
     }
 }
 

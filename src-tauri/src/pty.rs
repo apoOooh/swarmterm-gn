@@ -128,6 +128,10 @@ pub struct CreateTerminalOptions {
     pub cwd: Option<String>,
     pub shell_id: Option<String>,
     pub initial_command: Option<String>,
+    /// The part of `initial_command` the admin bypass check reads: the agent
+    /// command plus its launch-mode args, without a worker's task brief (so
+    /// prose in a brief is never taken for a flag). Absent ⇒ the whole line.
+    pub launch_line: Option<String>,
     /// Whether the owning workspace enables MCP worktree tools for this pty.
     pub worktree_mode: Option<bool>,
     /// The workspace's repo folder, recorded so worktree tools can resolve the
@@ -515,6 +519,11 @@ pub struct AppState {
     /// nested with `terminals` or `war_rooms`, because the `/mcp` middleware
     /// touches it on every inbound request and must not contend with pty I/O.
     pub mcp_clients: Mutex<crate::mcp::clients::McpClients>,
+    /// MCP bearer secret -> pane id (`mcp::session_tokens`). The pane id is
+    /// public to War Room peers, so it never authorises anything itself. Its
+    /// own lock, never nested with `terminals` (`live_session_owner` takes
+    /// them one after the other).
+    pub session_tokens: Mutex<crate::mcp::session_tokens::SessionTokens>,
     /// Last context-window percentage each Claude pane's status line reported
     /// via `/status?ctx=` (`mcp::context_usage`). Its own lock, never nested:
     /// `/status` hits it as often as every 300 ms per Claude pane while
@@ -548,6 +557,37 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// The live pane a bearer secret belongs to, or `None` (unknown secret, or
+    /// its pane is gone). The two locks are taken one after the other.
+    pub fn live_session_owner(&self, token: &str) -> Option<String> {
+        let id = self
+            .session_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owner(token)?;
+        self.terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&id)
+            .then_some(id)
+    }
+
+    fn with_session_tokens<R>(
+        &self,
+        f: impl FnOnce(&mut crate::mcp::session_tokens::SessionTokens) -> R,
+    ) -> R {
+        f(&mut self
+            .session_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
+    /// Revoke a pane's bearer secret (closed by `kill_terminal`, which runs
+    /// before any same-id respawn).
+    pub fn forget_session_token(&self, id: &str) {
+        self.with_session_tokens(|t| t.forget(id));
+    }
+
     /// A copy of the current env policy; a poisoned lock still yields the
     /// last value rather than failing every spawn.
     pub fn env_policy_snapshot(&self) -> crate::terminal_env::EnvPolicy {
@@ -601,6 +641,7 @@ impl Default for AppState {
             mcp_url: OnceLock::new(),
             war_rooms: Mutex::new(crate::warroom::WarRooms::default()),
             mcp_clients: Mutex::new(crate::mcp::clients::McpClients::default()),
+            session_tokens: Mutex::new(Default::default()),
             context_usage: Mutex::new(Default::default()),
             rate_limit_usage: Mutex::new(Default::default()),
             peer_states: Mutex::new(crate::mcp::peer_state::PeerStates::default()),
@@ -705,10 +746,42 @@ pub fn spawn_terminal(
     if state.terminals.lock().unwrap().contains_key(&id) {
         return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
     }
+    let result = spawn_terminal_inner(app, state, id.clone(), options, on_data);
+    // A failed create never reached `terminals`: drop the pending secret it
+    // minted (or adopted) so it does not linger. The duplicate check above
+    // returned before any mint, so a live pane's secret is never touched.
+    // A concurrent create of the same id that won keeps its secret: skip when
+    // the id is live (lock released before `session_tokens` is taken).
+    let live = state.terminals.lock().unwrap().contains_key(&id);
+    if !result.ok && !live {
+        state.forget_session_token(&id);
+    }
+    result
+}
+
+fn spawn_terminal_inner(
+    app: &AppHandle,
+    state: &AppState,
+    id: String,
+    options: CreateTerminalOptions,
+    on_data: Channel<PtyOut>,
+) -> CreateTerminalResult {
     // Admin policy: refuse bypass/YOLO lines here, on the final command, so
     // every path that builds one (menus, restore, worktree.spawn) is covered.
-    if let Some(line) = options.initial_command.as_deref() {
+    if let Some(line) = launch_line_to_check(
+        options.initial_command.as_deref(),
+        options.launch_line.as_deref(),
+    ) {
         if let Err(e) = state.admin_policy.check_launch_line(line) {
+            // A pane of that kind that survived the last app instance in the
+            // terminal host must not keep running detached: end it.
+            #[cfg(windows)]
+            if let Some((_, client)) = app
+                .try_state::<crate::host_client::HostHub>()
+                .and_then(|hub| hub.take_detached(&id))
+            {
+                client.conn.kill(&id);
+            }
             return CreateTerminalResult::err(e);
         }
     }
@@ -740,6 +813,38 @@ pub fn spawn_terminal(
     spawn_local(app, state, id, plan, on_data)
 }
 
+/// The line the admin bypass check reads. The renderer's `launch_line` is
+/// trusted only when the typed line is that prefix plus nothing or one
+/// quoted brief (optionally after a short prompt flag such as `-i`, see
+/// `spawnPromptFlag` in templates.ts); otherwise the whole line is checked.
+fn launch_line_to_check<'a>(initial: Option<&'a str>, launch: Option<&'a str>) -> Option<&'a str> {
+    let (Some(line), Some(prefix)) = (initial, launch) else {
+        return initial;
+    };
+    let Some(rest) = line.strip_prefix(prefix) else {
+        return Some(line);
+    };
+    if rest.is_empty() {
+        return Some(prefix);
+    }
+    if !rest.starts_with(' ') {
+        return Some(line);
+    }
+    // Exactly one quoted word, or `-i` plus one (the only prompt flag).
+    let quoted = |w: &str| w.starts_with(['\'', '"']);
+    let words = crate::policy::shell_words(rest);
+    let brief = match words.as_slice() {
+        [_] => rest.trim_start(),
+        [flag, _] if flag == "-i" => rest.trim_start().strip_prefix("-i ").unwrap_or(""),
+        _ => return Some(line),
+    };
+    if quoted(brief) {
+        Some(prefix)
+    } else {
+        Some(line)
+    }
+}
+
 /// Everything a pane is started with, resolved once for either backend.
 struct SpawnPlan {
     shell: String,
@@ -753,6 +858,10 @@ struct SpawnPlan {
     worktree_mode: bool,
     repo_root: Option<String>,
     claude_config_dir: Option<std::path::PathBuf>,
+    /// This generation's MCP bearer secret (`SWARMTERM_SESSION`); kept in the
+    /// host's meta so a reattached pane keeps authorising.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    session_token: String,
 }
 
 /// One lock per account id for `accounts::enroll` (see `plan_spawn`).
@@ -841,15 +950,17 @@ fn plan_spawn(
         env.set("PROMPT_COMMAND", combined);
     }
     // Identify this session to in-terminal processes so an in-terminal agent
-    // can call Swarmterm's MCP server. `id` is the terminalId — a random UUID
-    // that only this shell's env sees — and doubles as the unguessable bearer
-    // token authorising the MCP call. `SWARMTERM_MCP_URL` points at the
+    // can call Swarmterm's MCP server. `SWARMTERM_SESSION` is a random secret
+    // minted per spawn (a respawn rotates it) that only this shell's env
+    // sees; it is NOT the terminalId, which War Room peers can list, so one
+    // pane cannot impersonate another. `SWARMTERM_MCP_URL` points at the
     // Streamable-HTTP endpoint bound at app boot; if the server failed to
     // bind, we skip the URL var (agents just won't have the swarmterm server
     // available) but still set the session so future subsystems can use it.
     // `SWARMTERM_PTY_GENERATION` is stamped by whichever backend creates the
     // generation (`spawn_local` here, the host for hosted panes).
-    env.set("SWARMTERM_SESSION", id);
+    let session_token = state.with_session_tokens(|t| t.mint(id));
+    env.set("SWARMTERM_SESSION", &session_token);
     if let Some(url) = state.mcp_url.get() {
         env.set("SWARMTERM_MCP_URL", url.as_ref());
         // OpenCode gets the server per process via OPENCODE_CONFIG_CONTENT
@@ -861,7 +972,7 @@ fn plan_spawn(
         {
             env.set(
                 "OPENCODE_CONFIG_CONTENT",
-                crate::mcp::config::opencode_config_content(url.as_ref(), id),
+                crate::mcp::config::opencode_config_content(url.as_ref(), &session_token),
             );
         }
     }
@@ -913,6 +1024,7 @@ fn plan_spawn(
         worktree_mode: options.worktree_mode.unwrap_or(false),
         repo_root: options.repo_root,
         claude_config_dir,
+        session_token,
     })
 }
 
@@ -1021,6 +1133,7 @@ fn spawn_local(
             claude_config_dir: plan.claude_config_dir,
         },
     );
+    state.with_session_tokens(|t| t.settle(&id));
     send_initial_line(state, &id, &spawn_id, plan.initial_line);
 
     // A shell that exits on its own (typed `exit`, crash) never closes the
@@ -1077,6 +1190,7 @@ fn spawn_hosted(
         "worktreeMode": plan.worktree_mode,
         "repoRoot": plan.repo_root,
         "claudeConfigDir": plan.claude_config_dir,
+        "sessionToken": plan.session_token,
     });
     let op = serde_json::json!({
         "op": "create",
@@ -1159,6 +1273,15 @@ fn attach_hosted(
         repo_root: text("repoRoot"),
         claude_config_dir: text("claudeConfigDir").map(std::path::PathBuf::from),
     };
+    // The pane's env still carries the secret it was spawned with; re-learn
+    // it so the reattached pane keeps authorising. A pane created by a build
+    // before per-pane secrets has none in its meta and its env token is its
+    // id, so that legacy pane keeps working until its next respawn.
+    let token = text("sessionToken").unwrap_or_else(|| {
+        eprintln!("[host] {id}: no session secret in meta (older build); its id stays its bearer until respawn");
+        id.to_string()
+    });
+    state.with_session_tokens(|t| t.adopt(id, &token));
     client
         .sink
         .routes
@@ -1238,6 +1361,9 @@ pub fn register_hosted(
             claude_config_dir: pending.claude_config_dir,
         },
     );
+    // Never nest `session_tokens` inside `terminals`.
+    drop(map);
+    state.with_session_tokens(|t| t.settle(id));
 }
 
 /// Drop `id`'s map entry if it still belongs to `spawn_id` (the waiter's job
@@ -1395,6 +1521,8 @@ pub fn finish_generation(
     });
     if let Some(state) = app.try_state::<AppState>().filter(|_| !superseded) {
         state.mcp_clients.lock().unwrap().forget(id);
+        // Settled only: a same-id respawn may already hold a pending secret.
+        state.with_session_tokens(|t| t.forget_settled(id));
         // Same-id respawn must start from "no data", not its predecessor's %.
         state.context_usage.lock().unwrap().forget(id);
         state.rate_limit_usage.lock().unwrap().forget(id);
@@ -1450,6 +1578,35 @@ mod tests {
         state.read_persisted_env_policy(&path);
         // The first spawn (restored pane) reads this snapshot.
         assert_eq!(state.env_policy_snapshot(), user);
+    }
+
+    #[test]
+    fn launch_line_skips_only_a_quoted_brief() {
+        use super::launch_line_to_check as pick;
+        let base = "claude --permission-mode default";
+        let brief = format!("{base} 'run npx -y and never --yolo'");
+        assert_eq!(pick(Some(&brief), Some(base)), Some(base));
+        for (line, prefix) in [
+            ("gemini -y 'x'", "gemini"),
+            ("cursor-agent -f 'x'", "cursor-agent"),
+            ("claude 'a' --yolo 'b'", "claude"),
+        ] {
+            assert_eq!(pick(Some(line), Some(prefix)), Some(line));
+        }
+        let posix = format!(r"{base} 'it'\''s -y'");
+        assert_eq!(pick(Some(&posix), Some(base)), Some(base));
+        let flagged = "gemini -i \"use -y\"";
+        assert_eq!(pick(Some(flagged), Some("gemini")), Some("gemini"));
+        assert_eq!(pick(Some(base), Some(base)), Some(base));
+        // Anything but a quoted brief after the prefix: check it all.
+        let extra = "claude --dangerously-skip-permissions 'x'";
+        assert_eq!(pick(Some(extra), Some("claude")), Some(extra));
+        assert_eq!(
+            pick(Some("codex -a never"), Some("claude")),
+            Some("codex -a never")
+        );
+        assert_eq!(pick(Some(base), None), Some(base));
+        assert_eq!(pick(None, Some(base)), None);
     }
 
     #[test]
