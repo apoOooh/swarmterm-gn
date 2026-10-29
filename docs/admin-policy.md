@@ -20,9 +20,11 @@ can add locks on top but never lift those. See [Editions](editions.md).
 - **HKLM wins per value.** A value set under HKLM cannot be overridden from HKCU. HKCU can only add values that HKLM
   does not set. Lock settings under HKLM if users may have admin rights.
 - Value names are case-insensitive. Unknown value names are ignored. A known value with the wrong type or invalid
-  data **fails closed**: a `Disable*` value counts as `1`, an invalid `EnvPolicy` as `default`, an invalid `EnvAllow`
-  is ignored. Each case is logged to the app's stderr (`policy: …`).
-- `EnvAllow` is the only value that widens access, so an HKCU `EnvAllow` is ignored whenever HKLM sets `EnvPolicy`.
+  data **fails closed**: a `Disable*` value counts as `1`, an invalid or unreadable `EnvPolicy` (wrong type,
+  unknown text) as `strict`; `EnvPolicy` may be `REG_SZ` or `REG_EXPAND_SZ`. `EnvAllow` should be `REG_MULTI_SZ`; a
+  single `REG_SZ` name is accepted as a one-item list, any other type is ignored. Each case is logged to the app's stderr (`policy: …`).
+- `EnvAllow` is the only value that widens access, so an HKCU `EnvAllow` is ignored whenever the filter is locked: HKLM
+  sets `EnvPolicy`, or the edition locks it (Corp compiles in `EnvPolicy=default`). An HKLM `EnvAllow` still applies.
 - With no key at all, Swarmterm behaves as before (unmanaged).
 
 ## Values
@@ -40,7 +42,7 @@ can add locks on top but never lift those. See [Editions](editions.md).
 | `DisableModelDownload` | DWORD | No speech-model downloads for built-in dictation. Already downloaded models stay usable. | `voice/mod.rs` (`voice_model_download`) |
 | `DisableRoutineCommands` | DWORD | Routines of kind "Shell command" are refused. Agent routines are not affected. | `commands.rs` (`run_routine_command`) |
 | `DisablePreviewBrowser` | DWORD | The built-in web preview (embedded browser) cannot be opened by the user or by agents (`browser.open_preview`). | `preview.rs`, `mcp/tools/browser.rs` |
-| `EnvPolicy` | SZ `default` \| `strict` | Forces the terminal environment filter on: panes and command routines never get secrets from Swarmterm's environment. `default` withholds secret-looking names; `strict` passes only the Windows variables a shell needs. A stricter user choice is kept. The user's own allow list is **ignored** while this is set. | `policy.rs` `apply_env` (via `env_policy_snapshot`) |
+| `EnvPolicy` | SZ `default` \| `strict` | Forces the terminal environment filter on: panes, command routines and every other child process Swarmterm starts (git, editors, probes; see `docs/security-model.md`) never get secrets from Swarmterm's environment. Recommended for corporate use: `strict`. `default` withholds secret-looking names; `strict` passes only the Windows variables a shell needs. A stricter user choice is kept. The user's own allow list is **ignored** while this is set. | `policy.rs` `apply_env` (via `env_policy_snapshot`) |
 | `EnvAllow` | MULTI_SZ | Names that always pass the filter (case-insensitive, a trailing `*` matches a prefix). Merged with the user's list when `EnvPolicy` is not set, and the only allow list when it is. | same |
 
 ### Limits

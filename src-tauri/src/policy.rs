@@ -209,11 +209,13 @@ pub fn parse(values: &BTreeMap<String, RegValue>) -> (AdminPolicy, Vec<String>) 
                 RegValue::Sz(s) if s.trim().eq_ignore_ascii_case("strict") => {
                     p.env_policy = Some(FilterMode::Strict)
                 }
-                // Fail closed: the filter is forced on in its default mode.
+                // Fail closed: an admin who set this name meant to lock the
+                // filter, and a value we cannot read (wrong type, typo)
+                // gets the strictest mode rather than the lenient one.
                 other => {
-                    p.env_policy = Some(FilterMode::Default);
+                    p.env_policy = Some(FilterMode::Strict);
                     warnings.push(format!(
-                        "EnvPolicy: expected REG_SZ \"default\" or \"strict\", got {other:?}; treated as \"default\""
+                        "EnvPolicy: expected REG_SZ \"default\" or \"strict\", got {other:?}; treated as \"strict\""
                     ));
                 }
             }
@@ -224,6 +226,9 @@ pub fn parse(values: &BTreeMap<String, RegValue>) -> (AdminPolicy, Vec<String>) 
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty()),
                 ),
+                // A single name typed as REG_SZ is the common admin slip;
+                // read it as a one-item list.
+                RegValue::Sz(s) if !s.trim().is_empty() => p.env_allow.push(s.trim().to_string()),
                 other => warnings.push(format!("EnvAllow: expected REG_MULTI_SZ, got {other:?}")),
             }
         } else {
@@ -235,17 +240,19 @@ pub fn parse(values: &BTreeMap<String, RegValue>) -> (AdminPolicy, Vec<String>) 
 
 /// HKLM wins per value: HKCU may be user-writable, so it may only add values
 /// the machine policy does not set. `EnvAllow` is the one value that widens
-/// rather than locks, so HKCU's is dropped whenever HKLM forces the filter
-/// (`EnvPolicy`); otherwise a user could pass `*` past the machine lock.
+/// rather than locks, so HKCU's is dropped whenever the filter is locked:
+/// HKLM sets `EnvPolicy`, or the edition locks it (`edition_env_lock`, Corp);
+/// otherwise a user could widen the filter past the lock.
 pub fn merge_hives(
     hklm: BTreeMap<String, RegValue>,
     hkcu: BTreeMap<String, RegValue>,
+    edition_env_lock: bool,
 ) -> BTreeMap<String, RegValue> {
-    let hklm_env_lock = hklm.keys().any(|k| k.eq_ignore_ascii_case("EnvPolicy"));
+    let env_lock = edition_env_lock || hklm.keys().any(|k| k.eq_ignore_ascii_case("EnvPolicy"));
     let mut out: BTreeMap<String, RegValue> = BTreeMap::new();
     for (k, v) in hkcu {
-        if hklm_env_lock && k.eq_ignore_ascii_case("EnvAllow") {
-            eprintln!("policy: HKCU EnvAllow ignored, HKLM sets EnvPolicy");
+        if env_lock && k.eq_ignore_ascii_case("EnvAllow") {
+            eprintln!("policy: HKCU EnvAllow ignored, the env filter is locked");
             continue;
         }
         out.insert(k.to_ascii_lowercase(), v);
@@ -560,6 +567,7 @@ pub fn load() -> AdminPolicy {
     let values = merge_hives(
         registry::read(registry::Hive::LocalMachine, KEY),
         registry::read(registry::Hive::CurrentUser, KEY),
+        compiled_in().env_policy.is_some(),
     );
     #[cfg(not(windows))]
     let values = BTreeMap::new();
@@ -586,10 +594,10 @@ pub mod registry {
 
     use std::collections::BTreeMap;
 
-    use windows_sys::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+    use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
-        KEY_READ, REG_DWORD, REG_MULTI_SZ, REG_SZ,
+        KEY_READ, REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_SZ,
     };
 
     use super::RegValue;
@@ -616,7 +624,9 @@ pub mod registry {
             REG_DWORD if data.len() == 4 => {
                 RegValue::Dword(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
             }
-            REG_SZ => {
+            // EXPAND_SZ is read verbatim (no expansion): policy values never
+            // contain `%VAR%`, and an admin tool may write either type.
+            REG_SZ | REG_EXPAND_SZ => {
                 let w = utf16(data);
                 let end = w.iter().position(|&c| c == 0).unwrap_or(w.len());
                 RegValue::Sz(String::from_utf16_lossy(&w[..end]))
@@ -630,6 +640,49 @@ pub mod registry {
             ),
             _ => RegValue::Other,
         }
+    }
+
+    /// One `RegEnumValueW` result, so `scan` can be tested with a fake.
+    pub enum Entry {
+        Value(String, RegValue),
+        /// ERROR_MORE_DATA: the value (> 64 KiB) or its name (> 255 chars)
+        /// is not one of ours; recorded as unusable, so a policy name fails
+        /// closed, and the scan goes on.
+        TooLarge(String),
+        End,
+        /// Any other error: stop, never retry the same or the next index
+        /// blindly (that looped forever on a persistent error).
+        Failed(u32),
+    }
+
+    /// Upper bound on values read under the policy key; ours has about a
+    /// dozen.
+    pub const MAX_VALUES: u32 = 1024;
+
+    /// Enumerate indices from 0 until the end, an error, or `MAX_VALUES`.
+    pub fn scan(mut at: impl FnMut(u32) -> Entry) -> BTreeMap<String, RegValue> {
+        let mut out = BTreeMap::new();
+        for index in 0..MAX_VALUES {
+            match at(index) {
+                Entry::Value(name, value) => {
+                    out.insert(name, value);
+                }
+                Entry::TooLarge(name) => {
+                    out.insert(name, RegValue::Other);
+                }
+                Entry::End => break,
+                Entry::Failed(rc) => {
+                    eprintln!("policy: registry enumeration stopped at {index} (error {rc})");
+                    // The unread rest may hold EnvPolicy: fail closed (an
+                    // unreadable EnvPolicy parses as strict).
+                    if !out.keys().any(|k| k.eq_ignore_ascii_case("EnvPolicy")) {
+                        out.insert("EnvPolicy".into(), RegValue::Other);
+                    }
+                    break;
+                }
+            }
+        }
+        out
     }
 
     pub fn read(hive: Hive, key: &str) -> BTreeMap<String, RegValue> {
@@ -646,10 +699,9 @@ pub mod registry {
             if RegOpenKeyExW(root, subkey.as_ptr(), 0, KEY_READ, &mut hkey) != ERROR_SUCCESS {
                 return out;
             }
-            let mut index = 0u32;
             let mut name = vec![0u16; 256];
             let mut data = vec![0u8; MAX_DATA];
-            loop {
+            out = scan(|index| {
                 // In/out lengths: reset to the buffer sizes on every call.
                 let mut name_len = name.len() as u32;
                 let mut kind = 0u32;
@@ -664,20 +716,18 @@ pub mod registry {
                     data.as_mut_ptr(),
                     &mut data_len,
                 );
-                index += 1;
-                if rc == ERROR_NO_MORE_ITEMS {
-                    break;
+                let text =
+                    || String::from_utf16_lossy(&name[..(name_len as usize).min(name.len())]);
+                match rc {
+                    ERROR_SUCCESS => {
+                        let len = (data_len as usize).min(data.len());
+                        Entry::Value(text(), decode(kind, &data[..len]))
+                    }
+                    ERROR_MORE_DATA => Entry::TooLarge(text()),
+                    ERROR_NO_MORE_ITEMS => Entry::End,
+                    other => Entry::Failed(other),
                 }
-                let name = String::from_utf16_lossy(&name[..(name_len as usize).min(name.len())]);
-                if rc != ERROR_SUCCESS {
-                    // ERROR_MORE_DATA (oversized value, or name > 255 chars):
-                    // reported as unusable rather than aborting the scan.
-                    out.insert(name, RegValue::Other);
-                    continue;
-                }
-                let len = (data_len as usize).min(data.len());
-                out.insert(name, decode(kind, &data[..len]));
-            }
+            });
             RegCloseKey(hkey);
         }
         out
@@ -727,7 +777,7 @@ mod tests {
             ("Whatever", RegValue::Dword(1)),
         ]));
         assert!(p.disable_mcp && p.disable_companion && p.disable_routine_commands);
-        assert_eq!(p.env_policy, Some(FilterMode::Default));
+        assert_eq!(p.env_policy, Some(FilterMode::Strict));
         assert!(p.env_allow.is_empty());
         assert_eq!(w.len(), 6, "{w:?}");
     }
@@ -737,6 +787,7 @@ mod tests {
         let merged = merge_hives(
             map(&[("EnvPolicy", RegValue::Sz("strict".into()))]),
             map(&[("EnvAllow", RegValue::MultiSz(vec!["*".into()]))]),
+            false,
         );
         let (p, _) = parse(&merged);
         assert!(p.env_allow.is_empty());
@@ -744,8 +795,82 @@ mod tests {
         let merged = merge_hives(
             BTreeMap::new(),
             map(&[("EnvAllow", RegValue::MultiSz(vec!["X".into()]))]),
+            false,
         );
         assert_eq!(parse(&merged).0.env_allow, vec!["X"]);
+    }
+
+    #[test]
+    fn hkcu_env_allow_cannot_widen_an_edition_env_lock() {
+        // Corp locks the filter without any HKLM value.
+        let hkcu = || map(&[("EnvAllow", RegValue::MultiSz(vec!["MY_KEY".into()]))]);
+        let merged = merge_hives(
+            BTreeMap::new(),
+            hkcu(),
+            Edition::Corp.locks().env_policy.is_some(),
+        );
+        assert!(parse(&merged).0.env_allow.is_empty());
+        // HKLM's own EnvAllow still applies under the edition lock.
+        let merged = merge_hives(
+            map(&[("EnvAllow", RegValue::MultiSz(vec!["CORP_PROXY".into()]))]),
+            hkcu(),
+            true,
+        );
+        assert_eq!(parse(&merged).0.env_allow, vec!["CORP_PROXY"]);
+    }
+
+    #[test]
+    fn env_policy_type_slips_fail_closed_and_env_allow_accepts_one_sz() {
+        for bad in [
+            RegValue::MultiSz(vec!["default".into()]),
+            RegValue::Dword(0),
+            RegValue::Other,
+            RegValue::Sz("lenient".into()),
+        ] {
+            let (p, w) = parse(&map(&[("EnvPolicy", bad.clone())]));
+            assert_eq!(p.env_policy, Some(FilterMode::Strict), "{bad:?}");
+            assert_eq!(w.len(), 1);
+        }
+        let (p, w) = parse(&map(&[("EnvAllow", RegValue::Sz(" CORP_PROXY ".into()))]));
+        assert_eq!(p.env_allow, vec!["CORP_PROXY"]);
+        assert!(w.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn registry_scan_stops_on_errors_and_at_the_cap() {
+        use registry::{scan, Entry, MAX_VALUES};
+        // A persistent non-MORE_DATA error used to loop forever.
+        let mut calls = 0;
+        let out = scan(|i| {
+            calls += 1;
+            if i == 0 {
+                Entry::Value("EnvPolicy".into(), RegValue::Sz("strict".into()))
+            } else {
+                Entry::Failed(5)
+            }
+        });
+        assert_eq!(calls, 2);
+        assert_eq!(out.len(), 1);
+        // An error before EnvPolicy was read locks the filter (strict).
+        let out = scan(|_| Entry::Failed(5));
+        assert_eq!(out.get("EnvPolicy"), Some(&RegValue::Other));
+        assert_eq!(parse(&out).0.env_policy, Some(FilterMode::Strict));
+        // MORE_DATA records the name as unusable and goes on.
+        let out = scan(|i| match i {
+            0 => Entry::TooLarge("DisableMcp".into()),
+            1 => Entry::Value("X".into(), RegValue::Dword(1)),
+            _ => Entry::End,
+        });
+        assert_eq!(out.get("DisableMcp"), Some(&RegValue::Other));
+        assert_eq!(out.len(), 2);
+        // An enumerator that never ends is cut off.
+        let mut calls = 0;
+        scan(|i| {
+            calls += 1;
+            Entry::TooLarge(format!("v{i}"))
+        });
+        assert_eq!(calls, MAX_VALUES);
     }
 
     #[test]
@@ -777,6 +902,7 @@ mod tests {
                 ("DISABLEMCP", RegValue::Dword(1)),
                 ("DisableCompanion", RegValue::Dword(1)),
             ]),
+            false,
         );
         let (p, _) = parse(&merged);
         assert!(!p.disable_mcp);
@@ -1063,7 +1189,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn decode_handles_registry_encodings() {
-        use windows_sys::Win32::System::Registry::{REG_BINARY, REG_DWORD, REG_MULTI_SZ, REG_SZ};
+        use windows_sys::Win32::System::Registry::{
+            REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_SZ,
+        };
         let enc = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect() };
         assert_eq!(
             registry::decode(REG_DWORD, &1u32.to_le_bytes()),
@@ -1076,6 +1204,10 @@ mod tests {
         assert_eq!(
             registry::decode(REG_MULTI_SZ, &enc("A\0B\0\0")),
             RegValue::MultiSz(vec!["A".into(), "B".into()])
+        );
+        assert_eq!(
+            registry::decode(REG_EXPAND_SZ, &enc("Strict ")),
+            RegValue::Sz("Strict".into())
         );
         assert_eq!(registry::decode(REG_BINARY, &[1]), RegValue::Other);
         assert_eq!(registry::decode(REG_DWORD, &[1]), RegValue::Other);

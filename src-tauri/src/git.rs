@@ -11,8 +11,15 @@ use std::process::Command;
 /// Build a `git` Command. On Windows, set CREATE_NO_WINDOW (0x08000000) so
 /// spawning git from the GUI (no-console) release binary doesn't flash a
 /// console window each call — same flag `shell.rs` uses for its wsl probe.
-fn git_command() -> Command {
-    let mut cmd = Command::new("git");
+///
+/// The environment is the env policy's (`terminal_env::command`), and
+/// `core.fsmonitor` is switched off: a repo's own config (which an agent in
+/// a pane can write) must not make Swarmterm run a program on every status.
+/// Hooks still run where git runs them (`worktree add` → post-checkout), as
+/// a user's LFS or setup hooks are expected there; they get the filtered env.
+pub(crate) fn git_command() -> Command {
+    let mut cmd = crate::terminal_env::command("git");
+    cmd.args(["-c", "core.fsmonitor="]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

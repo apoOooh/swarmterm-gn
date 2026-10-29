@@ -168,7 +168,7 @@ pub fn start(dir: &Path) -> Result<(), String> {
         return Err("not-installed".into());
     }
     let spawn = |flags: u32| {
-        std::process::Command::new(&exe)
+        crate::terminal_env::command(&exe)
             .current_dir(dir)
             .creation_flags(flags)
             .spawn()
@@ -256,7 +256,7 @@ pub async fn probe(dir: &Path) -> Option<HardwareProbe> {
     if !exe.is_file() {
         return None;
     }
-    let mut cmd = tokio::process::Command::new(exe);
+    let mut cmd = crate::terminal_env::tokio_command(exe);
     cmd.args(["--probe-hardware", "--json"])
         .current_dir(dir)
         .stdin(std::process::Stdio::null())

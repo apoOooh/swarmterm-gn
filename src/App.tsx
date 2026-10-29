@@ -933,9 +933,9 @@ export default function App(): ReactElement {
     )
   }, [priority, exemptKey])
 
-  // Environment policy: Rust starts filtered (secure default), so a pane
-  // restored before this push is never less protected; the push only adds
-  // the user's allowlist or switches the filter off.
+  // Environment policy: Rust loads the last pushed policy from app data at
+  // start (secure default without one), so a pane restored before this push
+  // already uses the user's choice; Rust persists each push.
   const envPolicy = useEnvPolicyStore((s) => s.policy)
   useEffect(() => {
     setEnvPolicy(envPolicy).catch((err) => console.warn('[env] policy:', err))

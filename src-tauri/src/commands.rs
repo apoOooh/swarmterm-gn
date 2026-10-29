@@ -488,7 +488,8 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
 /// the environment they started with.
 #[tauri::command]
 pub fn env_policy_set(state: State<'_, AppState>, policy: crate::terminal_env::EnvPolicy) {
-    *state.env_policy.write().unwrap_or_else(|e| e.into_inner()) = policy;
+    crate::terminal_env::persist(&policy);
+    state.set_env_policy(policy);
 }
 
 /// Settings → Terminal → Agent safety (War Room execute between agents). Checked per MCP call,
@@ -917,7 +918,10 @@ pub fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
     if !crate::links::is_allowed_editor(&bin) {
         return Err(format!("editor not allowed: {bin}"));
     }
-    std::process::Command::new(&bin)
+    // Filtered like a pane: an editor is a GUI app, but its extensions and
+    // integrated terminals inherit what we pass, and nothing it needs lives
+    // only in the app's secrets (users allow-list what an editor needs).
+    crate::terminal_env::command(&bin)
         .args(&args)
         .spawn()
         .map(|mut child| {

@@ -915,7 +915,7 @@ const ENV_MODES: { id: EnvFilterMode; label: string; description: string }[] = [
   {
     id: 'default',
     label: 'Hide secrets',
-    description: 'Passes everything except names that look like secrets (API keys, tokens, passwords, AWS_*, ANTHROPIC_*, OPENAI_*).'
+    description: 'Passes everything except names that look like secrets (API keys, tokens, passwords, URLs with credentials).'
   },
   {
     id: 'strict',
