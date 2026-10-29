@@ -794,5 +794,5 @@ start it again after every change; remove the key at the end:
       `browser.open_preview` is refused.
 - [ ] `reg add … /v EnvPolicy /t REG_SZ /d strict /f` and `reg add … /v EnvAllow /t REG_MULTI_SZ /d CORP_X /f`:
       the Environment controls are greyed, `set` in a new pane shows only system variables plus `CORP_X`.
-- [ ] `DisableMcp` = `REG_SZ "1"` (wrong type): ignored, MCP works; the app log has `policy: DisableMcp: expected REG_DWORD`.
+- [ ] `DisableMcp` = `REG_SZ "1"` (wrong type): fails closed, MCP is off; the app log has `policy: DisableMcp: expected REG_DWORD … treated as 1`.
 - [ ] Same value under HKLM = 0 and HKCU = 1 (elevated): HKLM wins, the policy is off.

@@ -129,8 +129,13 @@ pub fn parse(values: &BTreeMap<String, RegValue>) -> (AdminPolicy, Vec<String>) 
             match value {
                 RegValue::Dword(1) => *field(&mut p) = true,
                 RegValue::Dword(0) => {}
+                // Fail closed: an admin who set this name meant to lock it,
+                // so a wrong type or unreadable value must not unlock it.
                 other => {
-                    warnings.push(format!("{canon}: expected REG_DWORD 0 or 1, got {other:?}"))
+                    *field(&mut p) = true;
+                    warnings.push(format!(
+                        "{canon}: expected REG_DWORD 0 or 1, got {other:?}; treated as 1"
+                    ));
                 }
             }
         } else if name.eq_ignore_ascii_case("EnvPolicy") {
@@ -141,9 +146,13 @@ pub fn parse(values: &BTreeMap<String, RegValue>) -> (AdminPolicy, Vec<String>) 
                 RegValue::Sz(s) if s.trim().eq_ignore_ascii_case("strict") => {
                     p.env_policy = Some(FilterMode::Strict)
                 }
-                other => warnings.push(format!(
-                    "EnvPolicy: expected REG_SZ \"default\" or \"strict\", got {other:?}"
-                )),
+                // Fail closed: the filter is forced on in its default mode.
+                other => {
+                    p.env_policy = Some(FilterMode::Default);
+                    warnings.push(format!(
+                        "EnvPolicy: expected REG_SZ \"default\" or \"strict\", got {other:?}; treated as \"default\""
+                    ));
+                }
             }
         } else if name.eq_ignore_ascii_case("EnvAllow") {
             match value {
@@ -161,14 +170,21 @@ pub fn parse(values: &BTreeMap<String, RegValue>) -> (AdminPolicy, Vec<String>) 
     (p, warnings)
 }
 
-/// HKLM wins per value: HKCU is user-writable, so it may only add values
-/// the machine policy does not set.
+/// HKLM wins per value: HKCU may be user-writable, so it may only add values
+/// the machine policy does not set. `EnvAllow` is the one value that widens
+/// rather than locks, so HKCU's is dropped whenever HKLM forces the filter
+/// (`EnvPolicy`); otherwise a user could pass `*` past the machine lock.
 pub fn merge_hives(
     hklm: BTreeMap<String, RegValue>,
     hkcu: BTreeMap<String, RegValue>,
 ) -> BTreeMap<String, RegValue> {
+    let hklm_env_lock = hklm.keys().any(|k| k.eq_ignore_ascii_case("EnvPolicy"));
     let mut out: BTreeMap<String, RegValue> = BTreeMap::new();
     for (k, v) in hkcu {
+        if hklm_env_lock && k.eq_ignore_ascii_case("EnvAllow") {
+            eprintln!("policy: HKCU EnvAllow ignored, HKLM sets EnvPolicy");
+            continue;
+        }
         out.insert(k.to_ascii_lowercase(), v);
     }
     for (k, v) in hklm {
@@ -312,7 +328,8 @@ impl AdminPolicy {
 
 /// First token of `line` that starts an agent without its approval prompts
 /// or sandbox. Mirrors the `dangerous` modes in `src/lib/templates.ts` plus
-/// the CLIs' known aliases, so a hand-typed template cannot slip past.
+/// the known equivalents of Claude Code, Codex and Gemini-style CLIs. A
+/// denylist: a flag a CLI adds later is not covered until it is listed here.
 pub fn bypass_flag(line: &str) -> Option<String> {
     let tokens: Vec<String> = line
         .split_whitespace()
@@ -329,14 +346,23 @@ pub fn bypass_flag(line: &str) -> Option<String> {
         {
             return Some(flag.to_string());
         }
-        if flag == "--permission-mode" {
-            let mode = match t.split_once('=') {
-                Some((_, m)) => Some(m.to_string()),
-                None => tokens.get(i + 1).cloned(),
-            };
-            if mode.as_deref() == Some("bypasspermissions") {
-                return Some("--permission-mode bypassPermissions".into());
-            }
+        if flag == "-y" {
+            return Some(flag.to_string());
+        }
+        // Option + value pairs, as `--opt value` or `--opt=value`.
+        let value = || match t.split_once('=') {
+            Some((_, v)) => Some(v.to_string()),
+            None => tokens.get(i + 1).cloned(),
+        };
+        let bad = match flag {
+            "--permission-mode" => value().as_deref() == Some("bypasspermissions"),
+            "-s" | "--sandbox" => value().as_deref() == Some("danger-full-access"),
+            "-a" | "--ask-for-approval" => value().as_deref() == Some("never"),
+            "--approval-mode" => value().as_deref() == Some("yolo"),
+            _ => false,
+        };
+        if bad {
+            return Some(format!("{flag} {}", value().unwrap_or_default()));
         }
     }
     None
@@ -439,11 +465,12 @@ pub mod registry {
                 return out;
             }
             let mut index = 0u32;
+            let mut name = vec![0u16; 256];
+            let mut data = vec![0u8; MAX_DATA];
             loop {
-                let mut name = vec![0u16; 256];
+                // In/out lengths: reset to the buffer sizes on every call.
                 let mut name_len = name.len() as u32;
                 let mut kind = 0u32;
-                let mut data = vec![0u8; MAX_DATA];
                 let mut data_len = data.len() as u32;
                 let rc = RegEnumValueW(
                     hkey,
@@ -508,16 +535,35 @@ mod tests {
     }
 
     #[test]
-    fn invalid_and_unknown_values_are_ignored_with_a_warning() {
+    fn invalid_lock_values_fail_closed_and_others_are_ignored() {
         let (p, w) = parse(&map(&[
             ("DisableMcp", RegValue::Dword(2)),
             ("DisableCompanion", RegValue::Sz("1".into())),
+            ("DisableRoutineCommands", RegValue::Other),
             ("EnvPolicy", RegValue::Sz("off".into())),
             ("EnvAllow", RegValue::Dword(1)),
             ("Whatever", RegValue::Dword(1)),
         ]));
-        assert_eq!(p, AdminPolicy::default());
-        assert_eq!(w.len(), 5, "{w:?}");
+        assert!(p.disable_mcp && p.disable_companion && p.disable_routine_commands);
+        assert_eq!(p.env_policy, Some(FilterMode::Default));
+        assert!(p.env_allow.is_empty());
+        assert_eq!(w.len(), 6, "{w:?}");
+    }
+
+    #[test]
+    fn hkcu_env_allow_cannot_widen_an_hklm_env_lock() {
+        let merged = merge_hives(
+            map(&[("EnvPolicy", RegValue::Sz("strict".into()))]),
+            map(&[("EnvAllow", RegValue::MultiSz(vec!["*".into()]))]),
+        );
+        let (p, _) = parse(&merged);
+        assert!(p.env_allow.is_empty());
+        // Without an HKLM lock, HKCU may still add names.
+        let merged = merge_hives(
+            BTreeMap::new(),
+            map(&[("EnvAllow", RegValue::MultiSz(vec!["X".into()]))]),
+        );
+        assert_eq!(parse(&merged).0.env_allow, vec!["X"]);
     }
 
     #[test]
@@ -647,12 +693,20 @@ mod tests {
             "claude --permission-mode=bypassPermissions",
             "gemini --yolo",
             "claude \"--DANGEROUSLY-skip-permissions\"",
+            "codex -s danger-full-access",
+            "codex --sandbox=danger-full-access",
+            "codex -a never",
+            "codex --ask-for-approval never",
+            "gemini -y",
+            "qwen --approval-mode yolo",
         ] {
             assert!(bypass_flag(line).is_some(), "{line}");
         }
         for line in [
             "claude --permission-mode default",
             "codex -s workspace-write -a on-request",
+            "codex -s read-only -a on-request",
+            "gemini --approval-mode default",
             "claude",
             "echo dangerously",
         ] {

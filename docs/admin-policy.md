@@ -15,8 +15,10 @@ Locked controls are greyed out and marked "Managed by your administrator". Setti
 - Swarmterm reads both keys **once at start**. Changes apply after a restart (quit from the tray, then start again).
 - **HKLM wins per value.** A value set under HKLM cannot be overridden from HKCU. HKCU can only add values that HKLM
   does not set. Lock settings under HKLM if users may have admin rights.
-- Value names are case-insensitive. Unknown values, wrong types (for example a `REG_SZ` where a `REG_DWORD` is
-  expected) and invalid data are ignored and logged to the app's stderr (`policy: …`), never treated as "on".
+- Value names are case-insensitive. Unknown value names are ignored. A known value with the wrong type or invalid
+  data **fails closed**: a `Disable*` value counts as `1`, an invalid `EnvPolicy` as `default`, an invalid `EnvAllow`
+  is ignored. Each case is logged to the app's stderr (`policy: …`).
+- `EnvAllow` is the only value that widens access, so an HKCU `EnvAllow` is ignored whenever HKLM sets `EnvPolicy`.
 - With no key at all, Swarmterm behaves as before (unmanaged).
 
 ## Values
@@ -25,7 +27,7 @@ Locked controls are greyed out and marked "Managed by your administrator". Setti
 
 | Value | Type | Effect | Enforced in |
 |---|---|---|---|
-| `DisableBypassModes` | DWORD | Refuses any pane whose launch line switches an agent's approval prompts or sandbox off: `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`, any other `--dangerously-*` / `--allow-dangerously-*` flag, `--permission-mode bypassPermissions`, `--yolo`. Red launch modes are greyed out, and spawned workers can never inherit them. | `pty.rs` (`spawn_terminal`), `agent_policy` override |
+| `DisableBypassModes` | DWORD | Refuses any pane whose launch line switches an agent's approval prompts or sandbox off: `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`, any other `--dangerously-*` / `--allow-dangerously-*` flag, `--permission-mode bypassPermissions`, `--yolo`, `-y`, `--approval-mode yolo`, `-s`/`--sandbox danger-full-access`, `-a`/`--ask-for-approval never`. Red launch modes are greyed out, and spawned workers can never inherit them. | `pty.rs` (`spawn_terminal`), `agent_policy` override |
 | `DisableWarRoomExecute` | DWORD | Agents cannot run prompts in other panes (War Room `execute`). Probes and the user's own War Room sends still work. | `mcp/tools/warroom.rs` |
 | `DisableWorktreeSpawn` | DWORD | The `worktree.spawn` MCP tool is refused. | `mcp/tools/worktree.rs` |
 | `DisableMcp` | DWORD | The local MCP server is not started, and Swarmterm removes its own entries from the agents' MCP configuration at start (entries it does not recognise as its own are never touched). The Settings → MCP switches stay off. | `lib.rs`, `mcp/toggle.rs` |
@@ -38,7 +40,8 @@ Locked controls are greyed out and marked "Managed by your administrator". Setti
 
 ### Limits
 
-- `DisableBypassModes` checks the command Swarmterm starts a pane with. A user can still type such a flag by hand
+- `DisableBypassModes` checks the command Swarmterm starts a pane with against a list of known flags; a flag an agent
+  CLI adds later is not covered until Swarmterm lists it. A user can still type such a flag by hand
   into a plain shell pane. Pair the policy with the agents' own managed settings (for example Claude Code's
   managed setting `permissions.disableBypassPermissionsMode`) if that matters.
 - The policy restricts Swarmterm. It does not sandbox the agents or the shell.

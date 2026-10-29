@@ -27,7 +27,7 @@
       <string id="EnvPolicy_Default">Default (withhold secrets)</string>
       <string id="EnvPolicy_Strict">Strict (system variables only)</string>
       <string id="EnvAllow">Allow environment variables</string>
-      <string id="EnvAllow_Help">Variable names that always pass the environment filter, one per line, case-insensitive; a trailing * matches a prefix (CORP_*). Merged with the user's own list unless "Force the terminal environment filter" is set.</string>
+      <string id="EnvAllow_Help">Variable names that always pass the environment filter, one per line, case-insensitive; a trailing * matches a prefix (CORP_*). Merged with the user's own list unless "Force the terminal environment filter" is set. A user-class value is ignored while the machine policy forces the filter.</string>
     </stringTable>
     <presentationTable>
       <presentation id="EnvPolicy">
