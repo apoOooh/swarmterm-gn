@@ -102,13 +102,20 @@ mode; the administrator policy `DisableBypassModes` forces this off.
 By default panes and command routines do not inherit secret-looking variables
 from the application's environment: names ending in `_TOKEN`, `_API_KEY`,
 `_SECRET`, `_PASSWORD`, `_PASS`, `_PWD`, `_KEY`, `_PRIVATE_KEY`,
-`_CREDENTIAL(S)` and similar, names with a `TOKEN`, `SECRET`, `PASSWORD` or
-`CREDENTIAL` segment anywhere (`AWS_BEARER_TOKEN_BEDROCK`), the `SECRET_`
-prefix, and `DATABASE_URL`, `PGPASSWORD`, `MYSQL_PWD`. Any variable whose value
+`_CREDENTIAL(S)`, `_AUTHTOKEN`, `_ACCESSTOKEN`, `_AUTH_CONFIG` and similar,
+names with a `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, `AUTHTOKEN` or
+`ACCESSTOKEN` segment anywhere (`AWS_BEARER_TOKEN_BEDROCK`), the `SECRET_`
+prefix, and `DATABASE_URL`, `PGPASSWORD`, `MYSQL_PWD`. Names that only say
+where or how a secret is kept pass: the segment rule skips names ending
+`_STORE`, `_PROVIDER(S)`, `_HELPER`, `_MANAGER` (`GCM_CREDENTIAL_STORE`,
+`CARGO_REGISTRY_CREDENTIAL_PROVIDER`), and public keys (`*_PUBLIC_KEY`, and
+`GPG_KEY`, which holds a key id) are not secrets. Any variable whose value
 is a URL with credentials (`http://user:pw@proxy`, `redis://:pw@host`,
 `https://token@host`) or an `Authorization:`/`Bearer ` header
 (`ANTHROPIC_CUSTOM_HEADERS`, any `*_HEADERS`) is dropped whole rather than
-redacted, since a URL without its password fails anyway. Paths to secrets
+redacted, since a URL without its password fails anyway. A bare user name
+counts as a credential except for SSH URLs: `DOCKER_HOST=ssh://user@host`
+names the login, while SSH authenticates with keys or the agent. Paths to secrets
 (`AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`,
 `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`; names ending `_FILE`, `_PATH`, `_DIR`,
 `_URI`, `_URL`) pass unless their value embeds credentials. Other
@@ -118,7 +125,12 @@ mode even if they embed keys; Strict drops them. Provider configuration such as
 (Bedrock and corporate LLM gateways need it), as do `PATH`, system variables,
 proxies without credentials and certificate variables (`SSL_CERT_FILE`,
 `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`). A strict mode keeps only system
-variables, and an allow list passes named variables
+variables plus what corporate networks and lockdowns rely on:
+`__PSLockdownPolicy` (dropping it would lift a PowerShell constrained-language
+lockdown set by that variable), `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (any
+case; still dropped when the URL carries credentials) and the CA variables
+`SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`,
+`CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`. An allow list passes named variables
 (`src-tauri/src/terminal_env.rs`, Settings → Terminal → Environment).
 
 The same filter applies to every child process Swarmterm starts, through one
@@ -136,7 +148,8 @@ helper (`terminal_env::command`, environment cleared, then the filtered copy):
 
 Exceptions: the terminal host process (`swarmterm-host.exe`) is Swarmterm's own
 binary and clears its environment before each pane; images, videos and HTML
-opened "in the default application" go through the Windows shell
+opened "in the default application", and web links opened in the default
+browser (the Tauri opener's `open_url`), go through the Windows shell
 (`ShellExecute`), whose handler may receive the app's environment, because the
 shell offers no way to pass a filtered one.
 

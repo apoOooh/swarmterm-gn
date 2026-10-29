@@ -16,7 +16,8 @@ flag into a shell pane or start an agent outside Swarmterm. For a corporate depl
 
 1. the **HKLM administrator policy** ([admin-policy.md](admin-policy.md)), which applies to both editions;
 2. the **agents' own managed settings**, required for corporate deployment: Claude Code managed settings with
-   `"permissions": { "disableBypassPermissionsMode": "disable" }`, Codex managed `requirements.toml`;
+   `"permissions": { "disableBypassPermissionsMode": "disable", "disableAutoMode": "disable" }`
+   (removes Bypass and Auto mode), Codex managed `requirements.toml`;
 3. **AppLocker or WDAC** rules that allow only the Corp installer's hash or install path, so users cannot run a
    swapped executable or the Standard edition.
 
