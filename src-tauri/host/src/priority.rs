@@ -267,7 +267,10 @@ pub fn plan(procs: &[Proc], root: u32) -> Vec<u32> {
         }
         // Members in a parent cycle (PID reuse) are unreachable from the
         // shell; they are still in the job, so they hang below it too.
-        match procs.iter().find(|p| p.pid != root && !visited.contains(&p.pid)) {
+        match procs
+            .iter()
+            .find(|p| p.pid != root && !visited.contains(&p.pid))
+        {
             Some(p) => {
                 visited.insert(p.pid);
                 order.push((p.pid, Some(0), Some(p)));
@@ -309,9 +312,9 @@ pub fn plan(procs: &[Proc], root: u32) -> Vec<u32> {
 }
 
 #[cfg(windows)]
-pub use os::{command_line, Registry};
-#[cfg(windows)]
 pub(crate) use os::snapshot;
+#[cfg(windows)]
+pub use os::{command_line, Registry};
 
 #[cfg(windows)]
 mod os {
@@ -354,7 +357,10 @@ mod os {
         }
 
         pub fn settings(&self) -> Settings {
-            self.settings.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.settings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
 
         /// Capture `pid` (a pane shell that has not run anything yet) in a
@@ -600,8 +606,7 @@ mod os {
                 if status >= 0 {
                     let us = &*(buf.as_ptr() as *const UNICODE_STRING);
                     if !us.Buffer.is_null() {
-                        let chars =
-                            std::slice::from_raw_parts(us.Buffer, (us.Length / 2) as usize);
+                        let chars = std::slice::from_raw_parts(us.Buffer, (us.Length / 2) as usize);
                         result = Some(String::from_utf16_lossy(chars));
                     }
                 }
@@ -701,16 +706,28 @@ mod tests {
     #[test]
     fn orphans_hang_below_the_shell() {
         // 11 (a `start` wrapper) exited; its child 12 is still in the job.
-        let procs = [p(10, 1, "pwsh.exe"), p(12, 11, "cargo.exe"), p(13, 12, "rustc.exe")];
+        let procs = [
+            p(10, 1, "pwsh.exe"),
+            p(12, 11, "cargo.exe"),
+            p(13, 12, "rustc.exe"),
+        ];
         assert_eq!(sorted(plan(&procs, 10)), vec![12, 13]);
         // An orphan launcher stays out, its build child goes in.
-        let procs = [p(10, 1, "pwsh.exe"), p(12, 11, "python.exe"), p(13, 12, "ping.exe")];
+        let procs = [
+            p(10, 1, "pwsh.exe"),
+            p(12, 11, "python.exe"),
+            p(13, 12, "ping.exe"),
+        ];
         assert_eq!(plan(&procs, 10), vec![13]);
     }
 
     #[test]
     fn interactive_programs_in_a_plain_pane_stay_out() {
-        let procs = [p(10, 1, "pwsh.exe"), p(11, 10, "ssh.exe"), p(12, 10, "nvim.exe")];
+        let procs = [
+            p(10, 1, "pwsh.exe"),
+            p(11, 10, "ssh.exe"),
+            p(12, 10, "nvim.exe"),
+        ];
         assert!(plan(&procs, 10).is_empty());
     }
 

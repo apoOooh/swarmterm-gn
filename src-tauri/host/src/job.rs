@@ -40,9 +40,10 @@ use windows_sys::Win32::System::JobObjects::{
     JOB_OBJECT_LIMIT_PRIORITY_CLASS,
 };
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, GetPriorityClass, GetProcessTimes, OpenProcess, SetPriorityClass, BELOW_NORMAL_PRIORITY_CLASS,
-    IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SET_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    GetExitCodeProcess, GetPriorityClass, GetProcessTimes, OpenProcess, SetPriorityClass,
+    BELOW_NORMAL_PRIORITY_CLASS, IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_INFORMATION, PROCESS_SET_QUOTA,
+    PROCESS_TERMINATE,
 };
 
 use crate::priority::{Level, Limits};
@@ -248,7 +249,11 @@ fn alive(pid: u32, born: u64) -> bool {
 fn force_class(pid: u32, born: u64, class: u32) -> bool {
     // SAFETY: handle opened and closed here.
     unsafe {
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION, 0, pid);
+        let h = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION,
+            0,
+            pid,
+        );
         if h.is_null() {
             return false;
         }
@@ -394,7 +399,9 @@ impl JobHandle {
                     // SAFETY: handle opened and closed here.
                     unsafe {
                         let h = OpenProcess(
-                            PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+                            PROCESS_SET_QUOTA
+                                | PROCESS_TERMINATE
+                                | PROCESS_QUERY_LIMITED_INFORMATION,
                             0,
                             pid,
                         );
@@ -654,9 +661,8 @@ impl JobHandle {
             // Born in the build job already (a descendant of an assigned
             // root): nothing to do, and no Assign call per pass.
             let mut inside = 0;
-            let res = if IsProcessInJob(proc, build, &mut inside) != 0 && inside != 0 {
-                Assign::Done
-            } else if AssignProcessToJobObject(build, proc) != 0 {
+            let already = IsProcessInJob(proc, build, &mut inside) != 0 && inside != 0;
+            let res = if already || AssignProcessToJobObject(build, proc) != 0 {
                 Assign::Done
             } else {
                 Assign::Refused(GetLastError())

@@ -264,8 +264,10 @@ fn connect(app: &AppHandle, start: bool, adopt: bool) -> Result<Client, String> 
                 }
                 // Before any create on this connection (requests are FIFO),
                 // so new hosted panes are born with the user's settings.
-                c.conn
-                    .set_priority(&app.state::<crate::child_priority::ChildPriority>().settings());
+                c.conn.set_priority(
+                    &app.state::<crate::child_priority::ChildPriority>()
+                        .settings(),
+                );
                 if let Some(port) = *app.state::<HostHub>().mcp_port.lock().unwrap() {
                     c.conn.set_app_state(serde_json::json!({ "mcpPort": port }));
                 }
@@ -769,9 +771,15 @@ mod capability_tests {
         assert!(!p);
         assert!(!spawn_on_host(p, "1.24.2"));
         let none = json!({"ok": true, "hostVersion": "1.0.0"});
-        assert!(!spawn_on_host(has_cap(&none, swarmterm_host::protocol::PRIORITY), "1.0.0"));
+        assert!(!spawn_on_host(
+            has_cap(&none, swarmterm_host::protocol::PRIORITY),
+            "1.0.0"
+        ));
         let new = json!({"ok": true, "capabilities": ["flow-control", swarmterm_host::protocol::PRIORITY]});
-        assert!(spawn_on_host(has_cap(&new, swarmterm_host::protocol::PRIORITY), "x"));
+        assert!(spawn_on_host(
+            has_cap(&new, swarmterm_host::protocol::PRIORITY),
+            "x"
+        ));
     }
 }
 

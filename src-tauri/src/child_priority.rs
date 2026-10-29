@@ -76,9 +76,10 @@ pub fn forward_to_host(app: tauri::AppHandle) {
     let spawned = std::thread::Builder::new()
         .name("child-priority-forward".into())
         .spawn(move || {
-            app.state::<ChildPriority>().run_forward(|| {
-                app.state::<crate::host_client::HostHub>().current()
-            }, |c, s| c.conn.set_priority(s));
+            app.state::<ChildPriority>().run_forward(
+                || app.state::<crate::host_client::HostHub>().current(),
+                |c, s| c.conn.set_priority(s),
+            );
         });
     if let Err(e) = spawned {
         eprintln!("[child-priority] forward thread failed to start: {e}");
