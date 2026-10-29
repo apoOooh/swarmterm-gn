@@ -17,24 +17,45 @@
 //! microphone (`update_gate`), checked before anything is fetched and again
 //! right before buzzkey is asked to quit.
 
+// Corp builds compile the download/install path out entirely (not just
+// lock it): no code that fetches and runs a third-party binary ships in
+// that edition (docs/editions.md).
+#[cfg(not(feature = "corp"))]
 mod install;
+mod names;
+#[cfg(not(feature = "corp"))]
 pub mod release;
+/// Corp keeps only the file names status, autostart and the hardware
+/// probe need; release selection and signature checks serve the
+/// compiled-out installer.
+#[cfg(feature = "corp")]
+mod release {
+    pub use super::names::{CONSOLE_EXE, EXE};
+}
 mod system;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(feature = "corp"))]
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+#[cfg(not(feature = "corp"))]
+use tauri::Emitter;
+use tauri::{AppHandle, Manager};
 
 use super::VoiceHub;
+#[cfg(not(feature = "corp"))]
 use release::{GhRelease, Release};
 pub use system::HardwareProbe;
 
+#[cfg(not(feature = "corp"))]
 const USER_AGENT: &str = concat!("swarmterm-gn/", env!("CARGO_PKG_VERSION"));
+#[cfg(not(feature = "corp"))]
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(not(feature = "corp"))]
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 /// How long a polite quit may take before the install gives up.
+#[cfg(not(feature = "corp"))]
 const QUIT_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
@@ -70,6 +91,7 @@ pub struct UpdateCheck {
     pub major_jump: bool,
 }
 
+#[cfg(not(feature = "corp"))]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Progress<'a> {
@@ -79,6 +101,7 @@ struct Progress<'a> {
     total: u64,
 }
 
+#[cfg(not(feature = "corp"))]
 fn emit_progress(app: &AppHandle, phase: &str, file: Option<&str>, received: u64, total: u64) {
     let _ = app.emit(
         "voice:companion-progress",
@@ -92,6 +115,7 @@ fn emit_progress(app: &AppHandle, phase: &str, file: Option<&str>, received: u64
 }
 
 /// Debug builds may read releases from the testlab's loopback server.
+#[cfg(not(feature = "corp"))]
 fn releases_url() -> (String, bool) {
     if cfg!(debug_assertions) {
         if let Ok(url) = std::env::var("SWARMTERM_BUZZKEY_RELEASES_URL") {
@@ -103,6 +127,7 @@ fn releases_url() -> (String, bool) {
     (release::RELEASES_URL.to_owned(), false)
 }
 
+#[cfg(not(feature = "corp"))]
 fn client(allow_loopback: bool, timeout: Duration) -> Result<reqwest::Client, String> {
     // Every hop of a redirect chain is held to the same allowlist, so a
     // GitHub redirect cannot hand the download to another host.
@@ -124,6 +149,7 @@ fn client(allow_loopback: bool, timeout: Duration) -> Result<reqwest::Client, St
 }
 
 /// GET with a byte cap enforced while reading, not after.
+#[cfg(not(feature = "corp"))]
 async fn fetch(
     http: &reqwest::Client,
     url: &str,
@@ -165,6 +191,7 @@ async fn fetch(
     Ok(body)
 }
 
+#[cfg(not(feature = "corp"))]
 async fn latest_release() -> Result<Option<Release>, String> {
     let (url, loopback) = releases_url();
     let http = client(loopback, LIST_TIMEOUT)?;
@@ -207,6 +234,7 @@ pub fn voice_companion_status(app: AppHandle) -> CompanionStatus {
 /// "Check for update" (click, or the update toast's schedule). Compares against the version the
 /// running buzzkey reported in `hello`; without one, any signed release
 /// counts as available (fresh install).
+#[cfg(not(feature = "corp"))]
 #[tauri::command]
 pub async fn voice_companion_check(app: AppHandle) -> Result<UpdateCheck, String> {
     app.state::<crate::pty::AppState>()
@@ -235,7 +263,9 @@ pub async fn voice_companion_check(app: AppHandle) -> Result<UpdateCheck, String
     })
 }
 
+#[cfg(not(feature = "corp"))]
 struct BusyGuard<'a>(&'a AtomicBool);
+#[cfg(not(feature = "corp"))]
 impl Drop for BusyGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Relaxed);
@@ -244,6 +274,7 @@ impl Drop for BusyGuard<'_> {
 
 /// An automatic update must never cut into a dictation: quitting buzzkey
 /// mid-recording loses the audio. A click is the user's own call.
+#[cfg(not(feature = "corp"))]
 fn update_gate(unattended: bool, dictating: bool) -> Result<(), &'static str> {
     if unattended && dictating {
         Err("dictating")
@@ -254,6 +285,7 @@ fn update_gate(unattended: bool, dictating: bool) -> Result<(), &'static str> {
 
 /// Anyone holding a dictation: a live pin (buzzkey or another client) or
 /// the built-in speech source.
+#[cfg(not(feature = "corp"))]
 fn dictating(app: &AppHandle) -> bool {
     let live = app
         .state::<VoiceHub>()
@@ -266,6 +298,7 @@ fn dictating(app: &AppHandle) -> bool {
 
 /// Install or update. Restarts buzzkey afterwards if it was running.
 /// `unattended` = the toast's auto-update, gated on no dictation.
+#[cfg(not(feature = "corp"))]
 #[tauri::command]
 pub async fn voice_companion_install(
     app: AppHandle,
@@ -292,6 +325,7 @@ pub async fn voice_companion_install(
     result.map(|()| status(&app))
 }
 
+#[cfg(not(feature = "corp"))]
 async fn install_inner(app: &AppHandle, unattended: bool) -> Result<(), String> {
     if !cfg!(windows) {
         return Err("unsupported".into());
@@ -361,6 +395,7 @@ async fn install_inner(app: &AppHandle, unattended: bool) -> Result<(), String> 
     Ok(())
 }
 
+#[cfg(not(feature = "corp"))]
 async fn quit_and_wait(app: &AppHandle) -> Result<(), String> {
     if !app.state::<VoiceHub>().request_buzzkey_quit() {
         return Err("running-quit-in-tray".into());
@@ -373,6 +408,34 @@ async fn quit_and_wait(app: &AppHandle) -> Result<(), String> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     Ok(())
+}
+
+/// Corp: the commands stay registered (one `generate_handler!` list for both
+/// editions) but refuse, naming the edition.
+#[cfg(feature = "corp")]
+#[tauri::command]
+pub async fn voice_companion_check(app: AppHandle) -> Result<UpdateCheck, String> {
+    corp_refusal(&app)
+}
+
+#[cfg(feature = "corp")]
+#[tauri::command]
+pub async fn voice_companion_install(
+    app: AppHandle,
+    unattended: Option<bool>,
+) -> Result<CompanionStatus, String> {
+    let _ = unattended;
+    corp_refusal(&app)
+}
+
+/// `DisableCompanion` is compiled into corp, so this is always the
+/// edition's refusal message.
+#[cfg(feature = "corp")]
+fn corp_refusal<T>(app: &AppHandle) -> Result<T, String> {
+    app.state::<crate::pty::AppState>()
+        .admin_policy
+        .check(crate::policy::Lock::Companion)?;
+    Err("unsupported".into())
 }
 
 #[tauri::command]
@@ -418,7 +481,7 @@ pub async fn voice_companion_probe() -> Option<HardwareProbe> {
     system::probe(&system::install_dir()?).await
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "corp")))]
 mod tests {
     use super::*;
 

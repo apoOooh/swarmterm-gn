@@ -48,8 +48,7 @@ pub fn verify_trusted(sums: &[u8], sig: &str) -> Result<(), String> {
 }
 
 pub const TAG_PREFIX: &str = "buzzkey-";
-pub const EXE: &str = "buzzkey.exe";
-pub const CONSOLE_EXE: &str = "buzzkey-console.exe";
+pub use super::names::{CONSOLE_EXE, EXE};
 pub const SUMS: &str = "SHA256SUMS.txt";
 pub const SUMS_SIG: &str = "SHA256SUMS.txt.minisig";
 /// Files that end up installed, in install order.

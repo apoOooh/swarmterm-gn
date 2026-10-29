@@ -5,6 +5,10 @@ their security rules do not allow. Swarmterm enforces every policy in its backen
 in the user interface, so neither the user nor an agent running in a pane can work around it from inside the app.
 Locked controls are greyed out and marked "Managed by your administrator". Settings lists the active policies at the top.
 
+The policy applies to both editions. **Swarmterm GN Corp** additionally has `DisableBypassModes`,
+`DisableWarRoomExecute`, `DisableCompanion`, `DisableModelDownload` and `EnvPolicy=default` compiled in: the registry
+can add locks on top but never lift those. See [Editions](editions.md).
+
 ## Where Swarmterm reads it
 
 | Key | Who can usually write it |

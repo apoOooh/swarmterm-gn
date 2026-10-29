@@ -1212,9 +1212,11 @@ pub fn voice_model_download(app: AppHandle, id: String) -> Result<(), String> {
     app.state::<crate::pty::AppState>()
         .admin_policy
         .check(crate::policy::Lock::ModelDownload)?;
-    #[cfg(windows)]
+    // Corp: `ModelDownload` is compiled in, so the check above already
+    // refused; the download code itself is not in that binary.
+    #[cfg(all(windows, not(feature = "corp")))]
     return speech::download(&app, &id);
-    #[cfg(not(windows))]
+    #[cfg(any(not(windows), feature = "corp"))]
     {
         let _ = (app, id);
         Err("unsupported".into())

@@ -54,6 +54,7 @@ Run from the repo root unless noted.
 | `npm run tauri build -- --no-bundle` | Release binary, skip installer. |
 | `cargo test` *(from `src-tauri/`)* | Rust unit tests (pty/shell helpers). |
 | `npm run tauri:dev:no-speech` / `npm run test:rust:no-speech` | Isolated dev instance / Rust tests **without LLVM and CMake**: `--no-default-features` drops the `local-speech` feature (whisper.cpp). Only built-in dictation is missing; it fails with `speech-engine-unavailable`. |
+| `npm run tauri:build:corp` / `tauri:build:corp:no-speech` / `test:rust:corp` | Corp edition (`docs/editions.md`): overlay `src-tauri/tauri.corp.conf.json` (own identifier, `npm run build:corp` = `vite --mode corp`) + Cargo feature `corp`. Check it with `cargo clippy --all-targets --no-default-features --features corp -- -D warnings`. |
 
 **Running the app from inside Swarmterm.** Swarmterm is single-instance, keyed
 on its identifier: a second launch with the same identifier is handed to the
@@ -536,6 +537,16 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   cannot loosen a lock; `DisableMcp` goes through `mcp::toggle` (`POLICY_OFF`)
   so every MCP writer removes our entries. New values: `FLAGS` in
   `policy.rs`, `lib/policy.ts`, the ADMX/ADML in `docs/admin/`.
+- **Corp edition (`corp` feature, `docs/editions.md`).** `policy::EDITION` /
+  `Edition::locks` are the compiled-in locks that `load` combines with the
+  registry (can add, never lift). The buzzkey install/check path and the model
+  download are `#[cfg(not(feature = "corp"))]`; the commands stay registered
+  with corp stubs so `generate_handler!` is one list. The renderer hides those
+  sections via `lib/edition.ts` (`VITE_SWARMTERM_EDITION` from `--mode corp`,
+  OR the backend's `policy_get().edition`). A new lock that belongs in Corp
+  goes into `Edition::locks` and `docs/editions.md`; new download/install code
+  gets the same cfg and, if it has an endpoint, the release workflow's corp
+  string check.
 - **`profiling` Cargo feature (dev only).** `prof.rs` spans/counters/lock
   timers compile to the plain operation without it, so normal and A/B builds
   are unchanged; never enable it in a release. Use it via

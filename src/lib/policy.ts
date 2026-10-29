@@ -4,6 +4,8 @@
  * action, so these helpers just decide what to grey out and what to list.
  * Field names are in lockstep with `PolicyView` (camelCase serde).
  */
+import type { Edition } from './edition'
+
 export type EnvPolicyMode = 'default' | 'strict'
 
 export interface AdminPolicy {
@@ -22,6 +24,10 @@ export interface AdminPolicy {
   locked: boolean
   /** Registry value names of the active policies. */
   active: string[]
+  /** Edition the backend was built as. */
+  edition: Edition
+  /** Value names compiled into the edition (subset of what may be active). */
+  builtIn: string[]
 }
 
 export const MANAGED_LABEL = 'Managed by your administrator'
@@ -38,7 +44,9 @@ export const UNMANAGED_POLICY: AdminPolicy = {
   envPolicy: null,
   envAllow: [],
   locked: false,
-  active: []
+  active: [],
+  edition: 'standard',
+  builtIn: []
 }
 
 const FLAGS = [
@@ -57,12 +65,14 @@ const FLAGS = [
  *  regardless of what the UI shows. */
 export function parseAdminPolicy(raw: unknown): AdminPolicy {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-  const out: AdminPolicy = { ...UNMANAGED_POLICY, envAllow: [], active: [] }
+  const out: AdminPolicy = { ...UNMANAGED_POLICY, envAllow: [], active: [], builtIn: [] }
   for (const f of FLAGS) out[f] = o[f] === true
   out.envPolicy = o.envPolicy === 'default' || o.envPolicy === 'strict' ? o.envPolicy : null
   out.envAllow = Array.isArray(o.envAllow) ? o.envAllow.filter((s): s is string => typeof s === 'string') : []
   out.active = Array.isArray(o.active) ? o.active.filter((s): s is string => typeof s === 'string') : []
   out.locked = out.active.length > 0
+  out.edition = o.edition === 'corp' ? 'corp' : 'standard'
+  out.builtIn = Array.isArray(o.builtIn) ? o.builtIn.filter((s): s is string => typeof s === 'string') : []
   return out
 }
 
@@ -82,7 +92,22 @@ export const POLICY_DESCRIPTIONS: Record<string, string> = {
 
 /** One line per active policy, in the order Rust reported them. */
 export function describeActivePolicies(policy: AdminPolicy): string[] {
-  return policy.active.map((name) => {
+  return describeNames(policy, policy.active)
+}
+
+/** Active policies split by source: compiled into the edition vs. set by an
+ *  administrator (a registry value repeating a built-in lock shows once, as
+ *  built in, since removing it would change nothing). */
+export function splitActivePolicies(policy: AdminPolicy): { builtIn: string[]; admin: string[] } {
+  const builtIn = new Set(policy.builtIn)
+  return {
+    builtIn: describeNames(policy, policy.active.filter((n) => builtIn.has(n))),
+    admin: describeNames(policy, policy.active.filter((n) => !builtIn.has(n)))
+  }
+}
+
+function describeNames(policy: AdminPolicy, names: string[]): string[] {
+  return names.map((name) => {
     const text = POLICY_DESCRIPTIONS[name] ?? name
     if (name === 'EnvPolicy' && policy.envPolicy) return `${text} (${policy.envPolicy})`
     if (name === 'EnvAllow') return `${text}: ${policy.envAllow.join(', ')}`

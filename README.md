@@ -85,7 +85,15 @@ Layouts save automatically under **Saved workspaces**. Closing the window hides 
 - **War Room execute** (handing a peer a prompt to run) is off by default.
 - **Verified downloads:** the buzzkey companion is installed only after a signature and hash check; speech models are hash-checked.
 - **Supply chain:** CI checks advisories and licences (`cargo deny`, `npm audit`); each release ships CycloneDX SBOMs.
-- **Administrator policy:** organisations can lock features (bypass modes, War Room execute, MCP, downloads, routines, preview, environment filter) through Group Policy or Intune; see [Administrator policy](docs/admin-policy.md). Planned: a `corp` build variant.
+- **Administrator policy:** organisations can lock features (bypass modes, War Room execute, MCP, downloads, routines, preview, environment filter) through Group Policy or Intune; see [Administrator policy](docs/admin-policy.md).
+- **Two editions:** every release ships **Swarmterm GN** and **Swarmterm GN Corp**, which can be installed side by side ([Editions](docs/editions.md)):
+
+  | | Standard | Corp |
+  |---|---|---|
+  | Bypass modes, War Room execute by agents | available, policy-lockable | locked (built in) |
+  | buzzkey installer/updates, speech model download | on click, policy-lockable | not in the program |
+  | Environment filter | on by default, user can switch off | always on |
+  | Routines, worktree spawn, preview, MCP | policy-lockable | policy-lockable |
 
 Documents: [Privacy policy](PRIVACY.md) · [Terms of use](TERMS.md) · [Security policy](SECURITY.md) · [Security model](docs/security-model.md) · [Project decisions](docs/decisions.md)
 

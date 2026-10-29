@@ -24,7 +24,9 @@ sends over the network, and when.
 ## Data stored on your computer
 
 All files below belong to your Windows user account. The application
-identifier is `com.apooooh.swarmterm.gn`.
+identifier is `com.apooooh.swarmterm.gn`; the Corp edition
+([editions](docs/editions.md)) uses `com.apooooh.swarmterm.gn.corp` with the
+same layout under that folder name.
 
 | Data | Location | Source |
 |---|---|---|
