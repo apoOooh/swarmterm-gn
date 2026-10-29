@@ -38,6 +38,8 @@ locally first:
 | Rust lints | `cargo clippy --all-targets -- -D warnings` *(from `src-tauri/`)* |
 | Rust advisories, licences, sources | `cargo deny check advisories licenses sources` *(from `src-tauri/`, needs `cargo install cargo-deny`)* |
 | npm advisories | `npm audit --omit=dev --audit-level=high` |
+| npm registry signatures | `npm audit signatures` |
+| Licence metadata (REUSE) | `reuse lint` *(`pipx install reuse`)* |
 
 New dependencies must use a licence on the allow list in `src-tauri/deny.toml`.
 A change that adds a network connection or stores new data updates

@@ -45,6 +45,21 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
 - **Supply chain checks.** CI runs `cargo deny` and `npm audit`; every release
   ships CycloneDX SBOMs with checksums. Licence or advisory exceptions need a
   written reason in `src-tauri/deny.toml`.
+- **Supply-chain hardening (P10, 2026-10-29).** Workflow actions pinned to
+  commit SHAs (Dependabot bumps them), `permissions: {}` at workflow level,
+  Rust toolchain pinned in `rust-toolchain.toml`, `--locked` cargo, npm
+  installs with `--ignore-scripts` (only esbuild rebuilt) and
+  `npm audit signatures`, CodeQL and OpenSSF Scorecard, signed build
+  provenance for every release asset, REUSE compliance (`REUSE.toml`,
+  `LICENSES/`). No installer code signing and no OpenSSF Best Practices
+  badge (user, 2026-10-29). Rust third-party notices come from the release
+  SBOMs, not a generated `cargo about` file: one source, nothing to keep in
+  sync. Admin-only GitHub settings live in `docs/maintainer-todos.md`.
+- **Release CSP (2026-10-29).** The release CSP drops the dev-server entry
+  (`ws://localhost:1420`, now `devCsp` only) and plain `http:` images;
+  Markdown previews still load remote `https:` images (a preview feature,
+  listed in PRIVACY.md). `freezePrototype` stays off until it is tested
+  against xterm.js, CodeMirror and the other renderer libraries.
 - **README covers all features.** The README is a short, scannable
   GitHub-style overview: features list, install, quick start, security and
   privacy, build, origin, licence. Details stay in the user guide.

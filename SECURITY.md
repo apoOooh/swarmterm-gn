@@ -51,5 +51,14 @@ Out of scope:
 - websites you open in the web preview;
 - the original upstream Swarmterm project.
 
+## Verifying releases
+
+Each release ships `SHA256SUMS.txt`, CycloneDX SBOMs and Sigstore-signed build
+provenance created by the release workflow. Check a download with
+`Get-FileHash -Algorithm SHA256 <file>` against `SHA256SUMS.txt` and
+`gh attestation verify <file> --repo apoOooh/swarmterm-gn`; details in
+[docs/enterprise-deployment.md](docs/enterprise-deployment.md#verify-a-download).
+The installer is not Authenticode-signed (decision 2026-10-29).
+
 The security design is described in
 [docs/security-model.md](docs/security-model.md).

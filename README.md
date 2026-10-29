@@ -14,6 +14,7 @@ Real split terminals, one git worktree per agent, and an app your agents can dri
 [![Latest release](https://img.shields.io/github/v/release/apoOooh/swarmterm-gn)](https://github.com/apoOooh/swarmterm-gn/releases/latest)
 [![CI](https://github.com/apoOooh/swarmterm-gn/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/apoOooh/swarmterm-gn/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/apoOooh/swarmterm-gn/badge)](https://scorecard.dev/viewer/?uri=github.com/apoOooh/swarmterm-gn)
 
 <!-- IMAGE: upgrade to docs/images/hero.gif when a ~20s tour is recorded; see docs/images/README.md -->
 <img src="docs/images/hero.png" alt="Swarmterm GN with several agent panes, the file explorer and the right panel" width="100%">
@@ -60,7 +61,7 @@ The [user guide](docs/user-guide.md) covers every feature, shortcut and setting.
 ## Install
 
 1. Download `Swarmterm.GN_<version>_x64-setup.exe` and `SHA256SUMS.txt` from [Releases](https://github.com/apoOooh/swarmterm-gn/releases).
-2. Check the hash: `Get-FileHash .\Swarmterm.GN_*_x64-setup.exe` must match `SHA256SUMS.txt`.
+2. Check the hash: `Get-FileHash .\Swarmterm.GN_*_x64-setup.exe` must match `SHA256SUMS.txt`. Optionally check the signed build provenance: `gh attestation verify .\Swarmterm.GN_<version>_x64-setup.exe --repo apoOooh/swarmterm-gn` ([details](docs/enterprise-deployment.md#verify-a-download)).
 3. Run the installer. It is not code-signed yet, so Windows SmartScreen may warn about an unknown publisher.
 
 Requirements: Windows 10/11 x64 with the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), plus the agent CLIs you want to use (`claude`, `codex`, `opencode`). Missing CLIs show as disabled.
@@ -84,14 +85,14 @@ Layouts save automatically under **Saved workspaces**. Closing the window hides 
 - **Launch modes are explicit:** agents start in their confirming mode unless you pick a bypass mode. Bypass modes are confirmed before launch and marked on the pane.
 - **War Room execute** (handing a peer a prompt to run) is off by default.
 - **Verified downloads:** the buzzkey companion is installed only after a signature and hash check; speech models are hash-checked.
-- **Supply chain:** CI checks advisories and licences (`cargo deny`, `npm audit`); each release ships CycloneDX SBOMs.
+- **Supply chain:** CI checks advisories and licences (`cargo deny`, `npm audit`, `npm audit signatures`, REUSE) and runs CodeQL and OpenSSF Scorecard; workflow actions are pinned to commit SHAs and the Rust toolchain to one version. Each release ships CycloneDX SBOMs and signed build provenance.
 - **Administrator policy:** organisations can lock features (bypass modes, War Room execute, MCP, downloads, routines, preview, environment filter) through Group Policy or Intune; see [Administrator policy](docs/admin-policy.md). Planned: a `corp` build variant.
 
-Documents: [Privacy policy](PRIVACY.md) · [Terms of use](TERMS.md) · [Security policy](SECURITY.md) · [Security model](docs/security-model.md) · [Project decisions](docs/decisions.md)
+Documents: [Privacy policy](PRIVACY.md) · [Terms of use](TERMS.md) · [Security policy](SECURITY.md) · [Security model](docs/security-model.md) · [Enterprise deployment](docs/enterprise-deployment.md) · [Project decisions](docs/decisions.md)
 
 ## Build from source
 
-Node.js 24, npm and stable Rust on Windows:
+Node.js 24, npm and Rust on Windows (rustup installs the version pinned in `rust-toolchain.toml`):
 
 ```powershell
 git clone --branch dev https://github.com/apoOooh/swarmterm-gn.git
@@ -107,7 +108,13 @@ Prerequisites, tests and contribution rules: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Swarmterm GN is an independent project. It started as a fork of [duongducnguyen/swarmterm](https://github.com/duongducnguyen/swarmterm) and added the [Astera](https://github.com/parsingk/Astera) themes and file tools, then grew on its own. It is no longer based on or synced with upstream; upstream's website, policies and releases do not apply to Swarmterm GN.
 
-Development happens on `dev`; releases are tagged on `main` ([release process](docs/release-process.md), [changelog](CHANGELOG.md)). Known limits are in the [user guide](docs/user-guide.md#known-limits). Issues: [GitHub issues](https://github.com/apoOooh/swarmterm-gn/issues).
+Development happens on `dev`; releases are tagged on `main` ([release process](docs/release-process.md), [changelog](CHANGELOG.md)). Known limits are in the [user guide](docs/user-guide.md#known-limits).
+
+## Help and community
+
+- Questions and bugs: [GitHub issues](https://github.com/apoOooh/swarmterm-gn/issues). Search first; include the version and steps to reproduce. This is a volunteer project without paid support.
+- Security vulnerabilities: privately, as described in [SECURITY.md](SECURITY.md), never in a public issue.
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Licence
 
