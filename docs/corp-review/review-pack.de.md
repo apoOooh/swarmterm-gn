@@ -60,7 +60,7 @@ erforderlich:
 
 - die **HKLM-Richtlinie** (Schritt 2), die für beide Editionen gilt;
 - die **verwalteten Einstellungen der Agenten selbst**: verwaltete Claude-Code-Einstellungen mit
-  `"disableBypassPermissionsMode": "disable"`, verwaltete Codex-`requirements.toml`;
+  `"permissions": { "disableBypassPermissionsMode": "disable" }`, verwaltete Codex-`requirements.toml`;
 - **AppLocker- oder WDAC-Regeln**, die nur den Hash des Corp-Installers oder seinen Pfad unter Programme zulassen,
   damit Benutzer weder eine ausgetauschte Programmdatei noch die Standard-Edition ausführen können.
 4. Verteilen Sie neue Versionen nach Prüfung über Ihre Softwareverteilung; beobachten Sie GitHub Releases auf

@@ -151,7 +151,7 @@ executable. Details: [editions.md](editions.md).
 mistakes: it refuses the launch flags it recognises for known agents. It is not
 a security boundary, because a user can type any flag into a shell pane or run
 an agent outside the app. Corporate deployments need the HKLM policy, the
-agents' own managed settings (Claude Code `disableBypassPermissionsMode:
+agents' own managed settings (Claude Code `permissions.disableBypassPermissionsMode:
 "disable"`, Codex managed `requirements.toml`) and AppLocker/WDAC rules that
 allow only the Corp installer's hash or path
 ([enterprise-deployment.md](enterprise-deployment.md#recommended-deployment)).

@@ -55,8 +55,8 @@ bypass flag into a shell pane or start an agent outside Swarmterm ([security mod
 controls, all required for a corporate deployment:
 
 - the **HKLM policy** (step 2), which applies to both editions;
-- the **agents' own managed settings**: Claude Code managed settings with `"disableBypassPermissionsMode":
-  "disable"`, Codex managed `requirements.toml`;
+- the **agents' own managed settings**: Claude Code managed settings with `"permissions": {
+  "disableBypassPermissionsMode": "disable" }`, Codex managed `requirements.toml`;
 - **AppLocker or WDAC** rules that allow only the Corp installer's hash or its Program Files path, so users cannot run
   a swapped executable or the Standard edition.
 4. Roll out new versions through your software distribution after review; watch GitHub Releases for security fixes.

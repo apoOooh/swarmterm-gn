@@ -58,7 +58,7 @@ reference machine before a wide rollout.
 2. The real controls, all required for a corporate deployment:
    - the **HKLM administrator policy** ([below](#administrator-policy); applies to both editions);
    - the **agents' own managed settings**: Claude Code managed settings with
-     `"disableBypassPermissionsMode": "disable"`, Codex managed `requirements.toml`;
+     `"permissions": { "disableBypassPermissionsMode": "disable" }`, Codex managed `requirements.toml`;
    - **AppLocker or WDAC** rules that allow only the Corp installer's hash or its Program Files path, so users
      cannot run a swapped executable or the Standard edition. The installers are not Authenticode-signed: allow
      them by hash or sign them internally ([Verify a download](#verify-a-download)).
@@ -145,6 +145,6 @@ organisation's certificate or allow it by hash.
 | Secure development | CI: types, unit and browser tests, clippy, `cargo deny` (advisories, licences, sources), `npm audit` and registry signatures, gitleaks secret scan, CodeQL, OpenSSF Scorecard, REUSE licence lint. Actions pinned to commit SHAs; Dependabot updates. Threat model: [security-model.md](security-model.md). |
 | Vulnerability handling | Private reports via GitHub Security Advisories (until private reporting is enabled: a GitHub issue that only asks for a private contact, without details); targets: acknowledge in 5 working days, fix critical/high in 30 days ([SECURITY.md](../SECURITY.md)). Advisories are published with the fixed release. |
 | Third-party components | Listed in the release SBOMs; copied code and bundled assets in [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md). Dependency licences are checked against an allow list in CI. |
-| Privileges | Runs as the user; no service, driver, elevation or machine-wide change. |
+| Privileges | The app runs as the user; no service or driver. The Corp installer needs administrator rights and writes to Program Files; the Standard installer is per user and needs none. |
 | Central control | Registry policy (HKLM) through Group Policy or Intune ([admin-policy.md](admin-policy.md)). |
 | Support | Community support through GitHub issues; no SLA. |
