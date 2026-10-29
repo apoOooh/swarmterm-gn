@@ -555,7 +555,8 @@ Hosted panes outlive Swarmterm itself: if the app crashes or is ended from Task 
 Swarmterm GN never updates itself and makes no update checks. New versions are
 installers from this fork's [GitHub Releases](https://github.com/apoOooh/swarmterm-gn/releases)
 (or your IT's software distribution); install one over the existing version.
-Upstream Swarmterm releases do not contain the GN additions.
+Swarmterm GN is an independent project; releases of the original Swarmterm do
+not apply to it.
 
 ## Telemetry
 

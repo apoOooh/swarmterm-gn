@@ -1,5 +1,8 @@
 # Astera migration into Swarmterm GN
 
+> Historical record of the initial port. Swarmterm GN is now an independent
+> project; see [decisions](decisions.md).
+
 This fork adds Astera's seven visual themes and its terminal-linked file workflow
 to Swarmterm's existing Tauri application. Select a terminal, browse that pane's
 project/worktree, inspect or edit agent output and run a file without replacing
@@ -119,6 +122,7 @@ webview codecs, live watcher behavior and tray interactions still require
 Windows [manual smoke checks](manual-smoke-tests.md#astera-themes-and-files-gn).
 
 `dev` integrates `feat/astera-themes` and `feat/astera-explorer` with merge commits.
-Upstream changes should be merged through `upstream`, preserving fork history.
+Swarmterm GN is now independent and no longer merges from upstream (see
+[decisions](decisions.md)).
 Private workspace notes, research clones, credentials and local toolchains are
 not included in the public product repository.

@@ -13,11 +13,18 @@ shell back), plus an optional Chrome-style web-preview column. Built on
 earlier Electron app; workspace structures and known agent session references
 are persisted locally, while terminal output and unsaved buffers are transient.
 
-`README.md` is a short user-facing intro (the pitch, install, first run) and
+`README.md` is a short, scannable user-facing overview (pitch, features list,
+install, quick start, security and privacy, build, origin, licence) and
 `docs/user-guide.md` is the detailed end-user guide — both English, no code
 guidance. The manual smoke-test checklist is `docs/manual-smoke-tests.md`.
 Update them when you ship user-visible behaviour: new features go into the
-guide (and README only if they change one of its three core ideas).
+guide and get a line in the README features list. A new network connection or
+stored data also updates `PRIVACY.md` (and `docs/security-model.md` if it
+touches a control). User decisions are recorded in `docs/decisions.md`.
+
+**Independent project:** Swarmterm GN started as a fork of
+duongducnguyen/swarmterm and is no longer based on or synced with upstream
+(`docs/decisions.md`).
 
 **Supported platform:** the GN fork supports Windows x64 only. CI and release
 bundles target Windows; retained upstream macOS/Linux code is not a support
@@ -531,10 +538,15 @@ first for anything non-trivial.
 
 ## Docs map
 
-- `README.md` — short user-facing intro (English): the pitch as three core
-  ideas, install, first run. No feature walkthrough (that's the user guide) and
-  no architecture or folder tree — that lives here. Screenshots are placehold.co
-  placeholders until real ones land; `docs/images/README.md` has the shot list.
+- `README.md` — short GitHub-style overview (English): pitch, badges, a
+  features list covering all features in one line each, install, quick start,
+  security and privacy, build, origin, licence (user decision 2026-10-29). No
+  feature walkthrough (that's the user guide) and no architecture or folder
+  tree — that lives here. `docs/images/README.md` has the shot list.
+- `PRIVACY.md`, `TERMS.md`, `SECURITY.md` — the project's privacy policy, terms
+  of use and vulnerability policy (no website; these are authoritative).
+- `docs/security-model.md` — threat model and security controls.
+- `docs/decisions.md` — dated user/maintainer decisions; add new ones there.
 - `docs/user-guide.md` — the detailed end-user guide: feature walkthrough,
   shortcuts, troubleshooting, known limits.
 - `CONTRIBUTING.md` — how to build, test, and submit changes; the CI contract.
