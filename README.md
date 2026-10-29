@@ -61,7 +61,7 @@ The [user guide](docs/user-guide.md) covers every feature, shortcut and setting.
 ## Install
 
 1. Download `Swarmterm.GN_<version>_x64-setup.exe` (or the Corp edition, `Swarmterm.GN.Corp_<version>_x64-setup.exe`) and `SHA256SUMS.txt` from [Releases](https://github.com/apoOooh/swarmterm-gn/releases).
-2. Check the hash: `Get-FileHash .\Swarmterm.GN_*_x64-setup.exe` must match `SHA256SUMS.txt`. Optionally check the signed build provenance: `gh attestation verify .\Swarmterm.GN_<version>_x64-setup.exe --repo apoOooh/swarmterm-gn` ([details](docs/enterprise-deployment.md#verify-a-download)).
+2. **Verify the download:** `Get-FileHash .\Swarmterm.GN_*_x64-setup.exe` must match `SHA256SUMS.txt`. Optionally check the signed build provenance: `gh attestation verify .\Swarmterm.GN_<version>_x64-setup.exe --repo apoOooh/swarmterm-gn` ([details](docs/enterprise-deployment.md#verify-a-download)).
 3. Run the installer. It is not code-signed yet, so Windows SmartScreen may warn about an unknown publisher.
 
 Requirements: Windows 10/11 x64 with the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), plus the agent CLIs you want to use (`claude`, `codex`, `opencode`). Missing CLIs show as disabled.
@@ -120,11 +120,15 @@ Swarmterm GN is an independent project. It started as a fork of [duongducnguyen/
 
 Development happens on `dev`; releases are tagged on `main` ([release process](docs/release-process.md), [changelog](CHANGELOG.md)). Known limits are in the [user guide](docs/user-guide.md#known-limits).
 
+## Contributing
+
+Bug fixes and features are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for building, tests and the CI contract; discuss anything non-trivial in an issue first.
+
 ## Help and community
 
 - Questions and bugs: [GitHub issues](https://github.com/apoOooh/swarmterm-gn/issues). Search first; include the version and steps to reproduce. This is a volunteer project without paid support.
 - Security vulnerabilities: privately, as described in [SECURITY.md](SECURITY.md), never in a public issue.
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Licence
 

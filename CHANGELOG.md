@@ -17,8 +17,8 @@ second **Swarmterm GN Corp** installer and a verifiable supply chain. Read
   copy of the app's environment. **Settings → Terminal → Environment**:
   **Hide secrets** (default) drops secret-looking names (`*_API_KEY`,
   `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_PAT`, `*_DSN`, `PGPASSWORD`,
-  `MYSQL_PWD`, `AWS_*`/`ANTHROPIC_*`/`OPENAI_*`/`AZURE_OPENAI_*` credentials
-  and more) and values that are URLs with credentials; **System variables
+  `MYSQL_PWD`, credential variables under the `AWS_`/`ANTHROPIC_`/`OPENAI_`/
+  `AZURE_OPENAI_` prefixes and more; settings such as `AWS_REGION` pass) and values that are URLs with credentials; **System variables
   only** keeps just the Windows variables a shell needs; **Always pass these
   variables** is an allow list (prefixes with `*`). The policy is saved in
   the app data folder (`env-policy.json`) and applies to panes restored at
@@ -48,8 +48,8 @@ second **Swarmterm GN Corp** installer and a verifiable supply chain. Read
   speech-model download are not in the program. Both editions install side
   by side ([editions.md](docs/editions.md)).
 - Release assets: CycloneDX SBOMs (`sbom-rust.cdx.json`,
-  `sbom-rust-host.cdx.json`, `sbom-npm.cdx.json`), `SHA256SUMS.txt` over all
-  assets, and signed build provenance for every asset
+  `sbom-rust-host.cdx.json`, `sbom-npm.cdx.json`), `SHA256SUMS.txt` over the
+  installers and SBOMs, and signed build provenance for every asset
   (`gh attestation verify`).
 - Documents: [PRIVACY.md](PRIVACY.md), [TERMS.md](TERMS.md),
   [SECURITY.md](SECURITY.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
@@ -64,6 +64,9 @@ second **Swarmterm GN Corp** installer and a verifiable supply chain. Read
   of duongducnguyen/swarmterm and is no longer based on or synced with it.
 
 ### Changed
+
+Entries marked **Behaviour change** or **Upgrade** need attention when
+upgrading.
 
 - **Behaviour change:** secrets in Swarmterm's own environment no longer
   reach panes, routines or helper programs by default. An agent that

@@ -46,6 +46,8 @@ Use a new version for each release. `npm run bump` updates the npm manifest,
 npm lockfile, Tauri configuration, Rust manifest and Rust lockfile together.
 The workflow rejects a tag whose version disagrees with any of them, a tag
 outside `main` history, or a version without `docs/releases/<version>.md`.
+For a new minor or major version, also update the supported-versions table in
+[SECURITY.md](../SECURITY.md).
 Through 1.19.0, tags were on `dev` and `main` was merged afterwards. Those
 tags are on `main`'s history once that merge is pushed, so re-running the
 workflow for them still passes; before it, a retry fails the `main` check.
@@ -139,8 +141,13 @@ Every `docs/releases/<version>.md` ends with this download section:
 ```markdown
 ## Download
 
-Install the **Windows x64 setup executable** attached to this release. The
-Microsoft WebView2 Runtime is required.
+Two Windows x64 setup executables are attached to this release:
+
+- `Swarmterm.GN_<version>_x64-setup.exe`: Standard edition, per-user install.
+- `Swarmterm.GN.Corp_<version>_x64-setup.exe`: Corp edition, per-machine install
+  (needs administrator rights).
+
+The Microsoft WebView2 Runtime is required.
 
 Verify the download in PowerShell before installing:
 
