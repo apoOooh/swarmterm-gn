@@ -66,3 +66,7 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   settings cannot reach a Corp one, and IT can tell them apart in software
   inventory. Settings are not migrated. Every release publishes both
   installers.
+- **Direct merges, no pull requests.** Feature branches are merged into `dev`
+  locally and `dev` is pushed directly; releases merge `dev` into `main` the
+  same way (`docs/release-process.md`). Branch rulesets therefore only block
+  deletion and force-push, and do not require pull requests or status checks.
