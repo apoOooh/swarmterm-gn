@@ -81,8 +81,8 @@ Layouts save automatically under **Saved workspaces**. Closing the window hides 
 - **No telemetry, no accounts, no self-update.** The app sends no usage data and never downloads updates for itself.
 - **Network use is listed** in [PRIVACY.md](PRIVACY.md): a local MCP server on `127.0.0.1`, and downloads (buzzkey, speech models) only when you ask for them.
 - **Secrets stay out of panes:** by default panes do not inherit secret-looking environment variables (Settings → Terminal → Environment).
-- **Launch modes are explicit:** agents start in their confirming mode unless you pick a bypass mode. Bypass modes are confirmed before launch and marked on the pane (in this release).
-- **War Room execute** (handing a peer a prompt to run) is off by default (in this release).
+- **Launch modes are explicit:** agents start in their confirming mode unless you pick a bypass mode. Bypass modes are confirmed before launch and marked on the pane.
+- **War Room execute** (handing a peer a prompt to run) is off by default.
 - **Verified downloads:** the buzzkey companion is installed only after a signature and hash check; speech models are hash-checked.
 - **Supply chain:** CI checks advisories and licences (`cargo deny`, `npm audit`); each release ships CycloneDX SBOMs.
 - **Planned:** administrator policy via the Windows registry and a `corp` build variant.

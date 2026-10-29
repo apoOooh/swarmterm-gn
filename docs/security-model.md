@@ -52,7 +52,8 @@ only what the app sends it, with the environment cleared first.
 
 The MCP server binds only `127.0.0.1` on a random port
 (`src-tauri/src/mcp/mod.rs`). Each pane gets its own bearer token (its session
-id) in its environment; a request without a token of a live pane is refused,
+id) in its environment; a request without an `Authorization: Bearer` header
+carrying the token of a live pane is refused,
 and the token stops working when the pane ends (`src-tauri/src/mcp/server.rs`).
 Tools: open a web preview (http/https URLs only), list/spawn/remove worktrees
 (only in workspaces with worktree isolation on; removal refuses uncommitted
@@ -64,8 +65,11 @@ Settings → MCP removes the server entry from an agent profile's configuration.
 War Room tools work only for panes the user dragged into a room; removing a
 pane revokes access at once. "Probe" messages wait in an inbox; "execute"
 pastes and runs a prompt in another agent pane and is refused toward plain
-shells and toward a pane waiting on a prompt. Deliveries are held while the
-user types in the target pane.
+shells and toward a pane waiting on a prompt. Agents may use "execute" only
+when Settings → Terminal → Agent safety → "Allow agents to run prompts in
+other panes" is on (off by default); otherwise the server refuses it and tells
+the agent to use a probe. The user's own Moderator messages are not gated.
+Deliveries are held while the user types in the target pane.
 
 ### Worktrees
 
@@ -79,7 +83,10 @@ Agent panes start in the mode chosen in the composer. The default is the
 agent's normal confirming mode (Claude Code `--permission-mode default`, Codex
 workspace-write with on-request approval). Bypass modes ("Bypass
 permissions", "YOLO") are explicit choices; they disable the agent's own
-confirmations and are the user's responsibility.
+confirmations and are the user's responsibility. Choosing one asks for
+confirmation first, and a pane running one carries a red badge in its header.
+Worker panes an agent starts with `worktree.spawn` never inherit a bypass mode;
+they start in the agent's confirming mode.
 
 ### Environment filtering
 
@@ -116,10 +123,6 @@ the Rust and npm dependencies with SHA-256 checksums.
 
 ## Planned
 
-- Permission hardening, landing in this release from a parallel change:
-  confirmation and a visible badge for bypass launch modes, worktree.spawn not
-  inheriting a bypass mode, War Room execute off by default, stricter MCP
-  bearer handling. Move these into Controls when that change merges.
 - Administrator policy via `HKLM`/`HKCU\Software\Policies\SwarmtermGN` and a
   `corp` build variant with restricted defaults.
 
