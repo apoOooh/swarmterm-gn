@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.25.4] - 2026-10-29
+
+- Media: images detected in pane output load their thumbnail in the strip and
+  popup right away; the click-to-load gate is gone (clicking still opens the
+  image large, the panel never opens by itself).
+- Media: an image wider than the panel is centred and scaled to fit instead of
+  sitting off to the right (the panel column grew to the image's natural
+  width).
+
 ## [1.25.3] - 2026-10-30
 
 1.25.0, 1.25.1 and 1.25.2 were tagged but never published: their release checks failed (Rust formatting and one Clippy lint, then the new priority tests could not find `ping` and `node` on the CI runner; the tests now start every program by its full path). 1.25.3 ships the same changes.
