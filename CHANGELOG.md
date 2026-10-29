@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-10-29
+
+- Process priority: every process in a pane is now held below Normal by a
+  Windows Job Object from the moment it starts, replacing the 1.24.2 watcher
+  that lowered processes every 500 ms and could be escaped. Processes cannot
+  raise themselves back or break away, and orphans (a parent that exited)
+  stay covered.
+- Settings → Terminal → Process priority: choose the mode (Strict, the
+  default, caps the whole pane including the agent; Agent stays Normal caps
+  only what the agent starts; Off), the pane and build levels (Below normal
+  or Low), and an optional CPU cap in percent of the machine per pane. The
+  old on/off setting is migrated; the per-workspace opt-out stays.
+- Agents installed through npm (Claude Code, Codex, Gemini and others running
+  under `node`) are recognised by their command line, so what they start is
+  lowered too.
+- When the running terminal host is from an older version, new panes run in
+  the app, where the limits are enforced, and Settings says why. Panes already
+  on the old host stay unlimited until it exits.
+- Not covered: processes Windows starts on an agent's behalf (WMI, Task
+  Scheduler, services, COM, Explorer). A process a shell profile starts before
+  the pane is capped, and that already has its own job, has its class forced
+  on every check instead. See `docs/adr/0005-job-object-priority.md`.
+
 ## [1.24.2] - 2026-10-25
 
 1.24.0 and 1.24.1 were tagged but never published: their release checks failed (Rust formatting, then two tests that were too strict for the CI runner). 1.24.2 ships the same changes.
