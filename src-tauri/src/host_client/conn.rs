@@ -562,7 +562,10 @@ mod tests {
     fn current_host_announces_priority() {
         let h = start_host();
         let conn = connect(&h, Arc::new(Recorder::default()));
-        assert!(conn.priority, "this host enforces priority; the hub must use it");
+        assert!(
+            conn.priority,
+            "this host enforces priority; the hub must use it"
+        );
         let _ = h.stop.send(true);
     }
 
