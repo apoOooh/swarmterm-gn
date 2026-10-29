@@ -69,9 +69,12 @@ Tags inherited from before the fork are retained; the first GN release is `v1.1.
    `Swarmterm.GN_<version>_x64-setup.exe` and
    `Swarmterm.GN.Corp_<version>_x64-setup.exe`, and add
    `SHA256SUMS.txt` over all assets.
-5. Create a draft, upload all files, then publish the release only after all
+5. Create signed build provenance (`actions/attest-build-provenance`, Sigstore)
+   for every installer, SBOM and `SHA256SUMS.txt`; it is stored in the
+   repository's attestations and checked with `gh attestation verify`.
+6. Create a draft, upload all files, then publish the release only after all
    checks and the installer build succeed.
-6. Optional: submit the new version to winget (see below). This step is
+7. Optional: submit the new version to winget (see below). This step is
    skipped without the opt-in secret and variable.
 
 The installer remains available as a workflow artifact for 14 days even if
@@ -80,7 +83,11 @@ incomplete release. Rerun failed jobs or use **Actions → Windows release →
 Run workflow** with an existing tag to retry. The workflow refuses to replace
 assets of an already published release. Tags must not be moved or overwritten.
 
-Only the final publishing job receives repository write permission. No
+Every workflow starts with no token permissions (`permissions: {}`); jobs ask
+for what they need. Only the final publishing job receives repository write
+permission, plus `id-token` and `attestations` for the provenance.
+Third-party actions are pinned to full commit SHAs (Dependabot proposes
+updates), and the Rust toolchain comes from `rust-toolchain.toml`. No
 additional repository secrets are required. The workflow is restricted to
 `apoOooh/swarmterm-gn`; other forks can explicitly adapt that condition.
 
@@ -120,7 +127,31 @@ held for manual validation.
 
 The first installer is **not Authenticode-signed**. Windows SmartScreen may
 show an unknown publisher warning. This is stated in each release's notes.
-The release supplies SHA-256 checksums alongside the installer.
+The release supplies SHA-256 checksums, CycloneDX SBOMs and signed build
+provenance alongside the installer; users verify downloads as described in
+[enterprise-deployment.md](enterprise-deployment.md#verify-a-download).
+
+## Release notes template
+
+Every `docs/releases/<version>.md` ends with this download section:
+
+```markdown
+## Download
+
+Install the **Windows x64 setup executable** attached to this release. The
+Microsoft WebView2 Runtime is required.
+
+Verify the download in PowerShell before installing:
+
+    Get-FileHash -Algorithm SHA256 .\Swarmterm.GN_<version>_x64-setup.exe
+    # must match the line in SHA256SUMS.txt
+    gh attestation verify .\Swarmterm.GN_<version>_x64-setup.exe --repo apoOooh/swarmterm-gn
+    # proves it was built by this repository's release workflow
+
+The installer is not Authenticode-signed; Windows SmartScreen may show an
+unknown publisher warning. The app never updates itself. Download future
+GN versions from this fork's releases. macOS and Linux are not supported.
+```
 
 The app never updates itself and contains no updater; this workflow uploads no
 `latest.json` or updater signatures. New versions reach users as installers

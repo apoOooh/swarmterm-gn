@@ -1,0 +1,89 @@
+# REUSE (https://reuse.software) licensing metadata, checked in CI with
+# `reuse lint`. Files carry no per-file SPDX headers; these annotations
+# declare licence and copyright instead. Later annotations win for a file.
+version = 1
+
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Swarmterm and Swarmterm GN contributors"
+SPDX-License-Identifier = "GPL-3.0-only"
+
+# Agent-state rules ported from herdr (THIRD-PARTY-NOTICES.md).
+[[annotations]]
+path = [
+  "src/lib/agent-state/engine.ts",
+  "src/lib/agent-state/manifests/amp.ts",
+  "src/lib/agent-state/manifests/antigravity.ts",
+  "src/lib/agent-state/manifests/claude-code.ts",
+  "src/lib/agent-state/manifests/codex.ts",
+  "src/lib/agent-state/manifests/copilot.ts",
+  "src/lib/agent-state/manifests/cursor.ts",
+  "src/lib/agent-state/manifests/gemini.ts",
+  "src/lib/agent-state/manifests/opencode.ts",
+  "src/lib/agent-state/manifests/qwen.ts",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["herdr contributors", "Swarmterm and Swarmterm GN contributors"]
+SPDX-License-Identifier = "GPL-3.0-only AND Apache-2.0"
+
+# Theme and file-management rules adapted from parsingk/Astera (THIRD-PARTY-NOTICES.md).
+[[annotations]]
+path = [
+  "src/lib/files/edit.ts",
+  "src/lib/files/media.ts",
+  "src/lib/files/messages.ts",
+  "src/lib/files/ops.ts",
+  "src/lib/files/paths.ts",
+  "src/lib/files/selection.ts",
+  "src/lib/theme/apply.test.ts",
+  "src/lib/theme/apply.ts",
+  "src/lib/theme/color.test.ts",
+  "src/lib/theme/color.ts",
+  "src/lib/theme/contrast.test.ts",
+  "src/lib/theme/contrast.ts",
+  "src/lib/theme/themes.contrast.test.ts",
+  "src/lib/theme/themes.test.ts",
+  "src/lib/theme/themes.ts",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["Astera contributors", "Swarmterm and Swarmterm GN contributors"]
+SPDX-License-Identifier = "GPL-3.0-only AND Apache-2.0"
+
+# Unmodified fonts bundled from Astera; notices in third-party-licenses/fonts/.
+[[annotations]]
+path = "src/assets/fonts/Geist/**"
+precedence = "override"
+SPDX-FileCopyrightText = "2024 The Geist Project Authors"
+SPDX-License-Identifier = "OFL-1.1"
+
+[[annotations]]
+path = ["src/assets/fonts/IBMPlexMono/**", "src/assets/fonts/IBMPlexSans/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2017 IBM Corp."
+SPDX-License-Identifier = "OFL-1.1"
+
+[[annotations]]
+path = "src/assets/fonts/JetBrainsMono/**"
+precedence = "override"
+SPDX-FileCopyrightText = "2020 The JetBrains Mono Project Authors"
+SPDX-License-Identifier = "OFL-1.1"
+
+[[annotations]]
+path = "src/assets/fonts/PublicSans/**"
+precedence = "override"
+SPDX-FileCopyrightText = "2015 The Public Sans Project Authors"
+SPDX-License-Identifier = "OFL-1.1"
+
+# Verbatim third-party licence texts.
+[[annotations]]
+path = ["third-party-licenses/Astera/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "Astera contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["third-party-licenses/fonts/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "The respective font authors"
+SPDX-License-Identifier = "OFL-1.1"

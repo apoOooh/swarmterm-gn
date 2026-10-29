@@ -630,6 +630,26 @@ machine that never built Swarmterm. Details in
 - [ ] A terminal pane spawns and runs `dir`; closing the pane leaves no
       orphaned shell in Task Manager.
 - [ ] Uninstall via Settings → Apps removes the Start Menu entry.
+- [ ] Silent install `…x64-setup.exe /S` and silent uninstall
+      `"%LOCALAPPDATA%\Swarmterm GN\uninstall.exe" /S` work without prompts
+      (docs/enterprise-deployment.md).
+- [ ] `gh attestation verify <installer> --repo apoOooh/swarmterm-gn`
+      succeeds for the published installer.
+
+## Content Security Policy (release build)
+
+The release CSP has no dev-server entries and no `http:` images. In an
+installed (or `tauri build`) app, check that none of these shows a blank
+area or a CSP violation in DevTools:
+
+- [ ] The app window loads (Welcome screen, fonts, icons, agent logos).
+- [ ] Media panel, popup and zoom show images and play a video.
+- [ ] Annotate opens an image and saves a marked copy.
+- [ ] Markdown preview shows a relative image and an `https:` image (for
+      example a README badge); an `http:` image now shows its alt text.
+- [ ] HTML preview renders a project page with its CSS/JS; SVG preview works.
+- [ ] Web preview and the popout window open an external site.
+- [ ] Links open in the default browser; dialogs (open folder) work.
 
 ## Auto-update
 

@@ -12,22 +12,29 @@ on:
         required: false
         default: ''
 
-permissions:
-  contents: read
+# Nothing by default; every job asks for exactly what it needs.
+permissions: {}
 
 jobs:
   frontend:
     name: Frontend (tsc + vitest)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      # Install scripts stay off: only esbuild needs its own (binary check),
+      # so it is rebuilt by name. The registry signatures and provenance of
+      # every installed package are verified before anything runs.
+      - run: npm ci --ignore-scripts && npm rebuild esbuild
+      - run: npm audit signatures
       - run: npx tsc --noEmit
       - run: npm test
       - run: npm run build
@@ -35,7 +42,7 @@ jobs:
       - run: npm run build:corp
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: headless-browser-traces
@@ -44,6 +51,8 @@ jobs:
   rust:
     name: Rust (Windows)
     runs-on: windows-latest
+    permissions:
+      contents: read
     env:
       # bindgen for whisper-rs-sys (SWA-38); LLVM ships with the runner image.
       LIBCLANG_PATH: C:/Program Files/LLVM/bin
@@ -51,32 +60,33 @@ jobs:
       run:
         working-directory: src-tauri
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+          persist-credentials: false
+      # Toolchain, components and target come from rust-toolchain.toml.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
-      - run: npm ci && npm run build
+      - run: npm ci --ignore-scripts && npm rebuild esbuild && npm run build
         working-directory: .
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
+      # --locked: build exactly the reviewed Cargo.lock, never a re-resolved one.
+      - run: cargo clippy --locked --all-targets -- -D warnings
       # The build without the speech engine (no LLVM) must stay warning-free too.
-      - run: cargo clippy --all-targets --no-default-features -- -D warnings
+      - run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
       # Corp edition (docs/editions.md): its cfg branches compile only with
       # the feature. Linted with speech (the release combination) and
       # without it (the local build), tested without speech to stay quick.
-      - run: cargo clippy --all-targets --features corp -- -D warnings
-      - run: cargo clippy --all-targets --no-default-features --features corp -- -D warnings
-      - run: cargo test --no-default-features --features corp --lib
-      - run: cargo test
+      - run: cargo clippy --locked --all-targets --features corp -- -D warnings
+      - run: cargo clippy --locked --all-targets --no-default-features --features corp -- -D warnings
+      - run: cargo test --locked --no-default-features --features corp --lib
+      - run: cargo test --locked
       - name: Compile desktop application
         run: npx tauri build --no-bundle -- --locked
         shell: bash
@@ -85,15 +95,18 @@ jobs:
   supply-chain:
     name: Dependency audit (cargo deny + npm audit)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       # Pinned tool version; bump deliberately.
       CARGO_DENY_VERSION: 0.20.2
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       - name: Install cargo-deny
@@ -110,11 +123,27 @@ jobs:
   secrets:
     name: Public history secret scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  licensing:
+    name: REUSE licence compliance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      # Every file must have a licence and copyright notice (REUSE.toml).
+      - uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6.0.0

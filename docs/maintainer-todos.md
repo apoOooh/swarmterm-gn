@@ -41,6 +41,13 @@ do them (the GitHub API answers 404). They come from the corporate-readiness wor
       on `main`.
 - [ ] **CodeQL / code scanning**: confirm results arrive under Security → Code scanning after the CodeQL
       workflow lands; enable default setup if the workflow is not used.
+- [ ] **Require code owner review** (Settings → Rules) once PR-based merges are used; `.github/CODEOWNERS`
+      names the maintainer for workflows, capabilities, Tauri config, `deny.toml`, `policy.rs`, ADMX and the
+      policy documents. Without such a rule CODEOWNERS only requests reviews.
+- [ ] **Actions policy** (Settings → Actions → General): "Require actions to be pinned to a full-length commit SHA"
+      and default workflow permissions "Read repository contents".
+- [ ] **Check the first attested release**: after the next release, `gh attestation verify` must find the
+      provenance (Actions → release run → Attestations), and the Scorecard badge must resolve.
 - [ ] **Release environment approval** (optional): Settings → Environments → `release` → required reviewers, if a
       second person should approve each publish.
 
