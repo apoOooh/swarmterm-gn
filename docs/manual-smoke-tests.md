@@ -767,3 +767,32 @@ Use Task Manager → Details → "Base priority" (or Process Explorer).
       Reopen the saved workspace: still unticked.
 - [ ] Settings → Terminal → **Run terminals in the terminal host** on, new pane → same results as above.
 - [ ] Upgrade from a build with the old "Lower build priority" switched off → mode shows **Off**.
+
+## Administrator policy
+
+Use a test key under HKCU (if `reg add` is denied, run it from an elevated prompt). Quit Swarmterm from the tray and
+start it again after every change; remove the key at the end:
+`reg delete HKCU\Software\Policies\SwarmtermGN /f`.
+
+- [ ] No key: Settings shows no "Managed by your administrator" box; everything works as before.
+- [ ] `reg add HKCU\Software\Policies\SwarmtermGN /v DisableBypassModes /t REG_DWORD /d 1 /f` → Settings lists it;
+      Bypass/YOLO greyed out in Default launch mode and in the pane header menu; the "Spawned workers inherit" switch
+      is off and greyed. A saved workspace with a Bypass pane restored → that pane shows "Launch refused … DisableBypassModes".
+- [ ] Settings → Terminal → Agent safety → **Spawned workers inherit Bypass/YOLO** (no policy): on, Claude pane in
+      Bypass asks `worktree.spawn` → the worker starts in Bypass with the red badge. Off → worker starts in Default.
+- [ ] `DisableWarRoomExecute` = 1: the Agent safety execute switch is greyed; an agent's `war_room.send` execute is
+      refused with a message naming `DisableWarRoomExecute`; probe still works.
+- [ ] `DisableWorktreeSpawn` = 1: `worktree.spawn` is refused naming the policy.
+- [ ] `DisableMcp` = 1: new panes have no `SWARMTERM_MCP_URL`; `~/.claude.json` has no `swarmterm` entry after start;
+      Settings → MCP switches are off and greyed.
+- [ ] `DisableCompanion` = 1: Settings → Voice → buzzkey Install / Check for update greyed; no update toast; autostart
+      can be turned off but not on.
+- [ ] `DisableModelDownload` = 1: speech-model Download buttons greyed; downloaded models still selectable.
+- [ ] `DisableRoutineCommands` = 1: "Shell command" kind is greyed in the routine dialog; an existing command routine
+      fails with the policy message in its last result.
+- [ ] `DisablePreviewBrowser` = 1: the right panel's Preview shows "Managed by your administrator"; an agent's
+      `browser.open_preview` is refused.
+- [ ] `reg add … /v EnvPolicy /t REG_SZ /d strict /f` and `reg add … /v EnvAllow /t REG_MULTI_SZ /d CORP_X /f`:
+      the Environment controls are greyed, `set` in a new pane shows only system variables plus `CORP_X`.
+- [ ] `DisableMcp` = `REG_SZ "1"` (wrong type): ignored, MCP works; the app log has `policy: DisableMcp: expected REG_DWORD`.
+- [ ] Same value under HKLM = 0 and HKCU = 1 (elevated): HKLM wins, the policy is off.

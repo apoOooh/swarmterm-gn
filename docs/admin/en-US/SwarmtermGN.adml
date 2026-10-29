@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>Swarmterm GN</displayName>
+  <description>Administrative template for Swarmterm GN.</description>
+  <resources>
+    <stringTable>
+      <string id="SwarmtermGN">Swarmterm GN</string>
+      <string id="SUPPORTED_SwarmtermGN">Swarmterm GN with administrator policy support</string>
+      <string id="DisableBypassModes">Block Bypass/YOLO launch modes</string>
+      <string id="DisableBypassModes_Help">Refuses to start any pane whose launch line switches an agent's approval prompts or sandbox off (--dangerously-skip-permissions, --dangerously-bypass-approvals-and-sandbox, --permission-mode bypassPermissions, --yolo). The red modes are greyed out and spawned workers can never inherit them.</string>
+      <string id="DisableWarRoomExecute">Block War Room execute between agents</string>
+      <string id="DisableWarRoomExecute_Help">Agents can no longer run prompts in other panes through the War Room (mode execute). Probe messages and the user's own War Room sends stay available.</string>
+      <string id="DisableWorktreeSpawn">Block worktree.spawn</string>
+      <string id="DisableWorktreeSpawn_Help">Agents cannot open new worker panes in git worktrees through the worktree.spawn MCP tool.</string>
+      <string id="DisableMcp">Turn off the Swarmterm MCP server</string>
+      <string id="DisableMcp_Help">Swarmterm does not start its local MCP server and removes its own MCP entries from the agents' configuration files on start. War Room tools, worktree tools and the browser preview tool are unavailable to agents.</string>
+      <string id="DisableCompanion">Block the voice companion install and updates</string>
+      <string id="DisableCompanion_Help">Swarmterm will not install or update the buzzkey dictation companion, does not check for its updates and cannot turn its Windows autostart on.</string>
+      <string id="DisableModelDownload">Block speech model downloads</string>
+      <string id="DisableModelDownload_Help">Swarmterm will not download speech-recognition models for built-in dictation. Models already present stay usable.</string>
+      <string id="DisableRoutineCommands">Block command routines</string>
+      <string id="DisableRoutineCommands_Help">Routines of kind "Shell command" are refused. Agent routines (a brief sent to an agent pane) are not affected.</string>
+      <string id="DisablePreviewBrowser">Turn off the web preview</string>
+      <string id="DisablePreviewBrowser_Help">The built-in web preview column (embedded browser) cannot be opened, neither by the user nor by agents.</string>
+      <string id="EnvPolicy">Force the terminal environment filter</string>
+      <string id="EnvPolicy_Help">Panes and command routines always get a filtered copy of Swarmterm's environment. "Default" withholds secret-looking variables (API keys, tokens, passwords); "Strict" passes only the Windows variables a shell needs. A user's stricter choice is kept; the user's own allow list is ignored while this policy is set (use "Allow environment variables" instead).</string>
+      <string id="EnvPolicy_Default">Default (withhold secrets)</string>
+      <string id="EnvPolicy_Strict">Strict (system variables only)</string>
+      <string id="EnvAllow">Allow environment variables</string>
+      <string id="EnvAllow_Help">Variable names that always pass the environment filter, one per line, case-insensitive; a trailing * matches a prefix (CORP_*). Merged with the user's own list unless "Force the terminal environment filter" is set.</string>
+    </stringTable>
+    <presentationTable>
+      <presentation id="EnvPolicy">
+        <dropdownList refId="EnvPolicyMode" defaultItem="0">Filter mode:</dropdownList>
+      </presentation>
+      <presentation id="EnvAllow">
+        <multiTextBox refId="EnvAllowList">Variable names (one per line):</multiTextBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>
