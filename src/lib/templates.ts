@@ -101,7 +101,9 @@ export const TEMPLATES: WorkspaceTemplate[] = [
       { id: 'default', label: 'Default', args: '--permission-mode default' },
       { id: 'acceptEdits', label: 'Accept edits', args: '--permission-mode acceptEdits' },
       { id: 'plan', label: 'Plan', args: '--permission-mode plan' },
-      { id: 'auto', label: 'Auto', args: '--permission-mode auto' },
+      // Auto hands per-action approval to Claude's own classifier, so no
+      // prompt reaches the user: treated as dangerous (docs/decisions.md).
+      { id: 'auto', label: 'Auto', args: '--permission-mode auto', dangerous: true },
       { id: 'bypass', label: 'Bypass permissions', args: '--dangerously-skip-permissions', dangerous: true }
     ],
     // --continue is scoped to the pane's cwd by claude itself; bare --resume

@@ -2,11 +2,12 @@ import { describe, it, expect } from 'vitest'
 import { dangerousModeWarning, isDangerousLaunchMode, workerLaunchMode } from './launch-mode-safety'
 
 describe('isDangerousLaunchMode', () => {
-  it('flags Claude bypass and Codex YOLO only', () => {
+  it('flags Claude bypass and Auto and Codex YOLO only', () => {
     expect(isDangerousLaunchMode('claude-code', 'bypass')).toBe(true)
     expect(isDangerousLaunchMode('codex', 'yolo')).toBe(true)
     expect(isDangerousLaunchMode('claude-code', 'default')).toBe(false)
-    expect(isDangerousLaunchMode('claude-code', 'auto')).toBe(false)
+    expect(isDangerousLaunchMode('claude-code', 'auto')).toBe(true)
+    expect(isDangerousLaunchMode('claude-code', 'plan')).toBe(false)
     expect(isDangerousLaunchMode('codex', 'auto')).toBe(false)
   })
 
@@ -22,6 +23,27 @@ describe('dangerousModeWarning', () => {
     const w = dangerousModeWarning('claude-code', 'bypass')
     expect(w?.title).toContain('Bypass permissions')
     expect(w?.body).toMatch(/without asking/)
+  })
+
+  it('explains that Claude Auto hands approval to its classifier', () => {
+    const w = dangerousModeWarning('claude-code', 'auto')
+    expect(w?.title).toContain('Auto')
+    expect(w?.body).toMatch(/classifier/)
+  })
+
+  it('never lets a worker inherit Claude Auto without the opt-in', () => {
+    expect(
+      workerLaunchMode({ agentId: 'claude-code', requesterAgentId: 'claude-code', requesterMode: 'auto', prefs: { 'claude-code': 'auto' } })
+    ).toBe('default')
+    expect(
+      workerLaunchMode({
+        agentId: 'claude-code',
+        requesterAgentId: 'claude-code',
+        requesterMode: 'auto',
+        prefs: {},
+        inheritBypass: true
+      })
+    ).toBe('auto')
   })
 
   it('is undefined for a safe mode', () => {

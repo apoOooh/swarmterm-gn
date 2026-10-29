@@ -55,3 +55,32 @@ describe('buildAgentSpawnCommand', () => {
     expect(buildAgentSpawnCommand('qwen', '', 'posix', '-i')).toBe('qwen')
   })
 })
+
+describe('quoting hostile briefs', () => {
+  it('doubles every PowerShell single-quote character', () => {
+    for (const q of ["'", '\u2018', '\u2019', '\u201A', '\u201B']) {
+      expect(quoteForShell(`a${q}; calc; ${q}b`, 'powershell')).toBe(`'a${q}${q}; calc; ${q}${q}b'`)
+    }
+    expect(buildAgentSpawnCommand('claude', '\u2019; Remove-Item x; \u2019', 'powershell')).toBe(
+      "claude '\u2019\u2019; Remove-Item x; \u2019\u2019'"
+    )
+  })
+
+  it('keeps a trailing backslash inside the quotes for bash and fish', () => {
+    expect(quoteForShell('a\\', 'posix')).toBe("'a'\\\\''")
+    expect(quoteForShell("it's", 'posix')).toBe("'it'\\''s'")
+  })
+
+  it('keeps cmd variables and trailing backslashes out of the quotes', () => {
+    expect(quoteForShell('use %PATH% now', 'cmd')).toBe('"use "^%"PATH"^%" now"')
+    expect(quoteForShell('C:\\dir\\', 'cmd')).toBe('"C:\\dir"\\')
+  })
+
+  it('never lets a brief add arguments on Windows shells', () => {
+    expect(buildAgentSpawnCommand('claude', 'x" --dangerously-skip-permissions "y', 'powershell')).toBe(
+      "claude 'x'' --dangerously-skip-permissions ''y'"
+    )
+    expect(buildAgentSpawnCommand('claude', 'a&calc', 'powershell')).toBe("claude 'a&calc '")
+    expect(buildAgentSpawnCommand('claude', 'say "hi"', 'posix')).toBe(`claude 'say "hi"'`)
+  })
+})
