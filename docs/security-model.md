@@ -147,6 +147,23 @@ buzzkey download/installer and the speech-model download are compiled out, not
 only locked; the release workflow fails if their endpoints appear in the Corp
 executable. Details: [editions.md](editions.md).
 
+**Limits.** The bypass lock (Corp, or `DisableBypassModes`) is a guard against
+mistakes: it refuses the launch flags it recognises for known agents. It is not
+a security boundary, because a user can type any flag into a shell pane or run
+an agent outside the app. Corporate deployments need the HKLM policy, the
+agents' own managed settings (Claude Code `disableBypassPermissionsMode:
+"disable"`, Codex managed `requirements.toml`) and AppLocker/WDAC rules that
+allow only the Corp installer's hash or path
+([enterprise-deployment.md](enterprise-deployment.md#recommended-deployment)).
+
+### Web preview isolation
+
+Preview pages run in native child webviews (`preview-<terminalId>`) inside the
+main window. The app's capability (`src-tauri/capabilities/default.json`) is
+scoped to the `main` webview by label (`webviews`, not `windows`), so preview
+webviews, which share the main window, get no IPC permissions; commands that
+must never be reached from a preview also check the caller's label.
+
 ## The user's responsibility
 
 Which agents and launch modes you use, which panes join a War Room, which MCP

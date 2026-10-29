@@ -1,6 +1,6 @@
 # Terms of use
 
-Swarmterm GN, version 1.25.4 and later. Last updated: 2026-10-29.
+Swarmterm GN, version 1.26.0 and later. Last updated: 2026-10-29.
 
 ## 1. What Swarmterm GN is
 

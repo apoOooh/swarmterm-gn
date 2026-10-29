@@ -18,11 +18,12 @@ repository.
 | 3 | Google Analytics telemetry in official releases contradicted "no telemetry". | **Fixed in v1.26.0.** The analytics code is removed; the app sends no telemetry, analytics, crash reports or identifiers. The release workflow fails if `google-analytics` appears in either edition's executable. | [release.yml](../../.github/workflows/release.yml), [PRIVACY.md](../../PRIVACY.md#summary), [decisions](../decisions.md) |
 | 4 | Child processes inherit the app's environment, including secrets. | **Fixed in v1.26.0.** Panes and command routines do not receive secret-looking variables (`*_TOKEN`, `*_API_KEY`, `*_SECRET`, `*_PASSWORD`, `DATABASE_URL`, `AWS_*`, `ANTHROPIC_*`, `OPENAI_*`, …); a strict mode passes only Windows system variables. Administrators force the filter with `EnvPolicy` and allow names with `EnvAllow`; in Corp it cannot be switched off. | [terminal_env.rs](../../src-tauri/src/terminal_env.rs), [security model](../security-model.md#environment-filtering), [admin policy](../admin-policy.md) |
 | 5 | In-app updates bypass internal software review. | **Fixed in v1.26.0.** The (disabled) updater plugin is removed; the app never checks for or downloads updates of itself. New versions arrive only when IT deploys the installer. The optional buzzkey voice companion installer/updater and the speech-model download are lockable (`DisableCompanion`, `DisableModelDownload`) and compiled out of the Corp edition; the release workflow fails if their endpoints appear in the Corp executable. | [enterprise deployment](../enterprise-deployment.md#updates), [editions](../editions.md), [release.yml](../../.github/workflows/release.yml) |
-| 6 | Internal software-development guidelines (dependency audit, SBOM, licences, security contact). | CI runs `cargo deny` (RustSec advisories, licence allow list, sources), `npm audit` and `npm audit signatures`, a gitleaks secret scan, CodeQL, OpenSSF Scorecard and REUSE licence lint; actions are pinned to commit SHAs. Each release ships CycloneDX SBOMs, `SHA256SUMS.txt` and Sigstore-signed build provenance. Private vulnerability reports via GitHub Security Advisories with response targets. | [ci.yml](../../.github/workflows/ci.yml), [codeql.yml](../../.github/workflows/codeql.yml), [scorecard.yml](../../.github/workflows/scorecard.yml), [deny.toml](../../src-tauri/deny.toml), [REUSE.toml](../../REUSE.toml), [SECURITY.md](../../SECURITY.md), [THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md) |
+| 6 | Internal software-development guidelines (dependency audit, SBOM, licences, security contact). | CI runs `cargo deny` (RustSec advisories, licence allow list, sources), `npm audit` and `npm audit signatures`, a gitleaks secret scan, CodeQL, OpenSSF Scorecard and REUSE licence lint; actions are pinned to commit SHAs. Each release ships CycloneDX SBOMs, `SHA256SUMS.txt` and Sigstore-signed build provenance. Private vulnerability reports via GitHub Security Advisories with response targets; until the maintainer enables private reporting (required before this resubmission, [maintainer to-dos](../maintainer-todos.md)), reporters open a GitHub issue that only asks for a private contact, without details. | [ci.yml](../../.github/workflows/ci.yml), [codeql.yml](../../.github/workflows/codeql.yml), [scorecard.yml](../../.github/workflows/scorecard.yml), [deny.toml](../../src-tauri/deny.toml), [REUSE.toml](../../REUSE.toml), [SECURITY.md](../../SECURITY.md), [THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md) |
 
 **Not provided:** the installers are **not Authenticode-signed** (decision 2026-10-29), so SmartScreen may warn about
 an unknown publisher. Checksums and signed build provenance replace the signature as proof of origin; organisations
-that only allow signed executables can sign the verified installer with their own certificate or allow it by hash.
+that only allow signed executables may need to allow the installer by hash (AppLocker/WDAC) or sign the verified
+installer internally with their own certificate.
 Swarmterm GN is a volunteer project (GPL-3.0-only) without a support contract or SLA.
 
 ## How to verify a download
@@ -39,13 +40,23 @@ The same works for `SHA256SUMS.txt` and each SBOM. Details: [enterprise deployme
 
 ## Recommended deployment for companies
 
-1. Deploy **Swarmterm GN Corp** (`Swarmterm.GN.Corp_<version>_x64-setup.exe`, per-user, silent with `/S`). Bypass
+1. Deploy **Swarmterm GN Corp** (`Swarmterm.GN.Corp_<version>_x64-setup.exe`, per machine into Program Files, needs
+   administrator rights, silent with `/S`). Bypass
    modes, War Room execute by agents, the buzzkey installer and model downloads are locked or compiled out, and the
    environment filter is always on; no setting or registry value lifts these ([editions](../editions.md)).
 2. Add the **HKLM policy** `HKLM\Software\Policies\SwarmtermGN` through Group Policy (ADMX in
    [docs/admin/](../admin/)) or Intune for anything else your rules require, for example `EnvPolicy=strict`,
    `DisableMcp`, `DisableRoutineCommands`, `DisablePreviewBrowser` ([admin policy](../admin-policy.md)).
-3. Uninstall the Standard edition where present (both can be installed side by side), and pair the policy with the
-   agents' own managed settings (for example Claude Code's `permissions.disableBypassPermissionsMode`), because
-   Swarmterm does not sandbox the agents or the shell ([security model](../security-model.md)).
+3. Uninstall the Standard edition where present (both can be installed side by side).
+
+**What the Corp locks are, and are not.** The Corp bypass lock is a guard against mistakes based on the agent flags
+it recognises, not a security boundary: Swarmterm does not sandbox the agents or the shell, and a user can type a
+bypass flag into a shell pane or start an agent outside Swarmterm ([security model](../security-model.md)). The real
+controls, all required for a corporate deployment:
+
+- the **HKLM policy** (step 2), which applies to both editions;
+- the **agents' own managed settings**: Claude Code managed settings with `"disableBypassPermissionsMode":
+  "disable"`, Codex managed `requirements.toml`;
+- **AppLocker or WDAC** rules that allow only the Corp installer's hash or its Program Files path, so users cannot run
+  a swapped executable or the Standard edition.
 4. Roll out new versions through your software distribution after review; watch GitHub Releases for security fixes.
