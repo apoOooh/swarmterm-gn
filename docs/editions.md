@@ -32,7 +32,7 @@ Legend:
 |---|---|---|
 | Bypass/YOLO launch modes (`--dangerously-skip-permissions`, `--yolo`, …) | Available, confirmed on selection; lockable (`DisableBypassModes`) | **Locked (built in)**. Panes whose launch line switches an agent's approvals or sandbox off are refused. |
 | War Room `execute` by agents (run a prompt in another pane) | Off by default, user can allow it; lockable (`DisableWarRoomExecute`) | **Locked (built in)**. Probes and your own War Room messages still work. |
-| buzzkey voice companion: install, update checks, update toast, auto-update | Available on click; lockable (`DisableCompanion`) | **Compiled out** (also locked by `DisableCompanion`). A buzzkey that IT installed still connects over the voice pipe and can be started and quit from Swarmterm. |
+| buzzkey voice companion: install, update checks, update toast, auto-update, and its Settings → Voice section (start, quit, autostart) | Available on click; lockable (`DisableCompanion`) | **Compiled out** (also locked by `DisableCompanion`); the section is hidden. The voice pipe itself stays: Corp writes its endpoint file to `%LOCALAPPDATA%\com.apooooh.swarmterm.gn.corp\voice-endpoint.json`, so a separately installed buzzkey connects only if it looks for that identifier (not verified with current buzzkey releases). |
 | Speech model download for built-in dictation | Available on click; lockable (`DisableModelDownload`) | **Compiled out** (also locked by `DisableModelDownload`). Models an administrator copies to `%LOCALAPPDATA%\com.apooooh.swarmterm.gn.corp\models\` (file names as in the Standard edition, for example `ggml-small-q5_1.bin`) are used. |
 | Environment filter (no secret-looking variables in panes and routines) | On by default, user can switch it off; lockable (`EnvPolicy`) | **Locked (built in)** in `default` mode: cannot be switched off, the user's own allow list is ignored. `EnvPolicy=strict` and `EnvAllow` still apply. |
 | Command routines ("Shell command" kind) | Policy-lockable (`DisableRoutineCommands`) | Policy-lockable (`DisableRoutineCommands`) |
@@ -52,8 +52,7 @@ change for that.
 | | Standard | Corp |
 |---|---|---|
 | Release asset | `Swarmterm.GN_<version>_x64-setup.exe` | `Swarmterm.GN.Corp_<version>_x64-setup.exe` |
-| SBOM of the app crate | `sbom-rust.cdx.json` | `sbom-rust-corp.cdx.json` |
-| Shared SBOMs | `sbom-rust-host.cdx.json`, `sbom-npm.cdx.json` | same files |
+| SBOMs | `sbom-rust.cdx.json`, `sbom-rust-host.cdx.json`, `sbom-npm.cdx.json` | same files (the `corp` feature adds no dependencies) |
 | App identifier | `com.apooooh.swarmterm.gn` | `com.apooooh.swarmterm.gn.corp` |
 | Product name, window title, Start menu | Swarmterm GN | Swarmterm GN Corp |
 | Settings and saved workspaces | `%APPDATA%\com.apooooh.swarmterm.gn\` | `%APPDATA%\com.apooooh.swarmterm.gn.corp\` |

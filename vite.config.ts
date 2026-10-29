@@ -11,7 +11,8 @@ export default defineConfig(async ({ mode }) => ({
   // Edition (docs/editions.md): `--mode corp` (npm run build:corp, used by
   // src-tauri/tauri.corp.conf.json) builds the Corp renderer. Defined from the
   // mode, not read from the environment, so a stray variable cannot flip a
-  // standard build; the dead branches are dropped from the bundle.
+  // standard build. The renderer also honours the backend's edition at
+  // runtime (lib/edition.ts), so both editions' UI code stays in the bundle.
   define: {
     "import.meta.env.VITE_SWARMTERM_EDITION": JSON.stringify(mode === "corp" ? "corp" : "standard"),
   },

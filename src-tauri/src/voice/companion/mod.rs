@@ -22,7 +22,16 @@
 // that edition (docs/editions.md).
 #[cfg(not(feature = "corp"))]
 mod install;
+#[cfg(not(feature = "corp"))]
 pub mod release;
+/// Corp keeps only the file names status, autostart and the hardware
+/// probe need; release selection and signature checks serve the
+/// compiled-out installer. Same values as `release.rs`.
+#[cfg(feature = "corp")]
+mod release {
+    pub const EXE: &str = "buzzkey.exe";
+    pub const CONSOLE_EXE: &str = "buzzkey-console.exe";
+}
 mod system;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,8 +54,8 @@ const USER_AGENT: &str = concat!("swarmterm-gn/", env!("CARGO_PKG_VERSION"));
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
 #[cfg(not(feature = "corp"))]
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
-#[cfg(not(feature = "corp"))]
 /// How long a polite quit may take before the install gives up.
+#[cfg(not(feature = "corp"))]
 const QUIT_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
@@ -105,8 +114,8 @@ fn emit_progress(app: &AppHandle, phase: &str, file: Option<&str>, received: u64
     );
 }
 
-#[cfg(not(feature = "corp"))]
 /// Debug builds may read releases from the testlab's loopback server.
+#[cfg(not(feature = "corp"))]
 fn releases_url() -> (String, bool) {
     if cfg!(debug_assertions) {
         if let Ok(url) = std::env::var("SWARMTERM_BUZZKEY_RELEASES_URL") {
@@ -139,8 +148,8 @@ fn client(allow_loopback: bool, timeout: Duration) -> Result<reqwest::Client, St
         .map_err(|e| format!("http: {e}"))
 }
 
-#[cfg(not(feature = "corp"))]
 /// GET with a byte cap enforced while reading, not after.
+#[cfg(not(feature = "corp"))]
 async fn fetch(
     http: &reqwest::Client,
     url: &str,
@@ -222,10 +231,10 @@ pub fn voice_companion_status(app: AppHandle) -> CompanionStatus {
     status(&app)
 }
 
-#[cfg(not(feature = "corp"))]
 /// "Check for update" (click, or the update toast's schedule). Compares against the version the
 /// running buzzkey reported in `hello`; without one, any signed release
 /// counts as available (fresh install).
+#[cfg(not(feature = "corp"))]
 #[tauri::command]
 pub async fn voice_companion_check(app: AppHandle) -> Result<UpdateCheck, String> {
     app.state::<crate::pty::AppState>()
@@ -263,9 +272,9 @@ impl Drop for BusyGuard<'_> {
     }
 }
 
-#[cfg(not(feature = "corp"))]
 /// An automatic update must never cut into a dictation: quitting buzzkey
 /// mid-recording loses the audio. A click is the user's own call.
+#[cfg(not(feature = "corp"))]
 fn update_gate(unattended: bool, dictating: bool) -> Result<(), &'static str> {
     if unattended && dictating {
         Err("dictating")
@@ -274,9 +283,9 @@ fn update_gate(unattended: bool, dictating: bool) -> Result<(), &'static str> {
     }
 }
 
-#[cfg(not(feature = "corp"))]
 /// Anyone holding a dictation: a live pin (buzzkey or another client) or
 /// the built-in speech source.
+#[cfg(not(feature = "corp"))]
 fn dictating(app: &AppHandle) -> bool {
     let live = app
         .state::<VoiceHub>()
@@ -287,9 +296,9 @@ fn dictating(app: &AppHandle) -> bool {
     live || super::speech::busy(app)
 }
 
-#[cfg(not(feature = "corp"))]
 /// Install or update. Restarts buzzkey afterwards if it was running.
 /// `unattended` = the toast's auto-update, gated on no dictation.
+#[cfg(not(feature = "corp"))]
 #[tauri::command]
 pub async fn voice_companion_install(
     app: AppHandle,
@@ -472,8 +481,7 @@ pub async fn voice_companion_probe() -> Option<HardwareProbe> {
     system::probe(&system::install_dir()?).await
 }
 
-#[cfg(not(feature = "corp"))]
-#[cfg(test)]
+#[cfg(all(test, not(feature = "corp")))]
 mod tests {
     use super::*;
 

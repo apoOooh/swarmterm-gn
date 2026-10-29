@@ -71,8 +71,9 @@ jobs:
       # The build without the speech engine (no LLVM) must stay warning-free too.
       - run: cargo clippy --all-targets --no-default-features -- -D warnings
       # Corp edition (docs/editions.md): its cfg branches compile only with
-      # the feature. Without speech keeps it quick; speech code is the same
-      # in both editions and covered above.
+      # the feature. Linted with speech (the release combination) and
+      # without it (the local build), tested without speech to stay quick.
+      - run: cargo clippy --all-targets --features corp -- -D warnings
       - run: cargo clippy --all-targets --no-default-features --features corp -- -D warnings
       - run: cargo test --no-default-features --features corp --lib
       - run: cargo test

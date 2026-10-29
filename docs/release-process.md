@@ -63,8 +63,9 @@ Tags inherited from before the fork are retained; the first GN release is `v1.1.
    [editions.md](editions.md)). Each exe is checked for analytics endpoints;
    the Corp exe also for the buzzkey and speech-model download endpoints.
 4. Download both build artifacts in a separate publishing job, generate the
-   CycloneDX SBOMs `sbom-rust.cdx.json`, `sbom-rust-corp.cdx.json`,
-   `sbom-rust-host.cdx.json` and `sbom-npm.cdx.json`, rename the installers to
+   CycloneDX SBOMs `sbom-rust.cdx.json`, `sbom-rust-host.cdx.json` and
+   `sbom-npm.cdx.json` (they cover both editions; `corp` adds no
+   dependencies), rename the installers to
    `Swarmterm.GN_<version>_x64-setup.exe` and
    `Swarmterm.GN.Corp_<version>_x64-setup.exe`, and add
    `SHA256SUMS.txt` over all assets.

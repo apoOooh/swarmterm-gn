@@ -7,10 +7,6 @@
 //! alone proves integrity only — anyone who can publish a release can also
 //! publish matching sums — so nothing is trusted before the signature is.
 
-// Corp builds keep only the names (`EXE`) for status and autostart; the
-// release selection and signature checks serve the compiled-out installer.
-#![cfg_attr(feature = "corp", allow(dead_code))]
-
 use minisign_verify::{PublicKey, Signature};
 use semver::Version;
 use serde::Deserialize;

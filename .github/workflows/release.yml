@@ -106,7 +106,11 @@ jobs:
           $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes('src-tauri/target/release/swarmterm.exe'))
           if ($text.Contains('google-analytics')) { throw 'swarmterm.exe contains google-analytics' }
       # Corp compiles the buzzkey installer and the model download out
-      # (docs/editions.md); their endpoints in the exe would mean they leaked back.
+      # (docs/editions.md); their endpoints in the exe would mean the Rust
+      # code leaked back. Scope: the Rust side only. rustc drops consts nobody
+      # references, so this also fails if a corp path starts using one. The
+      # embedded renderer is compressed and not scanned; its download
+      # buttons are hidden, and Rust refuses the commands regardless.
       - name: Check corp exe has no download endpoints
         if: matrix.edition == 'corp'
         shell: pwsh
@@ -154,11 +158,8 @@ jobs:
           # separate workspace member with its own file.
           mv src-tauri/swarmterm.cdx.json release-assets/sbom-rust.cdx.json
           mv src-tauri/host/swarmterm-host.cdx.json release-assets/sbom-rust-host.cdx.json
-          # Corp ships the same host and renderer dependencies; its app crate
-          # gets its own SBOM for its exact feature set (default + corp).
-          (cd src-tauri && cargo cyclonedx --format json --features corp --target x86_64-pc-windows-msvc)
-          mv src-tauri/swarmterm.cdx.json release-assets/sbom-rust-corp.cdx.json
-          rm -f src-tauri/host/swarmterm-host.cdx.json
+          # The SBOMs cover both editions: `--all-features` includes `corp`,
+          # which adds no dependencies (docs/editions.md).
           # npm sbom reads the installed tree; scripts are not needed for it.
           npm ci --ignore-scripts
           npm sbom --sbom-format cyclonedx --omit=dev > release-assets/sbom-npm.cdx.json

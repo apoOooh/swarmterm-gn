@@ -559,8 +559,8 @@ Hosted panes outlive Swarmterm itself: if the app crashes or is ended from Task 
 Swarmterm GN comes in two editions: **Swarmterm GN** and **Swarmterm GN Corp**
 for organisations. Corp has bypass launch modes and War Room execute by agents
 locked, the environment filter always on, and no buzzkey installer or speech
-model download (Settings → Voice hides them; your administrator provides
-models). The edition is shown in the title bar and, for Corp, at the top of
+model download (Settings → Voice hides the buzzkey section and the download
+buttons; your administrator provides models). The edition is shown in the title bar and, for Corp, at the top of
 Settings. Both can be installed side by side with separate settings. Full
 comparison: [Editions](editions.md).
 
