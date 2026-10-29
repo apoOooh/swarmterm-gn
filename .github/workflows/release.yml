@@ -156,7 +156,7 @@ jobs:
             test ! -e "$asset"
             mv -- "$installer" "$asset"
           fi
-          (cd release-assets && sha256sum *.exe *.cdx.json > SHA256SUMS.txt)
+          (cd release-assets && sha256sum -- *.exe *.cdx.json > SHA256SUMS.txt)
       # Sigstore-signed SLSA provenance for every published file, so users can
       # check an asset came from this workflow at this tag:
       # gh attestation verify <file> --repo apoOooh/swarmterm-gn
