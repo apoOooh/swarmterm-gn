@@ -559,6 +559,23 @@ impl AppState {
         self.admin_policy.apply_env(user)
     }
 
+    /// Replace the user's env policy and publish the effective one to the
+    /// child processes spawned outside panes (`terminal_env::command`).
+    pub fn set_env_policy(&self, policy: crate::terminal_env::EnvPolicy) {
+        *self.env_policy.write().unwrap_or_else(|e| e.into_inner()) = policy;
+        crate::terminal_env::publish_child_policy(self.env_policy_snapshot());
+    }
+
+    /// Startup: load the user's policy persisted by the last
+    /// `env_policy_set`, so panes restored and routines run before the
+    /// renderer's push already use it. Without a file the secure default
+    /// stays; either way the effective policy is published.
+    pub fn load_env_policy(&self, path: std::path::PathBuf) {
+        let user = crate::terminal_env::load_persisted(&path).unwrap_or_default();
+        crate::terminal_env::set_store_path(path);
+        self.set_env_policy(user);
+    }
+
     /// A copy of the agent policy; a poisoned lock yields the last value.
     pub fn agent_policy_snapshot(&self) -> crate::agent_policy::AgentPolicy {
         let user = self
@@ -834,7 +851,7 @@ fn plan_spawn(
         // never written. A value the user already exported wins.
         if options.agent_id.as_deref() == Some("opencode")
             && crate::mcp::toggle::is_enabled("opencode", None)
-            && std::env::var_os("OPENCODE_CONFIG_CONTENT").is_none()
+            && env.get("OPENCODE_CONFIG_CONTENT").is_none()
         {
             env.set(
                 "OPENCODE_CONFIG_CONTENT",
@@ -1412,6 +1429,22 @@ pub fn finish_generation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn persisted_env_policy_applies_before_the_renderer_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("env-policy.json");
+        let user = crate::terminal_env::EnvPolicy {
+            mode: crate::terminal_env::FilterMode::Strict,
+            allow: vec!["MY_TOOL_*".into()],
+            ..Default::default()
+        };
+        crate::terminal_env::save_persisted(&path, &user).unwrap();
+        let state = AppState::default();
+        state.load_env_policy(path);
+        // The first spawn (restored pane) reads this snapshot.
+        assert_eq!(state.env_policy_snapshot(), user);
+    }
+
     #[test]
     fn env_policy_defaults_to_filtering_and_snapshot_follows_writes() {
         use crate::terminal_env::{EnvPlan, EnvPolicy};

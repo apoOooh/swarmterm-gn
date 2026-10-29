@@ -524,10 +524,11 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   secure default, pushed by `env-policy-store` via `env_policy_set`) filters
   the inherited env in `plan_spawn` (both backends) and `run_routine_command`
   BEFORE the app sets its own vars; `APP_SET` names are never filtered. New
-  spawners of user/agent code must use `state.env_policy_snapshot()`, never
-  `EnvPlan::inherited()`. App-internal helpers (git, editor launch, hook
-  and session CLIs, voice companion) keep the full env on purpose. Restored
-  panes may spawn before the first push, so they get the Rust default.
+  pane/routine spawners use `state.env_policy_snapshot()`; every other child
+  process (git, editors, probes, companion) is built with
+  `terminal_env::command`/`tokio_command` — never a bare `Command::new`.
+  The user's policy is persisted in `env-policy.json` and loaded at the start
+  of `setup`, so restored panes use it before the renderer's push.
 - **Admin policy (`policy.rs`, `docs/admin-policy.md`).** Read once at start
   from `HKLM\Software\Policies\SwarmtermGN` then HKCU (HKLM wins per value)
   into the immutable `AppState.admin_policy`. Enforce every new lock in Rust at

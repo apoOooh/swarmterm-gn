@@ -94,12 +94,55 @@ mode; the administrator policy `DisableBypassModes` forces this off.
 ### Environment filtering
 
 By default panes and command routines do not inherit secret-looking variables
-(names such as `*_TOKEN`, `*_API_KEY`, `*_SECRET`, `*_PASSWORD`, `*_PRIVATE_KEY`,
-`DATABASE_URL` and the `AWS_`, `ANTHROPIC_`, `OPENAI_`, `AZURE_OPENAI_` and
-`SECRET_` prefixes) from the application's environment; a strict mode keeps only
-system variables, and an allow list passes named variables
+from the application's environment: names ending in `_TOKEN`, `_API_KEY`,
+`_SECRET`, `_PASSWORD`, `_PASS`, `_PWD`, `_KEY`, `_PRIVATE_KEY`,
+`_CREDENTIAL(S)` and similar, names with a `TOKEN`, `SECRET`, `PASSWORD` or
+`CREDENTIAL` segment anywhere (`AWS_BEARER_TOKEN_BEDROCK`), the `SECRET_`
+prefix, and `DATABASE_URL`, `PGPASSWORD`, `MYSQL_PWD`. Any variable whose value
+is a URL with credentials (`http://user:pw@proxy`, `redis://:pw@host`,
+`https://token@host`) is dropped whole rather than redacted, since a URL
+without its password fails anyway. Provider configuration such as
+`AWS_REGION`, `AWS_PROFILE`, `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` passes
+(Bedrock and corporate LLM gateways need it), as do `PATH`, system variables,
+proxies without credentials and certificate variables (`SSL_CERT_FILE`,
+`NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`). A strict mode keeps only system
+variables, and an allow list passes named variables
 (`src-tauri/src/terminal_env.rs`, Settings → Terminal → Environment).
-Internal helpers (git, hook CLIs) keep the full environment.
+
+The same filter applies to every child process Swarmterm starts, through one
+helper (`terminal_env::command`, environment cleared, then the filtered copy):
+
+| Child process | Where |
+|---|---|
+| Panes (in-process and terminal host) | `pty::plan_spawn` |
+| Command routines | `routine_cmd.rs` |
+| git (status, diff, worktree add/list/remove) | `git.rs`, `files/git.rs` |
+| Editors ("Open in editor"), MarkText | `commands.rs::open_in_editor`, `files/marktext.rs` |
+| Reveal in Explorer, WSL probe | `links.rs`, `shell.rs` |
+| Codex `--help` probe, `opencode session list` | `hook/codex.rs`, `sessions/opencode.rs` |
+| Voice companion (buzzkey) launch and hardware probe | `voice/companion/system.rs` |
+
+Exceptions: the terminal host process (`swarmterm-host.exe`) is Swarmterm's own
+binary and clears its environment before each pane; images, videos and HTML
+opened "in the default application" go through the Windows shell
+(`ShellExecute`), whose handler may receive the app's environment, because the
+shell offers no way to pass a filtered one.
+
+Git run by Swarmterm itself always passes `-c core.fsmonitor=`, so a repository
+config written by an agent cannot make Swarmterm run a program on every status.
+Hooks still run where git runs them (`worktree add` → `post-checkout`), since
+users rely on LFS or setup hooks there; they get the filtered environment.
+
+The user's setting is also persisted on the Rust side (`env-policy.json` in the
+app data folder) and loaded at start, so panes restored at boot and early
+routines use it before the renderer's push arrives. Only the very first start
+after an upgrade, before the setting was ever pushed, uses the built-in default.
+
+The filter is hygiene, not isolation: user-scope variables in
+`HKCU\Environment` and files in the user profile are readable by any process
+in a pane anyway. It keeps secrets that were only exported into Swarmterm's own
+launch environment away from agents. For corporate use set `EnvPolicy=strict`
+(`docs/admin-policy.md`) and allow-list what the agents need.
 
 ### Voice pipe
 

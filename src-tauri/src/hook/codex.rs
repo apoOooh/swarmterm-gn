@@ -5,7 +5,7 @@ use std::{
     fs,
     io::Read,
     path::Path,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{Condvar, Mutex},
     time::{Duration, Instant},
 };
@@ -97,7 +97,7 @@ fn probe() -> Option<bool> {
     let Ok(stdout) = output.try_clone() else {
         return Some(false);
     };
-    let mut command = Command::new(binary);
+    let mut command = crate::terminal_env::command(binary);
     command
         .arg("--help")
         .stdin(Stdio::null())

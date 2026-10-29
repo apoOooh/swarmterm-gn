@@ -58,7 +58,6 @@ impl EnvPlan {
         }
     }
 
-    #[cfg(test)]
     pub fn get(&self, key: &str) -> Option<&str> {
         self.existing_key(key)
             .and_then(|k| self.vars.get(&k))
@@ -116,13 +115,15 @@ pub enum FilterMode {
 }
 
 /// Set by the app after filtering, or the user's own pointer to an agent's
-/// config directory. Never filtered, so logins and the MCP wiring keep
+/// config directory. `OPENCODE_CONFIG_CONTENT` is not here: the app sets its
+/// own value after filtering, and one inherited from the app's parent is
+/// arbitrary user config (it can carry inline provider keys), so it follows
+/// the mode like any other name (passes Default, dropped by Strict). Never filtered, so logins and the MCP wiring keep
 /// working in every mode.
 const APP_SET: &[&str] = &[
     "SWARMTERM_SESSION",
     "SWARMTERM_MCP_URL",
     "SWARMTERM_PTY_GENERATION",
-    "OPENCODE_CONFIG_CONTENT",
     "CLAUDE_CONFIG_DIR",
     "CODEX_HOME",
 ];
@@ -138,6 +139,7 @@ const SECRET_SUFFIXES: &[&str] = &[
     "PASSWORD",
     "PASSWD",
     "PASSPHRASE",
+    "CREDENTIAL",
     "CREDENTIALS",
     "PRIVATE_KEY",
     "ACCESS_KEY",
@@ -150,12 +152,35 @@ const SECRET_SUFFIXES: &[&str] = &[
     "COOKIE",
 ];
 
-/// Whole provider families (`AWS_PROFILE`, `ANTHROPIC_BASE_URL` too: users
-/// who need one add it to the allowlist).
-const SECRET_PREFIXES: &[&str] = &["AWS_", "ANTHROPIC_", "OPENAI_", "AZURE_OPENAI_", "SECRET_"];
+/// Short suffixes that are only a secret after a `_` (`MYSQL_PWD`,
+/// `SMTP_PASS`, `STRIPE_KEY`); the bare name is not (`PWD` is the shell's
+/// working directory).
+const SECRET_SUFFIXES_AFTER_UNDERSCORE: &[&str] = &["PASS", "PWD", "KEY"];
+
+/// A `_`-separated segment anywhere in the name that marks a secret
+/// (`AWS_BEARER_TOKEN_BEDROCK`, `GITHUB_TOKEN_FOR_CI`). Only unambiguous
+/// words: `AUTH` stays suffix-only because of `SSH_AUTH_SOCK`.
+const SECRET_SEGMENTS: &[&str] = &[
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "PASSPHRASE",
+    "APIKEY",
+    "CREDENTIAL",
+    "CREDENTIALS",
+];
+
+/// Names starting with these are secrets as a whole. Provider families
+/// (`AWS_`, `ANTHROPIC_`, `OPENAI_`) are deliberately not here: their
+/// config (`AWS_REGION`, `AWS_PROFILE`, `ANTHROPIC_BASE_URL`,
+/// `OPENAI_BASE_URL`) is what Bedrock and corporate LLM gateways need, and
+/// their secrets (`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
+/// `ANTHROPIC_API_KEY`) are caught by the suffix and segment rules.
+const SECRET_PREFIXES: &[&str] = &["SECRET_"];
 
 /// Exact names that carry credentials without a telling suffix.
-const SECRET_NAMES: &[&str] = &["DATABASE_URL"];
+const SECRET_NAMES: &[&str] = &["DATABASE_URL", "PGPASSWORD", "MYSQL_PWD"];
 
 /// Strict mode: what Windows programs and shells expect to exist.
 const STRICT_NAMES: &[&str] = &[
@@ -202,11 +227,37 @@ const STRICT_PREFIXES: &[&str] = &[
 
 pub fn is_secret_name(name: &str) -> bool {
     let n = name.to_ascii_uppercase();
+    let after_underscore = |s: &&str| n.strip_suffix(*s).is_some_and(|head| head.ends_with('_'));
     SECRET_NAMES.contains(&n.as_str())
         || SECRET_PREFIXES.iter().any(|p| n.starts_with(p))
         || SECRET_SUFFIXES
             .iter()
-            .any(|s| n == *s || n.strip_suffix(s).is_some_and(|head| head.ends_with('_')))
+            .any(|s| n == *s || after_underscore(s))
+        || SECRET_SUFFIXES_AFTER_UNDERSCORE
+            .iter()
+            .any(after_underscore)
+        || n.split('_').any(|seg| SECRET_SEGMENTS.contains(&seg))
+}
+
+/// Whether `value` holds a URL with credentials in it
+/// (`redis://:pw@host`, `http://user:pw@proxy:8080`, `https://TOKEN@host`):
+/// any non-empty userinfo before the host. Every `scheme://` in the value is
+/// checked, so a list of URLs counts too.
+pub fn has_url_credentials(value: &str) -> bool {
+    let mut rest = value;
+    while let Some(i) = rest.find("://") {
+        let after = &rest[i + 3..];
+        let end = after
+            .find(|c: char| {
+                matches!(c, '/' | '?' | '#') || c.is_whitespace() || c == ';' || c == ','
+            })
+            .unwrap_or(after.len());
+        if after[..end].rfind('@').is_some_and(|at| at > 0) {
+            return true;
+        }
+        rest = after;
+    }
+    false
 }
 
 fn is_strict_name(upper: &str) -> bool {
@@ -225,7 +276,8 @@ impl EnvPolicy {
         })
     }
 
-    /// Whether `name` from the app's environment reaches a child.
+    /// Whether `name` from the app's environment reaches a child, judged by
+    /// its name alone (see `passes_var` for the value check).
     pub fn passes(&self, name: &str) -> bool {
         if self.pass_secrets {
             return true;
@@ -240,13 +292,32 @@ impl EnvPolicy {
         }
     }
 
+    /// Whether `name=value` reaches a child. On top of `passes`, Default mode
+    /// drops any variable whose value embeds URL credentials
+    /// (`HTTPS_PROXY=http://user:pw@proxy`, `REDIS_URL=redis://:pw@host`):
+    /// the whole variable goes rather than a redacted copy, because a URL
+    /// without its password fails anyway and a clear "not set" is easier to
+    /// diagnose than a 401/407. The allow list still passes it.
+    pub fn passes_var(&self, name: &str, value: &str) -> bool {
+        if !self.passes(name) {
+            return false;
+        }
+        if self.pass_secrets || self.mode != FilterMode::Default {
+            return true;
+        }
+        let upper = name.to_ascii_uppercase();
+        APP_SET.contains(&upper.as_str())
+            || self.allowed_by_user(&upper)
+            || !has_url_credentials(value)
+    }
+
     /// `plan` with everything this policy withholds removed.
     pub fn filter(&self, plan: EnvPlan) -> EnvPlan {
         EnvPlan {
             vars: plan
                 .vars
                 .into_iter()
-                .filter(|(k, _)| self.passes(k))
+                .filter(|(k, v)| self.passes_var(k, v))
                 .collect(),
         }
     }
@@ -254,6 +325,91 @@ impl EnvPolicy {
     /// The app's environment as this policy lets a child see it.
     pub fn inherited(&self) -> EnvPlan {
         self.filter(EnvPlan::inherited())
+    }
+}
+
+/// The effective policy (user setting with the admin policy applied) for
+/// child processes that have no `AppState` at hand: git, editors, MarkText,
+/// probes, the buzzkey companion. Published by the app at startup and on
+/// every `env_policy_set`; until then the secure default applies.
+static CHILD_POLICY: std::sync::RwLock<Option<EnvPolicy>> = std::sync::RwLock::new(None);
+
+pub fn publish_child_policy(policy: EnvPolicy) {
+    *CHILD_POLICY.write().unwrap_or_else(|e| e.into_inner()) = Some(policy);
+}
+
+pub fn child_policy() -> EnvPolicy {
+    CHILD_POLICY
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default()
+}
+
+/// A `std::process::Command` for any external program the app starts: the
+/// environment is cleared and replaced by the current policy's view of the
+/// app's own, exactly as for a pane. Every child process goes through this
+/// (or `tokio_command`) so no spawn site can forget the filter.
+pub fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    command_with(&child_policy(), program)
+}
+
+fn command_with(policy: &EnvPolicy, program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    cmd.env_clear();
+    cmd.envs(policy.inherited().iter());
+    cmd
+}
+
+/// `command` for tokio.
+pub fn tokio_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.env_clear();
+    cmd.envs(child_policy().inherited().iter());
+    cmd
+}
+
+/// Where the user's policy is kept on the Rust side, so the first spawn
+/// after a restart (restored panes, boot routines) uses it before the
+/// renderer's `env_policy_set` arrives.
+static STORE_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Read the persisted user policy. A missing or unreadable file is `None`
+/// (the caller keeps the secure default).
+pub fn load_persisted(path: &std::path::Path) -> Option<EnvPolicy> {
+    let text = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str(&text) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            eprintln!(
+                "env policy: {} unreadable ({e}); using the default",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+pub fn save_persisted(path: &std::path::Path, policy: &EnvPolicy) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(policy)?)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Set the file `persist` writes to; called once at startup.
+pub fn set_store_path(path: std::path::PathBuf) {
+    let _ = STORE_PATH.set(path);
+}
+
+/// Persist the user's policy (log-only on failure).
+pub fn persist(policy: &EnvPolicy) {
+    if let Some(path) = STORE_PATH.get() {
+        if let Err(e) = save_persisted(path, policy) {
+            eprintln!("env policy: cannot save {}: {e}", path.display());
+        }
     }
 }
 
@@ -341,9 +497,6 @@ mod tests {
             "DB_PASSWD",
             "GOOGLE_APPLICATION_CREDENTIALS",
             "SSH_PRIVATE_KEY",
-            "AWS_REGION",
-            "anthropic_base_url",
-            "OPENAI_ORG_ID",
             "GEMINI_API_KEY",
             "GOOGLE_API_KEY",
             "STORAGE_ACCOUNT_KEY",
@@ -357,6 +510,23 @@ mod tests {
             "SESSION_COOKIE",
             "SECRET_KEY_BASE",
             "CLAUDE_CODE_OAUTH_TOKEN",
+            // Item: names the old rules missed.
+            "PGPASSWORD",
+            "MYSQL_PWD",
+            "SMTP_PASS",
+            "DB_PWD",
+            "STRIPE_KEY",
+            "AZURE_CREDENTIAL",
+            "GCP_CREDENTIALS",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            // Provider secrets still caught without the family prefixes.
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SESSION_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "AZURE_OPENAI_API_KEY",
         ] {
             assert!(is_secret_name(n), "{n}");
         }
@@ -371,6 +541,23 @@ mod tests {
             "OLDPWD",
             "PATCH_LEVEL",
             "AUTHOR",
+            "PWD",
+            "KEY",
+            "PASS",
+            // Provider config Bedrock and LLM gateways need.
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+            "AWS_PROFILE",
+            "anthropic_base_url",
+            "ANTHROPIC_MODEL",
+            "OPENAI_BASE_URL",
+            "OPENAI_ORG_ID",
+            "AZURE_OPENAI_ENDPOINT",
+            "SYSTEMROOT",
+            "HTTPS_PROXY",
+            "SSL_CERT_FILE",
+            "NODE_EXTRA_CA_CERTS",
+            "REQUESTS_CA_BUNDLE",
         ] {
             assert!(!is_secret_name(n), "{n}");
         }
@@ -393,7 +580,6 @@ mod tests {
             ("SWARMTERM_SESSION", "s"),
             ("SWARMTERM_MCP_URL", "u"),
             ("SWARMTERM_PTY_GENERATION", "1"),
-            ("OPENCODE_CONFIG_CONTENT", "{}"),
             ("CLAUDE_CONFIG_DIR", "c"),
             ("CODEX_HOME", "h"),
         ];
@@ -470,5 +656,117 @@ mod tests {
         assert_eq!(p.allow, ["X"]);
         let empty: EnvPolicy = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, EnvPolicy::default());
+    }
+
+    #[test]
+    fn inherited_opencode_config_follows_the_mode() {
+        let vars = [("OPENCODE_CONFIG_CONTENT", "{}")];
+        assert_eq!(EnvPolicy::default().filter(plan(&vars)).iter().count(), 1);
+        let strict = EnvPolicy {
+            mode: FilterMode::Strict,
+            ..EnvPolicy::default()
+        };
+        assert_eq!(strict.filter(plan(&vars)).iter().count(), 0);
+    }
+
+    #[test]
+    fn url_credentials_are_detected() {
+        for v in [
+            "redis://:pw@cache:6379/0",
+            "mongodb+srv://user:pw@cluster.example/db",
+            "amqp://guest:guest@mq:5672/",
+            "http://user:pw@proxy:8080",
+            "https://ghp_x@github.com/o/r.git",
+            "http://a.example; http://u:p@b.example",
+        ] {
+            assert!(has_url_credentials(v), "{v}");
+        }
+        for v in [
+            "http://proxy:8080",
+            "https://gateway.example/v1?user=a@b",
+            "postgres://db.example/app",
+            r"C:\Windows",
+            "localhost,.corp.example",
+            "mailto:a@b.example",
+        ] {
+            assert!(!has_url_credentials(v), "{v}");
+        }
+    }
+
+    #[test]
+    fn default_mode_drops_credentialed_urls_and_keeps_config() {
+        let p = EnvPolicy::default().filter(plan(&[
+            ("PATH", r"C:\Windows"),
+            ("SYSTEMROOT", r"C:\Windows"),
+            ("HTTPS_PROXY", "http://proxy.corp:8080"),
+            ("HTTP_PROXY", "http://me:pw@proxy.corp:8080"),
+            ("REDIS_URL", "redis://:pw@cache"),
+            ("MONGODB_URI", "mongodb://u:p@db"),
+            ("AMQP_URL", "amqp://u:p@mq"),
+            ("DATABASE_URL", "postgres://db/app"),
+            ("SSL_CERT_FILE", "c.pem"),
+            ("NODE_EXTRA_CA_CERTS", "c.pem"),
+            ("REQUESTS_CA_BUNDLE", "c.pem"),
+            ("AWS_REGION", "eu-central-1"),
+            ("AWS_PROFILE", "corp"),
+            ("ANTHROPIC_BASE_URL", "https://llm.corp/anthropic"),
+            ("OPENAI_BASE_URL", "https://llm.corp/openai"),
+            ("AWS_SECRET_ACCESS_KEY", "s"),
+            ("AWS_SESSION_TOKEN", "t"),
+        ]));
+        assert_eq!(
+            names(&p),
+            [
+                "ANTHROPIC_BASE_URL",
+                "AWS_PROFILE",
+                "AWS_REGION",
+                "HTTPS_PROXY",
+                "NODE_EXTRA_CA_CERTS",
+                "OPENAI_BASE_URL",
+                "PATH",
+                "REQUESTS_CA_BUNDLE",
+                "SSL_CERT_FILE",
+                "SYSTEMROOT",
+            ]
+        );
+        // The allow list passes a credentialed URL on purpose.
+        let allow = EnvPolicy {
+            allow: vec!["HTTP_PROXY".into()],
+            ..EnvPolicy::default()
+        };
+        assert!(allow.passes_var("HTTP_PROXY", "http://me:pw@proxy"));
+    }
+
+    #[test]
+    fn persisted_policy_round_trips_and_bad_files_fall_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sub").join("env-policy.json");
+        assert_eq!(load_persisted(&path), None);
+        let policy = EnvPolicy {
+            pass_secrets: false,
+            mode: FilterMode::Strict,
+            allow: vec!["MY_*".into()],
+        };
+        save_persisted(&path, &policy).unwrap();
+        assert_eq!(load_persisted(&path), Some(policy));
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(load_persisted(&path), None);
+    }
+
+    #[test]
+    fn child_commands_get_exactly_the_filtered_environment() {
+        let strict = EnvPolicy {
+            mode: FilterMode::Strict,
+            ..EnvPolicy::default()
+        };
+        let cmd = command_with(&strict, "x");
+        let envs: Vec<_> = cmd.get_envs().collect();
+        // env_clear + explicit set: nothing removed-by-omission inherits.
+        assert!(envs.iter().all(|(_, v)| v.is_some()));
+        let expected = strict.inherited();
+        assert_eq!(envs.len(), expected.iter().count());
+        assert!(envs
+            .iter()
+            .all(|(k, _)| strict.passes(&k.to_string_lossy())));
     }
 }

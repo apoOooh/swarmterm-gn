@@ -90,9 +90,11 @@ through the MCP catalogue, the Microsoft WebView2 runtime that renders the
 interface, and Windows itself. Swarmterm GN does not control these
 connections.
 
-Panes do not inherit secret-looking environment variables (tokens, keys,
-passwords) from the application by default. See Settings → Terminal →
-Environment.
+Panes and the other programs Swarmterm GN starts (git, editors, probes) do
+not inherit secret-looking environment variables (tokens, keys, passwords,
+URLs with credentials) from the application by default. See Settings →
+Terminal → Environment. The setting itself (mode and allow-listed names, never
+values) is stored locally in `env-policy.json` in the app data folder.
 
 ## Changes and contact
 

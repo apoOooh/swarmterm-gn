@@ -77,6 +77,18 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             crate::prof::start(app.handle());
+            // Before any pane, routine or other child process spawns: the
+            // user's env policy from the last run (admin policy applied), not
+            // the built-in default.
+            match app.path().app_data_dir() {
+                Ok(dir) => app
+                    .state::<AppState>()
+                    .load_env_policy(dir.join("env-policy.json")),
+                Err(_) => {
+                    let state = app.state::<AppState>();
+                    crate::terminal_env::publish_child_policy(state.env_policy_snapshot());
+                }
+            }
             // The window title (taskbar, Alt+Tab) comes from tauri.conf.json,
             // which is shared by both editions; the edition is a compile-time
             // fact, so the binary sets it rather than a second config copy of

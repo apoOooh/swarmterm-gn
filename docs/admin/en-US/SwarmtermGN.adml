@@ -23,11 +23,11 @@
       <string id="DisablePreviewBrowser">Turn off the web preview</string>
       <string id="DisablePreviewBrowser_Help">The built-in web preview column (embedded browser) cannot be opened, neither by the user nor by agents.</string>
       <string id="EnvPolicy">Force the terminal environment filter</string>
-      <string id="EnvPolicy_Help">Panes and command routines always get a filtered copy of Swarmterm's environment. "Default" withholds secret-looking variables (API keys, tokens, passwords); "Strict" passes only the Windows variables a shell needs. A user's stricter choice is kept; the user's own allow list is ignored while this policy is set (use "Allow environment variables" instead).</string>
+      <string id="EnvPolicy_Help">Panes, command routines and every other program Swarmterm starts (git, editors, probes) always get a filtered copy of Swarmterm's environment. Recommended for corporate use: Strict. A value of the wrong type or unknown text is treated as Strict. "Default" withholds secret-looking variables (API keys, tokens, passwords); "Strict" passes only the Windows variables a shell needs. A user's stricter choice is kept; the user's own allow list is ignored while this policy is set (use "Allow environment variables" instead).</string>
       <string id="EnvPolicy_Default">Default (withhold secrets)</string>
       <string id="EnvPolicy_Strict">Strict (system variables only)</string>
       <string id="EnvAllow">Allow environment variables</string>
-      <string id="EnvAllow_Help">Variable names that always pass the environment filter, one per line, case-insensitive; a trailing * matches a prefix (CORP_*). Merged with the user's own list unless "Force the terminal environment filter" is set. A user-class value is ignored while the machine policy forces the filter.</string>
+      <string id="EnvAllow_Help">Variable names that always pass the environment filter, one per line, case-insensitive; a trailing * matches a prefix (CORP_*). Merged with the user's own list unless "Force the terminal environment filter" is set. A user-class value is ignored while the filter is locked by the machine policy or by the Corp edition. A single name stored as REG_SZ is accepted.</string>
     </stringTable>
     <presentationTable>
       <presentation id="EnvPolicy">
