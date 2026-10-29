@@ -151,6 +151,11 @@ const SECRET_SUFFIXES: &[&str] = &[
     "DSN",
     "COOKIE",
     "HEADERS",
+    // `NGROK_AUTHTOKEN`, `SYSTEM_ACCESSTOKEN` (Azure Pipelines),
+    // `npm_config__authToken`, `DOCKER_AUTH_CONFIG` (registry logins).
+    "AUTHTOKEN",
+    "ACCESSTOKEN",
+    "AUTH_CONFIG",
 ];
 
 /// Short suffixes that are only a secret after a `_` (`MYSQL_PWD`,
@@ -170,6 +175,8 @@ const SECRET_SEGMENTS: &[&str] = &[
     "APIKEY",
     "CREDENTIAL",
     "CREDENTIALS",
+    "AUTHTOKEN",
+    "ACCESSTOKEN",
 ];
 
 /// Names starting with these are secrets as a whole. Provider families
@@ -217,6 +224,22 @@ const STRICT_NAMES: &[&str] = &[
     "COLORTERM",
     "SHELL",
 ];
+/// Strict mode also keeps what corporate networks and lockdowns rely on: the
+/// PowerShell constrained-language switch (dropping it would lift that
+/// lockdown in the pane), proxies and CA bundles (TLS-inspecting proxies).
+/// Proxies still go when their URL carries credentials (`passes_var`).
+const STRICT_NETWORK_NAMES: &[&str] = &[
+    "__PSLOCKDOWNPOLICY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "GIT_SSL_CAINFO",
+];
 const STRICT_PREFIXES: &[&str] = &[
     "PROGRAMFILES",
     "PROGRAMW6432",
@@ -228,6 +251,9 @@ const STRICT_PREFIXES: &[&str] = &[
 
 pub fn is_secret_name(name: &str) -> bool {
     let n = name.to_ascii_uppercase();
+    if is_public_key_name(&n) {
+        return false;
+    }
     let after_underscore = |s: &&str| n.strip_suffix(*s).is_some_and(|head| head.ends_with('_'));
     SECRET_NAMES.contains(&n.as_str())
         || SECRET_PREFIXES.iter().any(|p| n.starts_with(p))
@@ -237,7 +263,9 @@ pub fn is_secret_name(name: &str) -> bool {
         || SECRET_SUFFIXES_AFTER_UNDERSCORE
             .iter()
             .any(after_underscore)
-        || (!names_a_location(&n) && n.split('_').any(|seg| SECRET_SEGMENTS.contains(&seg)))
+        || (!names_a_location(&n)
+            && !names_a_mechanism(&n)
+            && n.split('_').any(|seg| SECRET_SEGMENTS.contains(&seg)))
 }
 
 /// `AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`,
@@ -249,6 +277,22 @@ fn names_a_location(upper: &str) -> bool {
         .any(|s| upper.ends_with(s))
 }
 
+/// `GCM_CREDENTIAL_STORE`, `CARGO_REGISTRY_CREDENTIAL_PROVIDER`,
+/// `GIT_CREDENTIAL_HELPER`: which mechanism stores or fetches a secret is
+/// config, not the secret. Only the segment rule yields to it.
+fn names_a_mechanism(upper: &str) -> bool {
+    ["_STORE", "_PROVIDER", "_PROVIDERS", "_HELPER", "_MANAGER"]
+        .iter()
+        .any(|s| upper.ends_with(s))
+}
+
+/// Public halves are not secrets: `*_PUBLIC_KEY` (`SIGNING_PUBLIC_KEY`) and
+/// `GPG_KEY`, which by convention (Docker images, `gpg --recv-keys`) holds a
+/// key id or fingerprint, never key material.
+fn is_public_key_name(upper: &str) -> bool {
+    upper == "GPG_KEY" || upper == "PUBLIC_KEY" || upper.ends_with("_PUBLIC_KEY")
+}
+
 /// Header blobs (`ANTHROPIC_CUSTOM_HEADERS=Authorization: Bearer …`) carry
 /// credentials under a harmless name, so the value is checked too.
 fn has_auth_header(value: &str) -> bool {
@@ -257,20 +301,34 @@ fn has_auth_header(value: &str) -> bool {
 }
 
 /// Whether `value` holds a URL with credentials in it
-/// (`redis://:pw@host`, `http://user:pw@proxy:8080`, `https://TOKEN@host`):
-/// any non-empty userinfo before the host. Every `scheme://` in the value is
-/// checked, so a list of URLs counts too.
+/// (`redis://:pw@host`, `http://user:pw@proxy:8080`, `https://TOKEN@host`).
+/// Every `scheme://` in the value is checked, so a list of URLs counts too.
+/// A userinfo with a non-empty password part (`user:pw`, `:pw`) always
+/// counts. A bare user name counts too (`https://ghp_…@github.com` puts a
+/// token there), except for SSH schemes: `DOCKER_HOST=ssh://user@host` names
+/// the login, and SSH authenticates with keys or the agent, never the URL.
 pub fn has_url_credentials(value: &str) -> bool {
     let mut rest = value;
     while let Some(i) = rest.find("://") {
+        let scheme_start = rest[..i]
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
+            .map_or(0, |j| j + 1);
+        let scheme = rest[scheme_start..i].to_ascii_lowercase();
         let after = &rest[i + 3..];
         let end = after
             .find(|c: char| {
                 matches!(c, '/' | '?' | '#') || c.is_whitespace() || c == ';' || c == ','
             })
             .unwrap_or(after.len());
-        if after[..end].rfind('@').is_some_and(|at| at > 0) {
-            return true;
+        if let Some(at) = after[..end].rfind('@').filter(|at| *at > 0) {
+            let userinfo = &after[..at];
+            let password = userinfo
+                .split_once(':')
+                .is_some_and(|(_, pw)| !pw.is_empty());
+            let ssh = scheme.split('+').any(|p| p == "ssh" || p == "sftp");
+            if password || (!ssh && !userinfo.ends_with(':')) {
+                return true;
+            }
         }
         rest = after;
     }
@@ -278,7 +336,9 @@ pub fn has_url_credentials(value: &str) -> bool {
 }
 
 fn is_strict_name(upper: &str) -> bool {
-    STRICT_NAMES.contains(&upper) || STRICT_PREFIXES.iter().any(|p| upper.starts_with(p))
+    STRICT_NAMES.contains(&upper)
+        || STRICT_NETWORK_NAMES.contains(&upper)
+        || STRICT_PREFIXES.iter().any(|p| upper.starts_with(p))
 }
 
 impl EnvPolicy {
@@ -309,8 +369,8 @@ impl EnvPolicy {
         }
     }
 
-    /// Whether `name=value` reaches a child. On top of `passes`, Default mode
-    /// drops any variable whose value embeds URL credentials
+    /// Whether `name=value` reaches a child. On top of `passes`, both modes
+    /// drop any variable whose value embeds URL credentials
     /// (`HTTPS_PROXY=http://user:pw@proxy`, `REDIS_URL=redis://:pw@host`):
     /// the whole variable goes rather than a redacted copy, because a URL
     /// without its password fails anyway and a clear "not set" is easier to
@@ -319,7 +379,7 @@ impl EnvPolicy {
         if !self.passes(name) {
             return false;
         }
-        if self.pass_secrets || self.mode != FilterMode::Default {
+        if self.pass_secrets {
             return true;
         }
         let upper = name.to_ascii_uppercase();
@@ -534,6 +594,13 @@ mod tests {
             "SESSION_COOKIE",
             "SECRET_KEY_BASE",
             "CLAUDE_CODE_OAUTH_TOKEN",
+            // Re-review: auth tokens and registry logins without a `_TOKEN`.
+            "NGROK_AUTHTOKEN",
+            "SYSTEM_ACCESSTOKEN",
+            "npm_config__authToken",
+            "NPM_CONFIG__AUTHTOKEN",
+            "DOCKER_AUTH_CONFIG",
+            "MY_ACCESSTOKEN_V2",
             // Item: names the old rules missed.
             "PGPASSWORD",
             "MYSQL_PWD",
@@ -586,6 +653,21 @@ mod tests {
             "AWS_SHARED_CREDENTIALS_FILE",
             "AWS_WEB_IDENTITY_TOKEN_FILE",
             "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+            // Mechanisms and public halves are config, not secrets.
+            "GCM_CREDENTIAL_STORE",
+            "CARGO_REGISTRY_CREDENTIAL_PROVIDER",
+            "GIT_CREDENTIAL_HELPER",
+            "COSIGN_PUBLIC_KEY",
+            "PUBLIC_KEY",
+            "GPG_KEY",
+            "PATH",
+            "KEYBOARD_LAYOUT",
+            "SSH_AUTH_SOCK",
+            "GPG_TTY",
+            "GNOME_KEYRING_CONTROL",
+            "PYTHON_KEYRING_BACKEND",
+            "GIT_ASKPASS",
+            "TOKENIZERS_PARALLELISM",
         ] {
             assert!(!is_secret_name(n), "{n}");
         }
@@ -634,7 +716,7 @@ mod tests {
             ("LC_ALL", "C"),
             ("PSModulePath", "m"),
             ("EDITOR", "vim"),
-            ("HTTP_PROXY", "h"),
+            ("HTTP_PROXY", "http://u:p@proxy:8080"),
             ("FOO_API_KEY", "k"),
         ]));
         assert_eq!(
@@ -648,6 +730,44 @@ mod tests {
                 "SystemRoot"
             ]
         );
+    }
+
+    #[test]
+    fn strict_mode_keeps_lockdown_proxy_and_ca_variables() {
+        let policy = EnvPolicy {
+            mode: FilterMode::Strict,
+            ..EnvPolicy::default()
+        };
+        let keep = [
+            ("__PSLockdownPolicy", "4"),
+            ("HTTP_PROXY", "http://proxy.corp:8080"),
+            ("https_proxy", "http://proxy.corp:8080"),
+            ("NO_PROXY", "localhost,.corp"),
+            ("no_proxy", "localhost"),
+            ("SSL_CERT_FILE", "c.pem"),
+            ("SSL_CERT_DIR", "certs"),
+            ("NODE_EXTRA_CA_CERTS", "c.pem"),
+            ("REQUESTS_CA_BUNDLE", "c.pem"),
+            ("CURL_CA_BUNDLE", "c.pem"),
+            ("GIT_SSL_CAINFO", "c.pem"),
+        ];
+        for (k, v) in keep {
+            assert!(policy.passes_var(k, v), "{k}");
+        }
+        // A credentialed proxy is still dropped, unless the admin allows it.
+        assert!(!policy.passes_var("HTTPS_PROXY", "http://me:pw@proxy:8080"));
+        let allowed = EnvPolicy {
+            allow: vec!["HTTPS_PROXY".into()],
+            ..policy.clone()
+        };
+        assert!(allowed.passes_var("HTTPS_PROXY", "http://me:pw@proxy:8080"));
+    }
+
+    #[test]
+    fn default_mode_keeps_ssh_docker_host() {
+        let p = EnvPolicy::default();
+        assert!(p.passes_var("DOCKER_HOST", "ssh://user@host"));
+        assert!(!p.passes_var("DOCKER_HOST", "tcp://u:p@host:2376"));
     }
 
     #[test]
@@ -706,6 +826,8 @@ mod tests {
             "http://user:pw@proxy:8080",
             "https://ghp_x@github.com/o/r.git",
             "http://a.example; http://u:p@b.example",
+            "ssh://user:pw@host",
+            "git+ssh://u:p@host/r.git",
         ] {
             assert!(has_url_credentials(v), "{v}");
         }
@@ -716,6 +838,11 @@ mod tests {
             r"C:\Windows",
             "localhost,.corp.example",
             "mailto:a@b.example",
+            // SSH logins name a user, never carry the secret.
+            "ssh://user@host",
+            "ssh://deploy@build.corp:2222",
+            "git+ssh://git@github.com/o/r.git",
+            "http://user:@proxy:8080",
         ] {
             assert!(!has_url_credentials(v), "{v}");
         }

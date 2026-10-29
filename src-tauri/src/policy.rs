@@ -594,10 +594,12 @@ pub mod registry {
 
     use std::collections::BTreeMap;
 
-    use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+    use windows_sys::Win32::Foundation::{
+        ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS,
+    };
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
-        KEY_READ, REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_SZ,
+        RegCloseKey, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER,
+        HKEY_LOCAL_MACHINE, KEY_READ, REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_SZ,
     };
 
     use super::RegValue;
@@ -659,8 +661,25 @@ pub mod registry {
     /// dozen.
     pub const MAX_VALUES: u32 = 1024;
 
+    /// One direct `RegQueryValueExW` result for a known value name.
+    pub enum Query {
+        Value(RegValue),
+        /// ERROR_FILE_NOT_FOUND: the admin did not set it.
+        Missing,
+        /// Any other error, ERROR_MORE_DATA included.
+        Failed(u32),
+    }
+
     /// Enumerate indices from 0 until the end, an error, or `MAX_VALUES`.
-    pub fn scan(mut at: impl FnMut(u32) -> Entry) -> BTreeMap<String, RegValue> {
+    /// After an enumeration error the unread rest may hold any policy value,
+    /// so every known name not read yet is queried directly (`query`); a
+    /// lock or `EnvPolicy` that cannot be queried either is recorded as
+    /// unusable, which `parse` treats as set (fail closed). An unreadable
+    /// `EnvAllow` is left out: it only widens.
+    pub fn scan(
+        mut at: impl FnMut(u32) -> Entry,
+        mut query: impl FnMut(&str) -> Query,
+    ) -> BTreeMap<String, RegValue> {
         let mut out = BTreeMap::new();
         for index in 0..MAX_VALUES {
             match at(index) {
@@ -673,10 +692,27 @@ pub mod registry {
                 Entry::End => break,
                 Entry::Failed(rc) => {
                     eprintln!("policy: registry enumeration stopped at {index} (error {rc})");
-                    // The unread rest may hold EnvPolicy: fail closed (an
-                    // unreadable EnvPolicy parses as strict).
-                    if !out.keys().any(|k| k.eq_ignore_ascii_case("EnvPolicy")) {
-                        out.insert("EnvPolicy".into(), RegValue::Other);
+                    let known = super::FLAGS
+                        .iter()
+                        .map(|(n, _)| *n)
+                        .chain(["EnvPolicy", "EnvAllow"]);
+                    for name in known {
+                        if out.keys().any(|k| k.eq_ignore_ascii_case(name)) {
+                            continue;
+                        }
+                        match query(name) {
+                            Query::Value(v) => {
+                                out.insert(name.into(), v);
+                            }
+                            Query::Missing => {}
+                            Query::Failed(rc) if name != "EnvAllow" => {
+                                eprintln!("policy: {name} unreadable (error {rc}), locked");
+                                out.insert(name.into(), RegValue::Other);
+                            }
+                            Query::Failed(rc) => {
+                                eprintln!("policy: {name} unreadable (error {rc}), ignored")
+                            }
+                        }
                     }
                     break;
                 }
@@ -701,33 +737,56 @@ pub mod registry {
             }
             let mut name = vec![0u16; 256];
             let mut data = vec![0u8; MAX_DATA];
-            out = scan(|index| {
-                // In/out lengths: reset to the buffer sizes on every call.
-                let mut name_len = name.len() as u32;
-                let mut kind = 0u32;
-                let mut data_len = data.len() as u32;
-                let rc = RegEnumValueW(
-                    hkey,
-                    index,
-                    name.as_mut_ptr(),
-                    &mut name_len,
-                    std::ptr::null(),
-                    &mut kind,
-                    data.as_mut_ptr(),
-                    &mut data_len,
-                );
-                let text =
-                    || String::from_utf16_lossy(&name[..(name_len as usize).min(name.len())]);
-                match rc {
-                    ERROR_SUCCESS => {
-                        let len = (data_len as usize).min(data.len());
-                        Entry::Value(text(), decode(kind, &data[..len]))
+            out = scan(
+                |index| {
+                    // In/out lengths: reset to the buffer sizes on every call.
+                    let mut name_len = name.len() as u32;
+                    let mut kind = 0u32;
+                    let mut data_len = data.len() as u32;
+                    let rc = RegEnumValueW(
+                        hkey,
+                        index,
+                        name.as_mut_ptr(),
+                        &mut name_len,
+                        std::ptr::null(),
+                        &mut kind,
+                        data.as_mut_ptr(),
+                        &mut data_len,
+                    );
+                    let text =
+                        || String::from_utf16_lossy(&name[..(name_len as usize).min(name.len())]);
+                    match rc {
+                        ERROR_SUCCESS => {
+                            let len = (data_len as usize).min(data.len());
+                            Entry::Value(text(), decode(kind, &data[..len]))
+                        }
+                        ERROR_MORE_DATA => Entry::TooLarge(text()),
+                        ERROR_NO_MORE_ITEMS => Entry::End,
+                        other => Entry::Failed(other),
                     }
-                    ERROR_MORE_DATA => Entry::TooLarge(text()),
-                    ERROR_NO_MORE_ITEMS => Entry::End,
-                    other => Entry::Failed(other),
-                }
-            });
+                },
+                |value| {
+                    let wname: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+                    let mut kind = 0u32;
+                    let mut buf = vec![0u8; MAX_DATA];
+                    let mut len = buf.len() as u32;
+                    let rc = RegQueryValueExW(
+                        hkey,
+                        wname.as_ptr(),
+                        std::ptr::null(),
+                        &mut kind,
+                        buf.as_mut_ptr(),
+                        &mut len,
+                    );
+                    match rc {
+                        ERROR_SUCCESS => {
+                            Query::Value(decode(kind, &buf[..(len as usize).min(buf.len())]))
+                        }
+                        ERROR_FILE_NOT_FOUND => Query::Missing,
+                        other => Query::Failed(other),
+                    }
+                },
+            );
             RegCloseKey(hkey);
         }
         out
@@ -839,38 +898,83 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn registry_scan_stops_on_errors_and_at_the_cap() {
-        use registry::{scan, Entry, MAX_VALUES};
+        use registry::{scan, Entry, Query, MAX_VALUES};
+        let missing = |_: &str| Query::Missing;
         // A persistent non-MORE_DATA error used to loop forever.
         let mut calls = 0;
-        let out = scan(|i| {
-            calls += 1;
-            if i == 0 {
-                Entry::Value("EnvPolicy".into(), RegValue::Sz("strict".into()))
-            } else {
-                Entry::Failed(5)
-            }
-        });
+        let out = scan(
+            |i| {
+                calls += 1;
+                if i == 0 {
+                    Entry::Value("EnvPolicy".into(), RegValue::Sz("strict".into()))
+                } else {
+                    Entry::Failed(5)
+                }
+            },
+            missing,
+        );
         assert_eq!(calls, 2);
         assert_eq!(out.len(), 1);
-        // An error before EnvPolicy was read locks the filter (strict).
-        let out = scan(|_| Entry::Failed(5));
-        assert_eq!(out.get("EnvPolicy"), Some(&RegValue::Other));
-        assert_eq!(parse(&out).0.env_policy, Some(FilterMode::Strict));
-        // MORE_DATA records the name as unusable and goes on.
-        let out = scan(|i| match i {
-            0 => Entry::TooLarge("DisableMcp".into()),
-            1 => Entry::Value("X".into(), RegValue::Dword(1)),
-            _ => Entry::End,
-        });
+        // MORE_DATA records the name as unusable and goes on, no queries.
+        let out = scan(
+            |i| match i {
+                0 => Entry::TooLarge("DisableMcp".into()),
+                1 => Entry::Value("X".into(), RegValue::Dword(1)),
+                _ => Entry::End,
+            },
+            |n: &str| panic!("unexpected query {n}"),
+        );
         assert_eq!(out.get("DisableMcp"), Some(&RegValue::Other));
         assert_eq!(out.len(), 2);
         // An enumerator that never ends is cut off.
         let mut calls = 0;
-        scan(|i| {
-            calls += 1;
-            Entry::TooLarge(format!("v{i}"))
-        });
+        scan(
+            |i| {
+                calls += 1;
+                Entry::TooLarge(format!("v{i}"))
+            },
+            missing,
+        );
         assert_eq!(calls, MAX_VALUES);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn registry_scan_failure_queries_unread_names_and_fails_closed() {
+        use registry::{scan, Entry, Query};
+        // Enumeration fails after DisableMcp=0; the rest is queried by name.
+        let mut asked = Vec::new();
+        let out = scan(
+            |i| match i {
+                0 => Entry::Value("disablemcp".into(), RegValue::Dword(0)),
+                _ => Entry::Failed(5),
+            },
+            |n: &str| {
+                asked.push(n.to_string());
+                match n {
+                    "DisableWarRoom" => Query::Value(RegValue::Dword(1)),
+                    "DisableCompanion" => Query::Value(RegValue::Dword(0)),
+                    "EnvAllow" => Query::Value(RegValue::MultiSz(vec!["CORP_X".into()])),
+                    "DisablePreviewBrowser" => Query::Failed(5),
+                    _ => Query::Missing,
+                }
+            },
+        );
+        assert!(!asked.iter().any(|n| n == "DisableMcp"), "already read");
+        assert!(asked.iter().any(|n| n == "EnvPolicy"));
+        let (p, _) = parse(&out);
+        assert!(!p.disable_mcp && !p.disable_companion);
+        assert!(p.disable_war_room, "value after the failing index applies");
+        assert!(p.disable_preview_browser, "unqueryable lock fails closed");
+        assert!(!p.disable_worktree_spawn, "missing stays off");
+        assert_eq!(p.env_policy, None);
+        assert_eq!(p.env_allow, vec!["CORP_X"]);
+        // Every query failing locks everything, EnvAllow is dropped.
+        let out = scan(|_| Entry::Failed(5), |_: &str| Query::Failed(6));
+        let (p, _) = parse(&out);
+        assert_eq!(p.active().len(), FLAGS.len() + 1, "{:?}", p.active());
+        assert_eq!(p.env_policy, Some(FilterMode::Strict));
+        assert!(p.env_allow.is_empty());
     }
 
     #[test]
