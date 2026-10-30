@@ -136,6 +136,11 @@ provenance alongside the installer; users verify downloads as described in
 
 ## Release notes template
 
+The notes file becomes the GitHub release body, where relative links resolve
+against the release page and return 404. Link repository files with absolute
+URLs pinned to the tag, e.g.
+`https://github.com/apoOooh/swarmterm-gn/blob/v<version>/docs/editions.md`.
+
 Every `docs/releases/<version>.md` ends with this download section:
 
 ```markdown
