@@ -614,7 +614,17 @@ mod tests {
         let raws: Vec<String> = vec!["a.png".into(), abs, "b.txt".into(), "gone.gif".into()];
         let got = service.check_detected_media(&raws, t.path());
         let a = canonical(&t.path().join("a.png")).unwrap();
-        assert_eq!(got, vec![Some(a.clone()), Some(a.clone()), None, None]);
+        let paths: Vec<_> = got.iter().map(|d| d.as_ref().map(|d| d.path.clone())).collect();
+        assert_eq!(paths, vec![Some(a.clone()), Some(a.clone()), None, None]);
+        assert_eq!(got[0].as_ref().unwrap().size, 1);
+        assert!(got[0].as_ref().unwrap().mtime_ms > 0);
+        // Overwritten in place: same path, a different stamp. The size change
+        // keeps this deterministic; a same-size overwrite within one mtime
+        // tick is a known, accepted blind spot.
+        fs::write(t.path().join("a.png"), [0, 1, 2]).unwrap();
+        let again = service.check_detected_media(&raws[..1], t.path());
+        assert_eq!(again[0].as_ref().unwrap().path, a);
+        assert_eq!(again[0].as_ref().unwrap().size, 3);
         // Pane output (agent-controlled) never widens what the webview may read.
         assert!(!service.unrooted_registered(&a));
         // Over the cap: entries past MAX_DETECTED_PER_CALL are not looked at.

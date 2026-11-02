@@ -49,8 +49,10 @@ export interface ClipboardMediaEvent { path: string }
 export const onClipboardMedia = (cb: (e: ClipboardMediaEvent) => void): Promise<() => void> => listen<ClipboardMediaEvent>('media:clipboard', (e) => cb(e.payload))
 /** Starts/stops the backend clipboard watcher (opt-in setting). */
 export const setClipboardMediaEnabled = (enabled: boolean): Promise<void> => invoke('clipboard_media_set_enabled', { enabled })
-/** Passive detection: which candidates are existing media files (relative = terminal cwd). Registers nothing. One entry per input: its canonical path, or null. */
-export const checkDetectedMedia = (terminalId: string, paths: string[]): Promise<(string | null)[]> => invoke('media_check_detected', { terminalId, paths })
+/** A passive-detection hit: canonical path plus the stamp that tells an overwritten file apart. */
+export interface DetectedMedia { path: string; mtimeMs: number; size: number }
+/** Passive detection: which candidates are existing media files (relative = terminal cwd). Registers nothing. One entry per input: the hit (canonical path, mtime, size), or null. */
+export const checkDetectedMedia = (terminalId: string, paths: string[]): Promise<(DetectedMedia | null)[]> => invoke('media_check_detected', { terminalId, paths })
 /** User action only (open click, Ctrl+click): allow-lists one absolute media file for the unrooted route; resolves to its canonical path. */
 export const registerOpenedMedia = (path: string): Promise<string> => invoke('media_open', { path })
 /** Annotate: bytes of an image the user opened (the served <img> would taint the flatten canvas). */

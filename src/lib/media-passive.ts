@@ -70,14 +70,20 @@ function scan(terminalId: string, state: ScanState): void {
     .then((results) => {
       if (states.get(terminalId) !== state) return
       const source = paneSourceLabel(terminalId)
-      results.forEach((path, i) => {
-        if (path === null) return
-        state.seen.confirm(offered[i])
-        const kind = mediaKind(path)
+      // Answer time, not scan time: shownAt orders the strip against items
+      // added meanwhile (clipboard) and is the URL revision.
+      const at = Date.now()
+      results.forEach((hit, i) => {
+        if (hit === null) return
+        // A reprint of an unchanged file (redraw) is not news; an overwritten
+        // one is: it moves up with a fresh shownAt, which also cache-busts
+        // the thumbnail, overlay and viewer URLs.
+        const version = `${hit.mtimeMs}:${hit.size}`
+        if (!state.seen.confirm(offered[i], version, at)) return
+        const kind = mediaKind(hit.path)
         if (!kind) return
-        const item = { path, kind, terminalId, source, shownAt: now, opened: false }
-        useMediaStore.getState().detect(item)
-        useMediaStore.getState().announce(item, 'agent')
+        const item = { path: hit.path, kind, terminalId, source, shownAt: at, opened: false, version }
+        if (useMediaStore.getState().detect(item)) useMediaStore.getState().announce(item, 'agent')
       })
     })
     // The terminal may be gone (unknown terminal); detection is best effort.

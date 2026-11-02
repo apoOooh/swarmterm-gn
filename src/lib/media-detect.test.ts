@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectMediaPaths, stitchTableRows, MAX_CARRY, MediaOutputBuffer, MISS_MAX_TRIES, MISS_RETRY_MS, OVERLAP, SeenPaths } from './media-detect'
+import { detectMediaPaths, stitchTableRows, MAX_CARRY, MediaOutputBuffer, FOUND_RECHECK_MS, MISS_MAX_TRIES, MISS_RETRY_MS, OVERLAP, SeenPaths } from './media-detect'
 
 describe('detectMediaPaths', () => {
   it('ignores output without a media extension', () => {
@@ -178,11 +178,21 @@ describe('MediaOutputBuffer', () => {
 })
 
 describe('SeenPaths', () => {
-  it('never re-offers a confirmed path, case-insensitively', () => {
+  it('re-offers a confirmed path at most once per recheck interval, case-insensitively', () => {
     const s = new SeenPaths()
-    expect(s.offer('C:\A.png', 0)).toBe(true)
-    s.confirm('C:\A.png')
-    expect(s.offer('c:\a.PNG', 1e9)).toBe(false)
+    expect(s.offer('C:/A.png', 0)).toBe(true)
+    expect(s.confirm('C:/A.png', '1:1', 0)).toBe(true)
+    expect(s.offer('c:/a.PNG', FOUND_RECHECK_MS - 1)).toBe(false)
+    expect(s.offer('c:/a.PNG', FOUND_RECHECK_MS)).toBe(true)
+    expect(s.offer('c:/a.PNG', FOUND_RECHECK_MS + 1)).toBe(false)
+  })
+
+  it('confirm reports news only for a first find or a changed stamp', () => {
+    const s = new SeenPaths()
+    expect(s.confirm('xs.png', '1:10', 0)).toBe(true)
+    expect(s.confirm('XS.png', '1:10', 1)).toBe(false)
+    expect(s.confirm('xs.png', '2:10', 2)).toBe(true)
+    expect(s.confirm('xs.png', '2:10', 3)).toBe(false)
   })
 
   it('retries a miss after a delay, a bounded number of times', () => {
@@ -199,9 +209,9 @@ describe('SeenPaths', () => {
 
   it('stays bounded', () => {
     const s = new SeenPaths(2)
-    s.offer('a.png', 0); s.confirm('a.png')
-    s.offer('b.png', 0); s.confirm('b.png')
-    s.offer('c.png', 0); s.confirm('c.png')
+    s.offer('a.png', 0); s.confirm('a.png', 'v', 0)
+    s.offer('b.png', 0); s.confirm('b.png', 'v', 0)
+    s.offer('c.png', 0); s.confirm('c.png', 'v', 0)
     expect(s.offer('a.png', 0)).toBe(true)
   })
 })
