@@ -78,16 +78,21 @@ export interface TypingSnapshot {
 }
 
 /** Why a queued delivery is being withheld from a pane. Order of precedence
- *  is blocked → working → typing: the agent reasons come first because a
- *  flush is body writes PLUS an Enter, and on a permission prompt that Enter
- *  is an approval — the user clearing their own typing must not release it. */
-export type HoldReason = 'agent-blocked' | 'agent-working' | 'typing'
+ *  is blocked → working → draft → typing → pane-busy: the agent reasons come
+ *  first because a flush is body writes PLUS an Enter, and on a permission
+ *  prompt that Enter is an approval — the user clearing their own typing must
+ *  not release it. `pane-busy` is the scheduler's output gate (the pane kept
+ *  printing above repaint-noise level, see `busyPaneReady`). */
+export type HoldReason = 'agent-blocked' | 'agent-working' | 'draft' | 'typing' | 'pane-busy'
 
 export interface DeliverySnapshot extends TypingSnapshot {
   /** Raw engine state for this pane; undefined when the engine has no entry
    *  (plain shell, no manifest, or cleared on kill). Never `displayState` —
    *  the seen-bit behind `done` is a UI concern, not a safety signal. */
   agentState?: AgentEngineState
+  /** The agent's input box shows unsent text (see prompt-draft.ts). Typing a
+   *  nudge would append to it and the Enter would send the user's draft. */
+  draft?: boolean
 }
 
 /**
@@ -105,6 +110,10 @@ export function deliveryHoldReason(s: DeliverySnapshot, now: number): HoldReason
   // opinion, and the pre-Đ2 behaviour is the right fallback.
   if (s.agentState === 'blocked') return 'agent-blocked'
   if (s.agentState === 'working') return 'agent-working'
+  // Screen evidence, independent of the typing store: a draft restored by a
+  // host reattach, or typed before Swarmterm restarted, has no dirty flag, and
+  // "Deliver now" clearing the typing signal must not release it either.
+  if (s.draft === true) return 'draft'
   // Unfocused-but-dirty still holds: the line survives losing focus.
   if (s.dirty) return 'typing'
   if (!s.focused) return null
@@ -118,11 +127,78 @@ export function shouldDeferDelivery(s: DeliverySnapshot, now: number): boolean {
   return deliveryHoldReason(s, now) !== null
 }
 
-/** UI copy per reason. `releasable` = "Deliver now" may be offered: it clears
- *  the typing signal, which is meaningless against an agent hold — and a real
- *  bypass would press Enter on the very prompt the agent is waiting on. */
+/**
+ * Relaxed gate for a pane that is still printing. Real agent TUIs are never
+ * fully quiet at their prompt: a status line re-rendered every few seconds, a
+ * blinking-cursor repaint or a title update restarts the strict
+ * NUDGE_IDLE_MS countdown forever, so the strict gate alone held nudges
+ * indefinitely. Below this smoothed rate, output counts as repaint noise. A
+ * 1-2 KB status line every 5 s decays under it within ~1.5 s (tau 1 s, see
+ * renderer-policy); a streaming answer or a 100 ms spinner stays above it.
+ */
+export const NOISE_BYTES_PER_SEC = 512
+/** The detector must have said `idle` this long before the relaxed gate
+ *  trusts it — its own working→idle debounce already settled the verdict,
+ *  this just keeps a fresh idle from racing the last bytes of a turn. */
+export const IDLE_DWELL_MS = 1500
+/** Safety valve: idle-by-detector this long (and waiting this long) delivers
+ *  even when the output rate never drops — e.g. a TUI that animates
+ *  something constantly at its prompt. Never applies to blocked/working/
+ *  typing: those are decided by `deliveryHoldReason` before this runs. */
+export const MAX_IDLE_HOLD_MS = 20000
+
+export interface BusyPaneSnapshot {
+  agentState?: AgentEngineState
+  /** ms epoch the engine entered `agentState` (agent-state-store sinceMs). */
+  agentSinceMs?: number
+  /** Smoothed pane output rate, bytes/s. */
+  outputBytesPerSec: number
+  /** ms epoch the queue started waiting for this pane. */
+  waitingSinceMs: number
+  /** The user clicked "Deliver now" on a pane-busy hold. */
+  forced: boolean
+}
+
+/**
+ * May a queue be flushed into a pane that has NOT been output-quiet for
+ * NUDGE_IDLE_MS? Call only after `deliveryHoldReason` returned null — a
+ * blocked prompt, a working agent and user typing are never released here.
+ * `unknown`/no detector never qualifies (except forced): without an engine
+ * verdict, output is the only signal there is.
+ */
+export function busyPaneReady(s: BusyPaneSnapshot, now: number): boolean {
+  if (s.forced) return true
+  if (s.agentState !== 'idle' || s.agentSinceMs === undefined) return false
+  const idleFor = now - s.agentSinceMs
+  if (idleFor >= IDLE_DWELL_MS && s.outputBytesPerSec < NOISE_BYTES_PER_SEC) return true
+  return Math.min(idleFor, now - s.waitingSinceMs) >= MAX_IDLE_HOLD_MS
+}
+
+/** UI copy per reason. `releasable` = "Deliver now" may be offered: for
+ *  `typing` it clears the typing signal, for `pane-busy` it waives the output
+ *  gate once (`requestDeliverNow`). Neither touches the agent/draft rules —
+ *  a real bypass would press Enter on the very prompt the agent is waiting
+ *  on, or send the user's unsent draft. */
 export function holdReasonCopy(reason: HoldReason): { title: string; releasable: boolean } {
   switch (reason) {
+    case 'pane-busy':
+      return {
+        title:
+          'Held — the pane is still printing output. Delivers when it settles, or at most ' +
+          `${MAX_IDLE_HOLD_MS / 1000} s after the agent is idle. Click to deliver now.`,
+        releasable: true
+      }
+    case 'draft':
+      // Deliberately no release and no timeout: any release would type into
+      // the draft and its Enter would send it. A false positive (prompt-like
+      // non-dim text in the box) costs a held nudge the tooltip explains —
+      // the agent still finds the message via read_inbox.
+      return {
+        title:
+          "Held — the agent's input box has unsent text. Delivers once you send or clear it " +
+          '(a nudge would be appended to your draft and submit it).',
+        releasable: false
+      }
     case 'typing':
       return { title: "Held because you're typing here. Click to deliver now.", releasable: true }
     case 'agent-blocked':

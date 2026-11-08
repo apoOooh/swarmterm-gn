@@ -1,0 +1,7 @@
+# One toolchain for local builds and CI (rustup reads this file), so a new
+# stable release never changes a release build unreviewed. Bump deliberately.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-pc-windows-msvc"]
+profile = "minimal"

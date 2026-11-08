@@ -77,6 +77,26 @@ Do not mark them passed from the in-memory fixture alone.
       `Esc` in the terminal (e.g. vim) leaves the pinned row open.
 - [ ] Dragging a narrow pane by its header still swaps/docks it; double-clicking
       bare header space still maximizes.
+- [ ] Pane identity: hover a header, click the smiley left of the title, set
+      name "Reviewer", the bug icon and a color, Enter. Header shows icon +
+      **Reviewer** · agent title; the sidebar row shows the icon; the pane is
+      not restarted. Right-click → Set identity… opens the same dialog; an emoji
+      works, text in the emoji field is refused; Clear identity restores the
+      plain title. Restart the app: the identity is kept.
+- [ ] Identity dialog: pick a color and tick *Tint the top bar* — the preview
+      and then the header bar take the color (bottom border full color); the
+      checkbox is disabled with No color. Search icons for "arrow up": matches
+      appear, Enter picks the first without saving the dialog; the chosen
+      icon shows in the header, sidebar and after a restart. Scroll the grid
+      to the end: icons appear as you scroll. Maximize the pane: the zoom
+      border stays violet. Light and dark theme: header text stays readable.
+      Clicking the bold identity name also opens the dialog.
+- [ ] Composer: type a Name, create — the tab uses it (with its case); leave it
+      blank — the tab is named after the folder.
+- [ ] Open a file in the focused pane's editor, then rename a workspace (tab
+      double-click and sidebar ⋯ → Rename): click into the field, Home/End,
+      type "Alpha" and "alphA" — capitals at both ends stick, focus stays in the
+      field until Enter.
 - [ ] Settings → Title bar: mark Split right as Core — it stays in a narrow
       header; drag Shell to the bottom — it moves to the end of every header and
       is first to collapse. Restart the app: the layout is kept. Reset to
@@ -103,8 +123,18 @@ Do not mark them passed from the in-memory fixture alone.
 - [ ] Fresh profile: a new Claude Code pane starts in normal mode (header shows
       "Default"; Claude asks before an edit).
 - [ ] Settings → Terminal → Default launch mode → Claude Code = Bypass permissions:
-      a new Claude pane starts bypassed; an already running pane is not restarted
-      and keeps its mode. Restart the app: the choice is kept.
+      a confirmation explains the risk; Cancel (or Esc) keeps the old default.
+      Confirm: a new Claude pane starts bypassed; an already running pane is not
+      restarted and keeps its mode. Restart the app: the choice is kept.
+- [ ] Pane header agent menu → Bypass permissions (Codex: YOLO): the confirmation
+      appears and owns the keyboard (typing does not reach the pane); Cancel keeps
+      the mode, confirm restarts in it.
+- [ ] From Settings → Default launch mode, pick Bypass → the confirmation opens;
+      Esc closes only it (Settings stays open) and focus returns to the button. The header shows a red `BYPASS` / `YOLO`
+      badge; switching back to a safe mode removes it and asks nothing.
+- [ ] Worktree mode on, a bypassed Claude pane calls `worktree.spawn` → the
+      worker pane starts in Default (or the Settings default if that is safe),
+      with no red badge.
 - [ ] Pane header → Plan on a Claude pane: Claude restarts in plan mode and
       continues the conversation.
 - [ ] Codex default = Safe: a new Codex pane runs `-s read-only -a on-request`.
@@ -215,6 +245,11 @@ Do not mark them passed from the in-memory fixture alone.
       immediately → characters reach the terminal; Tab triggers shell
       completion instead of walking the focus ring.
 - [ ] **Activity dot:** lights while a pane streams output, clears when quiet.
+- [ ] **Environment filter:** quit Swarmterm, start it from a `cmd` with
+      `set FOO_API_KEY=x` → in a new cmd pane `echo %FOO_API_KEY%` prints
+      `%FOO_API_KEY%` (not set). Add `FOO_API_KEY` to **Settings → Terminal →
+      Environment → Always pass these variables**, open a new pane → prints
+      `x`. A command routine `echo %FOO_API_KEY%` behaves the same.
 
 ## Terminal links
 
@@ -238,6 +273,11 @@ Do not mark them passed from the in-memory fixture alone.
       typing once reaches every group member; `Esc` exits.
 - [ ] Settings → Terminal: changing font / size / line height / ligatures
       updates the preview and every pane.
+- [ ] Ctrl + mouse wheel over a pane: *Pane under the mouse* resizes only that
+      pane (shell and Claude Code reflow, plain wheel still scrolls, Claude Code
+      fullscreen does not scroll), `Ctrl + 0` resets it; *All panes* moves every
+      pane and the Size stepper; *Off* leaves Ctrl + wheel alone. The app UI
+      itself never page-zooms.
 - [ ] Settings → Keyboard Shortcuts lists the bindings for the current platform.
 - [ ] `⌘/Ctrl + B` toggles the sidebar; `Esc` closes Settings.
 - [ ] Sidebar hidden: resting the mouse on the left window edge slides it in over
@@ -275,6 +315,106 @@ Do not mark them passed from the in-memory fixture alone.
       "worktree isolation is not enabled".
 - [ ] Closing a pane or workspace does NOT delete any worktree.
 
+## Media panel
+
+- [ ] The Swarmterm MCP server lists no `media.*` tool, and its instructions do
+      not mention the Media panel.
+- [ ] Run `echo C:\path with spaces\shot.png` (existing file) in a pane:
+      a "1 new image/video" pill appears, the strip shows `shot.png` with its
+      thumbnail, the Media panel does not open, typing continues in the shell.
+- [ ] A large image (wider than the panel) shown in the Media tab is centred
+      and scaled to fit the viewer, never shifted off to the right.
+- [ ] Click the pill: the Media tab opens on that image and shows it, the pill
+      is gone and keystrokes still land in the terminal.
+- [ ] Click a second strip item: it loads and shows. An MP4 plays
+      and seeking works (range requests).
+- [ ] Ctrl+click a media path outside the project in the terminal: the Media
+      tab opens on it. Ctrl+click a `.txt` path still opens the editor/file
+      manager as before.
+- [ ] Print the same path again: no new pill. Print a relative `out/x.webp`
+      and a quoted `"a b.gif"`: both are picked up; a missing, `.svg` or
+      `\\host\share` path is not.
+- [ ] Switching from Preview to Media hides the native preview webview.
+- [ ] `cat` a large log (no media paths): no visible slowdown versus before.
+
+## Media zoom
+
+- [ ] Wheel over an opened image in the Media tab: it zooms in/out around the
+      pointer (the spot under it stays put), stopping at 10% and 2000%; the
+      corner shows the percentage. A touchpad pinch zooms too.
+- [ ] Wheel over the thumbnail strip, or over the viewer outside the image:
+      the strip scrolls / nothing zooms. A video does not zoom.
+- [ ] Zoomed in: left-drag pans, the image cannot be dragged out of the panel;
+      double-click or **Fit** returns to fit, **1:1** shows real pixels.
+- [ ] Keystrokes still reach the focused terminal after zooming, panning and
+      clicking Fit/1:1.
+- [ ] While annotating: zoom in, draw a pen stroke and a rectangle; they land
+      under the pointer. Middle-drag and Space+drag pan without drawing; Space
+      with the pointer elsewhere types a space in the terminal. Marks stay sharp
+      after zooming; Save copy is identical to an unzoomed save.
+
+## Media annotate
+
+- [ ] An opened image shows **Annotate** in the viewer title; an unopened item
+      and a video do not.
+- [ ] Draw with pen and marker, a line, an arrow, a rectangle and an ellipse
+      (drag up-left as well as down-right), with Fill on and off and different
+      colours/widths: the live preview follows the pointer and each shape lands
+      where it was drawn. Resize the right panel: the marks stay in place.
+- [ ] Undo removes marks newest first; Clear then Undo brings them all back.
+- [ ] While drawing, and right after moving the width slider or toggling
+      Fill, keystrokes still go to the focused terminal (arrow keys do not
+      move the slider).
+- [ ] Re-print or overwrite the image file while annotating: the marks still
+      sit on the picture you are drawing on, and the saved copy shows it.
+- [ ] While annotating, Esc with the
+      pointer over the image leaves annotate mode; Esc elsewhere reaches the agent.
+- [ ] Save copy: a `<name> (marked).png` item tagged `marked` is selected, shows
+      the marks at full resolution, and the original file is unchanged on disk.
+- [ ] Drag the marked item (or the toolbar grip while annotating) into a Claude
+      Code pane: the agent attaches the image and sees the marks.
+- [ ] A very large image (e.g. 10000 px wide) saves downscaled to 8192 px
+      without freezing the UI.
+- [ ] Quit Swarmterm: `%TEMP%\swarmterm-marked\<pid>` is gone. The MCP server
+      lists no tool for annotating or reading marked images.
+
+## Media popup and clipboard images
+
+- [ ] Defaults: with a fresh profile, Settings → Media shows the popup and
+      Clipboard images off; a printed media path and copying a screenshot show no popup.
+- [ ] Turn on Show popup, `echo` an existing image path while you type in a
+      pane: the corner popup lists the item, keystrokes keep landing in the
+      shell, and it hides after ~6 s.
+- [ ] Hover the popup for 15 s: it stays; leave: it hides a full timeout later.
+      Scroll a long list: the countdown restarts.
+- [ ] Press Esc while hovering: the popup closes and the agent does NOT receive
+      the Esc. Esc with the pointer elsewhere goes to the terminal.
+- [ ] Click an item: the Media tab opens on it, the popup closes, typing still
+      goes to the terminal and the image loads. Image rows show thumbnails;
+      a video row shows the film icon.
+- [ ] With the web preview open, trigger the popup: the preview hides while the
+      popup is up and comes back after it hides.
+- [ ] Turn on Clipboard images, press Win+Shift+S and snip: a `clipboard` item
+      appears in the Media tab and the popup. Copy the same image again: no new
+      item. Copy a PNG and an MP4 file in Explorer: both appear as the files.
+- [ ] Copy text: nothing happens. Turn Clipboard images off and snip: nothing.
+- [ ] Copy a large (4K) screenshot: the UI does not stutter.
+- [ ] Quit from the tray: `%TEMP%\swarmterm-clipboard\<pid>` is gone.
+
+## Media drag into panes
+
+- [ ] Drag an opened image from the Media strip: after a few pixels a ghost
+      with its thumbnail follows the pointer (film icon for an opened
+      video, image icon for any unopened item) and the pane under it gets the drop ring.
+- [ ] Release over a Claude Code pane: the path arrives as a paste and the
+      CLI shows `[Image #1]` (Codex likewise); the pane has the keyboard.
+- [ ] Release over a PowerShell pane: the quoted path is typed, nothing runs.
+- [ ] Drag an unopened item into a pane: its path is typed, the strip still
+      shows the placeholder and its media URL still answers 404.
+- [ ] Release over the web-preview column, the navbar or the panel, or press
+      Esc mid-drag: nothing is typed. A plain click still opens the item.
+- [ ] With the popup up, drag one of its rows into a pane: same result.
+
 ## Web preview
 
 - [ ] Preview a framing-hostile site: type `github.com` in the address bar —
@@ -310,8 +450,13 @@ Do not mark them passed from the in-memory fixture alone.
       intro is typed into each pane.
 - [ ] **Probe:** agent A sends a probe → the transcript shows it, idle agent B
       is nudged and reads its inbox.
-- [ ] **Execute:** agent A sends execute → the prompt runs in pane B and the
-      transcript marks it orange.
+- [ ] **Execute off (default):** agent A sends execute → refused with a message
+      telling it to use probe; nothing reaches pane B. The Moderator's own
+      Execute from the composer still runs in pane B.
+- [ ] **Execute:** Settings → Terminal → Agent safety → allow agents to run
+      prompts in other panes; agent A sends execute → the prompt runs in pane B
+      and the transcript marks it orange. Turn it off again → the next execute
+      is refused without restarting anything.
 - [ ] **Revocation:** drag a chip out or press ✕ → the next tool call from that
       pane is refused with "not in the War Room".
 - [ ] **PTY death:** close a member pane → the transcript logs the leave and
@@ -475,7 +620,7 @@ has never run Swarmterm from source. Details in
       or "damaged" dialog.
 - [ ] A terminal pane spawns and runs `ls`; a split pane spawns a second shell.
 - [ ] The web preview column loads `https://github.com`.
-- [ ] `echo $SWARMTERM_MCP_URL` inside a pane prints a loopback URL.
+- [ ] `echo $SWARMTERM_MCP_URL` inside a pane prints a loopback URL (a pane opened within ~10 s of a restart, while the previous MCP port is awaited, may print nothing: known limit, user guide).
 - [ ] A War Room message reaches a second pane.
 - [ ] Prompts for Desktop/Documents/Downloads access name Swarmterm and carry a
       readable explanation (the `Info.plist` usage strings).
@@ -488,21 +633,37 @@ machine that never built Swarmterm. Details in
 
 - [ ] A freshly downloaded `…x64-setup.exe` shows SmartScreen's "Windows
       protected your PC"; **More info → Run anyway** proceeds.
-- [ ] Install completes per-user with no admin prompt; the app launches.
+- [ ] Standard: install completes per-user with no admin prompt; the app launches.
+- [ ] Corp: the installer asks for administrator rights (UAC) and installs to
+      `%ProgramFiles%\Swarmterm GN Corp\`; the app launches.
 - [ ] A terminal pane spawns and runs `dir`; closing the pane leaves no
       orphaned shell in Task Manager.
 - [ ] Uninstall via Settings → Apps removes the Start Menu entry.
+- [ ] Silent install `…x64-setup.exe /S` and silent uninstall
+      `"%LOCALAPPDATA%\Swarmterm GN\uninstall.exe" /S` work without prompts
+      (docs/enterprise-deployment.md).
+- [ ] `gh attestation verify <installer> --repo apoOooh/swarmterm-gn`
+      succeeds for the published installer.
 
-## Auto-update
+## Content Security Policy (release build)
 
-- [ ] GN shows no upstream updater controls or tray entry and makes no upstream
-      update requests. App name and application-data identifier are distinct.
+The release CSP has no dev-server entries and no `http:` images. In an
+installed (or `tauri build`) app, check that none of these shows a blank
+area or a CSP violation in DevTools:
 
-## Telemetry (release builds only)
+- [ ] The app window loads (Welcome screen, fonts, icons, agent logos).
+- [ ] Media panel, popup and zoom show images and play a video.
+- [ ] Annotate opens an image and saves a marked copy.
+- [ ] Markdown preview shows a relative image and an `https:` image (for
+      example a README badge); an `http:` image now shows its alt text.
+- [ ] HTML preview renders a project page with its CSS/JS; SVG preview works.
+- [ ] Web preview and the popout window open an external site.
+- [ ] Links open in the default browser; dialogs (open folder) work.
 
-- [ ] Release build (built with GA keys in `.env.release`): launch, then GA →
-      Reports → Realtime shows 1 active user within ~a minute.
-- [ ] `npm run tauri dev` (no keys): nothing appears in GA Realtime.
+## No self-update
+
+- [ ] GN shows no update controls or tray entry and makes no update
+      requests. App name and application-data identifier are distinct.
 
 ## Agent state detection
 
@@ -614,3 +775,58 @@ It restores previous shortcut settings and removes only its own workspaces.
       "Transcribing…", the sentence arrives as a draft (no Enter).
 - [ ] Start again, click the pill's Stop: nothing is typed.
 - [ ] Windows microphone access off for desktop apps: the bell reports "no microphone available".
+
+## Process priority
+
+Use Task Manager → Details → "Base priority" (or Process Explorer).
+
+- [ ] Default (Strict): agent pane, let the agent run `cargo build -j 8` → cargo/rustc "Low", the agent CLI and its
+      shell "Below normal", Swarmterm "Normal". Typing in another pane and the desktop stay smooth.
+- [ ] Terminal pane: `cargo build` directly in the shell → cargo "Low", the shell "Below normal".
+- [ ] In a pane, `powershell -c "$p=[Diagnostics.Process]::GetCurrentProcess(); $p.PriorityClass='Normal'; $p.Refresh(); $p.PriorityClass"`
+      prints "BelowNormal".
+- [ ] npm-installed Claude Code (`node …\@anthropic-ai\claude-code\cli.js`): its `node` "Below normal", a build it
+      starts "Low".
+- [ ] Settings → Terminal → Process priority → **Agent at normal**: the running agent and shell turn "Normal" at once,
+      the running build stays "Low".
+- [ ] Pane priority **Low (idle)** (Strict): the whole pane turns "Low" at once.
+- [ ] **Cap CPU per pane** at 25 %: a `cargo build -j 16` stays near 25 % total CPU in Task Manager.
+- [ ] **Off**: running pane processes return to "Normal"; new builds stay "Normal".
+- [ ] Workspace ⋮ → untick **Lower build priority** → that workspace's processes return to "Normal".
+      Reopen the saved workspace: still unticked.
+- [ ] Settings → Terminal → **Run terminals in the terminal host** on, new pane → same results as above.
+- [ ] Upgrade from a build with the old "Lower build priority" switched off → mode shows **Off**.
+
+## Administrator policy
+
+Use a test key under HKCU (if `reg add` is denied, run it from an elevated prompt). Quit Swarmterm from the tray and
+start it again after every change; remove the key at the end:
+`reg delete HKCU\Software\Policies\SwarmtermGN /f`.
+
+- [ ] No key: Settings shows no "Managed by your administrator" box; everything works as before.
+- [ ] `reg add HKCU\Software\Policies\SwarmtermGN /v DisableBypassModes /t REG_DWORD /d 1 /f` → Settings lists it;
+      Bypass/YOLO greyed out in Default launch mode and in the pane header menu; the "Spawned workers inherit" switch
+      is off and greyed. A saved workspace with a Bypass pane restored → that pane shows "Launch refused … DisableBypassModes".
+- [ ] Settings → Terminal → Agent safety → **Spawned workers inherit Bypass/YOLO** (no policy): on, Claude pane in
+      Bypass asks `worktree.spawn` → the worker starts in Bypass with the red badge. Off → worker starts in Default.
+- [ ] `DisableWarRoomExecute` = 1: the Agent safety execute switch is greyed; an agent's `war_room.send` execute is
+      refused with a message naming `DisableWarRoomExecute`; probe still works.
+- [ ] `DisableWarRoom` = 1: the War Room tab shows "Managed by your administrator", the execute switch is greyed,
+      and an agent's `war_room.list_peers` / `send` / `read_inbox` / `read_peer` / `wait_peer` are refused with a
+      message naming `DisableWarRoom`.
+- [ ] MCP bearer: in a pane, `$env:SWARMTERM_SESSION` differs from the pane's terminalId; a request to `/status` with
+      `Authorization: Bearer <another pane's terminalId>` answers 401; after a respawn the old secret answers 401.
+- [ ] `DisableWorktreeSpawn` = 1: `worktree.spawn` is refused naming the policy.
+- [ ] `DisableMcp` = 1: new panes have no `SWARMTERM_MCP_URL`; `~/.claude.json` has no `swarmterm` entry after start;
+      Settings → MCP switches are off and greyed.
+- [ ] `DisableCompanion` = 1: Settings → Voice → buzzkey Install / Check for update greyed; no update toast; autostart
+      can be turned off but not on.
+- [ ] `DisableModelDownload` = 1: speech-model Download buttons greyed; downloaded models still selectable.
+- [ ] `DisableRoutineCommands` = 1: "Shell command" kind is greyed in the routine dialog; an existing command routine
+      fails with the policy message in its last result.
+- [ ] `DisablePreviewBrowser` = 1: the right panel's Preview shows "Managed by your administrator"; an agent's
+      `browser.open_preview` is refused.
+- [ ] `reg add … /v EnvPolicy /t REG_SZ /d strict /f` and `reg add … /v EnvAllow /t REG_MULTI_SZ /d CORP_X /f`:
+      the Environment controls are greyed, `set` in a new pane shows only system variables plus `CORP_X`.
+- [ ] `DisableMcp` = `REG_SZ "1"` (wrong type): fails closed, MCP is off; the app log has `policy: DisableMcp: expected REG_DWORD … treated as 1`.
+- [ ] Same value under HKLM = 0 and HKCU = 1 (elevated): HKLM wins, the policy is off.

@@ -44,6 +44,10 @@ export interface LaunchMode {
   id: string
   label: string
   args: string
+  /** Runs tools without asking and/or outside the sandbox. Selecting it needs
+   *  a confirmation, the pane shows a red badge, and MCP-spawned workers never
+   *  inherit it (lib/launch-mode-safety). */
+  dangerous?: true
 }
 
 export interface WorkspaceTemplate {
@@ -97,8 +101,10 @@ export const TEMPLATES: WorkspaceTemplate[] = [
       { id: 'default', label: 'Default', args: '--permission-mode default' },
       { id: 'acceptEdits', label: 'Accept edits', args: '--permission-mode acceptEdits' },
       { id: 'plan', label: 'Plan', args: '--permission-mode plan' },
-      { id: 'auto', label: 'Auto', args: '--permission-mode auto' },
-      { id: 'bypass', label: 'Bypass permissions', args: '--dangerously-skip-permissions' }
+      // Auto hands per-action approval to Claude's own classifier, so no
+      // prompt reaches the user: treated as dangerous (docs/decisions.md).
+      { id: 'auto', label: 'Auto', args: '--permission-mode auto', dangerous: true },
+      { id: 'bypass', label: 'Bypass permissions', args: '--dangerously-skip-permissions', dangerous: true }
     ],
     // --continue is scoped to the pane's cwd by claude itself; bare --resume
     // opens its session picker.
@@ -120,7 +126,7 @@ export const TEMPLATES: WorkspaceTemplate[] = [
     launchModes: [
       { id: 'auto', label: 'Auto', args: '-s workspace-write -a on-request' },
       { id: 'safe', label: 'Safe (read-only)', args: '-s read-only -a on-request' },
-      { id: 'yolo', label: 'YOLO', args: '--dangerously-bypass-approvals-and-sandbox' }
+      { id: 'yolo', label: 'YOLO', args: '--dangerously-bypass-approvals-and-sandbox', dangerous: true }
     ],
     // --last is filtered to the pane's cwd by codex itself.
     continueCommand: (base, how) => (how === 'pick' ? `${base} resume` : `${base} resume --last`)
@@ -221,8 +227,31 @@ export const TEMPLATES: WorkspaceTemplate[] = [
 
 export const DEFAULT_TEMPLATE_ID = 'terminal'
 
+/**
+ * Perf harness only (scripts/perf/flood.ps1 `-MockAgents`, scenario e): a
+ * pseudo agent whose command is the local synthetic generator
+ * `agent-stream.mjs` (copied into the perf data dir, the pane's cwd). It runs
+ * no AI provider and no agent CLI, so the agent detector, tab badges and War
+ * Room state flips can be measured without usage. Deliberately NOT in
+ * TEMPLATES (never offered in any picker) and resolved only in dev builds;
+ * a release build maps the id to the plain terminal like any unknown id.
+ */
+export const PERF_MOCK_AGENT_ID = 'perf-mock-agent'
+export const PERF_MOCK_AGENT_COMMAND = 'node agent-stream.mjs --mock'
+// Frozen and carrying only `command`: no executable, launch modes, resume,
+// continue or prompt flags, so nothing can append arguments or swap in a real
+// CLI, and nothing at runtime can mutate it into one.
+const PERF_MOCK_TEMPLATE: WorkspaceTemplate = Object.freeze({
+  id: PERF_MOCK_AGENT_ID,
+  name: 'Perf mock agent',
+  description: 'Synthetic agent output for the perf harness (no AI).',
+  command: PERF_MOCK_AGENT_COMMAND
+})
+const perfMockEnabled = (): boolean => import.meta.env.DEV === true
+
 /** The template with `id`, or the default template when `id` is unknown. */
 export function templateById(id: string): WorkspaceTemplate {
+  if (id === PERF_MOCK_AGENT_ID && perfMockEnabled()) return PERF_MOCK_TEMPLATE
   return (
     TEMPLATES.find((t) => t.id === id) ??
     TEMPLATES.find((t) => t.id === DEFAULT_TEMPLATE_ID) ??
@@ -259,6 +288,7 @@ export function withLaunchMode(command: string, agentId: string | undefined, mod
  * typo as a plain shell, the opposite of fail-closed.
  */
 export function isPlainShellPane(agentId: string | undefined): boolean {
+  if (agentId === PERF_MOCK_AGENT_ID && perfMockEnabled()) return false
   return TEMPLATES.find((t) => t.id === agentId)?.command === null
 }
 

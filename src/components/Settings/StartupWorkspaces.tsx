@@ -6,7 +6,8 @@ import { useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
 /** Saved workspaces that open on app start; while any is set, Welcome is skipped. */
 export function StartupWorkspaces(): ReactElement {
   const entries = useSavedWorkspacesStore((s) => s.entries)
-  const { setAutoOpen, moveAutoOpen } = useSavedWorkspacesStore.getState()
+  const pinNew = useSavedWorkspacesStore((s) => s.pinNew)
+  const { setAutoOpen, moveAutoOpen, setPinNew } = useSavedWorkspacesStore.getState()
   const startup = autoOpenList(entries)
   const others = entries.filter((w) => w.autoOpen === undefined)
   return (
@@ -16,6 +17,10 @@ export function StartupWorkspaces(): ReactElement {
         These saved workspaces open in the navbar when Swarmterm starts, agents resume their sessions.
         Welcome is skipped while at least one is selected.
       </p>
+      <label className="mb-3 flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={pinNew} onChange={(e) => setPinNew(e.target.checked)} />
+        Open new workspaces on startup by default
+      </label>
       {entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">No saved workspaces yet. Create a workspace first; it is saved automatically.</p>
       ) : (

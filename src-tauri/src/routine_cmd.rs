@@ -86,7 +86,15 @@ fn keep_tail(buf: &Arc<Mutex<Vec<u8>>>, mut src: impl Read) {
     }
 }
 
-pub fn run(command: &str, cwd: &str, timeout: Duration) -> Result<CommandOutcome, String> {
+/// `env` is the complete environment the line runs with (the caller's env
+/// policy applied): a routine is user-authored but may run agent CLIs or
+/// scripts, so it gets the same secret filtering as a pane.
+pub fn run(
+    command: &str,
+    cwd: &str,
+    timeout: Duration,
+    env: &crate::terminal_env::EnvPlan,
+) -> Result<CommandOutcome, String> {
     let started = Instant::now();
     let mut cmd = Command::new("cmd.exe");
     #[cfg(windows)]
@@ -102,6 +110,8 @@ pub fn run(command: &str, cwd: &str, timeout: Duration) -> Result<CommandOutcome
         cmd = Command::new("sh");
         cmd.arg("-c").arg(command.trim());
     }
+    cmd.env_clear();
+    cmd.envs(env.iter());
     let mut child = cmd
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -190,7 +200,13 @@ mod tests {
     fn runs_reports_exit_code_and_times_out() {
         let d = std::env::temp_dir();
         let d = d.to_str().unwrap();
-        let ok = run("echo \"hello world\" & exit 3", d, Duration::from_secs(20)).unwrap();
+        let ok = run(
+            "echo \"hello world\" & exit 3",
+            d,
+            Duration::from_secs(20),
+            &crate::terminal_env::EnvPlan::inherited(),
+        )
+        .unwrap();
         assert_eq!(ok.exit_code, Some(3));
         assert!(!ok.timed_out);
         assert_eq!(ok.output, "\"hello world\"");
@@ -198,9 +214,31 @@ mod tests {
             r"%SystemRoot%\System32\PING.EXE -n 30 127.0.0.1 >nul",
             d,
             Duration::from_secs(1),
+            &crate::terminal_env::EnvPlan::inherited(),
         )
         .unwrap();
         assert!(slow.timed_out && slow.exit_code.is_none(), "{slow:?}");
         assert!(slow.duration_ms < 10_000);
+    }
+
+    /// The line sees exactly the plan it is given, not the app's own
+    /// environment: secrets withheld by the env policy stay withheld.
+    #[cfg(windows)]
+    #[test]
+    fn runs_with_only_the_given_environment() {
+        let d = std::env::temp_dir();
+        let d = d.to_str().unwrap();
+        let mut env = crate::terminal_env::EnvPolicy::default().inherited();
+        env.set("ROUTINE_PROBE", "seen");
+        // Not in the plan, so cmd leaves `%PATH%` unexpanded.
+        env.remove("PATH");
+        let out = run(
+            "echo %ROUTINE_PROBE%-%PATH%",
+            d,
+            Duration::from_secs(20),
+            &env,
+        )
+        .unwrap();
+        assert_eq!(out.output, "seen-%PATH%");
     }
 }

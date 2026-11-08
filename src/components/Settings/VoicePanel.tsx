@@ -1,4 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react'
+import { MANAGED_LABEL } from '@/lib/policy'
+import { usePolicyStore, useEdition } from '@/store/policy-store'
+import { editionFeatures } from '@/lib/edition'
 import {
   cancelVoiceModel,
   deleteVoiceModel,
@@ -45,6 +48,10 @@ const megabytes = (bytes: number): string => `${Math.round(bytes / 1_000_000)} M
  * queue, the stop rules and who speaks (buzzkey only as a fallback).
  */
 export function VoicePanel(): ReactElement {
+  // DisableModelDownload: Rust refuses voice_model_download; buttons say why.
+  const downloadLocked = usePolicyStore((s) => s.policy.disableModelDownload)
+  // Corp has no download or companion code at all: hide instead of grey out.
+  const features = editionFeatures(useEdition())
   const [settings, setSettings] = useState<VoiceSettings | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tts, setTts] = useState<TtsStatus | null>(null)
@@ -221,8 +228,13 @@ export function VoicePanel(): ReactElement {
                 <div className="flex shrink-0 items-center gap-2">
                   {settings.model === recommended.id && recommended.ready ? (
                     <span className="text-xs text-muted-foreground">in use</span>
-                  ) : (
-                    <button className={action} disabled={recommended.downloading} onClick={useRecommended}>
+                  ) : !recommended.ready && !features.modelDownload ? null : (
+                    <button
+                      className={action}
+                      disabled={recommended.downloading || (!recommended.ready && downloadLocked)}
+                      title={!recommended.ready && downloadLocked ? MANAGED_LABEL : undefined}
+                      onClick={useRecommended}
+                    >
                       {recommended.ready ? 'Use' : 'Download and use'}
                     </button>
                   )}
@@ -270,8 +282,15 @@ export function VoicePanel(): ReactElement {
                       </>
                     ) : m.ready ? (
                       <button className={action} onClick={() => run(deleteVoiceModel(m.id))}>Delete</button>
-                    ) : (
-                      <button className={action} onClick={() => { setPickAfterDownload(m.id); run(downloadVoiceModel(m.id)) }}>Download</button>
+                    ) : !features.modelDownload ? null : (
+                      <button
+                        className={action}
+                        disabled={downloadLocked}
+                        title={downloadLocked ? MANAGED_LABEL : undefined}
+                        onClick={() => { setPickAfterDownload(m.id); run(downloadVoiceModel(m.id)) }}
+                      >
+                        Download
+                      </button>
                     )}
                   </div>
                 </div>
@@ -279,13 +298,14 @@ export function VoicePanel(): ReactElement {
             })}
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Models come from huggingface.co/ggerganov/whisper.cpp and are checked against a fixed
-            checksum before use.
+            {features.modelDownload
+              ? 'Models come from huggingface.co/ggerganov/whisper.cpp and are checked against a fixed checksum before use.'
+              : 'This edition does not download models. Your administrator can provide them in the models folder (see docs/editions.md).'}
           </p>
         </section>
       )}
       {error && <p className="text-xs text-destructive">{error}</p>}
-      <BuzzkeySection />
+      {features.companion && <BuzzkeySection />}
     </div>
   )
 }

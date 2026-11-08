@@ -1,4 +1,4 @@
-// Adapted from parsingk/Astera, debc3098; Apache-2.0. See licenses/Astera/.
+// Adapted from parsingk/Astera, debc3098; Apache-2.0. See third-party-licenses/Astera/.
 import { describe, it, expect } from 'vitest'
 import { THEMES, DEFAULT_THEME_ID, isThemeId, themeById } from './themes'
 

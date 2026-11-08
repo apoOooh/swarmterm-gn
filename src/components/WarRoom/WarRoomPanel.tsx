@@ -8,6 +8,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useWarRoomStore } from '@/store/war-room-store'
 import { WAR_ROOM_DROP_ID } from '@/lib/war-room-drop'
 import { groupTranscript } from '@/lib/war-room-transcript'
+import { holdReasonCopy } from '@/lib/war-room-nudge'
 import { MembersTab } from './MembersTab'
 import { ClearButton, DiscussionTab } from './DiscussionTab'
 import { RoomTabs } from './RoomTabs'
@@ -40,6 +41,14 @@ export function WarRoomPanel(): ReactElement {
     })
   )
   const heldTotal = heldByRoom[activeRoomId ?? ''] ?? 0
+  // Tooltip for the ⏸ badge: one line per held member of the active room.
+  // A string, so the selector result compares by value.
+  const heldTitle = useWarRoomStore((s) =>
+    (s.membersByRoom[activeRoomId ?? ''] ?? [])
+      .filter((m) => s.held[m.terminalId] !== undefined)
+      .map((m) => `${m.name}: ${holdReasonCopy(s.held[m.terminalId]).title}`)
+      .join('\n')
+  )
 
   // Per-room member counts for the tab strip's armed-delete confirm copy.
   // Same identity concern as heldByRoom above: a fresh Record needs
@@ -86,7 +95,7 @@ export function WarRoomPanel(): ReactElement {
           'members',
           <>
             {`Members · ${members.length}`}
-            {heldTotal > 0 && <span className="ml-1 text-[#f97316]">⏸{heldTotal}</span>}
+            {heldTotal > 0 && <span className="ml-1 text-[#f97316]" title={heldTitle}>⏸{heldTotal}</span>}
           </>
         )}
         {subTab('discussion', 'Discussion')}

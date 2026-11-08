@@ -69,8 +69,6 @@ Fill in all four values, then confirm Apple accepts them:
 | `APPLE_API_ISSUER` | Issuer ID (UUID) in App Store Connect |
 | `APPLE_API_KEY` | Key ID (10 characters) |
 | `APPLE_API_KEY_PATH` | absolute path to `AuthKey_<KeyID>.p8` |
-| `TAURI_SIGNING_PRIVATE_KEY` | path to `swarmterm-updater.key` — see [release-process.md](release-process.md) |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | contents of `swarmterm-updater.key.password` |
 
 ## Releasing
 
@@ -79,11 +77,7 @@ npm run release:mac -- --smoke   # arm64 .app, signed only — minutes
 npm run release:mac              # universal .dmg, notarized + stapled
 ```
 
-Both passes also emit the auto-updater artifacts next to the `.app` —
-`Swarmterm.app.tar.gz` plus its minisign `.sig` — and the script asserts they
-exist. The `.dmg` is for new installs from the Releases page; the tarball is
-what installed apps download when they update. Uploading everything to the
-release is `npm run release:publish` ([release-process.md](release-process.md)).
+The `.dmg` is for installs from the Releases page; the app never updates itself.
 
 Run the smoke pass first after any change to the bundle configuration: it
 proves the app still runs under hardened runtime without waiting on Apple's
@@ -140,7 +134,7 @@ No warning dialog means the release is good.
 ## Not covered here
 
 Windows builds are [release-windows.md](release-windows.md); the cross-platform
-flow, publishing, and the auto-updater are [release-process.md](release-process.md).
+flow and publishing are [release-process.md](release-process.md).
 CI releases (GitHub Actions) remain future work — the variables above are
 deliberately plain environment variables so a future workflow can consume them
 as secrets unchanged, alongside a base64-encoded `.p12` export of the

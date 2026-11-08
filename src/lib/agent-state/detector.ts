@@ -43,6 +43,10 @@ export class AgentStateDetector {
   private oscProgress = ''
   private contentSeq = 0
   private lastScannedSeq = -1
+  /** Clock of the last completed scan. A hook mark that was live then but has
+   *  expired since must force one more scan: its TTL expiry changes the
+   *  verdict on a pane that prints nothing (see `hookUnobserved`). */
+  private lastScanAt = Number.NEGATIVE_INFINITY
   private spawnedAt: number
   private state: AgentEngineState = 'unknown'
   private pending: PendingIdle | null = null
@@ -70,12 +74,16 @@ export class AgentStateDetector {
     this.contentSeq++
   }
 
+  // OSC title/progress are verdict inputs too, so they bump the seq like
+  // output: the unchanged-seq scan skip must never hide a title change.
   noteTitle(rawTitle: string): void {
     this.oscTitle = sanitizeOsc(rawTitle)
+    this.contentSeq++
   }
 
   noteProgress(payload: string): void {
     this.oscProgress = sanitizeOsc(payload)
+    this.contentSeq++
   }
 
   /** A Claude Code hook fired for this pane. `forget` (SessionEnd) drops the
@@ -90,6 +98,10 @@ export class AgentStateDetector {
   noteHook(signal: HookSignal | 'forget'): void {
     if (this.disposed || this.exited) return
     this.hook = signal === 'forget' ? null : { signal, atMs: this.deps.now() }
+    // A hook change is a verdict input like output: bump the seq so the
+    // unchanged-seq skip (idle or working) cannot swallow it — `forget` in
+    // particular leaves no live mark behind to disable the skip.
+    this.contentSeq++
     this.schedule(0)
   }
 
@@ -122,6 +134,7 @@ export class AgentStateDetector {
     this.exited = false
     this.spawnedAt = this.deps.now()
     this.lastScannedSeq = -1
+    this.lastScanAt = Number.NEGATIVE_INFINITY
     this.setState('unknown')
     this.schedule(TICK_MS)
   }
@@ -147,6 +160,15 @@ export class AgentStateDetector {
     }, ms)
   }
 
+  /** The hook still needs scans: live now, or live at the last scan and
+   *  expired since (the expiry tick must run the scrape fallback — a silent
+   *  `working` pane after an Esc interrupt would otherwise stay working). */
+  private hookUnobserved(now: number): boolean {
+    // `lastScanAt` starts (and resets) at -Infinity, so before the first scan
+    // the second test is always false: only a hook live NOW forces a scan.
+    return isHookLive(this.hook, now) || isHookLive(this.hook, this.lastScanAt)
+  }
+
   private tick(): void {
     if (this.disposed || this.exited) return
     const now = this.deps.now()
@@ -160,7 +182,7 @@ export class AgentStateDetector {
         contentSeq: this.contentSeq,
         lastScannedSeq: this.lastScannedSeq,
         pendingIdle: this.pending !== null,
-        hookActive: isHookLive(this.hook, now)
+        hookActive: this.hookUnobserved(now)
       })
     ) {
       this.schedule(TICK_MS)
@@ -182,6 +204,7 @@ export class AgentStateDetector {
         oscProgress: this.oscProgress
       })
       this.lastScannedSeq = seq
+      this.lastScanAt = now
       if (!verdict.skip) {
         // Hook precedence runs BEFORE the idle hold: the hold exists to
         // confirm a scraped idle over three quiet rechecks, and a Stop hook

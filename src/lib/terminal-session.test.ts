@@ -27,19 +27,119 @@ function makeDeps(): SessionDeps & {
 
 const OPTS = { cols: 80, rows: 24, cwd: '/tmp' }
 
+/** UTF-8 bytes of `s`, as pty output arrives. */
+const b = (s: string): Uint8Array => new TextEncoder().encode(s)
+
 describe('TerminalSession', () => {
+  it('releases a generation whose create resolves after dispose, never a stale one', async () => {
+    const deps = makeDeps()
+    let complete!: (r: CreateTerminalResult) => void
+    vi.mocked(deps.createTerminal).mockImplementation(() => new Promise(resolve => { complete = resolve }))
+    const releaseOutput = vi.fn()
+    const session = new TerminalSession('t1', { write: vi.fn() }, { ...deps, releaseOutput })
+    session.start(OPTS)
+    session.dispose()
+    expect(releaseOutput).not.toHaveBeenCalled()
+    complete({ ok: true, pid: 1, shell: 'sh', spawnId: 'late' })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(releaseOutput).toHaveBeenCalledWith('t1', 'late')
+    expect(deps.killTerminal).toHaveBeenCalled()
+  })
+
+  it('releases the flow gate of its live generation on dispose', async () => {
+    const deps = makeDeps()
+    vi.mocked(deps.createTerminal).mockImplementation((_id, _o, cb) => {
+      deps.channels.push(cb)
+      return Promise.resolve({ ok: true, pid: 1, shell: 'sh', spawnId: 'gen-7' })
+    })
+    const releaseOutput = vi.fn()
+    const session = new TerminalSession('t1', { write: vi.fn() }, { ...deps, releaseOutput })
+    session.start(OPTS)
+    await Promise.resolve()
+    await Promise.resolve()
+    session.dispose()
+    session.dispose()
+    expect(releaseOutput).toHaveBeenCalledTimes(1)
+    expect(releaseOutput).toHaveBeenCalledWith('t1', 'gen-7')
+  })
+
+  it('releases the dying generation on a respawn before killing it', async () => {
+    const deps = makeDeps()
+    vi.mocked(deps.createTerminal).mockImplementation((_id, _o, cb) => {
+      deps.channels.push(cb)
+      return Promise.resolve({ ok: true, pid: 1, shell: 'sh', spawnId: 'gen-1' })
+    })
+    const releaseOutput = vi.fn()
+    const session = new TerminalSession('t1', { write: vi.fn() }, { ...deps, releaseOutput })
+    session.start(OPTS)
+    await Promise.resolve()
+    await Promise.resolve()
+    session.respawn(OPTS)
+    expect(releaseOutput).toHaveBeenCalledWith('t1', 'gen-1')
+    expect(deps.killTerminal).toHaveBeenCalled()
+  })
+
+  it('acks parsed output per generation, batched, once the spawn id is known', async () => {
+    const deps = makeDeps()
+    vi.mocked(deps.createTerminal).mockImplementation((_id, _o, cb) => {
+      deps.channels.push(cb)
+      return Promise.resolve({ ok: true, pid: 1, shell: 'sh', spawnId: 'gen-1' })
+    })
+    const ackOutput = vi.fn()
+    const parsed: (() => void)[] = []
+    const write = vi.fn((_d: Uint8Array | string, onParsed?: () => void) => { if (onParsed) parsed.push(onParsed) })
+    const session = new TerminalSession('t1', { write }, { ...deps, ackOutput })
+    session.start(OPTS)
+    const chunk = 'x'.repeat(64 * 1024)
+    for (let i = 0; i < 8; i++) deps.emit({ type: 'data', payload: b(chunk) })
+    // Nothing parsed yet: no acks, however much was written.
+    expect(ackOutput).not.toHaveBeenCalled()
+    // One parse callback per ACK_CHUNK (256 KB), not one per write.
+    expect(parsed).toHaveLength(2)
+    for (const p of parsed.splice(0)) p()
+    await Promise.resolve()
+    await Promise.resolve()
+    // 512 KB parsed = two 256 KB batches, not eight calls.
+    const total = ackOutput.mock.calls.reduce((n, c) => n + (c[2] as number), 0)
+    expect(total).toBe(512 * 1024)
+    expect(ackOutput.mock.calls.length).toBeLessThanOrEqual(2)
+    expect(ackOutput.mock.calls.every(c => c[0] === 't1' && c[1] === 'gen-1')).toBe(true)
+  })
+
+  it('acks a string payload with its exact UTF-8 size', async () => {
+    const deps = makeDeps()
+    vi.mocked(deps.createTerminal).mockImplementation((_id, _o, cb) => {
+      deps.channels.push(cb)
+      return Promise.resolve({ ok: true, pid: 1, shell: 'sh', spawnId: 'gen-1' })
+    })
+    const ackOutput = vi.fn()
+    const parsed: (() => void)[] = []
+    const write = vi.fn((_d: Uint8Array | string, onParsed?: () => void) => { if (onParsed) parsed.push(onParsed) })
+    const session = new TerminalSession('t1', { write }, { ...deps, ackOutput })
+    session.start(OPTS)
+    await Promise.resolve()
+    // Mixed widths, well past one 256 KB ack chunk.
+    const chunk = 'aé─\u{1F600}'.repeat(32 * 1024)
+    deps.emit({ type: 'data', payload: chunk })
+    for (const p of parsed.splice(0)) p()
+    await Promise.resolve()
+    const total = ackOutput.mock.calls.reduce((n, c) => n + (c[2] as number), 0)
+    expect(total).toBe(new TextEncoder().encode(chunk).byteLength)
+  })
+
   it('hands a reattached pane its history through replay, not write', () => {
     const deps = makeDeps()
     const write = vi.fn()
     const replay = vi.fn()
     const session = new TerminalSession('t1', { write, replay }, deps)
     session.start(OPTS)
-    const payload = { data: 'history', cols: 100, rows: 30, truncated: true }
+    const payload = { data: b('history'), cols: 100, rows: 30, truncated: true }
     deps.emit({ type: 'replay', payload })
-    deps.emit({ type: 'data', payload: 'live' })
-    expect(replay).toHaveBeenCalledWith(payload)
+    deps.emit({ type: 'data', payload: b('live') })
+    expect(replay).toHaveBeenCalledWith(payload, undefined)
     expect(write).toHaveBeenCalledTimes(1)
-    expect(write).toHaveBeenCalledWith('live')
+    expect(write).toHaveBeenCalledWith(b('live'), undefined, 4)
   })
 
   it('writes a replay as plain output when the sink has no replay handler', () => {
@@ -47,8 +147,8 @@ describe('TerminalSession', () => {
     const write = vi.fn()
     const session = new TerminalSession('t1', { write }, deps)
     session.start(OPTS)
-    deps.emit({ type: 'replay', payload: { data: 'history', cols: 80, rows: 24, truncated: false } })
-    expect(write).toHaveBeenCalledWith('history')
+    deps.emit({ type: 'replay', payload: { data: b('history'), cols: 80, rows: 24, truncated: false } })
+    expect(write).toHaveBeenCalledWith(b('history'), undefined)
   })
 
   it('cleans up a successful creation that completes after disposal', async () => {
@@ -157,9 +257,9 @@ describe('TerminalSession', () => {
     const session = new TerminalSession('t1', { write }, deps)
 
     session.start(OPTS)
-    deps.emit({ type: 'data', payload: 'hello' })
+    deps.emit({ type: 'data', payload: b('hello') })
 
-    expect(write).toHaveBeenCalledWith('hello')
+    expect(write).toHaveBeenCalledWith(b('hello'), undefined, 5)
   })
 
   it('kills the pty exactly once on dispose, even if called twice', () => {
@@ -231,8 +331,8 @@ describe('TerminalSession', () => {
     session.retry(OPTS)
 
     // A late message from the OLD pty channel must not reach the sink.
-    staleChannel({ type: 'data', payload: 'ghost' })
-    expect(write).not.toHaveBeenCalledWith('ghost')
+    staleChannel({ type: 'data', payload: b('ghost') })
+    expect(write).not.toHaveBeenCalledWith(b('ghost'), undefined, 5)
   })
 
   it('kills a running pty and re-spawns only after its exit is observed', () => {

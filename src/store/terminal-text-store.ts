@@ -3,9 +3,11 @@ import {
   DEFAULT_TERMINAL_TEXT,
   clampFontSize,
   clampLineHeight,
+  clampScrollback,
   readStoredTerminalText,
   storeTerminalText,
-  type TerminalTextPref
+  type TerminalTextPref,
+  type WheelZoomMode
 } from '@/lib/terminal-text'
 
 export interface TerminalTextStore {
@@ -14,6 +16,8 @@ export interface TerminalTextStore {
   setFontSize: (px: number) => void
   setLineHeight: (mult: number) => void
   setLigatures: (on: boolean) => void
+  setWheelZoom: (mode: WheelZoomMode) => void
+  setScrollback: (lines: number) => void
   reset: () => void
 }
 
@@ -41,6 +45,8 @@ export const useTerminalTextStore = create<TerminalTextStore>((set, get) => {
     setFontSize: (px) => update({ fontSize: clampFontSize(px) }),
     setLineHeight: (mult) => update({ lineHeight: clampLineHeight(mult) }),
     setLigatures: (on) => update({ ligatures: on }),
+    setWheelZoom: (mode) => update({ wheelZoom: mode }),
+    setScrollback: (lines) => update({ scrollback: clampScrollback(lines) }),
     reset: () => update({ ...DEFAULT_TERMINAL_TEXT })
   }
 })

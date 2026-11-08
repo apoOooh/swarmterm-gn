@@ -1,4 +1,4 @@
-// Adapted from parsingk/Astera, debc3098; Apache-2.0. See licenses/Astera/.
+// Adapted from parsingk/Astera, debc3098; Apache-2.0. See third-party-licenses/Astera/.
 // Multi-selection maths (pure module). Shift+click range selection is defined by the on-screen
 // order, so this has to reproduce the explorer tree's row order (buildTreeRows in components/explorerRows.ts) exactly — if it drifts,
 // the selected span stops matching the span the user sees. Like ops.ts and paths.ts, it uses string

@@ -10,7 +10,7 @@ import { TERMINAL_COUNTS, layoutSummary } from '@/lib/layout-tree'
 import { allocateAgents } from '@/lib/agent-allocation'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
-import { allocateAccounts, type AccountSelection } from '@/lib/agent-accounts'
+import { allocateAccounts, workspaceAccountSelections, type AccountSelection } from '@/lib/agent-accounts'
 import { useAppStore } from '@/store/app-store'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { AgentIcon } from '@/components/AgentIcon'
@@ -85,6 +85,8 @@ export function Welcome(): ReactElement {
   const [savedNotice, setSavedNotice] = useState('')
   const [isGitRepo, setIsGitRepo] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Optional workspace name; blank ⇒ named after the folder on create.
+  const [workspaceName, setWorkspaceName] = useState('')
 
   const [sessions, setSessions] = useState<AgentSessionEntry[]>([])
   const [tickedSessions, setTickedSessions] = useState<ReadonlySet<string>>(new Set())
@@ -317,10 +319,12 @@ export function Welcome(): ReactElement {
         terminalCount,
         agentIds,
         accountIds: allocateAccounts(agentIds, accounts, accountSelections),
+        accountSelections: workspaceAccountSelections(accountSelections),
         worktreeMode: isolate,
         paneWorktrees,
         resumePanes: panesToResume.length > 0 ? panesToResume : undefined,
-        defaultAgentId: splitAgent === '' ? undefined : splitAgent
+        defaultAgentId: splitAgent === '' ? undefined : splitAgent,
+        name: workspaceName
       })
     } finally {
       setIsSubmitting(false)
@@ -385,6 +389,22 @@ export function Welcome(): ReactElement {
                 Browse
               </Button>
             </div>
+          </div>
+
+          {/* Workspace name — optional; the placeholder shows the default. */}
+          <div className="mt-3">
+            <label htmlFor="welcome-workspace-name" className="mb-1.5 block text-sm font-medium text-foreground">
+              Name <span className="font-normal text-muted-foreground">(optional)</span>
+            </label>
+            <input
+              id="welcome-workspace-name"
+              value={workspaceName}
+              onChange={(e) => setWorkspaceName(e.target.value)}
+              placeholder={folder.trim() === '' ? 'Named after the folder' : folderName(folder.trim())}
+              maxLength={60}
+              spellCheck={false}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+            />
           </div>
 
           {savedWorkspaces.length > 0 && <section aria-label="Saved workspaces" className="mt-5">

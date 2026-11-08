@@ -129,6 +129,11 @@ impl SwarmtermMcpServer {
         Parameters(args): Parameters<WorktreeSpawnArgs>,
     ) -> Result<Json<WorktreeSpawnResult>, rmcp::ErrorData> {
         let terminal = self.caller(&parts)?;
+        self.app
+            .state::<crate::pty::AppState>()
+            .admin_policy
+            .check(crate::policy::Lock::WorktreeSpawn)
+            .map_err(|m| rmcp::ErrorData::invalid_request(m, None))?;
         let repo_root = self.worktree_ctx(&terminal)?;
         if args.prompt.trim().is_empty() {
             return Err(rmcp::ErrorData::invalid_params(

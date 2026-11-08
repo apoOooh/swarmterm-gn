@@ -42,7 +42,9 @@ export interface CenterEntry extends NewCenterEntry {
 export const HOLD_REASON_COPY: Record<HoldReason, string> = {
   'agent-blocked': 'agent needs input',
   'agent-working': 'agent working',
-  typing: 'you are typing'
+  draft: 'unsent draft in input box',
+  typing: 'you are typing',
+  'pane-busy': 'pane busy'
 }
 
 /** Bounded so a chatty War Room cannot grow renderer memory forever. */

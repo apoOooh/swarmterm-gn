@@ -13,11 +13,13 @@ import {
 } from '@/tauri/git'
 import { matchWorktreeForCwd } from '@/lib/worktree-match'
 
+export type RightPanelMode = 'browser' | 'git' | 'warroom' | 'media'
+
 export type { WorktreeInfo, ChangedFile, CommitInfo, MergeReadiness }
 
 interface GitStore {
   panelOpen: boolean
-  mode: 'browser' | 'git' | 'warroom'
+  mode: RightPanelMode
   currentCwd: string
   worktrees: WorktreeInfo[]
   selectedWorktreePath: string
@@ -32,7 +34,7 @@ interface GitStore {
   loading: boolean
   error: string | null
 
-  setMode: (mode: 'browser' | 'git' | 'warroom') => void
+  setMode: (mode: RightPanelMode) => void
   setPanelOpen: (open: boolean) => void
   togglePanel: () => void
   selectWorktree: (path: string) => void

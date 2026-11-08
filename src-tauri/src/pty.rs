@@ -3,121 +3,28 @@ use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
+use swarmterm_host::output::{next_batch, take_valid_utf8, OUTPUT_IDLE, READ_BUF_BYTES};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
 
-/// Windows Job Object helper. Killing a pty's shell with `TerminateProcess`
-/// leaves its child/grandchild processes running (Windows does not cascade a
-/// kill down the tree). Putting the shell in a job created with
-/// `KILL_ON_JOB_CLOSE` means terminating — or merely dropping — the job tears
-/// down every descendant, so closing a pane/workspace actually frees the CPU+RAM.
+/// Windows Job Object helper: the host crate's (ADR 0001, 0005), so
+/// in-process and hosted panes share one implementation, priority limits
+/// included. Killing a pty's shell with `TerminateProcess` leaves its
+/// children running; a kill-on-close job tears the whole tree down.
 #[cfg(windows)]
-pub(crate) mod job {
-    use std::ffi::c_void;
-    use std::mem;
-    use std::ptr;
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
-        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-        TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    };
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
-    };
+pub(crate) use swarmterm_host::job;
 
-    /// Owns a kill-on-close job handle. On drop the last handle closes, which
-    /// terminates any process still in the job — a safety net against orphans.
-    pub struct JobHandle(HANDLE);
-
-    // A job handle is an opaque kernel handle; it is sound to move/share across
-    // threads (it lives in the Mutex-guarded terminal map).
-    unsafe impl Send for JobHandle {}
-    unsafe impl Sync for JobHandle {}
-
-    impl JobHandle {
-        /// Create a kill-on-close job and place process `pid` in it. Every process
-        /// the shell spawns afterwards inherits the job, so the whole tree is
-        /// captured. Returns `None` if any Win32 step fails (caller degrades to
-        /// the plain single-process kill).
-        pub fn capturing(pid: u32) -> Option<Self> {
-            unsafe {
-                let job = CreateJobObjectW(ptr::null(), ptr::null());
-                if job.is_null() {
-                    return None;
-                }
-                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = mem::zeroed();
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                let set = SetInformationJobObject(
-                    job,
-                    JobObjectExtendedLimitInformation,
-                    &info as *const _ as *const c_void,
-                    mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                );
-                if set == 0 {
-                    CloseHandle(job);
-                    return None;
-                }
-                let proc = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
-                if proc.is_null() {
-                    CloseHandle(job);
-                    return None;
-                }
-                let assigned = AssignProcessToJobObject(job, proc);
-                CloseHandle(proc);
-                if assigned == 0 {
-                    CloseHandle(job);
-                    return None;
-                }
-                Some(JobHandle(job))
-            }
-        }
-
-        /// Immediately terminate the shell and all of its descendants.
-        pub fn terminate(&self) {
-            unsafe {
-                TerminateJobObject(self.0, 1);
-            }
-        }
-
-        /// Number of processes still alive in the job, or `None` if the query
-        /// fails (callers then stop waiting and terminate).
-        pub fn active_processes(&self) -> Option<u32> {
-            unsafe {
-                let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = mem::zeroed();
-                let ok = QueryInformationJobObject(
-                    self.0,
-                    JobObjectBasicAccountingInformation,
-                    &mut info as *mut _ as *mut c_void,
-                    mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
-                    ptr::null_mut(),
-                );
-                (ok != 0).then_some(info.ActiveProcesses)
-            }
-        }
-    }
-
-    impl Drop for JobHandle {
-        fn drop(&mut self) {
-            unsafe {
-                CloseHandle(self.0);
-            }
-        }
-    }
-}
-
-/// Output streamed to the renderer over a per-terminal channel.
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "type", content = "payload")]
+/// Output streamed to the renderer over a per-terminal channel. Sent as a raw
+/// binary IPC body (perf phase 3, see `PtyOut::encode`), not JSON: a 64 KB
+/// batch would otherwise pay JSON string escaping on every flush.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PtyOut {
     Data(String),
     /// First message of a pane taken over from the terminal host (SWA-56):
     /// its history, rendered at `cols`x`rows`. Not new output — the renderer
     /// writes it without activity ticks and without answering queries in it.
-    #[serde(rename_all = "camelCase")]
     Replay {
         data: String,
         cols: u16,
@@ -126,9 +33,90 @@ pub enum PtyOut {
         truncated: bool,
     },
     Exit {
-        #[serde(rename = "exitCode")]
         exit_code: i32,
     },
+}
+
+/// Trailing tag of an encoded [`PtyOut`] (mirrored in `src/tauri/terminal.ts`).
+pub const OUT_DATA: u8 = 0;
+pub const OUT_REPLAY: u8 = 1;
+pub const OUT_EXIT: u8 = 2;
+
+impl PtyOut {
+    /// Wire layout: `[body][header json][header_len: u16 LE][tag: u8]`.
+    /// The tag goes LAST so a data batch is its own `String` buffer plus
+    /// three pushed bytes: no copy of the body on either side (`into_bytes`
+    /// is free, the renderer reads `subarray`s). `Data` has an empty header,
+    /// `Replay` carries `{cols,rows,truncated}`, `Exit` `{exitCode}` and no
+    /// body. The body is exactly the UTF-8 bytes the flow gate counted.
+    pub fn encode(self) -> Vec<u8> {
+        let (tag, body, header) = match self {
+            PtyOut::Data(text) => (OUT_DATA, text, String::new()),
+            PtyOut::Replay {
+                data,
+                cols,
+                rows,
+                truncated,
+            } => (
+                OUT_REPLAY,
+                data,
+                serde_json::json!({ "cols": cols, "rows": rows, "truncated": truncated })
+                    .to_string(),
+            ),
+            PtyOut::Exit { exit_code } => (
+                OUT_EXIT,
+                String::new(),
+                serde_json::json!({ "exitCode": exit_code }).to_string(),
+            ),
+        };
+        debug_assert!(
+            header.len() <= u16::MAX as usize,
+            "pty output header too long"
+        );
+        let mut out = body.into_bytes();
+        out.reserve_exact(header.len() + 3);
+        out.extend_from_slice(header.as_bytes());
+        out.extend_from_slice(&(header.len() as u16).to_le_bytes());
+        out.push(tag);
+        out
+    }
+
+    /// The IPC body: a JSON string for a `Data` batch that Tauri evaluates
+    /// directly, else [`PtyOut::encode`] as raw bytes.
+    pub fn into_body(self) -> tauri::Result<tauri::ipc::InvokeResponseBody> {
+        if let PtyOut::Data(text) = &self {
+            if text.len() < DIRECT_JSON_LIMIT {
+                let json = serde_json::to_string(text)?;
+                if json.len() < DIRECT_JSON_LIMIT {
+                    // `[utf8_len,"text"]`: the renderer acks and rates this
+                    // exact byte count; sending it saves a UTF-8 length scan
+                    // of every small batch on the WebView main thread.
+                    return Ok(tauri::ipc::InvokeResponseBody::Json(format!(
+                        "[{},{json}]",
+                        text.len()
+                    )));
+                }
+            }
+        }
+        Ok(tauri::ipc::InvokeResponseBody::Raw(self.encode()))
+    }
+}
+
+/// Tauri's direct-eval limit for a JSON channel message (its
+/// `MAX_JSON_DIRECT_EXECUTE_THRESHOLD`). A raw message is evaluated
+/// directly only below 1 KiB (as a JSON number array); from there on every
+/// message costs a separate fetch round trip. Under the flow gate a flood
+/// sends many mid-sized batches, and as raw bodies each became one extra
+/// IPC request on the WebView's main thread, delaying every pane's echo.
+/// So a `Data` batch whose JSON string fits this limit goes as JSON, exactly
+/// as before phase 3; only larger ones (which take the fetch path either
+/// way) go raw and skip the JSON escaping and parse.
+pub const DIRECT_JSON_LIMIT: usize = 8192;
+
+impl tauri::ipc::IpcResponse for PtyOut {
+    fn body(self) -> tauri::Result<tauri::ipc::InvokeResponseBody> {
+        self.into_body()
+    }
 }
 
 /// Options the renderer passes when asking the backend to spawn a pty.
@@ -140,6 +128,10 @@ pub struct CreateTerminalOptions {
     pub cwd: Option<String>,
     pub shell_id: Option<String>,
     pub initial_command: Option<String>,
+    /// The part of `initial_command` the admin bypass check reads: the agent
+    /// command plus its launch-mode args, without a worker's task brief (so
+    /// prose in a brief is never taken for a flag). Absent ⇒ the whole line.
+    pub launch_line: Option<String>,
     /// Whether the owning workspace enables MCP worktree tools for this pty.
     pub worktree_mode: Option<bool>,
     /// The workspace's repo folder, recorded so worktree tools can resolve the
@@ -157,6 +149,8 @@ pub struct CreateTerminalResult {
     pub pid: Option<u32>,
     pub shell: Option<String>,
     pub error: Option<String>,
+    /// The generation the renderer names in `ack_output` (flow control).
+    pub spawn_id: Option<String>,
 }
 
 impl CreateTerminalResult {
@@ -166,6 +160,7 @@ impl CreateTerminalResult {
             pid: None,
             shell: None,
             error: Some(msg.into()),
+            spawn_id: None,
         }
     }
 }
@@ -203,7 +198,7 @@ impl PtyInput {
         let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
         let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let drained = queued.clone();
-        std::thread::spawn(move || {
+        crate::prof::spawn_named("pty-writer", move || {
             while let Ok(mut bytes) = rx.recv() {
                 // Coalesce whatever queued behind a slow write into one write.
                 while let Ok(more) = rx.try_recv() {
@@ -270,16 +265,19 @@ pub struct ManagedTerminal {
 
 /// Where a pane's PTY lives (SWA-55, ADR 0001).
 pub enum TerminalIo {
-    /// In this process. `master` is kept for resize; `input` for input;
+    /// In this process. `resizer` owns the master (resize + close); `input` for input;
     /// `killer` to terminate the child from the command thread. On Windows
     /// `job` (when set) owns the shell's whole process tree so closing the
     /// terminal frees every descendant, not just the shell.
     Local {
         input: PtyInput,
-        master: Box<dyn MasterPty + Send>,
+        resizer: std::sync::Arc<swarmterm_host::resize::Resizer>,
         killer: Box<dyn ChildKiller + Send + Sync>,
         #[cfg(windows)]
         job: Option<job::JobHandle>,
+        /// Output backpressure (perf phase 2), shared with the flusher. A
+        /// hosted pane's gate lives in the host; its acks are forwarded.
+        flow: std::sync::Arc<swarmterm_host::flow::FlowGate>,
     },
     /// In `swarmterm-host.exe`. Every call only enqueues a frame for the
     /// connection's writer, so it is as cheap under the `terminals` lock as
@@ -322,21 +320,94 @@ impl ManagedTerminal {
         }
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) {
+    /// What the hot commands (ack/release/resize) need, cloned so they can
+    /// drop the `terminals` lock before touching the gate or the PTY.
+    pub fn handle(&self) -> IoHandle {
         match &self.io {
-            TerminalIo::Local { master, .. } => {
-                let _ = master.resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                });
-            }
+            TerminalIo::Local { flow, resizer, .. } => IoHandle::Local {
+                spawn_id: self.spawn_id.clone(),
+                flow: flow.clone(),
+                resizer: resizer.clone(),
+            },
             #[cfg(windows)]
-            TerminalIo::Host { conn, terminal_id } => conn.resize(terminal_id, cols, rows),
+            TerminalIo::Host { conn, terminal_id } => IoHandle::Host {
+                spawn_id: self.spawn_id.clone(),
+                conn: conn.clone(),
+                terminal_id: terminal_id.clone(),
+            },
+        }
+    }
+}
+
+/// A pane's I/O endpoints outside the `terminals` lock (perf step C). Every
+/// call here is non-blocking: gates only signal, the resizer only stores the
+/// size for its worker, a hosted pane only enqueues a frame. Acks re-check
+/// the generation the handle was cloned from, so a respawn racing the
+/// unlocked call never pays down the new generation's gate.
+#[derive(Clone)]
+pub enum IoHandle {
+    Local {
+        spawn_id: String,
+        flow: std::sync::Arc<swarmterm_host::flow::FlowGate>,
+        resizer: std::sync::Arc<swarmterm_host::resize::Resizer>,
+    },
+    #[cfg(windows)]
+    Host {
+        spawn_id: String,
+        conn: std::sync::Arc<crate::host_client::conn::Conn>,
+        terminal_id: String,
+    },
+}
+
+impl IoHandle {
+    fn spawn_id(&self) -> &str {
+        match self {
+            IoHandle::Local { spawn_id, .. } => spawn_id,
+            #[cfg(windows)]
+            IoHandle::Host { spawn_id, .. } => spawn_id,
         }
     }
 
+    pub fn ack(&self, spawn_id: &str, bytes: u64) {
+        if !matches_generation(self.spawn_id(), spawn_id) {
+            return;
+        }
+        match self {
+            IoHandle::Local { flow, .. } => flow.ack(bytes),
+            #[cfg(windows)]
+            IoHandle::Host {
+                conn, terminal_id, ..
+            } => conn.ack(terminal_id, spawn_id, bytes),
+        }
+    }
+
+    pub fn release_output(&self, spawn_id: &str) {
+        if !matches_generation(self.spawn_id(), spawn_id) {
+            return;
+        }
+        match self {
+            IoHandle::Local { flow, .. } => flow.release(),
+            #[cfg(windows)]
+            IoHandle::Host {
+                conn, terminal_id, ..
+            // A maximal ack saturates the host gate's debt to zero, which
+            // opens it like a local release.
+            } => conn.ack(terminal_id, spawn_id, u64::MAX),
+        }
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) {
+        match self {
+            IoHandle::Local { resizer, .. } => resizer.request(cols, rows),
+            #[cfg(windows)]
+            IoHandle::Host {
+                conn, terminal_id, ..
+            } => conn.resize(terminal_id, cols, rows),
+        }
+    }
+}
+
+impl ManagedTerminal {
     /// Close the terminal the way a regular terminal window does, then make
     /// sure nothing survives. Returns the thread enforcing the deadline, if any.
     ///
@@ -353,16 +424,19 @@ impl ManagedTerminal {
         let (input, master, killer, job) = match self.io {
             TerminalIo::Local {
                 input,
-                master,
+                resizer,
                 killer,
                 #[cfg(windows)]
                 job,
+                flow,
             } => {
+                // The rest of the output and `Exit` must not wait on acks.
+                flow.close();
                 #[cfg(windows)]
                 let job = job;
                 #[cfg(not(windows))]
                 let job = ();
-                (input, master, killer, job)
+                (input, resizer, killer, job)
             }
             // The host closes gracefully and enforces KILL_GRACE itself; the
             // id is free here as soon as the entry left the map.
@@ -384,15 +458,17 @@ impl ManagedTerminal {
             // detach, so the close runs off the caller's (command/quit) thread
             // and can never delay the hard kill past KILL_GRACE.
             let deadline = std::time::Instant::now() + KILL_GRACE;
-            std::thread::spawn(move || {
+            crate::prof::spawn_named("pty-close", move || {
                 // Dropping the sender ends the writer thread once it is idle;
                 // one parked in write_all is released by the master close.
                 drop(input);
                 // ClosePseudoConsole: delivers CTRL_CLOSE_EVENT and closes the
                 // output pipe, so the reader sees EOF and emits Exit as before.
-                drop(master);
+                // Waits for a resize in flight (it cannot stay stuck: the
+                // gate closed above, so the reader drains the pipe).
+                drop(master.close());
             });
-            Some(std::thread::spawn(move || {
+            Some(crate::prof::spawn_named("pty-killer", move || {
                 while std::time::Instant::now() < deadline
                     && job.active_processes().is_some_and(|n| n > 0)
                 {
@@ -405,12 +481,18 @@ impl ManagedTerminal {
         }
         #[cfg(not(windows))]
         {
-            let _ = (input, master, job);
+            let _ = (input, master.close(), job);
             let mut killer = killer;
             let _ = killer.kill();
             None
         }
     }
+}
+
+/// Whether an ack/release naming `given` is for the live generation
+/// `current`; one for an older (respawned-over) generation is dropped.
+fn matches_generation(current: &str, given: &str) -> bool {
+    !given.is_empty() && current == given
 }
 
 /// How long a closed pane's process tree may take to exit on its own before
@@ -438,6 +520,11 @@ pub struct AppState {
     /// nested with `terminals` or `war_rooms`, because the `/mcp` middleware
     /// touches it on every inbound request and must not contend with pty I/O.
     pub mcp_clients: Mutex<crate::mcp::clients::McpClients>,
+    /// MCP bearer secret -> pane id (`mcp::session_tokens`). The pane id is
+    /// public to War Room peers, so it never authorises anything itself. Its
+    /// own lock, never nested with `terminals` (`live_session_owner` takes
+    /// them one after the other).
+    pub session_tokens: Mutex<crate::mcp::session_tokens::SessionTokens>,
     /// Last context-window percentage each Claude pane's status line reported
     /// via `/status?ctx=` (`mcp::context_usage`). Its own lock, never nested:
     /// `/status` hits it as often as every 300 ms per Claude pane while
@@ -456,6 +543,95 @@ pub struct AppState {
     /// `Notify` carries no payload on purpose: waiters re-read the snapshot
     /// after each wake, which makes a lost intermediate change harmless.
     pub peer_wake: tokio::sync::Notify,
+    /// Settings → Terminal "Environment": what of the app's environment a
+    /// pane or command routine inherits. Read once per spawn and cloned, so
+    /// the lock is never held across a spawn or nested with `terminals`.
+    pub env_policy: std::sync::RwLock<crate::terminal_env::EnvPolicy>,
+    /// Settings → Terminal → Agent safety: what an agent may make other panes do (War Room
+    /// execute). Starts at the restrictive default until the renderer pushes
+    /// the user's choice, so an early MCP call is never more permissive.
+    pub agent_policy: std::sync::RwLock<crate::agent_policy::AgentPolicy>,
+    /// Admin policy (`policy.rs`), read once at startup and never written
+    /// afterwards: the snapshots below apply it on every read, so a renderer
+    /// push can never loosen a lock.
+    pub admin_policy: crate::policy::AdminPolicy,
+}
+
+impl AppState {
+    /// The live pane a bearer secret belongs to, or `None` (unknown secret, or
+    /// its pane is gone). The two locks are taken one after the other.
+    pub fn live_session_owner(&self, token: &str) -> Option<String> {
+        let id = self
+            .session_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owner(token)?;
+        self.terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&id)
+            .then_some(id)
+    }
+
+    fn with_session_tokens<R>(
+        &self,
+        f: impl FnOnce(&mut crate::mcp::session_tokens::SessionTokens) -> R,
+    ) -> R {
+        f(&mut self
+            .session_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
+    /// Revoke a pane's bearer secret (closed by `kill_terminal`, which runs
+    /// before any same-id respawn).
+    pub fn forget_session_token(&self, id: &str) {
+        self.with_session_tokens(|t| t.forget(id));
+    }
+
+    /// A copy of the current env policy; a poisoned lock still yields the
+    /// last value rather than failing every spawn.
+    pub fn env_policy_snapshot(&self) -> crate::terminal_env::EnvPolicy {
+        let user = self
+            .env_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        self.admin_policy.apply_env(user)
+    }
+
+    /// Replace the user's env policy and publish the effective one to the
+    /// child processes spawned outside panes (`terminal_env::command`).
+    pub fn set_env_policy(&self, policy: crate::terminal_env::EnvPolicy) {
+        *self.env_policy.write().unwrap_or_else(|e| e.into_inner()) = policy;
+        crate::terminal_env::publish_child_policy(self.env_policy_snapshot());
+    }
+
+    /// Startup: load the user's policy persisted by the last
+    /// `env_policy_set`, so panes restored and routines run before the
+    /// renderer's push already use it. Without a file the secure default
+    /// stays; either way the effective policy is published.
+    pub fn load_env_policy(&self, path: std::path::PathBuf) {
+        self.read_persisted_env_policy(&path);
+        crate::terminal_env::set_store_path(path);
+        crate::terminal_env::publish_child_policy(self.env_policy_snapshot());
+    }
+
+    /// The state part of `load_env_policy`, without the process globals.
+    fn read_persisted_env_policy(&self, path: &std::path::Path) {
+        let user = crate::terminal_env::load_persisted(path).unwrap_or_default();
+        *self.env_policy.write().unwrap_or_else(|e| e.into_inner()) = user;
+    }
+
+    /// A copy of the agent policy; a poisoned lock yields the last value.
+    pub fn agent_policy_snapshot(&self) -> crate::agent_policy::AgentPolicy {
+        let user = self
+            .agent_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        self.admin_policy.apply_agent(user)
+    }
 }
 
 impl Default for AppState {
@@ -466,10 +642,14 @@ impl Default for AppState {
             mcp_url: OnceLock::new(),
             war_rooms: Mutex::new(crate::warroom::WarRooms::default()),
             mcp_clients: Mutex::new(crate::mcp::clients::McpClients::default()),
+            session_tokens: Mutex::new(Default::default()),
             context_usage: Mutex::new(Default::default()),
             rate_limit_usage: Mutex::new(Default::default()),
             peer_states: Mutex::new(crate::mcp::peer_state::PeerStates::default()),
             peer_wake: tokio::sync::Notify::new(),
+            env_policy: Default::default(),
+            agent_policy: Default::default(),
+            admin_policy: Default::default(),
         }
     }
 }
@@ -557,51 +737,6 @@ pub fn utf8_lang_fallback(
     }
 }
 
-/// Drain the largest valid-UTF-8 prefix from `buf`, leaving any incomplete
-/// trailing multibyte sequence behind for the next read. Bytes that cannot begin
-/// or continue a valid sequence are genuinely invalid, so they are flushed
-/// lossily immediately rather than stalling the stream waiting for a completion
-/// that will never come.
-pub fn take_valid_utf8(buf: &mut Vec<u8>) -> Option<String> {
-    if buf.is_empty() {
-        return None;
-    }
-    let valid_up_to = match std::str::from_utf8(buf) {
-        Ok(s) => s.len(),
-        Err(e) => e.valid_up_to(),
-    };
-    if valid_up_to == 0 {
-        // Nothing decodes yet. Wait for more bytes only if the leading byte could
-        // plausibly start a multibyte sequence and we haven't already buffered a
-        // full char's worth (max 4 bytes). Otherwise the bytes are invalid —
-        // flush lossily so the stream never stalls.
-        // The three ranges are the 2-, 3- and 4-byte UTF-8 lead classes. They
-        // happen to be contiguous, but they are kept split so the classes stay
-        // legible next to the UTF-8 spec.
-        #[allow(clippy::manual_range_patterns)]
-        let leads_multibyte = matches!(buf[0], 0xC2..=0xDF | 0xE0..=0xEF | 0xF0..=0xF4);
-        if leads_multibyte && buf.len() < 4 {
-            return None;
-        }
-        let s = String::from_utf8_lossy(buf).into_owned();
-        buf.clear();
-        return Some(s);
-    }
-    let s = std::str::from_utf8(&buf[..valid_up_to])
-        .expect("valid_up_to guarantees valid utf8")
-        .to_owned();
-    buf.drain(..valid_up_to);
-    Some(s)
-}
-
-/// Output coalescing (see read_loop): a burst is batched for up to
-/// OUTPUT_COALESCE or OUTPUT_BATCH_BYTES; output after OUTPUT_IDLE of silence
-/// is sent immediately.
-const OUTPUT_COALESCE: std::time::Duration = std::time::Duration::from_millis(4);
-const OUTPUT_IDLE: std::time::Duration = std::time::Duration::from_millis(16);
-const OUTPUT_BATCH_BYTES: usize = 64 * 1024;
-const READ_BUF_BYTES: usize = 64 * 1024;
-
 pub fn spawn_terminal(
     app: &AppHandle,
     state: &AppState,
@@ -611,6 +746,54 @@ pub fn spawn_terminal(
 ) -> CreateTerminalResult {
     if state.terminals.lock().unwrap().contains_key(&id) {
         return CreateTerminalResult::err(format!("Terminal \"{id}\" already exists"));
+    }
+    let result = spawn_terminal_inner(app, state, id.clone(), options, on_data);
+    // A failed create never reached `terminals`: drop the pending secret it
+    // minted (or adopted) so it does not linger. The duplicate check above
+    // returned before any mint, so a live pane's secret is never touched.
+    // Creates of the same id never race here: `create_terminal` holds a
+    // `SpawnReservation` for the id, so a second one runs only after this one
+    // finished and then stops at the duplicate check. The `live` test is a
+    // second guard for that invariant, not a fix for a race (it could not
+    // be one: the lock is released before `session_tokens` is taken).
+    let live = state.terminals.lock().unwrap().contains_key(&id);
+    if !result.ok && !live {
+        state.forget_session_token(&id);
+    }
+    result
+}
+
+fn spawn_terminal_inner(
+    app: &AppHandle,
+    state: &AppState,
+    id: String,
+    options: CreateTerminalOptions,
+    on_data: Channel<PtyOut>,
+) -> CreateTerminalResult {
+    let shell_id = options.shell_id.as_deref();
+    let shell_available = shell_id.map(|id| crate::shell::resolve_shell(id).is_some());
+    // Admin policy: refuse bypass/YOLO lines here, on the final command, so
+    // every path that builds one (menus, restore, worktree.spawn) is covered.
+    let flavor = crate::policy::ShellFlavor::from_shell_id(
+        shell_id.filter(|_| shell_available == Some(true)),
+    );
+    if let Some(line) = launch_line_to_check(
+        options.initial_command.as_deref(),
+        options.launch_line.as_deref(),
+        flavor,
+    ) {
+        if let Err(e) = state.admin_policy.check_launch_line(line) {
+            // A pane of that kind that survived the last app instance in the
+            // terminal host must not keep running detached: end it.
+            #[cfg(windows)]
+            if let Some((_, client)) = app
+                .try_state::<crate::host_client::HostHub>()
+                .and_then(|hub| hub.take_detached(&id))
+            {
+                client.conn.kill(&id);
+            }
+            return CreateTerminalResult::err(e);
+        }
     }
     // A pane that survived the last app instance in the terminal host
     // (SWA-56): take it over instead of starting a new one. No template line,
@@ -626,6 +809,19 @@ pub fn spawn_terminal(
         },
         None => on_data,
     };
+    // The renderer quotes a brief for the shell the pane asked for. If that
+    // shell is unavailable, `plan_spawn` falls back to the default one, which
+    // would parse a POSIX-quoted brief differently (`'a'\'' ; calc ; '\''b'`
+    // runs `calc` in PowerShell). Refuse such a launch instead. Only here,
+    // after the reattach above: a surviving host pane never retypes its line,
+    // so a shell probe hiccup must not refuse it and leave it windowless.
+    if let Err(e) = check_shell_for_line(
+        options.shell_id.as_deref(),
+        shell_available,
+        options.initial_command.as_deref(),
+    ) {
+        return CreateTerminalResult::err(e);
+    }
     let plan = match plan_spawn(app, state, &id, options) {
         Ok(plan) => plan,
         Err(e) => return CreateTerminalResult::err(e),
@@ -638,6 +834,80 @@ pub fn spawn_terminal(
         return spawn_hosted(state, id, plan, on_data, client);
     }
     spawn_local(app, state, id, plan, on_data)
+}
+
+/// A pane that types a line must get the shell it asked for: the line was
+/// quoted for that shell, and the default shell may read it differently.
+/// `available` is `resolve_shell(id).is_some()` for a requested `id`.
+/// `default` (or no id) always resolves to the default shell, so it passes.
+fn check_shell_for_line(
+    shell_id: Option<&str>,
+    available: Option<bool>,
+    initial: Option<&str>,
+) -> Result<(), String> {
+    let has_line = initial.is_some_and(|l| !l.trim().is_empty());
+    match shell_id {
+        Some(id) if id != "default" && has_line && available == Some(false) => Err(format!(
+            "shell-unavailable: the shell \"{id}\" is not available, so the pane's command was not run in another shell. Pick an available shell for this pane."
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// The line the admin bypass check reads. The renderer's `launch_line`
+/// (blank = absent) is trusted only when the typed line is that prefix plus
+/// nothing, or plus one brief quoted exactly as the renderer quotes it for
+/// this pane's shell (`quote_for_shell`, optionally after the `-i` prompt
+/// flag, see `spawnPromptFlag` in templates.ts), and that brief does not
+/// start with `-` (the renderer puts a space before such a brief, so an
+/// agent never parses it as a flag). Anything else checks the whole line.
+fn launch_line_to_check<'a>(
+    initial: Option<&'a str>,
+    launch: Option<&'a str>,
+    flavor: crate::policy::ShellFlavor,
+) -> Option<&'a str> {
+    let launch = launch.filter(|l| !l.trim().is_empty());
+    let (Some(line), Some(prefix)) = (initial, launch) else {
+        return initial;
+    };
+    let Some(rest) = line.strip_prefix(prefix) else {
+        return Some(line);
+    };
+    if rest.is_empty() {
+        return Some(prefix);
+    }
+    let Some(body) = rest.strip_prefix(' ') else {
+        return Some(line);
+    };
+    let quoted = body.strip_prefix("-i ").unwrap_or(body);
+    let brief_ok = match crate::policy::shell_words_in(quoted, flavor).as_slice() {
+        [text] =>
+        // A control byte (Ctrl-U, Esc, ...) edits the typed line in the
+        // shell's line editor, so the shell may run something else.
+        {
+            !text.starts_with('-')
+                && !text.chars().any(char::is_control)
+                && !windows_expansion(text, flavor)
+                && crate::policy::quote_for_shell(text, flavor) == quoted
+        }
+        _ => false,
+    };
+    if brief_ok {
+        Some(prefix)
+    } else {
+        Some(line)
+    }
+}
+
+/// `%` and `!` expand in cmd (`%VAR%`, delayed `!VAR!`) even inside the
+/// renderer's quoting, and an expanded value can carry flags the check never
+/// saw; PowerShell gets the same rule so both Windows shells stay simple. Such
+/// a brief is not trusted: the whole line is checked instead (the launch
+/// still runs if that line passes, so plain briefs with `%` only lose the
+/// skip, never the pane).
+fn windows_expansion(text: &str, flavor: crate::policy::ShellFlavor) -> bool {
+    use crate::policy::ShellFlavor::{Cmd, PowerShell};
+    matches!(flavor, Cmd | PowerShell) && text.contains(['%', '!'])
 }
 
 /// Everything a pane is started with, resolved once for either backend.
@@ -653,6 +923,24 @@ struct SpawnPlan {
     worktree_mode: bool,
     repo_root: Option<String>,
     profile_dir: Option<std::path::PathBuf>,
+    /// This generation's MCP bearer secret (`SWARMTERM_SESSION`); kept in the
+    /// host's meta so a reattached pane keeps authorising.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    session_token: String,
+}
+
+/// One lock per account id for `accounts::enroll` (see `plan_spawn`).
+fn enroll_lock(account_id: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
+    static LOCKS: std::sync::Mutex<
+        Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
+    > = std::sync::Mutex::new(None);
+    LOCKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .entry(account_id.to_string())
+        .or_default()
+        .clone()
 }
 
 fn plan_spawn(
@@ -664,6 +952,12 @@ fn plan_spawn(
     let account = match options.account_id.as_deref() {
         Some(id) => {
             let account = crate::accounts::resolve(app, id, options.agent_id.as_deref())?;
+            // Enrollment merge-writes the profile's config files: two panes
+            // of one account starting together must not interleave those
+            // read-modify-writes now that creates run concurrently. Keyed
+            // per account, so different accounts enroll in parallel.
+            let lock = enroll_lock(id);
+            let _enroll = lock.lock().unwrap_or_else(|e| e.into_inner());
             crate::accounts::enroll(&account, state.mcp_url.get().map(|url| url.as_ref()))?;
             Some(account)
         }
@@ -675,11 +969,13 @@ fn plan_spawn(
         .and_then(crate::shell::resolve_shell);
     let (shell, args) = resolved.clone().unwrap_or_else(default_shell);
 
-    // Inherit the parent environment, then advertise truecolor so CLIs emit
-    // 24-bit color sequences that ConPTY forwards and xterm renders verbatim.
-    // The plan is complete on purpose: the host clears its own environment
-    // and spawns exactly this (SWA-54 `CreateSpec.env`).
-    let mut env = crate::terminal_env::EnvPlan::inherited();
+    // Inherit the parent environment minus what the env policy withholds
+    // (secrets by default), then advertise truecolor so CLIs emit 24-bit
+    // color sequences that ConPTY forwards and xterm renders verbatim. The
+    // filter runs before the app's own variables are set, so those always
+    // reach the pane. The plan is complete on purpose: the host clears its
+    // own environment and spawns exactly this (SWA-54 `CreateSpec.env`).
+    let mut env = state.env_policy_snapshot().inherited();
     if let Some(account) = &account {
         crate::accounts::apply_environment(&mut env, account);
     }
@@ -707,6 +1003,8 @@ fn plan_spawn(
     // user-configured PROMPT_COMMAND still runs.
     if shell.to_lowercase().contains("bash") {
         let osc7 = r#"printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-}" "$PWD""#;
+        // Read from the app env, not the filtered plan: a prompt hook is
+        // not a secret and the env policy never names it.
         let existing = std::env::var("PROMPT_COMMAND").unwrap_or_default();
         let combined = if existing.is_empty() {
             osc7.to_string()
@@ -716,15 +1014,17 @@ fn plan_spawn(
         env.set("PROMPT_COMMAND", combined);
     }
     // Identify this session to in-terminal processes so an in-terminal agent
-    // can call Swarmterm's MCP server. `id` is the terminalId — a random UUID
-    // that only this shell's env sees — and doubles as the unguessable bearer
-    // token authorising the MCP call. `SWARMTERM_MCP_URL` points at the
+    // can call Swarmterm's MCP server. `SWARMTERM_SESSION` is a random secret
+    // minted per spawn (a respawn rotates it) that only this shell's env
+    // sees; it is NOT the terminalId, which War Room peers can list, so one
+    // pane cannot impersonate another. `SWARMTERM_MCP_URL` points at the
     // Streamable-HTTP endpoint bound at app boot; if the server failed to
     // bind, we skip the URL var (agents just won't have the swarmterm server
     // available) but still set the session so future subsystems can use it.
     // `SWARMTERM_PTY_GENERATION` is stamped by whichever backend creates the
     // generation (`spawn_local` here, the host for hosted panes).
-    env.set("SWARMTERM_SESSION", id);
+    let session_token = state.with_session_tokens(|t| t.mint(id));
+    env.set("SWARMTERM_SESSION", &session_token);
     if let Some(url) = state.mcp_url.get() {
         env.set("SWARMTERM_MCP_URL", url.as_ref());
         // OpenCode gets the server per process via OPENCODE_CONFIG_CONTENT
@@ -732,11 +1032,11 @@ fn plan_spawn(
         // never written. A value the user already exported wins.
         if options.agent_id.as_deref() == Some("opencode")
             && crate::mcp::toggle::is_enabled("opencode", None)
-            && std::env::var_os("OPENCODE_CONFIG_CONTENT").is_none()
+            && env.get("OPENCODE_CONFIG_CONTENT").is_none()
         {
             env.set(
                 "OPENCODE_CONFIG_CONTENT",
-                crate::mcp::config::opencode_config_content(url.as_ref(), id),
+                crate::mcp::config::opencode_config_content(url.as_ref(), &session_token),
             );
         }
     }
@@ -788,6 +1088,7 @@ fn plan_spawn(
         worktree_mode: options.worktree_mode.unwrap_or(false),
         repo_root: options.repo_root,
         profile_dir,
+        session_token,
     })
 }
 
@@ -866,10 +1167,16 @@ fn spawn_local(
     // Capture the shell in a job BEFORE running any command, so every process the
     // command tree spawns is born inside the job and dies with it.
     #[cfg(windows)]
-    let job = pid.and_then(job::JobHandle::capturing);
+    // The pane's priority limits are in force from birth (ADR 0005).
+    let job = pid.and_then(|p| {
+        app.state::<crate::child_priority::ChildPriority>()
+            .registry()
+            .capture(&id, p)
+    });
 
     let waiter_spawn_id = spawn_id.clone();
     let reader_spawn_id = spawn_id.clone();
+    let flow = std::sync::Arc::new(swarmterm_host::flow::FlowGate::default());
     state.terminals.lock().unwrap().insert(
         id.clone(),
         ManagedTerminal {
@@ -878,10 +1185,11 @@ fn spawn_local(
             agent_id: plan.agent_id,
             io: TerminalIo::Local {
                 input: PtyInput::spawn(writer),
-                master: pair.master,
+                resizer: swarmterm_host::resize::Resizer::new(pair.master),
                 killer,
                 #[cfg(windows)]
                 job,
+                flow: flow.clone(),
             },
             worktree_mode: plan.worktree_mode,
             repo_root: plan.repo_root,
@@ -889,6 +1197,7 @@ fn spawn_local(
             profile_dir: plan.profile_dir,
         },
     );
+    state.with_session_tokens(|t| t.settle(&id));
     send_initial_line(state, &id, &spawn_id, plan.initial_line);
 
     // A shell that exits on its own (typed `exit`, crash) never closes the
@@ -901,16 +1210,20 @@ fn spawn_local(
     let (exit_tx, exit_rx) = std::sync::mpsc::channel::<i32>();
     let waiter_app = app.clone();
     let waiter_id = id.clone();
-    std::thread::spawn(move || {
+    let waiter_flow = flow.clone();
+    crate::prof::spawn_named(format!("pty-waiter-{waiter_id}"), move || {
         let mut child = child;
         let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
+        // The entry (and with it the ack route) goes away next: the tail of
+        // the output must flow ungated so `Exit` is never held back.
+        waiter_flow.close();
         drop_generation(&waiter_app, &waiter_id, &waiter_spawn_id);
         let _ = exit_tx.send(exit_code);
     });
 
     let app = app.clone();
-    std::thread::spawn(move || {
-        read_loop(app, id, reader_spawn_id, reader, exit_rx, on_data);
+    crate::prof::spawn_named(format!("pty-flusher-{id}"), move || {
+        read_loop(app, id, reader_spawn_id, reader, exit_rx, on_data, flow);
     });
 
     CreateTerminalResult {
@@ -918,6 +1231,7 @@ fn spawn_local(
         pid,
         shell: Some(plan.shell),
         error: None,
+        spawn_id: Some(spawn_id),
     }
 }
 
@@ -942,6 +1256,7 @@ fn spawn_hosted(
         // Key kept from SWA-58 so a host started by an older build still
         // hands the profile back on reattach.
         "claudeConfigDir": plan.profile_dir,
+        "sessionToken": plan.session_token,
     });
     let op = serde_json::json!({
         "op": "create",
@@ -998,6 +1313,7 @@ fn spawn_hosted(
         pid: answer["pid"].as_u64().map(|p| p as u32),
         shell: Some(plan.shell),
         error: None,
+        spawn_id: Some(spawn_id.to_string()),
     }
 }
 
@@ -1023,6 +1339,15 @@ fn attach_hosted(
         repo_root: text("repoRoot"),
         profile_dir: text("claudeConfigDir").map(std::path::PathBuf::from),
     };
+    // The pane's env still carries the secret it was spawned with; re-learn
+    // it so the reattached pane keeps authorising. A pane created by a build
+    // before per-pane secrets has none in its meta and its env token is its
+    // id, so that legacy pane keeps working until its next respawn.
+    let token = text("sessionToken").unwrap_or_else(|| {
+        eprintln!("[host] {id}: no session secret in meta (older build); its id stays its bearer until respawn");
+        id.to_string()
+    });
+    state.with_session_tokens(|t| t.adopt(id, &token));
     client
         .sink
         .routes
@@ -1059,6 +1384,7 @@ fn attach_hosted(
         pid: facts["pid"].as_u64().map(|p| p as u32),
         shell: None,
         error: None,
+        spawn_id: Some(spawn_id.to_string()),
     })
 }
 
@@ -1076,7 +1402,8 @@ pub fn register_hosted(
         return;
     };
     let mut map = state.terminals.lock().unwrap();
-    // `spawn_terminal` refused a live duplicate under SPAWN_LOCK already;
+    // `create_terminal` reserved the id and `spawn_terminal` refused a live
+    // duplicate already;
     // never replace a live generation from an event.
     if map.contains_key(id) {
         eprintln!("[host] spawned {id} while a generation is live; closing it");
@@ -1100,6 +1427,9 @@ pub fn register_hosted(
             profile_dir: pending.profile_dir,
         },
     );
+    // Never nest `session_tokens` inside `terminals`.
+    drop(map);
+    state.with_session_tokens(|t| t.settle(id));
 }
 
 /// Drop `id`'s map entry if it still belongs to `spawn_id` (the waiter's job
@@ -1113,26 +1443,6 @@ pub fn drop_generation(app: &AppHandle, id: &str, spawn_id: &str) {
         };
         drop(removed);
     }
-}
-
-/// Join `first` with whatever follows it on `rx`: only what is already queued
-/// after a quiet spell (`idle`), else up to OUTPUT_COALESCE / OUTPUT_BATCH_BYTES.
-/// Order is preserved; a closed channel just ends the batch.
-fn next_batch(rx: &std::sync::mpsc::Receiver<String>, mut text: String, idle: bool) -> String {
-    let deadline = std::time::Instant::now()
-        + if idle {
-            std::time::Duration::ZERO
-        } else {
-            OUTPUT_COALESCE
-        };
-    while text.len() < OUTPUT_BATCH_BYTES {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        match rx.recv_timeout(left) {
-            Ok(more) => text.push_str(&more),
-            Err(_) => break,
-        }
-    }
-    text
 }
 
 /// Remove `id` only if it still belongs to this generation. Returns the removed
@@ -1157,6 +1467,7 @@ fn read_loop(
     mut reader: Box<dyn Read + Send>,
     exit_rx: std::sync::mpsc::Receiver<i32>,
     on_data: Channel<PtyOut>,
+    flow: std::sync::Arc<swarmterm_host::flow::FlowGate>,
 ) {
     // Reader → flusher split. ConPTY reads block, so coalescing needs its own
     // thread: the reader decodes (UTF-8 boundary handling stays HERE, so the
@@ -1167,8 +1478,14 @@ fn read_loop(
     // OUTPUT_COALESCE. The channel closing means EOF with every byte —
     // including the lossy trailing flush — already queued, so `Exit` below
     // can never overtake output.
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    std::thread::spawn(move || {
+    //
+    // Flow control (perf phase 2): the flusher parks while the renderer is
+    // more than FLOW_HIGH behind (`FlowGate`), and the queue is bounded, so
+    // the reader then blocks, stops reading, and ConPTY backpressures the
+    // child instead of the WebView buffering GBs. Input is a separate thread
+    // (`PtyInput`) and never waits on this.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<String>(swarmterm_host::flow::READ_QUEUE_DEPTH);
+    crate::prof::spawn_named(format!("pty-reader-{id}"), move || {
         let mut pending: Vec<u8> = Vec::new();
         let mut chunk = vec![0u8; READ_BUF_BYTES];
         loop {
@@ -1179,9 +1496,13 @@ fn read_loop(
                 Ok(n) => {
                     pending.extend_from_slice(&chunk[..n]);
                     if let Some(text) = take_valid_utf8(&mut pending) {
+                        // Time blocked here = the bounded queue was full,
+                        // i.e. the flusher (or the flow gate) is behind.
+                        let t0 = crate::prof::now();
                         if tx.send(text).is_err() {
                             return;
                         }
+                        crate::prof::since("chan.read_queue.send_block", t0);
                     }
                 }
             }
@@ -1195,7 +1516,12 @@ fn read_loop(
     let mut last_flush = std::time::Instant::now() - OUTPUT_IDLE;
     while let Ok(first) = rx.recv() {
         let text = next_batch(&rx, first, last_flush.elapsed() >= OUTPUT_IDLE);
+        let t0 = crate::prof::now();
+        flow.wait();
+        crate::prof::since("flow.park", t0);
+        let n = text.len();
         deliver_output(&app, &id, text, &on_data);
+        flow.sent(n);
         last_flush = std::time::Instant::now();
     }
     // The waiter thread owns the child; EOF means it is dead or about to be
@@ -1211,13 +1537,17 @@ pub fn deliver_output(app: &AppHandle, id: &str, text: String, on_data: &Channel
     // Lock scope is the one statement — never held across the send. `None`
     // only during teardown, when there is nobody left to read the tail.
     if let Some(state) = app.try_state::<AppState>() {
-        state
-            .peer_states
-            .lock()
-            .unwrap()
-            .push_output(id, &text, crate::warroom::now_ms());
-        state.peer_wake.notify_waiters();
+        crate::prof::lock("lock.peer_states.output", &state.peer_states).push_output(
+            id,
+            &text,
+            crate::warroom::now_ms(),
+        );
+        // No `peer_wake` here: output only pushes a `wait_peer` stall verdict
+        // later, never produces one, and the loop re-reads the output clock
+        // on its own stall timer (`mcp::tools::peers::wait_loop`). Waking
+        // every waiter per batch only churned locks under a flood.
     }
+    let _span = crate::prof::span("ipc.channel_send");
     let _ = on_data.send(PtyOut::Data(text));
 }
 
@@ -1257,6 +1587,8 @@ pub fn finish_generation(
     });
     if let Some(state) = app.try_state::<AppState>().filter(|_| !superseded) {
         state.mcp_clients.lock().unwrap().forget(id);
+        // Settled only: a same-id respawn may already hold a pending secret.
+        state.with_session_tokens(|t| t.forget_settled(id));
         // Same-id respawn must start from "no data", not its predecessor's %.
         state.context_usage.lock().unwrap().forget(id);
         state.rate_limit_usage.lock().unwrap().forget(id);
@@ -1297,7 +1629,137 @@ pub fn finish_generation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn persisted_env_policy_applies_before_the_renderer_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("env-policy.json");
+        let user = crate::terminal_env::EnvPolicy {
+            mode: crate::terminal_env::FilterMode::Strict,
+            allow: vec!["MY_TOOL_*".into()],
+            ..Default::default()
+        };
+        crate::terminal_env::save_persisted(&path, &user).unwrap();
+        let state = AppState::default();
+        // Not `load_env_policy`: it sets process globals other tests share.
+        state.read_persisted_env_policy(&path);
+        // The first spawn (restored pane) reads this snapshot.
+        assert_eq!(state.env_policy_snapshot(), user);
+    }
+
+    #[test]
+    fn launch_line_skips_only_a_quoted_brief() {
+        use crate::policy::ShellFlavor::{self, Cmd, Posix, PowerShell};
+        let pick = |i, l| super::launch_line_to_check(i, l, Posix);
+        let in_shell = |i, l, f: ShellFlavor| super::launch_line_to_check(Some(i), Some(l), f);
+        let base = "claude --permission-mode default";
+        let brief = format!("{base} 'run npx -y and never --yolo'");
+        assert_eq!(pick(Some(&brief), Some(base)), Some(base));
+        for (line, prefix) in [
+            ("gemini -y 'x'", "gemini"),
+            ("cursor-agent -f 'x'", "cursor-agent"),
+            ("claude 'a' --yolo 'b'", "claude"),
+        ] {
+            assert_eq!(pick(Some(line), Some(prefix)), Some(line));
+        }
+        let posix = format!(r"{base} 'it'\''s -y'");
+        assert_eq!(pick(Some(&posix), Some(base)), Some(base));
+        let flagged = "gemini -i 'use -y'";
+        assert_eq!(pick(Some(flagged), Some("gemini")), Some("gemini"));
+        assert_eq!(pick(Some(base), Some(base)), Some(base));
+        // Each shell's own exact quoting is trusted, another one is not.
+        let ps = "claude 'it''s --yolo '";
+        assert_eq!(in_shell(ps, "claude", PowerShell), Some("claude"));
+        let cmd = r#"claude "50"^%" --yolo""#;
+        // `%` / `!` in a Windows-shell brief: never trusted, whole line checked.
+        assert_eq!(in_shell(cmd, "claude", Cmd), Some(cmd));
+        assert_eq!(in_shell(cmd, "claude", Posix), Some(cmd));
+        let plain = r#"claude "run the tests --yolo""#;
+        assert_eq!(in_shell(plain, "claude", Cmd), Some("claude"));
+        for (line, f) in [
+            (r#"claude "%X% --yolo""#, Cmd),
+            (r#"claude "!X! --yolo""#, Cmd),
+            ("claude '50% --yolo'", PowerShell),
+            ("claude 'hi! --yolo'", PowerShell),
+        ] {
+            assert_eq!(in_shell(line, "claude", f), Some(line), "{line}");
+        }
+        // POSIX shells do not expand these inside single quotes.
+        let pct = "claude '50% done!'";
+        assert_eq!(in_shell(pct, "claude", Posix), Some("claude"));
+        let dq = "claude \"use --yolo\"";
+        assert_eq!(in_shell(dq, "claude", PowerShell), Some(dq));
+        // A brief that would parse as a flag is never skipped (review
+        // 2026-10-29); the renderer's leading space makes it a brief again.
+        for (line, f) in [
+            ("claude '--dangerously-skip-permissions'", Posix),
+            ("claude '--permission-mode=bypassPermissions'", Posix),
+            ("claude '--yolo '", PowerShell),
+            (r#"claude "--settings=C:\x\evil.json ""#, Cmd),
+        ] {
+            assert_eq!(in_shell(line, "claude", f), Some(line), "{line}");
+        }
+        assert_eq!(
+            in_shell("claude ' --yolo is banned'", "claude", Posix),
+            Some("claude")
+        );
+        // Control bytes would let the shell's line editor rewrite the line.
+        let ctl = "claude '\u{15}claude --yolo #'";
+        assert_eq!(in_shell(ctl, "claude", Posix), Some(ctl));
+        // A blank launch line is no launch line.
+        assert_eq!(pick(Some("claude 'x'"), Some(" ")), Some("claude 'x'"));
+        // Anything but a quoted brief after the prefix: check it all.
+        let extra = "claude --dangerously-skip-permissions 'x'";
+        assert_eq!(pick(Some(extra), Some("claude")), Some(extra));
+        assert_eq!(
+            pick(Some("codex -a never"), Some("claude")),
+            Some("codex -a never")
+        );
+        assert_eq!(pick(Some(base), None), Some(base));
+        assert_eq!(pick(None, Some(base)), None);
+    }
+
+    #[test]
+    fn unavailable_shell_refuses_a_line_quoted_for_it() {
+        use super::check_shell_for_line as check;
+        let brief = Some(r"claude 'a'\'' ; calc ; '\''b'");
+        let err = check(Some("git-bash"), Some(false), brief).unwrap_err();
+        assert!(err.starts_with("shell-unavailable"), "{err}");
+        assert!(check(Some("wsl"), Some(false), brief).is_err());
+        // Available shell, the default shell or no line: nothing to refuse.
+        assert!(check(Some("git-bash"), Some(true), brief).is_ok());
+        assert!(check(Some("default"), Some(false), brief).is_ok());
+        assert!(check(None, None, brief).is_ok());
+        assert!(check(Some("git-bash"), Some(false), None).is_ok());
+        assert!(check(Some("git-bash"), Some(false), Some("  ")).is_ok());
+    }
+
+    #[test]
+    fn env_policy_defaults_to_filtering_and_snapshot_follows_writes() {
+        use crate::terminal_env::{EnvPlan, EnvPolicy};
+        let state = AppState::default();
+        let secret = || EnvPlan::from_vars([("FOO_API_KEY".to_string(), "x".to_string())]);
+        assert_eq!(state.env_policy_snapshot(), EnvPolicy::default());
+        assert_eq!(
+            state.env_policy_snapshot().filter(secret()).iter().count(),
+            0
+        );
+        state.env_policy.write().unwrap().allow = vec!["FOO_API_KEY".into()];
+        assert_eq!(
+            state.env_policy_snapshot().filter(secret()).iter().count(),
+            1
+        );
+    }
+
     use super::*;
+
+    #[test]
+    fn flow_acks_only_reach_the_live_generation() {
+        assert!(matches_generation("gen-2", "gen-2"));
+        assert!(!matches_generation("gen-2", "gen-3"));
+        // A stale id from before a same-id respawn.
+        assert!(!matches_generation("gen-2", "gen-1"));
+        assert!(!matches_generation("gen-2", ""));
+    }
 
     #[test]
     fn remove_generation_spares_a_respawned_entry() {
@@ -1310,40 +1772,6 @@ mod tests {
         assert_eq!(removed.as_deref(), Some("new"));
         assert!(!superseded && map.is_empty());
         assert_eq!(remove_generation(&mut map, "t", |_| true), (None, false));
-    }
-
-    #[test]
-    fn next_batch_joins_queued_chunks_in_order() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        tx.send("b".to_string()).unwrap();
-        tx.send("c".to_string()).unwrap();
-        assert_eq!(next_batch(&rx, "a".into(), false), "abc");
-    }
-
-    #[test]
-    fn next_batch_idle_takes_only_what_is_queued() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        tx.send("b".to_string()).unwrap();
-        let start = std::time::Instant::now();
-        assert_eq!(next_batch(&rx, "a".into(), true), "ab");
-        assert!(start.elapsed() < OUTPUT_COALESCE * 10);
-        drop(tx);
-    }
-
-    #[test]
-    fn next_batch_stops_at_the_byte_cap() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        tx.send("y".to_string()).unwrap();
-        let big = "x".repeat(OUTPUT_BATCH_BYTES);
-        assert_eq!(next_batch(&rx, big.clone(), false), big);
-        assert_eq!(rx.try_recv().unwrap(), "y");
-    }
-
-    #[test]
-    fn next_batch_ends_on_closed_channel() {
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
-        drop(tx);
-        assert_eq!(next_batch(&rx, "a".into(), false), "a");
     }
 
     struct SharedSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
@@ -1498,37 +1926,93 @@ mod tests {
         );
     }
 
-    #[test]
-    fn take_valid_utf8_returns_complete_prefix_and_holds_partial_tail() {
-        // "é" is 0xC3 0xA9; feed only the first byte after an ascii char.
-        let mut buf = vec![b'h', b'i', 0xC3];
-        let out = take_valid_utf8(&mut buf).unwrap();
-        assert_eq!(out, "hi");
-        assert_eq!(buf, vec![0xC3]); // incomplete tail retained
+    /// Split an encoded `PtyOut` the way `src/tauri/terminal.ts` does.
+    fn split(out: &[u8]) -> (u8, &[u8], serde_json::Value) {
+        let tag = out[out.len() - 1];
+        let hlen = u16::from_le_bytes([out[out.len() - 3], out[out.len() - 2]]) as usize;
+        let hstart = out.len() - 3 - hlen;
+        let header = if hlen == 0 {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&out[hstart..out.len() - 3]).unwrap()
+        };
+        (tag, &out[..hstart], header)
     }
 
     #[test]
-    fn take_valid_utf8_completes_across_chunks() {
-        let mut buf = vec![0xC3, 0xA9]; // full "é"
-        let out = take_valid_utf8(&mut buf).unwrap();
-        assert_eq!(out, "é");
-        assert!(buf.is_empty());
+    fn data_encodes_its_utf8_bytes_with_a_trailing_tag() {
+        let text = "h\u{e9}\u{1F600}\x1b[0m".to_string();
+        let out = PtyOut::Data(text.clone()).encode();
+        assert_eq!(
+            split(&out),
+            (OUT_DATA, text.as_bytes(), serde_json::Value::Null)
+        );
+        assert_eq!(out.len(), text.len() + 3);
     }
 
     #[test]
-    fn take_valid_utf8_flushes_long_invalid_runs() {
-        let mut buf = vec![0xFF, 0xFE, 0xFD, 0xFC, 0xFB];
-        let out = take_valid_utf8(&mut buf).unwrap();
-        assert!(!out.is_empty()); // lossy, but does not stall
-        assert!(buf.is_empty());
+    fn replay_encodes_history_and_a_json_header() {
+        let out = PtyOut::Replay {
+            data: "hist\u{2500}".into(),
+            cols: 120,
+            rows: 40,
+            truncated: true,
+        }
+        .encode();
+        let (tag, body, header) = split(&out);
+        assert_eq!((tag, body), (OUT_REPLAY, "hist\u{2500}".as_bytes()));
+        assert_eq!(
+            header,
+            serde_json::json!({"cols":120,"rows":40,"truncated":true})
+        );
     }
 
     #[test]
-    fn take_valid_utf8_flushes_short_invalid_runs() {
-        let mut buf = vec![0xFF, 0xFE, 0xFD]; // 3 invalid bytes, not a multibyte lead
-        let out = take_valid_utf8(&mut buf).unwrap();
-        assert!(!out.is_empty());
-        assert!(buf.is_empty()); // flushed immediately, not stalled
+    fn small_data_goes_as_json_large_as_raw() {
+        use tauri::ipc::InvokeResponseBody as B;
+        match PtyOut::Data("a\u{1b}b".into()).into_body().unwrap() {
+            B::Json(j) => assert_eq!(j, r#"[3,"a\u001bb"]"#),
+            B::Raw(_) => panic!("small data must be json"),
+        }
+        for big in [
+            "x".repeat(DIRECT_JSON_LIMIT),
+            // Fits as text, but its escaped JSON does not.
+            "\u{1b}".repeat(DIRECT_JSON_LIMIT / 4),
+        ] {
+            match PtyOut::Data(big.clone()).into_body().unwrap() {
+                B::Raw(r) => assert_eq!(r, PtyOut::Data(big).encode()),
+                B::Json(_) => panic!("large data must be raw"),
+            }
+        }
+        assert!(matches!(
+            PtyOut::Exit { exit_code: 0 }.into_body().unwrap(),
+            B::Raw(_)
+        ));
+    }
+
+    #[test]
+    fn exit_encodes_an_empty_body_and_its_code() {
+        let out = PtyOut::Exit { exit_code: -1 }.encode();
+        assert_eq!(
+            split(&out),
+            (OUT_EXIT, &b""[..], serde_json::json!({"exitCode":-1}))
+        );
+    }
+
+    #[test]
+    fn empty_replay_still_carries_its_size() {
+        let out = PtyOut::Replay {
+            data: String::new(),
+            cols: 80,
+            rows: 24,
+            truncated: false,
+        }
+        .encode();
+        let (tag, body, header) = split(&out);
+        assert_eq!(
+            (tag, body.len(), header["cols"].as_u64()),
+            (OUT_REPLAY, 0, Some(80))
+        );
     }
 
     #[cfg(not(windows))]

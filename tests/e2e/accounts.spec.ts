@@ -24,6 +24,42 @@ test('profile management drives account-aware composition and isolated login', a
   expect(await page.evaluate(() => (window as any).fixture.counters.spawns.slice(1).map((spawn: any) => spawn.accountId))).toEqual([undefined, profile.id, undefined, profile.id])
 })
 
+test('a split pane follows the workspace account and can switch before its first turn', async ({ page }) => {
+  await page.goto('/tests/fixtures/app.html?welcome=1')
+  await expect(page.getByRole('heading', { name: 'Compose' })).toBeVisible()
+  await page.evaluate(async () => {
+    const f = (window as any).fixture
+    f.accounts.push({ id: 'claude-a', name: 'Alpha', agentId: 'claude-code', configDir: '/accounts/a' }, { id: 'claude-b', name: 'Beta', agentId: 'claude-code', configDir: '/accounts/b' })
+    await f.useAgentAccountsStore.getState().refresh()
+    const app = f.useAppStore.getState()
+    app.createWorkspace({ cwd: '/project', terminalCount: 1, agentIds: ['claude-code'], accountIds: ['claude-b'], accountSelections: { 'claude-code': { mode: 'fixed', accountId: 'claude-b' } } })
+    const ws = f.useAppStore.getState().workspaces[0]
+    app.splitPane(ws.focusedLeafId, 'horizontal', 'claude-code')
+  })
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.counters.spawns.map((s: any) => s.accountId))).toEqual(['claude-b', 'claude-b'])
+  // Claude reports its session id at startup, before any transcript exists.
+  const terminalId = await page.evaluate(() => {
+    const ws = (window as any).fixture.useAppStore.getState().workspaces[0]
+    const walk = (n: any): any[] => n.type === 'leaf' ? [n] : n.children.flatMap(walk)
+    const leaf = walk(ws.layout).find((l: any) => l.id === ws.focusedLeafId)
+    ;(window as any).fixture.useAppStore.getState().recordPaneSession(leaf.terminalId, 'claude-code', '11111111-2222-4333-8444-555555555555')
+    return leaf.terminalId
+  })
+  await page.getByRole('button', { name: 'Account: Beta', exact: true }).last().click()
+  await page.getByRole('menuitem', { name: 'Alpha', exact: true }).click()
+  // Nothing to carry, so the pane restarts fresh on the new account (the
+  // fixture never reports the old pty's exit, so the restart stops at the kill).
+  await expect.poll(() => page.evaluate(() => (window as any).fixture.counters.killed)).toBe(1)
+  const switched = await page.evaluate((id) => {
+    const ws = (window as any).fixture.useAppStore.getState().workspaces[0]
+    const walk = (n: any): any[] => n.type === 'leaf' ? [n] : n.children.flatMap(walk)
+    return walk(ws.layout).find((l: any) => l.terminalId === id)
+  }, terminalId)
+  expect(switched).toMatchObject({ accountId: 'claude-a' })
+  expect(switched.resumeSessionId).toBeUndefined()
+  expect(await page.evaluate(() => (window as any).fixture.counters.transfers)).toEqual(['11111111-2222-4333-8444-555555555555:claude-b->claude-a'])
+})
+
 test('removed account restores fresh with warning and retains no wrong-account session', async ({ page }) => {
   await page.goto('/tests/fixtures/app.html?welcome=1')
   await expect(page.getByRole('heading', { name: 'Compose' })).toBeVisible()

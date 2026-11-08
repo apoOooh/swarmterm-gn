@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import {
   DndContext,
@@ -40,7 +40,12 @@ import { templateById } from '@/lib/templates'
 import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
 import { ClearGuard, clearInputSequence } from '@/lib/clear-input'
 import { shellFlavor } from '@/lib/agent-spawn-command'
-import { setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
+import { setAgentPolicy, setChildPriority, setEnvPolicy, setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
+import { useEnvPolicyStore } from '@/store/env-policy-store'
+import { useAgentPolicyStore } from '@/store/agent-policy-store'
+import { useAgentPrefStore } from '@/store/agent-pref-store'
+import { exemptTerminalIds } from '@/lib/build-priority'
+import { useBuildPriorityStore } from '@/store/build-priority-store'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useTerminalTypingStore } from '@/store/terminal-typing-store'
 
@@ -55,11 +60,13 @@ import {
   getTerminalGeneration,
   isAnyTerminalFocused,
   noteAgentHook,
-  refitAttachedTerminals
+  refitAttachedTerminals,
+  resetTerminalZoom
 } from '@/lib/terminal-registry'
 import { useHandoffStore } from '@/store/handoff-store'
 import {
   describeFocusedElement,
+  isEditableElement,
   shouldReturnFocus,
   FOCUS_RETURN_ATTR
 } from '@/lib/terminal-focus'
@@ -73,6 +80,7 @@ import { resolvePaneTitle } from '@/lib/pane-title'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { FileDropListener } from '@/components/FileDropListener'
 import { FileDialog } from '@/components/Files/FileDialog'
+import { usePaneIdentityDialogStore } from '@/store/pane-identity-dialog-store'
 import { collectEditorCache } from '@/lib/files/editor-cache'
 import { useDocumentStore } from '@/store/document-store'
 import { useExplorerStore } from '@/store/explorer-store'
@@ -90,11 +98,8 @@ import { FLOATING_LAYER_ID } from '@/lib/floating-panes'
 import { Welcome } from '@/components/Welcome/Welcome'
 import { WorkspaceTabs } from '@/components/WorkspaceTabs/WorkspaceTabs'
 import { useBrowserStore } from '@/store/browser-store'
-import { useUpdaterStore } from '@/store/updater-store'
-import { PERIODIC_CHECK_INTERVAL_MS, STARTUP_CHECK_DELAY_MS } from '@/lib/updater-flow'
-import { onUpdateCheckRequested } from '@/tauri/updater'
 import { showMessage } from '@/tauri/dialog'
-import { useGitStore } from '@/store/git-store'
+import { useGitStore, type RightPanelMode } from '@/store/git-store'
 import { useRecentsStore } from '@/store/recents-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { useShellAvailabilityStore } from '@/store/shell-availability-store'
@@ -121,6 +126,11 @@ import {
   onWarRoomRooms
 } from '@/tauri/warroom'
 import { onPreviewOpen } from '@/tauri/preview'
+import { onClipboardMedia, setClipboardMediaEnabled } from '@/tauri/files'
+import { useMediaPrefStore } from '@/store/media-pref-store'
+import { MediaOverlay } from '@/components/Media/MediaOverlay'
+import { CLIPBOARD_SOURCE, useMediaStore } from '@/store/media-store'
+import { mediaKind } from '@/lib/media-gallery'
 import { closePreview, openPreview, wirePreviewEvents } from '@/lib/preview-registry'
 import { onWorktreeSpawn, onWorktreeRemoved } from '@/tauri/worktree'
 import { showWindow } from '@/tauri/window'
@@ -136,6 +146,8 @@ import { staleKeys } from '@/lib/stale-sweep'
 import { VOICE_ALERT_ID, createInputDropThrottle, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
 import { BuzzkeyUpdateToast } from '@/components/BuzzkeyUpdateToast'
 import { useBuzzkeyUpdateStore } from '@/store/buzzkey-update-store'
+import { BUILD_EDITION, editionFeatures, effectiveEdition } from '@/lib/edition'
+import { usePolicyStore } from '@/store/policy-store'
 
 // Platform never changes at runtime, so a module-level constant is fine.
 const isMac = isMacPlatform()
@@ -177,6 +189,12 @@ const ghostModifier: Modifier = ({ transform, activatorEvent, draggingNodeRect }
     draggingNodeRect
   )
 
+// Lazy: the dialog's icon picker carries the list of every lucide icon,
+// which only needs to load once someone opens it.
+const PaneIdentityDialog = lazy(() =>
+  import('@/components/TerminalPane/PaneIdentityDialog').then((m) => ({ default: m.PaneIdentityDialog }))
+)
+
 export default function App(): ReactElement {
   const macroRunning = useRef(false)
   useEffect(() => wireSavedWorkspaces(), [])
@@ -212,6 +230,7 @@ export default function App(): ReactElement {
   const openWelcome = useAppStore((s) => s.openWelcome)
   const closeWelcome = useAppStore((s) => s.closeWelcome)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const identityDialogOpen = usePaneIdentityDialogStore((s) => s.leafId !== null)
   const [settingsTab, setSettingsTab] = useState<CategoryId>('appearance')
   // Native full-screen state, owned here because both the header's traffic-light
   // inset and the system-chrome dodge below are driven by it.
@@ -228,7 +247,7 @@ export default function App(): ReactElement {
   const [draggingLeafId, setDraggingLeafId] = useState<string | null>(null)
   // Restore the right panel exactly as it was when a drag reveals it and the
   // drop lands elsewhere — revealing the zone must not permanently flip tabs.
-  const panelBeforeDragRef = useRef<{ open: boolean; mode: 'browser' | 'git' | 'warroom' } | null>(null)
+  const panelBeforeDragRef = useRef<{ open: boolean; mode: RightPanelMode } | null>(null)
   const dndSensors = useSensors(
     useSensor(GuardedPointerSensor, { activationConstraint: { distance: 5 } })
   )
@@ -243,7 +262,7 @@ export default function App(): ReactElement {
     panelBeforeDragRef.current = null
     if (!prior) return
     const git = useGitStore.getState()
-    git.setMode(prior.mode === 'warroom' ? 'warroom' : prior.mode)
+    git.setMode(prior.mode)
     git.setPanelOpen(prior.open)
   }, [])
 
@@ -576,6 +595,12 @@ export default function App(): ReactElement {
         st.drawerPane(ws.focusedLeafId)
         return
       }
+      if (action === 'reset-terminal-zoom') {
+        if (!requestedAction && !isAnyTerminalFocused()) return
+        const terminalId = selectFocusedTerminalId(useAppStore.getState())
+        if (terminalId && resetTerminalZoom(terminalId)) e.preventDefault()
+        return
+      }
       if (action === 'clear-input') {
         // Only while a terminal itself has the keyboard: in an input field the
         // browser's own Ctrl+Shift+Backspace behaviour is what the user wants.
@@ -640,6 +665,10 @@ export default function App(): ReactElement {
     const appState = useAppStore.getState()
     const workspace = appState.workspaces.find((w) => w.id === appState.activeWorkspaceId)
     const pane = workspace ? useDocumentStore.getState().panes[workspace.focusedLeafId] : undefined
+    // A text field the user is typing in (e.g. a workspace rename input) keeps
+    // the keyboard — checked before the editor branch, which would otherwise
+    // steal focus mid-edit, blur the input and commit a half-typed name.
+    if (isEditableElement(document.activeElement)) return
     if (pane?.active && pane.keyboard === 'file') {
       if (document.activeElement?.closest('[role="dialog"],[role="menu"],[data-keyboard-owner="explorer"]')) return
       window.dispatchEvent(new Event('swarmterm:focus-editor'))
@@ -892,37 +921,82 @@ export default function App(): ReactElement {
     }
   }, [deferReturnFocusToTerminal])
 
+  // Process priority: keep the panes' job limits in Rust in step with the
+  // setting and the panes of opted-out workspaces. The selector returns a
+  // JSON string so a workspace change that leaves the set alone neither
+  // re-renders nor pushes.
+  const priority = useBuildPriorityStore((s) => s.priority)
+  const exemptKey = useAppStore((s) => JSON.stringify(exemptTerminalIds(s.workspaces)))
+  useEffect(() => {
+    setChildPriority(priority, JSON.parse(exemptKey) as string[]).catch((err) =>
+      console.warn('[priority] settings:', err)
+    )
+  }, [priority, exemptKey])
+
+  // Environment policy: Rust loads the last pushed policy from app data at
+  // start (secure default without one), so a pane restored before this push
+  // already uses the user's choice; Rust persists each push.
+  const envPolicy = useEnvPolicyStore((s) => s.policy)
+  useEffect(() => {
+    setEnvPolicy(envPolicy).catch((err) => console.warn('[env] policy:', err))
+  }, [envPolicy])
+
+  // Agent policy (War Room execute): Rust starts restrictive, so an MCP call
+  // before this push is refused rather than allowed.
+  const agentPolicy = useAgentPolicyStore((s) => s.policy)
+  useEffect(() => {
+    setAgentPolicy(agentPolicy).catch((err) => console.warn('[agent] policy:', err))
+  }, [agentPolicy])
+
+  // Clipboard images (opt-in): keep the backend watcher in step with the
+  // setting, and add each saved image to the gallery without taking the
+  // viewer or the panel — the overlay (if enabled) is the only announcement.
+  const clipboardImages = useMediaPrefStore((s) => s.prefs.clipboardImages)
+  useEffect(() => {
+    setClipboardMediaEnabled(clipboardImages).catch((err) => console.warn('[media] clipboard watcher:', err))
+    // Off deletes the saved images and withdraws them from serving.
+    if (!clipboardImages) useMediaStore.getState().dropClipboard()
+  }, [clipboardImages])
+  useEffect(() => {
+    const unlisten = onClipboardMedia((e) => {
+      // An event in flight while switching off names a withdrawn file.
+      if (!useMediaPrefStore.getState().prefs.clipboardImages) return
+      const kind = mediaKind(e.path)
+      if (!kind) return
+      // User-originated and already registered by the backend watcher.
+      const item = { path: e.path, kind, terminalId: '', source: CLIPBOARD_SOURCE, shownAt: Date.now(), opened: true }
+      useMediaStore.getState().add(item)
+      useMediaStore.getState().announce(item, 'clipboard')
+    })
+    return () => {
+      void unlisten.then((fn) => fn())
+    }
+  }, [])
+
   // Wire native webview navigation/title/loading and denied-popup events into
   // the store — see lib/preview-registry.ts. Mount-once: the registry itself
   // is a module singleton, this just attaches its listeners for the app's life.
   useEffect(() => wirePreviewEvents(), [])
 
-  // Silent update checks: one a few seconds after boot (never competing with
-  // pty spawn), then periodically — Swarmterm runs for days, and the navbar
-  // update button only ever appears through these. Failures are swallowed by
-  // the flow reducer. The periodic tick only fires from idle so it can never
-  // clobber a known update or an in-flight download.
-  useEffect(() => {
-    const check = () => void useUpdaterStore.getState().check(false)
-    const t = window.setTimeout(check, STARTUP_CHECK_DELAY_MS)
-    const i = window.setInterval(() => {
-      if (useUpdaterStore.getState().state.phase === 'idle') check()
-    }, PERIODIC_CHECK_INTERVAL_MS)
-    return () => {
-      window.clearTimeout(t)
-      window.clearInterval(i)
-    }
-  }, [])
-
   // buzzkey update toast: start + every 24 h, only for an installed and
   // connected buzzkey (rules in lib/buzzkey-update.ts).
-  useEffect(() => useBuzzkeyUpdateStore.getState().startWatch(), [])
-
-  // Tray "Check for Updates…" → manual check (talkative: reports up-to-date
-  // and failures in a native dialog).
+  // DisableCompanion (admin policy): no update checks at all, so the watch
+  // waits for the policy instead of starting before it is known.
   useEffect(() => {
-    const unlisten = onUpdateCheckRequested(() => void useUpdaterStore.getState().check(true))
-    return () => void unlisten.then((fn) => fn())
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void usePolicyStore
+      .getState()
+      .load()
+      .then((policy) => {
+        // Corp compiles the companion updater out: never start the watch.
+        if (!cancelled && !policy.disableCompanion && editionFeatures(effectiveEdition(BUILD_EDITION, policy.edition)).companion)
+          stop = useBuzzkeyUpdateStore.getState().startWatch()
+      })
+    return () => {
+      cancelled = true
+      stop?.()
+    }
   }, [])
 
   // Claude Code hook edges (`swarmterm --hook` → POST /hook → `agent:hook`)
@@ -974,27 +1048,8 @@ export default function App(): ReactElement {
     })
   }, [])
 
-  // Manual-check verdicts land as native OS dialogs, not DOM — nothing to
-  // position over the terminal. Subscribed outside the render path so the
-  // per-chunk download progress never re-renders App. Dismiss BEFORE the
-  // dialog: the machine is already idle while the dialog waits for OK.
-  useEffect(() => {
-    return useUpdaterStore.subscribe((cur, prev) => {
-      if (cur.state.phase === prev.state.phase) return
-      if (cur.state.phase === 'upToDate') {
-        useUpdaterStore.getState().dismiss()
-        void showMessage('Swarmterm is up to date.', { title: 'Swarmterm' })
-      } else if (cur.state.phase === 'error') {
-        const detail = cur.state.message
-        useUpdaterStore.getState().dismiss()
-        void showMessage(`Update check failed:\n${detail}`, { title: 'Swarmterm', kind: 'error' })
-      }
-    })
-  }, [])
-
   // Agent notifications — plus long-command notifications for plain panes
-  // (OSC 133 shell marks) — subscribed outside the render path (updater
-  // precedent) so per-tick agent-state churn never re-renders App.
+  // (OSC 133 shell marks) — subscribed outside the render path so per-tick agent-state churn never re-renders App.
   useEffect(() => {
     return startNotificationWatch({
       subscribeAgentStates: (listener) =>
@@ -1122,7 +1177,8 @@ export default function App(): ReactElement {
         path: e.path,
         branch: e.branch,
         agentId: e.agent ?? undefined,
-        prompt: e.prompt
+        prompt: e.prompt,
+        launchModePrefs: useAgentPrefStore.getState().defaultLaunchModes
       })
     })
     const unRemoved = onWorktreeRemoved((e) => {
@@ -1172,7 +1228,9 @@ export default function App(): ReactElement {
     >
       <FileDropListener />
       <FileDialog />
+      {identityDialogOpen && <Suspense fallback={null}><PaneIdentityDialog /></Suspense>}
       <BuzzkeyUpdateToast />
+      <MediaOverlay />
       <TitleBar fullscreen={isFullscreen} />
       <SavedWorkspaceNotice />
 

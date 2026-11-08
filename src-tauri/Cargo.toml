@@ -1,8 +1,8 @@
 [package]
 name = "swarmterm"
-version = "1.18.0"
+version = "1.26.0"
 description = "One window for a whole swarm of AI coding agents — split terminals, per-agent git worktrees, live web previews, and a War Room where agents collaborate"
-authors = ["Duong Duc Nguyen"]
+authors = ["Swarmterm GN maintainers"]
 license = "GPL-3.0-only"
 homepage = "https://github.com/apoOooh/swarmterm-gn"
 repository = "https://github.com/apoOooh/swarmterm-gn"
@@ -12,6 +12,21 @@ edition = "2021"
 default-run = "swarmterm"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+# The built-in speech engine (whisper.cpp). Its bindgen step needs LLVM
+# (`LIBCLANG_PATH`). Build with `--no-default-features` to skip it: everything
+# else works, the built-in speech source reports `speech-engine-unavailable`.
+default = ["local-speech"]
+local-speech = ["dep:whisper-rs"]
+# Perf counters (prof.rs): lock wait/hold, flow-gate park, main-thread
+# watchdog, command spans. Off in every normal and A/B build; see
+# docs/perf-profiling.md.
+profiling = []
+# Corp edition (docs/editions.md): compiled-in admin-policy locks
+# (`policy::Edition::locks`) and no buzzkey installer or whisper model
+# download in the binary. Combines with `--no-default-features`.
+corp = []
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -39,11 +54,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 url = "2"
 percent-encoding = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
 rmcp = { version = "2.1", features = ["server", "transport-streamable-http-server"] }
-# Both already in the tree via tauri-plugin-updater — direct deps for analytics.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 uuid = { version = "1", features = ["v4"] }
 axum = "0.8"
@@ -56,7 +69,7 @@ notify = "8.2"
 clipboard-rs = { version = "0.3.5", default-features = false, features = ["image"] }
 dunce = "1"
 sha2 = "0.10"
-# Voice companion (SWA-42): both already in the tree via tauri-plugin-updater.
+# Voice companion (SWA-42): verify and version-compare companion downloads.
 minisign-verify = "0.2"
 semver = "1"
 tempfile = "3"
@@ -68,8 +81,9 @@ libc = "0.2"
 swarmterm-host = { path = "host" }
 # Built-in speech source (SWA-38, docs/adr/0002): whisper.cpp on the CPU and
 # WASAPI capture. Windows-only like the voice pipe; no GPU backend so the CI
-# needs no Vulkan SDK.
-whisper-rs = "0.16"
+# needs no Vulkan SDK. Optional: building it needs libclang (LLVM), see the
+# `local-speech` feature below.
+whisper-rs = { version = "0.16", optional = true }
 cpal = "0.18"
 # Built-in announcements (SWA-66, docs/adr/0003): the system's SAPI voices.
 # Same version tauri/wry already pull in, so this adds features, not a crate.
@@ -88,6 +102,8 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_Storage_FileSystem",
+  # Clipboard sequence-number poll (clipboard_media.rs fallback).
+  "Win32_System_DataExchange",
 ] }
 
 # Terminal host sidecar (ADR 0001). A workspace member so `cargo test` /
@@ -95,3 +111,17 @@ windows-sys = { version = "0.59", features = [
 [workspace]
 members = ["host"]
 default-members = [".", "host"]
+
+[dev-dependencies]
+# Paused-clock tests for the `wait_peer` loop (stall/deadline timers).
+# Cargo unions features per crate, so tests get the main tokio features plus
+# `test-util`; release builds are unaffected (dev-deps are test-only).
+tokio = { version = "1", features = ["test-util"] }
+
+# Profiling build (docs/perf-profiling.md): release codegen plus line tables
+# so samply/WPA resolve symbols. Output lands in target/profiling, apart
+# from target/release, so A/B binaries are never overwritten.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false

@@ -1,9 +1,12 @@
 // src/components/RightPanel/RightPanel.tsx
+import { MANAGED_LABEL } from '@/lib/policy'
+import { usePolicyStore } from '@/store/policy-store'
 import { useRef, type ReactElement } from 'react'
 import { useSidebarPeekStore } from '@/store/sidebar-peek-store'
 import { useEdgePeek } from '@/components/use-edge-peek'
-import { Eye, GitBranch, Pin, RotateCw, Swords, X } from 'lucide-react'
-import { useGitStore } from '@/store/git-store'
+import { Eye, GitBranch, Image, Pin, RotateCw, Swords, X } from 'lucide-react'
+import { useGitStore, type RightPanelMode } from '@/store/git-store'
+import { MediaPanel } from '@/components/Media/MediaPanel'
 import { BrowserColumn } from '@/components/Browser/BrowserColumn'
 import { GitPanel } from '@/components/Git/GitPanel'
 import { WarRoomPanel } from '@/components/WarRoom/WarRoomPanel'
@@ -31,6 +34,10 @@ interface RightPanelProps {
 
 export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}): ReactElement {
   const mode = useGitStore((s) => s.mode)
+  // DisablePreviewBrowser: Rust refuses preview_open; no webview column at all.
+  const previewLocked = usePolicyStore((s) => s.policy.disablePreviewBrowser)
+  // DisableWarRoom: Rust refuses joins, Moderator sends and every war_room.* tool.
+  const warRoomLocked = usePolicyStore((s) => s.policy.disableWarRoom)
   const setPanelOpen = useGitStore((s) => s.setPanelOpen)
 
   function handleClose(): void {
@@ -39,7 +46,7 @@ export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}):
   }
 
   // setMode also opens (docks) the panel — while peeking, switch tabs only.
-  function switchTo(next: 'browser' | 'git' | 'warroom'): void {
+  function switchTo(next: RightPanelMode): void {
     if (peek) useGitStore.setState({ mode: next })
     else useGitStore.getState().setMode(next)
   }
@@ -96,6 +103,18 @@ export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}):
           <Swords className="h-3.5 w-3.5" />
           War Room
         </button>
+        <button
+          onClick={() => switchTo('media')}
+          className={[
+            'flex items-center gap-1.5 px-3 py-1.5 text-xs transition-colors',
+            mode === 'media'
+              ? 'border-b-2 border-[#a855f7] bg-background text-foreground'
+              : 'text-muted-foreground hover:text-foreground',
+          ].join(' ')}
+        >
+          <Image className="h-3.5 w-3.5" />
+          Media
+        </button>
         {mode === 'git' && <RefreshButton />}
         {peek && (
           <button
@@ -118,8 +137,13 @@ export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}):
 
       {/* Mode content */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {mode === 'browser' && !peek && <BrowserColumn />}
-        {mode === 'browser' && peek && (
+        {mode === 'browser' && previewLocked && (
+          <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
+            Web preview: {MANAGED_LABEL}
+          </div>
+        )}
+        {mode === 'browser' && !peek && !previewLocked && <BrowserColumn />}
+        {mode === 'browser' && peek && !previewLocked && (
           // The native preview webview paints above all page content, so it
           // cannot live inside a floating overlay — dock the panel to use it.
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
@@ -133,7 +157,13 @@ export function RightPanel({ peek = false, onClosePeek }: RightPanelProps = {}):
           </div>
         )}
         {mode === 'git' && <GitPanel />}
-        {mode === 'warroom' && <WarRoomPanel />}
+        {mode === 'warroom' && warRoomLocked && (
+          <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
+            War Room: {MANAGED_LABEL}
+          </div>
+        )}
+        {mode === 'warroom' && !warRoomLocked && <WarRoomPanel />}
+        {mode === 'media' && <MediaPanel />}
       </div>
     </div>
   )

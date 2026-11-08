@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useAppStore } from '@/store/app-store'
+import { EVERYONE_CANDIDATE, buildCandidates, namedPanes, resolveMention, tokenizeMentions } from '@/lib/war-room-mentions'
 import { LogIn, LogOut, Plug, Trash2 } from 'lucide-react'
 import { useWarRoomStore } from '@/store/war-room-store'
 import {
@@ -16,7 +18,12 @@ function Markdown({ text }: { text: string }): ReactElement {
   return (
     <>
       {tokenizeMarkdown(text).map((tok, i) => {
-        if (tok.t === 'bold') return <strong key={i}>{tok.v}</strong>
+        if (tok.t === 'bold')
+          return (
+            <strong key={i}>
+              <TextWithMentions text={tok.v} />
+            </strong>
+          )
         if (tok.t === 'code')
           return (
             <code key={i} className="rounded bg-muted px-1 font-mono text-[11px]">
@@ -32,9 +39,62 @@ function Markdown({ text }: { text: string }): ReactElement {
               {tok.v}
             </pre>
           )
-        return <span key={i}>{tok.v}</span>
+        return <TextWithMentions key={i} text={tok.v} />
       })}
     </>
+  )
+}
+
+function TextWithMentions({ text }: { text: string }): ReactElement {
+  // Cheap pre-check: most messages carry no mention and skip the tokenizer.
+  if (!text.includes('@')) return <span>{text}</span>
+  return (
+    <span>
+      {tokenizeMentions(text).map((seg, i) =>
+        seg.t === 'text' ? <span key={i}>{seg.v}</span> : <MentionChip key={i} name={seg.name} raw={seg.raw} />
+      )}
+    </span>
+  )
+}
+
+/**
+ * Resolved against the CURRENT room and named panes, so a chip follows a
+ * rename or a pane leaving (it then turns into subtle plain text). Only
+ * messages with a mention mount this, so the workspaces subscription is not
+ * paid per message.
+ */
+function MentionChip({ name, raw }: { name: string; raw: string }): ReactElement {
+  const members = useWarRoomStore((s) =>
+    s.activeRoomId !== null ? s.membersByRoom[s.activeRoomId] : undefined
+  )
+  const workspaces = useAppStore((s) => s.workspaces)
+  const res = useMemo(
+    () => resolveMention(name, buildCandidates(members ?? [], namedPanes(workspaces))),
+    [name, members, workspaces]
+  )
+  if (res.status === 'unresolved') {
+    return (
+      <span className="text-muted-foreground" title="Not an open pane or War Room member">
+        {raw}
+      </span>
+    )
+  }
+  if (res.status === 'resolved' && res.id === EVERYONE_CANDIDATE.id) {
+    return <span className="rounded-[3px] px-0.5 font-medium text-[#00b0f4]">{raw}</span>
+  }
+  const ids = res.status === 'resolved' ? [res.id] : res.ids
+  return (
+    <button
+      type="button"
+      onClick={() => jumpToTerminal(ids[0])}
+      title={res.status === 'ambiguous' ? `${ids.length} panes share this name — showing the first` : 'Show this pane'}
+      className={cn(
+        'rounded-[3px] px-0.5 font-medium text-[#00b0f4] hover:bg-[#00b0f4]/15',
+        res.status === 'ambiguous' && 'underline decoration-dotted'
+      )}
+    >
+      {raw}
+    </button>
   )
 }
 

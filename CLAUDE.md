@@ -13,15 +13,28 @@ shell back), plus an optional Chrome-style web-preview column. Built on
 earlier Electron app; workspace structures and known agent session references
 are persisted locally, while terminal output and unsaved buffers are transient.
 
-`README.md` is a short user-facing intro (the pitch, install, first run) and
+`README.md` is a short, scannable user-facing overview (pitch, features list,
+install, quick start, security and privacy, build, origin, licence) and
 `docs/user-guide.md` is the detailed end-user guide — both English, no code
 guidance. The manual smoke-test checklist is `docs/manual-smoke-tests.md`.
 Update them when you ship user-visible behaviour: new features go into the
-guide (and README only if they change one of its three core ideas).
+guide and get a line in the README features list. A new network connection or
+stored data also updates `PRIVACY.md` (and `docs/security-model.md` if it
+touches a control). User decisions are recorded in `docs/decisions.md`.
+
+**Independent project:** Swarmterm GN started as a fork of
+duongducnguyen/swarmterm and is no longer based on or synced with upstream
+(`docs/decisions.md`).
 
 **Supported platform:** the GN fork supports Windows x64 only. CI and release
 bundles target Windows; retained upstream macOS/Linux code is not a support
 commitment. Preserve platform guards when editing inherited Rust code.
+
+**Branches and releases:** work branches merge into `dev` (the integration
+branch). `main` only receives `dev` for a release (`Release GN <version>`
+merge commit), and the release tag goes on that commit on `main`, never on
+`dev`. The release workflow rejects tags outside `main` history. Never
+commit to `main` directly. Steps: `docs/release-process.md`.
 
 ## Commands
 
@@ -40,6 +53,8 @@ Run from the repo root unless noted.
 | `npm run tauri build` | Production bundle (installer). |
 | `npm run tauri build -- --no-bundle` | Release binary, skip installer. |
 | `cargo test` *(from `src-tauri/`)* | Rust unit tests (pty/shell helpers). |
+| `npm run tauri:dev:no-speech` / `npm run test:rust:no-speech` | Isolated dev instance / Rust tests **without LLVM and CMake**: `--no-default-features` drops the `local-speech` feature (whisper.cpp). Only built-in dictation is missing; it fails with `speech-engine-unavailable`. |
+| `npm run tauri:build:corp` / `tauri:build:corp:no-speech` / `test:rust:corp` | Corp edition (`docs/editions.md`): overlay `src-tauri/tauri.corp.conf.json` (own identifier, `npm run build:corp` = `vite --mode corp`) + Cargo feature `corp`. Check it with `cargo clippy --all-targets --no-default-features --features corp -- -D warnings`. |
 
 **Running the app from inside Swarmterm.** Swarmterm is single-instance, keyed
 on its identifier: a second launch with the same identifier is handed to the
@@ -163,11 +178,13 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
 - **MCP server & session token.** On boot the Rust process binds a random
   loopback port and runs an `rmcp` Streamable-HTTP MCP server. Each PTY is
   spawned with `SWARMTERM_MCP_URL=http://127.0.0.1:<port>/mcp` and
-  `SWARMTERM_SESSION=<terminalId>`. The session UUID doubles as the bearer
-  token — the terminal's env is the only place it appears, and it stops
-  authorising the moment the PTY is killed (auth resolver checks the live
-  terminal map). To add a tool: drop it into `src-tauri/src/mcp/tools/` and
-  add one `mod` line.
+  `SWARMTERM_SESSION=<secret>`: a random bearer minted per spawn
+  (`mcp/session_tokens.rs`, rotated on respawn, kept in the host's `meta` for
+  reattach), never the terminalId — `war_room.list_peers` shows ids to peers.
+  Auth maps secret → pane id and stops the moment the PTY is killed (the
+  resolver checks the live terminal map); `mcp_clients` is keyed by pane id.
+  To add a tool: drop it into `src-tauri/src/mcp/tools/` and add one `mod`
+  line.
 - **War Room.** Multiple named rooms on `AppState.war_rooms` (`warroom.rs`:
   `WarRooms` registry over per-room `WarRoom` instances; default room seeded
   at boot, last room undeletable). A pane is in at most one room — drag onto
@@ -184,7 +201,16 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   short nudge is typed into an idle pane (sustained idle, `NUDGE_IDLE_MS`),
   via `deliverPromptToTerminal` which bypasses broadcast fan-out on purpose.
   `mode: "execute"` pastes + runs a full prompt and is server-rejected toward
-  plain-shell members. Codex enrollment rewrites `~/.codex/config.toml` with
+  plain-shell members. Agent (MCP) executes are also refused unless
+  `AppState.agent_policy` (`agent_policy.rs`, default off, pushed by
+  `agent-policy-store` via `agent_policy_set`, Settings → Terminal → Agent
+  safety) allows them — refused with a "use probe" message, never silently
+  downgraded; the Moderator's `war_room_moderator_send` is not gated.
+  Bypass/YOLO launch modes (`dangerous` in `templates.ts`) are confirmed on
+  selection, badged red, and never inherited by `worktree.spawn` workers
+  (`lib/launch-mode-safety.ts`) unless the user turns on
+  `AgentPolicy.workersInheritBypass` (same agent only, default off, user
+  decision 2026-10-29). Codex enrollment rewrites `~/.codex/config.toml` with
   the concrete URL on every boot (`mcp/config.rs::register_codex`).
   "Connected" is set by the first inbound MCP request carrying the pane's
   bearer (`record_client` middleware → `connect_war_room_member`) and again
@@ -203,7 +229,20 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   while focused. A held queue is never dropped — it re-arms every
   `HOLD_RECHECK_MS`, shows an in-pane pill plus a panel badge, and both
   "Deliver now" affordances release it by clearing the typing signal rather
-  than bypassing the scheduler. There is deliberately no maximum hold.
+  than bypassing the scheduler. There is deliberately no maximum hold for
+  blocked/working/typing, nor for `draft` (Claude Code input box shows
+  unsent non-dim text, read from the screen at flush time, `prompt-draft.ts`).
+  A pane that keeps printing is not held forever: `busyPaneReady` releases
+  it once the detector says idle (1.5 s dwell) and the smoothed output rate
+  (renderer-policy EWMA) is below 512 B/s, or after 20 s idle anyway; the
+  `pane-busy` hold's "Deliver now" waives only that output gate.
+- **War Room @-mentions.** `src/lib/war-room-mentions.ts` (pure: candidates,
+  ranking, `@name` / `@"quoted name"` tokens, parsing a sent message back into
+  spans) and `war-room-mention-routing.ts` (who a composer message goes to: no
+  mention = the picker's target unchanged, `@everyone` = one broadcast,
+  otherwise one send per mentioned member; any unresolved mention blocks the
+  whole send, never a partial one). `components/WarRoom/MentionPopup.tsx` only
+  wires the caret and the store to them.
 - **Worktree-per-agent.** The composer's "Isolate features in git worktrees"
   toggle now provisions isolation upfront: every agent pane is created inside
   its own `<repo>.worktrees/<slug>` worktree on branch `swarm/<agent>-<n>`
@@ -252,17 +291,12 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   are denied and navigate the same preview in place. Webviews close on
   terminal death in `kill_terminal` AND `read_loop` (belt-and-braces, like the
   War Room auto-leave).
-- **Auto-update.** Disabled in GN. The tag-triggered Windows release workflow
-  publishes standalone installers and checksums without updater artifacts.
-  `scripts/release/publish.mjs` deliberately refuses the current configuration.
-  See `docs/release-process.md`; do not restore upstream update endpoints.
-- **Anonymous telemetry is compile-time gated.** `analytics.rs` sends a GA4
-  Measurement Protocol `app_open` + 5-minute heartbeat, but only when
-  `SWARMTERM_GA_MEASUREMENT_ID` / `SWARMTERM_GA_API_SECRET` were in the env
-  when **cargo compiled** (`option_env!` — the release scripts export them
-  from `.env.release`). Dev and source builds are no-ops; don't add runtime
-  key lookups, and never send more than version + OS (the user-guide
-  Telemetry section is the contract).
+- **No auto-update.** GN never updates itself: no updater plugin, no update
+  checks. The tag-triggered Windows release workflow publishes standalone
+  installers and checksums. Do not add an updater or update endpoints.
+- **No telemetry.** GN sends no telemetry or usage data (user decision
+  2026-10-29). The release workflow fails if the built exe contains
+  `google-analytics`; do not add analytics or usage pings.
 - **Saved workspaces.** Welcome lists up to 24 local snapshots. `saved-workspaces`
   serializes structure only; `saved-workspace-sync` debounces meaningful changes
   and flushes on close/quit. Restore verifies directories and exact session ids,
@@ -351,7 +385,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   buzzkey's. It never takes pins/`terminals` locks itself. One dictation at
   a time (`active` spans begin → insert answer). Models: fixed catalog in
   `speech/model.rs` (URL + SHA-256), `.part` file renamed only on a hash
-  match. Build: bindgen needs libclang (`LIBCLANG_PATH`; CI uses the
+  match. The engine sits behind the default `local-speech` Cargo feature
+  (`engine.rs` has a stub without it). Build: bindgen needs libclang (`LIBCLANG_PATH`; CI uses the
   runner's LLVM — whisper-rs-sys's bundled bindings are Linux-only), and
   `src-tauri/.cargo/config.toml` forces `-O2` (the cmake crate drops it for
   MSVC → 7x slower) plus an AVX2 baseline. After changing those flags run
@@ -431,8 +466,11 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   held 100k+ handles. `ignored()` filters events by their PARENT instead of
   pruning folders; git metadata watches and explicitly requested files pass
   regardless. notify 8 drops a ReadDirectoryChangesW buffer overflow
-  silently, so a burst (`RESCAN_BURST` raw events) schedules one trailing
-  `rescan` change after `RESCAN_QUIET`; the explorer then reloads every
+  silently, so a burst (`RESCAN_BURST` raw events) enters storm mode
+  (`Storm`: a leading `rescan`, then the seen paths at most every
+  `STORM_EMIT` so latency stays bounded in a continuous storm, and one
+  trailing `rescan` after `RESCAN_QUIET`); the thread (`pump`) blocks on
+  one `Msg` channel (events, extra files, `Stop`) with no idle tick; the explorer then reloads every
   loaded folder and documents re-check disk. Only the root itself stays
   non-renameable (user-guide Known limits).
 - **Terminal host (SWA-54/55, `docs/adr/0001`).** `src-tauri/host` is a
@@ -482,8 +520,52 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `spawned`. Pane ids are saved only while the switch is on (`paneIds`).
   MCP rebinds the port kept in the host's app state (`set_app_state`,
   returned by hello).
-  `input.rs`, `job.rs` and `output.rs` are copies of `pty.rs` parts until
-  the in-process backend goes away: change both or neither.
+  `input.rs` and `output.rs` are copies of `pty.rs` parts until the
+  in-process backend goes away: change both or neither (`job.rs` is shared).
+- **Child process priority (`docs/adr/0005`).** Enforced by the pane's
+  kill-on-close Job Object (`host/src/job.rs`, used by the host AND the
+  in-process backend via `pty::job`): `JOB_OBJECT_LIMIT_PRIORITY_CLASS`
+  from birth (strict mode), a nested build job for processes below an
+  agent (`host/src/priority.rs` watcher, pure rule `plan` over the job's
+  PID list, agents by exe or npm command-line marker), optional hard CPU
+  cap. Settings (mode off/strict/agent-normal, pane/build level, cpuCap)
+  live in `build-priority-store` + `src/lib/build-priority.ts`, merged with
+  the per-workspace opt-out and pushed via `child_priority_set`, which also
+  forwards `set_priority` to the host (and on every host connect).
+  `AGENT_EXES`/`AGENT_MARKERS` mirror the app catalog; a test keeps them
+  in step. Normal and above are not representable.
+- **Environment filter.** `terminal_env::EnvPolicy` (in `AppState.env_policy`,
+  secure default, pushed by `env-policy-store` via `env_policy_set`) filters
+  the inherited env in `plan_spawn` (both backends) and `run_routine_command`
+  BEFORE the app sets its own vars; `APP_SET` names are never filtered. New
+  pane/routine spawners use `state.env_policy_snapshot()`; every other child
+  process (git, editors, probes, companion) is built with
+  `terminal_env::command`/`tokio_command` — never a bare `Command::new`.
+  The user's policy is persisted in `env-policy.json` and loaded at the start
+  of `setup`, so restored panes use it before the renderer's push.
+- **Admin policy (`policy.rs`, `docs/admin-policy.md`).** Read once at start
+  from `HKLM\Software\Policies\SwarmtermGN` then HKCU (HKLM wins per value)
+  into the immutable `AppState.admin_policy`. Enforce every new lock in Rust at
+  the point of action (`admin_policy.check(Lock::…)`), never UI-only; the
+  renderer (`policy-store`, `policy_get`) only greys out. Env and agent policy
+  snapshots apply it on read, so `env_policy_set`/`agent_policy_set` pushes
+  cannot loosen a lock; `DisableMcp` goes through `mcp::toggle` (`POLICY_OFF`)
+  so every MCP writer removes our entries. New values: `FLAGS` in
+  `policy.rs`, `lib/policy.ts`, the ADMX/ADML in `docs/admin/`.
+- **Corp edition (`corp` feature, `docs/editions.md`).** `policy::EDITION` /
+  `Edition::locks` are the compiled-in locks that `load` combines with the
+  registry (can add, never lift). The buzzkey install/check path and the model
+  download are `#[cfg(not(feature = "corp"))]`; the commands stay registered
+  with corp stubs so `generate_handler!` is one list. The renderer hides those
+  sections via `lib/edition.ts` (`VITE_SWARMTERM_EDITION` from `--mode corp`,
+  OR the backend's `policy_get().edition`). A new lock that belongs in Corp
+  goes into `Edition::locks` and `docs/editions.md`; new download/install code
+  gets the same cfg and, if it has an endpoint, the release workflow's corp
+  string check.
+- **`profiling` Cargo feature (dev only).** `prof.rs` spans/counters/lock
+  timers compile to the plain operation without it, so normal and A/B builds
+  are unchanged; never enable it in a release. Use it via
+  `scripts/perf/flood.ps1 -Profile` and `docs/perf-profiling.md`.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that
@@ -500,10 +582,15 @@ first for anything non-trivial.
 
 ## Docs map
 
-- `README.md` — short user-facing intro (English): the pitch as three core
-  ideas, install, first run. No feature walkthrough (that's the user guide) and
-  no architecture or folder tree — that lives here. Screenshots are placehold.co
-  placeholders until real ones land; `docs/images/README.md` has the shot list.
+- `README.md` — short GitHub-style overview (English): pitch, badges, a
+  features list covering all features in one line each, install, quick start,
+  security and privacy, build, origin, licence (user decision 2026-10-29). No
+  feature walkthrough (that's the user guide) and no architecture or folder
+  tree — that lives here. `docs/images/README.md` has the shot list.
+- `PRIVACY.md`, `TERMS.md`, `SECURITY.md` — the project's privacy policy, terms
+  of use and vulnerability policy (no website; these are authoritative).
+- `docs/security-model.md` — threat model and security controls.
+- `docs/decisions.md` — dated user/maintainer decisions; add new ones there.
 - `docs/user-guide.md` — the detailed end-user guide: feature walkthrough,
   shortcuts, troubleshooting, known limits.
 - `CONTRIBUTING.md` — how to build, test, and submit changes; the CI contract.

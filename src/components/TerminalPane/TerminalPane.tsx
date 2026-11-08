@@ -11,14 +11,18 @@ import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { resolveLaunchMode, resolveSplitAgent } from '@/lib/agent-pref'
 import { useTerminalTitleStore } from '@/store/terminal-title-store'
+import { usePaneIdentityDialogStore } from '@/store/pane-identity-dialog-store'
 import { useTerminalSearchStore } from '@/store/terminal-search-store'
 import { useContextUsageStore } from '@/store/context-usage-store'
 import { Button } from '@/components/ui/button'
 import { HeldDeliveryPill } from '@/components/TerminalPane/HeldDeliveryPill'
 import { VoiceIndicatorPill } from '@/components/TerminalPane/VoiceIndicatorPill'
+import { MediaBadge } from '@/components/TerminalPane/MediaBadge'
 import { SearchOverlay } from '@/components/TerminalPane/SearchOverlay'
 import { PaneHeader } from './PaneHeader'
 import { HandoffBriefDialog } from './HandoffBriefDialog'
+import { DangerousModeDialog, type PendingDangerousMode } from '@/components/DangerousModeDialog'
+import { isDangerousLaunchMode } from '@/lib/launch-mode-safety'
 import { ThreadDialog } from './ThreadDialog'
 import { canShowThread } from '@/lib/thread-view'
 import { useAgentAccountsStore } from '@/store/agent-accounts-store'
@@ -158,8 +162,10 @@ export function TerminalPane({
       return
     }
     try {
-      await transferAgentSession(agentId, sessionId, leaf.accountId, accountId)
-      setPaneAccount(leafId, accountId, true)
+      // No transcript yet (e.g. a fresh split pane): no history to lose, so
+      // the pane simply restarts on the new subscription.
+      const carried = await transferAgentSession(agentId, sessionId, leaf.accountId, accountId)
+      setPaneAccount(leafId, accountId, carried)
     } catch (error) {
       reportSwitch(`Could not move the session to the other subscription: ${String(error)}`)
     }
@@ -240,6 +246,9 @@ export function TerminalPane({
           templateById(resolvedAgentId).spawnPromptFlag
         )
       : baseCommand)
+  // Same line without the brief, so prose in a brief never trips the
+  // backend's bypass-flag check.
+  const launchLine = leaf.startupCommand ?? resumeCommand ?? baseCommand
   useEffect(() => {
     if (leaf.launchMode === undefined && resolvedLaunchMode !== undefined) {
       seedPaneLaunchMode(leaf.id, resolvedLaunchMode)
@@ -250,6 +259,8 @@ export function TerminalPane({
   const paneShellFlavor = shellFlavor(resolvedShellId, isWindowsPlatform())
 
   const [status, setStatus] = useState<TerminalStatus>(() => getTerminalStatus(terminalId))
+  // Bypass / YOLO picked from the agent menu waits here for confirmation.
+  const [pendingMode, setPendingMode] = useState<PendingDangerousMode | undefined>(undefined)
 
   // Attach the live terminal to this pane's container and mirror its status.
   // Keyed on terminalId only: remounts (sibling close → tree collapse) re-attach
@@ -262,6 +273,7 @@ export function TerminalPane({
       cwd: resolvedCwd,
       shellId: resolvedShellId,
       initialCommand: resolvedCommand,
+      launchLine,
       worktreeMode: worktreeMode || undefined,
       repoRoot: worktreeMode ? cwd : undefined,
       agentId: resolvedAgentId,
@@ -311,6 +323,7 @@ export function TerminalPane({
       cwd: resolvedCwd,
       shellId: resolvedShellId,
       initialCommand: resolvedCommand,
+      launchLine,
       worktreeMode: worktreeMode || undefined,
       repoRoot: worktreeMode ? cwd : undefined,
       agentId: resolvedAgentId,
@@ -319,7 +332,7 @@ export function TerminalPane({
     // A same-id respawn (agent/cwd/shell switch) starts a new session; the old
     // agent's title no longer describes it. Clear it — the new agent re-titles.
     useTerminalTitleStore.getState().clearTitle(terminalId)
-  }, [terminalId, resolvedCwd, resolvedShellId, resolvedCommand, resolvedAgentId, leaf.accountId])
+  }, [terminalId, resolvedCwd, resolvedShellId, resolvedCommand, launchLine, resolvedAgentId, leaf.accountId])
 
   // Pull keyboard focus into xterm when this pane becomes the focused one.
   useEffect(() => {
@@ -466,7 +479,15 @@ export function TerminalPane({
         hasCwdOverride={leaf.cwd !== undefined}
         launchModeId={resolvedLaunchMode}
         onAgentChange={(id) => setPaneAgent(leafId, id)}
-        onLaunchModeChange={(id) => setPaneLaunchMode(leafId, id)}
+        onLaunchModeChange={(id) => {
+          // Re-picking the running mode is no new risk; only a switch into
+          // Bypass / YOLO asks first.
+          if (id !== resolvedLaunchMode && isDangerousLaunchMode(resolvedAgentId, id)) {
+            setPendingMode({ agentId: resolvedAgentId, modeId: id })
+          } else {
+            setPaneLaunchMode(leafId, id)
+          }
+        }}
         onPickSession={() => pickPaneSession(leafId)}
         onShellChange={(id) => setPaneShell(leafId, id)}
         onChoosePath={() => void handleChoosePath()}
@@ -501,9 +522,22 @@ export function TerminalPane({
         agentTitle={agentTitle}
         leafId={leafId}
         paneName={leaf.name}
+        paneIcon={leaf.icon}
+        paneColor={leaf.color}
+        paneHeaderTint={leaf.headerTint}
         paneNumber={paneNumber}
         ctxPct={ctxPct}
         warRoom={warRoomStatus}
+      />
+
+      <DangerousModeDialog
+        pending={pendingMode}
+        returnTo={terminalId}
+        onCancel={() => setPendingMode(undefined)}
+        onConfirm={() => {
+          if (pendingMode) setPaneLaunchMode(leafId, pendingMode.modeId)
+          setPendingMode(undefined)
+        }}
       />
 
       <HandoffBriefDialog
@@ -539,6 +573,7 @@ export function TerminalPane({
 
         <HeldDeliveryPill terminalId={terminalId} />
         <VoiceIndicatorPill terminalId={terminalId} />
+        {!searchOpen && <MediaBadge terminalId={terminalId} />}
         <DockPicker leafId={leafId} />
         {searchOpen && <SearchOverlay terminalId={terminalId} />}
 
@@ -569,6 +604,9 @@ export function TerminalPane({
     <ContextMenu onOpenChange={(open) => { if (open) setMenuTargetCount(resolveWorktreeTargets().length) }}>
       <ContextMenuTrigger asChild>{pane}</ContextMenuTrigger>
       <ContextMenuContent>
+        <ContextMenuItem onSelect={() => usePaneIdentityDialogStore.getState().open(leafId)}>
+          Set identity…
+        </ContextMenuItem>
         <ContextMenuItem
           disabled={menuTargetCount === 0}
           onSelect={() => void openClearDialog()}

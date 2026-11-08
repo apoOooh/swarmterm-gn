@@ -5,15 +5,39 @@
 //! dictation from conditioning the next.
 
 use std::path::Path;
+#[cfg(feature = "local-speech")]
 use std::sync::Mutex;
 
+#[cfg(feature = "local-speech")]
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+#[cfg(feature = "local-speech")]
 #[derive(Default)]
 pub struct Engine {
     loaded: Mutex<Option<(String, WhisperContext)>>,
 }
 
+/// Built without the `local-speech` feature (no LLVM): same API, every
+/// dictation fails with a stable error code the UI can show.
+#[cfg(not(feature = "local-speech"))]
+#[derive(Default)]
+pub struct Engine;
+
+#[cfg(not(feature = "local-speech"))]
+impl Engine {
+    pub fn transcribe(
+        &self,
+        _model_path: &Path,
+        _samples: &[f32],
+        _language: &str,
+    ) -> Result<String, String> {
+        Err("speech-engine-unavailable".into())
+    }
+
+    pub fn unload(&self) {}
+}
+
+#[cfg(feature = "local-speech")]
 impl Engine {
     /// Blocking: call from `spawn_blocking`.
     pub fn transcribe(
@@ -67,6 +91,7 @@ impl Engine {
 
 /// Leave a core for the UI and the PTY threads. Up to 16, so the large
 /// models `recommend` suggests for big CPUs can use them.
+#[cfg(feature = "local-speech")]
 fn threads() -> i32 {
     std::thread::available_parallelism()
         .map(|n| n.get().saturating_sub(1).clamp(1, 16) as i32)
@@ -76,6 +101,7 @@ fn threads() -> i32 {
 /// Joins segments and drops Whisper's non-speech annotations
 /// (`[BLANK_AUDIO]`, `(Musik)`, `[music]` …): silence must cancel the
 /// dictation, not type a bracketed word into a shell.
+#[cfg_attr(not(feature = "local-speech"), allow(dead_code))]
 pub fn clean_transcript(segments: &[String]) -> String {
     let mut out = String::new();
     for seg in segments {
@@ -133,6 +159,7 @@ mod tests {
     ///  cargo test --release engine::tests::probe -- --ignored --nocapture`
     #[test]
     #[ignore]
+    #[cfg(feature = "local-speech")]
     fn probe() {
         let model = std::env::var("SWA38_MODEL").expect("SWA38_MODEL");
         let wav = std::fs::read(std::env::var("SWA38_WAV").expect("SWA38_WAV")).unwrap();

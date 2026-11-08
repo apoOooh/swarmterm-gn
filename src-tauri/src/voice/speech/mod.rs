@@ -61,6 +61,7 @@ struct DictationEvent {
     reason: Option<String>,
 }
 
+#[cfg(not(feature = "corp"))]
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ProgressEvent {
@@ -363,6 +364,7 @@ pub fn status(app: &AppHandle) -> Result<SpeechStatus, String> {
     })
 }
 
+#[cfg(not(feature = "corp"))]
 pub fn download(app: &AppHandle, id: &str) -> Result<(), String> {
     let model = model::find(id).ok_or("unknown-model")?;
     let dir = models_dir(app)?;
@@ -400,6 +402,7 @@ pub fn download(app: &AppHandle, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(feature = "corp"))]
 async fn fetch(
     app: &AppHandle,
     model: &'static model::ModelInfo,

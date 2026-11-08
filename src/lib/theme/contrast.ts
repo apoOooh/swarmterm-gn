@@ -1,4 +1,4 @@
-// Adapted from parsingk/Astera, debc3098; Apache-2.0. See licenses/Astera/.
+// Adapted from parsingk/Astera, debc3098; Apache-2.0. See third-party-licenses/Astera/.
 import { parseColor } from './color'
 
 /** WCAG 2.1 상대휘도. sRGB 채널을 선형화해 가중 합한다. */

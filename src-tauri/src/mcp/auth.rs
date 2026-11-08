@@ -10,40 +10,43 @@ pub enum AuthError {
 }
 
 /// Resolve a bearer token to a live TerminalId, or explain why not.
-/// `is_live(id)` reports whether the token identifies a currently-running PTY.
-pub fn resolve(token: &str, is_live: impl Fn(&str) -> bool) -> Result<TerminalId, AuthError> {
+/// The token is the pane's secret (`mcp::session_tokens`), never its public
+/// id: `live_owner(token)` returns the id of the currently-running PTY that
+/// secret belongs to, or `None`.
+pub fn resolve(
+    token: &str,
+    live_owner: impl Fn(&str) -> Option<String>,
+) -> Result<TerminalId, AuthError> {
     let trimmed = token.trim();
     if trimmed.is_empty() {
         return Err(AuthError::Missing);
     }
-    if !is_live(trimmed) {
-        return Err(AuthError::Unknown);
-    }
-    Ok(TerminalId(trimmed.to_owned()))
+    live_owner(trimmed)
+        .map(TerminalId)
+        .ok_or(AuthError::Unknown)
 }
 
-/// Pull the token out of an `Authorization` header value. Tolerates a bare
-/// token (no `Bearer ` prefix) because both the MCP client and our own status
-/// probe are first-party, and a missing scheme is not worth a 401 of its own —
-/// `resolve` still rejects anything that is not a live terminal id.
+/// Pull the token out of an `Authorization` header value. Only the
+/// `Bearer <token>` form is accepted: every first-party writer (MCP configs,
+/// hook CLI, status probe) sends the scheme, and a bare token is treated as
+/// missing (empty → `AuthError::Missing`) so the header follows RFC 6750
+/// strictly rather than accepting whatever a client happens to send.
 pub fn bearer(header: &str) -> &str {
-    header.strip_prefix("Bearer ").unwrap_or(header)
+    header.strip_prefix("Bearer ").unwrap_or("")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn is_live(id: &str) -> bool {
-        id == "abc-123"
+    /// Secret "abc-123" belongs to live pane "pane-1".
+    fn is_live(token: &str) -> Option<String> {
+        (token == "abc-123").then(|| "pane-1".to_owned())
     }
 
     #[test]
     fn resolves_live_token() {
-        assert_eq!(
-            resolve("abc-123", is_live),
-            Ok(TerminalId("abc-123".into()))
-        );
+        assert_eq!(resolve("abc-123", is_live), Ok(TerminalId("pane-1".into())));
     }
 
     #[test]
@@ -58,10 +61,15 @@ mod tests {
     }
 
     #[test]
+    fn the_public_pane_id_is_not_a_token() {
+        assert_eq!(resolve("pane-1", is_live), Err(AuthError::Unknown));
+    }
+
+    #[test]
     fn trims_whitespace() {
         assert_eq!(
             resolve("  abc-123  ", is_live),
-            Ok(TerminalId("abc-123".into()))
+            Ok(TerminalId("pane-1".into()))
         );
     }
 
@@ -71,8 +79,15 @@ mod tests {
     }
 
     #[test]
-    fn bearer_passes_through_a_bare_token() {
-        assert_eq!(bearer("abc-123"), "abc-123");
+    fn bearer_rejects_a_bare_token() {
+        assert_eq!(bearer("abc-123"), "");
+        assert_eq!(resolve(bearer("abc-123"), is_live), Err(AuthError::Missing));
+    }
+
+    #[test]
+    fn bearer_rejects_other_schemes() {
+        assert_eq!(bearer("Basic abc-123"), "");
+        assert_eq!(bearer("bearerabc-123"), "");
     }
 
     #[test]
