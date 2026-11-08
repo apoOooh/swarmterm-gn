@@ -795,6 +795,14 @@ Use Task Manager → Details → "Base priority" (or Process Explorer).
 - [ ] Workspace ⋮ → untick **Lower build priority** → that workspace's processes return to "Normal".
       Reopen the saved workspace: still unticked.
 - [ ] Settings → Terminal → **Run terminals in the terminal host** on, new pane → same results as above.
+- [ ] Fresh profile: Settings → Terminal → **Run new panes in the terminal host** is on, and a new pane runs in
+      `swarmterm-host.exe`. A profile that had it switched off keeps it off.
+- [ ] Installed build, terminal host on, a pane open: `swarmterm-host.exe` runs from
+      `%LOCALAPPDATA%\<app id>\host\<version>-<hash>\`, not from the install directory. Install a newer build
+      over it while the pane runs: the installer finishes without a file-in-use prompt. Start the new build: the
+      old pane reopens (saved workspace) on the old host, a new pane starts on a second host, and Settings →
+      Terminal names the old host. Close the old pane: ten minutes later the old host has ended, and the next
+      start removes its folder.
 - [ ] Upgrade from a build with the old "Lower build priority" switched off → mode shows **Off**.
 
 ## Quit with the terminal host

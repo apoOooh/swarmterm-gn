@@ -29,7 +29,7 @@ Real split terminals, one git worktree per agent, and an app your agents can dri
 
 **Terminals and workspaces**
 - Workspaces of real split terminal panes (ConPTY), with live titles, activity and agent-state dots, broadcast typing and zoom.
-- Saved workspaces and templates restore layouts, folders and agent sessions; panes can keep running in a separate terminal host across app restarts (optional).
+- Saved workspaces and templates restore layouts, folders and agent sessions; panes keep running in a separate terminal host across app restarts and updates (on by default).
 - Close to tray; everything keeps running until you quit.
 
 **Agents**

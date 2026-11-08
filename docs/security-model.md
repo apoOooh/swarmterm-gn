@@ -47,6 +47,12 @@ limit the priority class from process birth and add a CPU cap
 ([ADR 0005](adr/0005-job-object-priority.md)). The optional terminal host
 (`swarmterm-host.exe`, [ADR 0001](adr/0001-terminal-host-process.md)) spawns
 only what the app sends it, with the environment cleared first.
+It never runs from the install directory: before every start the app checks
+the SHA-256 of a per-build copy under `%LOCALAPPDATA%\<app id>\host\`
+against the installed binary and copies it again if they differ
+(`src-tauri/src/host_client/launch.rs`). That folder is writable by the user,
+like the rest of the profile; the check catches a damaged or swapped copy,
+not a same-user attacker racing the start.
 
 ### Local MCP server
 

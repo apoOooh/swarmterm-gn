@@ -21,6 +21,14 @@
 //! spawning; the renderer's `keep` decides what can never be shown again.
 //! The MCP port rides along in the host's app state, so surviving panes'
 //! `SWARMTERM_MCP_URL` keeps working when the port is free again.
+//!
+//! Versioned hosts (SWA-82, `launch.rs`): new panes always go to the host of
+//! this build (`client`). Hosts of other builds that still run after an
+//! update are connected at boot as `legacy`: their panes are detached like
+//! any survivor and attach over that host's connection, but nothing new
+//! spawns there. Once a legacy host holds no pane the app shows or may still
+//! attach, its connection is closed (`retire_idle`), so it idles out and its
+//! directory is pruned later.
 
 pub mod detached;
 pub mod routes;
@@ -38,15 +46,25 @@ use tauri::{AppHandle, Manager};
 
 use settings::HostSettings;
 
-/// Lock order: `client` → `terminals` (`reap` checks the map while
-/// `for_spawn` or `reconnect_for_cleanup` hold the slot). Nothing takes
-/// `client` while holding `terminals`: `tray::quit_blocking` drains the map
+/// Lock order: `client` → `legacy` → `terminals` (`reap` checks the map
+/// while `for_spawn` or `reconnect_for_cleanup` hold the slot), and
+/// `detached` → a sink's `routes` (`retire_idle`). Nothing takes `client` or
+/// `legacy` while holding `terminals`: `tray::quit_blocking` drains the map
 /// first, `kill_terminal` never touches the hub.
 #[derive(Default)]
 pub struct HostHub {
     settings: Mutex<HostSettings>,
     #[cfg(windows)]
     client: Mutex<Option<Client>>,
+    /// Hosts of other builds that still hold panes (SWA-82).
+    #[cfg(windows)]
+    legacy: Mutex<Vec<Client>>,
+    /// Hosts of other builds the boot could not talk to (reason per host).
+    #[cfg(windows)]
+    unreachable: Mutex<Vec<String>>,
+    /// Where this build's host lives; computed once (hashes the binary).
+    #[cfg(windows)]
+    location: std::sync::OnceLock<Result<launch::HostDir, String>>,
     last_error: Mutex<Option<String>>,
     detached: Mutex<detached::Detached>,
     /// Set once the boot connection attempt finished (either way).
@@ -67,6 +85,37 @@ const BOOT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 pub struct Client {
     pub conn: std::sync::Arc<conn::Conn>,
     pub sink: std::sync::Arc<AppSink>,
+    /// The host's data dir: which host this is (`DetachedPane::host`).
+    pub dir: std::path::PathBuf,
+}
+
+/// Held while a detached pane is being attached (`take_detached` until
+/// `attach_hosted` returns): the pane has left the detached set but its
+/// route is not bound yet, and `retire_idle` must not close that host's
+/// connection in between.
+#[cfg(windows)]
+pub struct AttachTicket(std::sync::Arc<AppSink>);
+
+#[cfg(windows)]
+impl Drop for AttachTicket {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+        if self.0.attaching.fetch_sub(1, Ordering::AcqRel) == 1 {
+            // A failed attach may have been the host's last pane.
+            if let Some(hub) = self.0.app.try_state::<HostHub>() {
+                hub.retire_idle();
+            }
+        }
+    }
+}
+
+/// Which slot a lost connection held.
+#[cfg(windows)]
+enum Held {
+    Current,
+    Legacy(std::path::PathBuf),
+    /// Already replaced or retired: someone else cleaned up.
+    Neither,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,6 +130,9 @@ pub struct HostStatus {
     /// host predates process priority (ADR 0005) and would run them
     /// unlimited. Shown under Settings → Terminal → Process priority.
     pub priority_unsupported: Option<String>,
+    /// Hosts of an earlier build that still run panes (SWA-82), or could
+    /// not be reached. Shown under the host status line.
+    pub older_hosts: Option<String>,
 }
 
 impl HostHub {
@@ -102,7 +154,10 @@ impl HostHub {
         if let Some(c) = slot.as_ref().filter(|c| c.conn.is_alive()) {
             return Self::enforced(c.clone());
         }
-        match connect(app, true, false) {
+        match self
+            .location(app)
+            .and_then(|host| connect(app, &host, true, false))
+        {
             Ok(c) => {
                 *slot = Some(c.clone());
                 *self.last_error.lock().unwrap() = None;
@@ -130,7 +185,24 @@ impl HostHub {
         None
     }
 
-    /// Every connection still open, for quit's flush.
+    /// Where this build's host lives (`launch::locate`), computed once.
+    #[cfg(windows)]
+    fn location(&self, app: &AppHandle) -> Result<launch::HostDir, String> {
+        self.location
+            .get_or_init(|| {
+                let local = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+                let version = app.package_info().version.to_string();
+                launch::locate(
+                    &local,
+                    &version,
+                    &launch::bundled_exe()?,
+                    launch::versioned_layout(),
+                )
+            })
+            .clone()
+    }
+
+    /// The connection to this build's host, if open.
     #[cfg(windows)]
     pub fn current(&self) -> Option<Client> {
         self.client
@@ -140,18 +212,74 @@ impl HostHub {
             .filter(|c| c.conn.is_alive())
     }
 
-    /// Clear the slot if it still holds `conn`. `false` = an older,
-    /// already replaced connection: the slot's owner took over its cleanup.
+    /// Every connection still open (this build's host first), for quit's
+    /// flush and settings every host must hear.
     #[cfg(windows)]
-    fn forget(&self, conn: &std::sync::Arc<conn::Conn>) -> bool {
-        let mut slot = self.client.lock().unwrap();
-        let current = slot
-            .as_ref()
-            .is_some_and(|c| std::sync::Arc::ptr_eq(&c.conn, conn));
-        if current {
-            *slot = None;
+    pub fn all(&self) -> Vec<Client> {
+        let mut out: Vec<Client> = self.current().into_iter().collect();
+        out.extend(
+            self.legacy
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| c.conn.is_alive())
+                .cloned(),
+        );
+        out
+    }
+
+    /// Clear the slot that still holds `conn`.
+    #[cfg(windows)]
+    fn forget(&self, conn: &std::sync::Arc<conn::Conn>) -> Held {
+        let same = |c: &Client| std::sync::Arc::ptr_eq(&c.conn, conn);
+        {
+            let mut slot = self.client.lock().unwrap();
+            if slot.as_ref().is_some_and(same) {
+                *slot = None;
+                return Held::Current;
+            }
         }
-        current
+        let mut legacy = self.legacy.lock().unwrap();
+        match legacy.iter().position(same) {
+            Some(i) => Held::Legacy(legacy.remove(i).dir),
+            None => Held::Neither,
+        }
+    }
+
+    /// Close the connection of every legacy host that holds nothing the
+    /// app shows or may still attach: no detached pane, no attach in
+    /// flight, no live or pending route. The host then has no client and,
+    /// once its last PTY is gone, idles out. Checked under the `detached`
+    /// lock, which `take_detached` also holds while it counts an attach, so
+    /// a pane can never be between the two.
+    #[cfg(windows)]
+    pub fn retire_idle(&self) {
+        let legacy = self.legacy.lock().unwrap().clone();
+        if legacy.is_empty() {
+            return;
+        }
+        let idle: Vec<Client> = {
+            let detached = self.detached.lock().unwrap();
+            legacy
+                .into_iter()
+                .filter(|c| {
+                    !detached.any_on(&c.dir)
+                        && c.sink.attaching.load(std::sync::atomic::Ordering::Acquire) == 0
+                        && c.sink.routes.lock().unwrap().is_empty()
+                })
+                .collect()
+        };
+        for c in idle {
+            self.legacy
+                .lock()
+                .unwrap()
+                .retain(|x| !std::sync::Arc::ptr_eq(&x.conn, &c.conn));
+            eprintln!(
+                "[host] older host {} holds no pane any more; disconnecting",
+                c.dir.display()
+            );
+            c.conn.close();
+        }
     }
 
     /// Cleanup-only reconnect after `lost`. Runs under the slot lock like
@@ -166,9 +294,25 @@ impl HostHub {
         if slot.as_ref().is_some_and(|c| c.conn.is_alive()) {
             return;
         }
-        if let Ok(c) = connect(app, false, false) {
+        if let Ok(c) = self
+            .location(app)
+            .and_then(|host| connect(app, &host, false, false))
+        {
             *slot = Some(c);
         }
+    }
+
+    /// `reconnect_for_cleanup` for a lost legacy connection: reap what no
+    /// window shows, and keep the connection only while detached panes of
+    /// that host may still be attached.
+    #[cfg(windows)]
+    fn reconnect_legacy(&self, app: &AppHandle, dir: std::path::PathBuf) {
+        let _slot = self.client.lock().unwrap();
+        let Ok(c) = connect(app, &launch::HostDir::found(dir), false, false) else {
+            return;
+        };
+        self.legacy.lock().unwrap().push(c);
+        self.retire_idle();
     }
 
     fn mark_booted(&self) {
@@ -183,26 +327,39 @@ impl HostHub {
             .wait_timeout_while(guard, BOOT_WAIT, |done| !*done);
     }
 
-    /// Close host panes by id over the current connection.
+    /// Close detached panes, each over its own host's connection.
     #[cfg(windows)]
-    fn close(&self, ids: &[String]) {
-        if ids.is_empty() {
-            return;
-        }
-        if let Some(c) = self.current() {
-            for id in ids {
-                c.conn.kill(id);
+    fn close(&self, panes: &[detached::DetachedPane]) {
+        if !panes.is_empty() {
+            let clients = self.all();
+            for p in panes {
+                if let Some(c) = clients.iter().find(|c| c.dir == p.host) {
+                    c.conn.kill(&p.terminal_id);
+                }
             }
         }
+        self.retire_idle();
     }
 
     /// A detached pane `create_terminal` may attach to, with the connection
-    /// that can. Single use (`Detached::take`).
+    /// of the host that runs it. Single use (`Detached::take`); the ticket
+    /// must live until the attach is answered.
     #[cfg(windows)]
-    pub fn take_detached(&self, id: &str) -> Option<(detached::DetachedPane, Client)> {
-        let client = self.current()?;
-        let pane = self.detached.lock().unwrap().take(id)?;
-        Some((pane, client))
+    pub fn take_detached(
+        &self,
+        id: &str,
+    ) -> Option<(detached::DetachedPane, Client, AttachTicket)> {
+        let clients = self.all();
+        let mut detached = self.detached.lock().unwrap();
+        let pane = detached.take(id)?;
+        let client = clients.into_iter().find(|c| c.dir == pane.host)?;
+        client
+            .sink
+            .attaching
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        drop(detached);
+        let ticket = AttachTicket(client.sink.clone());
+        Some((pane, client, ticket))
     }
 
     pub fn status(&self) -> HostStatus {
@@ -224,6 +381,21 @@ impl HostHub {
         };
         #[cfg(not(windows))]
         let (connected, host_version, priority_unsupported) = (false, None, None);
+        #[cfg(windows)]
+        let older_hosts = {
+            let legacy: Vec<String> = self
+                .legacy
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| c.conn.is_alive())
+                .map(|c| build_label(&c.dir))
+                .collect();
+            let unreachable = self.unreachable.lock().unwrap().clone();
+            older_hosts_note(&legacy, &unreachable)
+        };
+        #[cfg(not(windows))]
+        let older_hosts = None;
         HostStatus {
             enabled: self.enabled(),
             supported: cfg!(windows),
@@ -231,6 +403,7 @@ impl HostHub {
             host_version,
             error: self.last_error.lock().unwrap().clone(),
             priority_unsupported,
+            older_hosts,
         }
     }
 }
@@ -243,19 +416,23 @@ const CONNECT_ATTEMPTS: u32 = 3;
 #[cfg(windows)]
 const CONNECT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
-/// Connect to the running host, starting one when `start` is set. `adopt`
-/// (boot only): the host's panes become the detached set instead of being
-/// reaped. Blocking: runs on `create_terminal`'s blocking thread or a plain
-/// thread.
+/// Connect to the host of `host`, starting one when `start` is set (only
+/// ever for this build's host). `adopt` (boot only): the host's panes join
+/// the detached set instead of being reaped. Blocking: runs on
+/// `create_terminal`'s blocking thread or a plain thread.
 #[cfg(windows)]
-fn connect(app: &AppHandle, start: bool, adopt: bool) -> Result<Client, String> {
-    let data_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+fn connect(
+    app: &AppHandle,
+    host: &launch::HostDir,
+    start: bool,
+    adopt: bool,
+) -> Result<Client, String> {
     let mut last = String::from("terminal host unavailable");
     for attempt in 0..CONNECT_ATTEMPTS {
         if attempt > 0 {
             std::thread::sleep(CONNECT_RETRY_DELAY);
         }
-        match connect_once(app, &data_dir, start) {
+        match connect_once(app, host, start) {
             Ok(c) => {
                 if adopt {
                     self::adopt(app, &c);
@@ -282,16 +459,14 @@ fn connect(app: &AppHandle, start: bool, adopt: bool) -> Result<Client, String> 
 }
 
 #[cfg(windows)]
-fn connect_once(
-    app: &AppHandle,
-    data_dir: &std::path::Path,
-    start: bool,
-) -> Result<Client, String> {
+fn connect_once(app: &AppHandle, host: &launch::HostDir, start: bool) -> Result<Client, String> {
+    let data_dir = host.data_dir.as_path();
     let sink = std::sync::Arc::new(AppSink {
         app: app.clone(),
         routes: Mutex::default(),
         conn: std::sync::OnceLock::new(),
         replays: PendingReplays::default(),
+        attaching: std::sync::atomic::AtomicUsize::new(0),
     });
     let try_connect = |ep: &launch::Endpoint| {
         tauri::async_runtime::block_on(conn::Conn::connect(&ep.pipe, &ep.token, sink.clone()))
@@ -303,12 +478,63 @@ fn connect_once(
         Some(Err(e)) if !start => return Err(e),
         _ if !start => return Err("no terminal host running".into()),
         _ => {
-            let ep = launch::start(data_dir, existing.as_ref())?;
+            let ep = launch::start(host, existing.as_ref())?;
+            prune(app, data_dir);
             try_connect(&ep)?
         }
     };
     let _ = sink.conn.set(conn.clone());
-    Ok(Client { conn, sink })
+    Ok(Client {
+        conn,
+        sink,
+        dir: data_dir.to_path_buf(),
+    })
+}
+
+/// Remove the directories of host builds that no longer run (`current` is
+/// this build's data dir and stays).
+#[cfg(windows)]
+fn prune(app: &AppHandle, current: &std::path::Path) {
+    let Ok(local) = app.path().app_local_data_dir() else {
+        return;
+    };
+    for dir in launch::prune(&local, current) {
+        eprintln!("[host] removed unused host directory {}", dir.display());
+    }
+}
+
+/// A host's build as users can tell it apart: the version directory's name
+/// (`1.26.0-ab12…`); the crate's `hostVersion` does not change per release.
+#[cfg(windows)]
+fn build_label(dir: &std::path::Path) -> String {
+    let versioned = dir
+        .parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == launch::HOSTS_DIR);
+    match dir.file_name() {
+        Some(name) if versioned => name.to_string_lossy().into_owned(),
+        _ => "of an unversioned build".to_string(),
+    }
+}
+
+/// The status line's note on hosts of earlier builds.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn older_hosts_note(legacy: &[String], unreachable: &[String]) -> Option<String> {
+    let mut parts = Vec::new();
+    if !legacy.is_empty() {
+        parts.push(format!(
+            "Panes from before the update still run on the terminal host {} until they are \
+             closed; new panes use the current host.",
+            legacy.join(", ")
+        ));
+    }
+    if !unreachable.is_empty() {
+        parts.push(format!(
+            "An older terminal host could not be reached ({}); its panes cannot be reopened.",
+            unreachable.join("; ")
+        ));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 /// A fresh connection tracks no pane yet, so every host pane neither the
@@ -338,11 +564,21 @@ fn reap(app: &AppHandle, client: &Client) {
 fn adopt(app: &AppHandle, client: &Client) {
     match client.conn.list(conn::REQUEST_TIMEOUT) {
         Ok(list) => {
-            let d = detached::Detached::from_list(&list);
-            let n = d.list().len();
-            *app.state::<HostHub>().detached.lock().unwrap() = d;
+            let dupes = app
+                .state::<HostHub>()
+                .detached
+                .lock()
+                .unwrap()
+                .add(&list, &client.dir);
+            for id in &dupes {
+                client.conn.kill(id);
+            }
+            let n = list.len() - dupes.len();
             if n > 0 {
-                eprintln!("[host] {n} pane(s) survived the last app instance");
+                eprintln!(
+                    "[host] {n} pane(s) on host {} survived the last app instance",
+                    client.conn.host_version
+                );
             }
         }
         Err(e) => eprintln!("[host] could not list surviving panes: {e}"),
@@ -370,6 +606,8 @@ pub struct AppSink {
     /// Attached generations whose replay frame has not arrived yet: the
     /// first frame becomes `PtyOut::Replay` with these facts.
     replays: PendingReplays<ReplayFacts>,
+    /// Attaches in flight on this connection (`AttachTicket`).
+    attaching: std::sync::atomic::AtomicUsize,
 }
 
 #[cfg(windows)]
@@ -543,6 +781,10 @@ impl conn::Sink for AppSink {
         if let Some(channel) = channel {
             crate::pty::finish_generation(&self.app, terminal_id, spawn_id, exit_code, &channel);
         }
+        // The last pane of an older host may just have ended.
+        if let Some(hub) = self.app.try_state::<HostHub>() {
+            hub.retire_idle();
+        }
     }
 
     fn input_dropped(&self, terminal_id: &str) {
@@ -551,9 +793,9 @@ impl conn::Sink for AppSink {
     }
 
     fn lost(&self) {
-        let current = match (self.app.try_state::<HostHub>(), self.conn.get()) {
+        let held = match (self.app.try_state::<HostHub>(), self.conn.get()) {
             (Some(hub), Some(conn)) => hub.forget(conn),
-            _ => false,
+            _ => Held::Neither,
         };
         let ended = self.routes.lock().unwrap().drain();
         for (terminal_id, spawn_id, channel) in ended {
@@ -563,8 +805,9 @@ impl conn::Sink for AppSink {
         // panes just ended would keep running and keep it from idling out.
         // Reconnect to clean up, without starting a host; off the reader
         // task, because connecting blocks. Only for the slot's connection: a
-        // replaced one was kicked by its successor, which reaped on connect.
-        if !current {
+        // replaced one was kicked by its successor, which reaped on connect,
+        // and a retired one was closed on purpose.
+        if matches!(held, Held::Neither) {
             return;
         }
         // Quitting: the cleanup reconnect would reap the panes a "keep
@@ -580,7 +823,11 @@ impl conn::Sink for AppSink {
         let app = self.app.clone();
         std::thread::spawn(move || {
             if let Some(hub) = app.try_state::<HostHub>() {
-                hub.reconnect_for_cleanup(&app);
+                match held {
+                    Held::Current => hub.reconnect_for_cleanup(&app),
+                    Held::Legacy(dir) => hub.reconnect_legacy(&app, dir),
+                    Held::Neither => {}
+                }
             }
         });
     }
@@ -626,12 +873,31 @@ fn sweep(app: &AppHandle) {
     let hub = app.state::<HostHub>();
     {
         let _slot = hub.client.lock().unwrap();
-        if let Ok(c) = connect(app, false, false) {
-            let _ = c.conn.flush(conn::REQUEST_TIMEOUT);
-            c.conn.close();
+        for host in every_host(app, &hub) {
+            if let Ok(c) = connect(app, &host, false, false) {
+                let _ = c.conn.flush(conn::REQUEST_TIMEOUT);
+                c.conn.close();
+            }
         }
     }
     hub.mark_booted();
+}
+
+/// This build's host (if it can be located) and every other host found on
+/// disk, this build's first.
+#[cfg(windows)]
+fn every_host(app: &AppHandle, hub: &HostHub) -> Vec<launch::HostDir> {
+    let current = hub.location(app).ok();
+    let Ok(local) = app.path().app_local_data_dir() else {
+        return current.into_iter().collect();
+    };
+    let current_dir = current
+        .as_ref()
+        .map_or_else(|| local.clone(), |h| h.data_dir.clone());
+    let others = launch::others(&local, &current_dir)
+        .into_iter()
+        .map(launch::HostDir::found);
+    current.into_iter().chain(others).collect()
 }
 
 #[cfg(windows)]
@@ -639,10 +905,34 @@ fn boot(app: &AppHandle) {
     let hub = app.state::<HostHub>();
     {
         let mut slot = hub.client.lock().unwrap();
-        if let Ok(c) = connect(app, false, true) {
-            *slot = Some(c);
+        let current = hub.location(app).ok();
+        for host in every_host(app, &hub) {
+            let this_build = current.as_ref() == Some(&host);
+            match connect(app, &host, false, true) {
+                Ok(c) if this_build => *slot = Some(c),
+                Ok(c) => hub.legacy.lock().unwrap().push(c),
+                Err(_) if this_build => {}
+                // A discovery file whose host is gone is pruned below; one
+                // that runs but refuses us (a protocol we no longer speak)
+                // keeps its panes out of reach, which Settings says.
+                Err(e) => {
+                    let pid_alive = launch::read_endpoint(&host.data_dir)
+                        .is_some_and(|ep| launch::is_running(ep.pid));
+                    if pid_alive {
+                        eprintln!(
+                            "[host] older host at {} unreachable: {e}",
+                            host.data_dir.display()
+                        );
+                        hub.unreachable.lock().unwrap().push(e);
+                    }
+                }
+            }
+        }
+        if let Some(current) = &current {
+            prune(app, &current.data_dir);
         }
     }
+    hub.retire_idle();
     hub.mark_booted();
     // The renderer reports `keep` once it loaded the saved workspaces; if
     // it never does, detached panes would run unseen and keep the host
@@ -671,10 +961,13 @@ pub fn preferred_mcp_port(app: &AppHandle) -> Option<u16> {
     {
         let hub = app.state::<HostHub>();
         hub.wait_booted();
-        let c = hub.current()?;
-        c.conn.app_state["mcpPort"]
-            .as_u64()
-            .and_then(|p| u16::try_from(p).ok())
+        // Every host the previous instance used stored the same port; this
+        // build's host first, an older one if only that survived.
+        hub.all().iter().find_map(|c| {
+            c.conn.app_state["mcpPort"]
+                .as_u64()
+                .and_then(|p| u16::try_from(p).ok())
+        })
     }
     #[cfg(not(windows))]
     {
@@ -689,7 +982,7 @@ pub fn publish_mcp_port(app: &AppHandle, port: u16) {
     let hub = app.state::<HostHub>();
     *hub.mcp_port.lock().unwrap() = Some(port);
     #[cfg(windows)]
-    if let Some(c) = hub.current() {
+    for c in hub.all() {
         c.conn.set_app_state(serde_json::json!({ "mcpPort": port }));
     }
 }
@@ -804,6 +1097,20 @@ fn decode_same_len(bytes: &[u8]) -> String {
         out.extend(std::iter::repeat_n('?', chunk.invalid().len()));
     }
     out
+}
+
+#[cfg(test)]
+mod older_hosts_tests {
+    use super::older_hosts_note;
+
+    #[test]
+    fn the_note_names_running_and_unreachable_older_hosts() {
+        assert_eq!(older_hosts_note(&[], &[]), None);
+        let n = older_hosts_note(&["0.1.0".into()], &[]).unwrap();
+        assert!(n.contains("0.1.0") && n.contains("new panes use the current host"));
+        let n = older_hosts_note(&[], &["unsupported-proto".into()]).unwrap();
+        assert!(n.contains("unsupported-proto"));
+    }
 }
 
 #[cfg(test)]

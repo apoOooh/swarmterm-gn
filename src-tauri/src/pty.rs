@@ -798,7 +798,7 @@ fn spawn_terminal_inner(
             // A pane of that kind that survived the last app instance in the
             // terminal host must not keep running detached: end it.
             #[cfg(windows)]
-            if let Some((_, client)) = app
+            if let Some((_, client, _ticket)) = app
                 .try_state::<crate::host_client::HostHub>()
                 .and_then(|hub| hub.take_detached(&id))
             {
@@ -815,7 +815,8 @@ fn spawn_terminal_inner(
         .try_state::<crate::host_client::HostHub>()
         .and_then(|hub| hub.take_detached(&id))
     {
-        Some((pane, client)) => match attach_hosted(state, &id, pane, on_data, client) {
+        // The ticket lives until the attach is answered (`retire_idle`).
+        Some((pane, client, _ticket)) => match attach_hosted(state, &id, pane, on_data, client) {
             Ok(result) => return result,
             Err(on_data) => on_data,
         },

@@ -8,7 +8,8 @@ const base: TerminalHostStatus = {
   connected: false,
   hostVersion: null,
   error: null,
-  priorityUnsupported: null
+  priorityUnsupported: null,
+  olderHosts: null
 }
 
 describe('describeHostStatus', () => {
@@ -29,6 +30,13 @@ describe('describeHostStatus', () => {
   it('reports why new panes fell back to in-process', () => {
     expect(describeHostStatus({ ...base, enabled: true, error: 'terminal host not found' })).toBe(
       'Unavailable (terminal host not found). New panes run inside Swarmterm.'
+    )
+  })
+
+  it('adds the note on hosts of an earlier build', () => {
+    const olderHosts = 'Panes from before the update still run on the terminal host 0.1.0.'
+    expect(describeHostStatus({ ...base, enabled: true, connected: true, hostVersion: '0.2.0', olderHosts })).toBe(
+      `Connected to terminal host 0.2.0. ${olderHosts}`
     )
   })
 

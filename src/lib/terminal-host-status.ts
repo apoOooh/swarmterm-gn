@@ -2,6 +2,11 @@ import type { TerminalHostStatus } from '@/tauri/terminal-host'
 
 /** One line for Settings → Terminal → Terminal host. */
 export function describeHostStatus(s: TerminalHostStatus): string {
+  const line = mainLine(s)
+  return s.supported && s.olderHosts ? `${line} ${s.olderHosts}` : line
+}
+
+function mainLine(s: TerminalHostStatus): string {
   if (!s.supported) return 'Only available on Windows.'
   if (!s.enabled) return 'Off: terminals run inside Swarmterm.'
   if (s.connected) return `Connected to terminal host ${s.hostVersion ?? ''}`.trimEnd() + '.'

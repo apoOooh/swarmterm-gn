@@ -402,8 +402,8 @@ function useHostStatus(): [
 
 /**
  * Terminal host (SWA-55, ADR 0001 phase 2): new panes spawn in the separate
- * `swarmterm-host.exe` instead of inside the app. Off by default until
- * panes can survive a restart (phase 3/4); running panes keep their backend.
+ * `swarmterm-host.exe` instead of inside the app. On by default since the
+ * installer ships it (SWA-82); running panes keep their backend.
  */
 function TerminalHostSettings(): ReactElement | null {
   const [status, setStatus] = useHostStatus()

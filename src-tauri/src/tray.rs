@@ -79,12 +79,12 @@ fn quit_blocking(app: &tauri::AppHandle, keep_hosted: bool) {
     // the host has read those requests, or they die with our pipe at exit
     // and the panes keep running without a client. The host does the
     // graceful close and KILL_GRACE itself, then idles out (ADR 0001).
+    // Every host: panes of an older build's host (SWA-82) close the same way.
     #[cfg(windows)]
-    if let Some(client) = app
-        .try_state::<crate::host_client::HostHub>()
-        .and_then(|hub| hub.current())
-    {
-        let _ = client.conn.flush(std::time::Duration::from_secs(2));
+    if let Some(hub) = app.try_state::<crate::host_client::HostHub>() {
+        for client in hub.all() {
+            let _ = client.conn.flush(std::time::Duration::from_secs(2));
+        }
     }
     for w in waiters {
         let _ = w.join();

@@ -13,8 +13,13 @@
 //! knows can never be shown again. If the renderer never reports, `expire`
 //! closes everything, so detached panes cannot keep the host from idling
 //! out forever.
+//!
+//! Several hosts can hold detached panes (SWA-82: after an update the old
+//! host keeps its panes, the new one takes new panes), so every entry
+//! remembers the data dir of its host.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -28,16 +33,20 @@ pub struct DetachedPane {
     pub cwd: String,
     /// `create`'s meta: agentId, worktreeMode, repoRoot, claudeConfigDir.
     pub meta: Value,
+    /// Data dir of the host that runs it (app side only).
+    #[serde(skip)]
+    pub host: PathBuf,
 }
 
 impl DetachedPane {
-    fn from_info(v: &Value) -> Option<Self> {
+    fn from_info(v: &Value, host: &Path) -> Option<Self> {
         Some(DetachedPane {
             terminal_id: v["terminalId"].as_str()?.to_string(),
             spawn_id: v["spawnId"].as_str()?.to_string(),
             pid: v["pid"].as_u64().map(|p| p as u32),
             cwd: v["cwd"].as_str().unwrap_or("").to_string(),
             meta: v["meta"].clone(),
+            host: host.to_path_buf(),
         })
     }
 }
@@ -50,15 +59,31 @@ pub struct Detached {
 
 impl Detached {
     /// From the boot connection's `list`.
+    #[cfg(test)]
     pub fn from_list(list: &[Value]) -> Self {
-        Detached {
-            panes: list
-                .iter()
-                .filter_map(DetachedPane::from_info)
-                .map(|p| (p.terminal_id.clone(), p))
-                .collect(),
-            settled: false,
+        let mut d = Detached::default();
+        d.add(list, Path::new("h"));
+        d
+    }
+
+    /// Add one host's boot `list`. Returns the ids another host already
+    /// holds: ids are unique per app instance, so a second copy can only be
+    /// a leftover, and the caller closes it on `host`.
+    pub fn add(&mut self, list: &[Value], host: &Path) -> Vec<String> {
+        let mut dupes = Vec::new();
+        for p in list.iter().filter_map(|v| DetachedPane::from_info(v, host)) {
+            if self.panes.contains_key(&p.terminal_id) {
+                dupes.push(p.terminal_id);
+            } else {
+                self.panes.insert(p.terminal_id.clone(), p);
+            }
         }
+        dupes
+    }
+
+    /// Whether any detached pane runs on the host with this data dir.
+    pub fn any_on(&self, host: &Path) -> bool {
+        self.panes.values().any(|p| p.host == host)
     }
 
     pub fn contains(&self, id: &str) -> bool {
@@ -86,7 +111,7 @@ impl Detached {
 
     /// The renderer's verdict: `ids` may still be opened. Returns the panes
     /// to close.
-    pub fn keep(&mut self, ids: &HashSet<String>) -> Vec<String> {
+    pub fn keep(&mut self, ids: &HashSet<String>) -> Vec<DetachedPane> {
         self.settled = true;
         let close: Vec<String> = self
             .panes
@@ -94,27 +119,24 @@ impl Detached {
             .filter(|id| !ids.contains(*id))
             .cloned()
             .collect();
-        for id in &close {
-            self.panes.remove(id);
-        }
         close
-    }
-
-    /// A saved workspace was forgotten: its panes can never be opened.
-    pub fn release(&mut self, ids: &[String]) -> Vec<String> {
-        ids.iter()
-            .filter(|id| self.panes.remove(*id).is_some())
-            .cloned()
+            .iter()
+            .filter_map(|id| self.panes.remove(id))
             .collect()
     }
 
+    /// A saved workspace was forgotten: its panes can never be opened.
+    pub fn release(&mut self, ids: &[String]) -> Vec<DetachedPane> {
+        ids.iter().filter_map(|id| self.panes.remove(id)).collect()
+    }
+
     /// No verdict in time: close everything still detached.
-    pub fn expire(&mut self) -> Vec<String> {
+    pub fn expire(&mut self) -> Vec<DetachedPane> {
         if self.settled {
             return Vec::new();
         }
         self.settled = true;
-        self.panes.drain().map(|(id, _)| id).collect()
+        self.panes.drain().map(|(_, p)| p).collect()
     }
 }
 
@@ -130,6 +152,12 @@ mod tests {
 
     fn set(ids: &[&str]) -> HashSet<String> {
         ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn ids(panes: Vec<DetachedPane>) -> Vec<String> {
+        let mut v: Vec<String> = panes.into_iter().map(|p| p.terminal_id).collect();
+        v.sort();
+        v
     }
 
     #[test]
@@ -164,7 +192,7 @@ mod tests {
     #[test]
     fn keep_closes_what_no_snapshot_references() {
         let mut d = Detached::from_list(&[info("a", "g1"), info("b", "g2")]);
-        assert_eq!(d.keep(&set(&["a", "zzz"])), vec!["b".to_string()]);
+        assert_eq!(ids(d.keep(&set(&["a", "zzz"]))), vec!["b".to_string()]);
         assert!(d.contains("a"));
         // A verdict was given: the expiry no longer closes anything.
         assert!(d.expire().is_empty());
@@ -174,16 +202,34 @@ mod tests {
     #[test]
     fn release_closes_a_forgotten_workspace_s_panes() {
         let mut d = Detached::from_list(&[info("a", "g1"), info("b", "g2")]);
-        assert_eq!(d.release(&["b".into(), "x".into()]), vec!["b".to_string()]);
+        assert_eq!(
+            ids(d.release(&["b".into(), "x".into()])),
+            vec!["b".to_string()]
+        );
         assert_eq!(d.list().len(), 1);
     }
 
     #[test]
     fn without_a_verdict_everything_expires() {
         let mut d = Detached::from_list(&[info("a", "g1"), info("b", "g2")]);
-        let mut gone = d.expire();
-        gone.sort();
-        assert_eq!(gone, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(ids(d.expire()), vec!["a".to_string(), "b".to_string()]);
         assert!(d.list().is_empty());
+    }
+
+    #[test]
+    fn panes_of_several_hosts_remember_their_host() {
+        let mut d = Detached::default();
+        assert!(d.add(&[info("a", "g1")], Path::new("old")).is_empty());
+        // The same id on a second host is a leftover the caller closes.
+        assert_eq!(
+            d.add(&[info("b", "g2"), info("a", "g9")], Path::new("new")),
+            vec!["a".to_string()]
+        );
+        assert_eq!(d.take("a").map(|p| p.host), Some(PathBuf::from("old")));
+        assert!(d.any_on(Path::new("new")));
+        assert!(!d.any_on(Path::new("old")));
+        let closed = d.keep(&set(&[]));
+        assert_eq!(closed[0].host, PathBuf::from("new"));
+        assert!(!d.any_on(Path::new("new")));
     }
 }
