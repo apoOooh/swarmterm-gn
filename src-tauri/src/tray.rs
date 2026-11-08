@@ -160,8 +160,7 @@ mod tests {
 
     #[test]
     fn keep_spares_only_hosted_panes() {
-        let (kept, close) =
-            split_for_quit(vec![(1, true), (2, false), (3, true)], true, |t| t.1);
+        let (kept, close) = split_for_quit(vec![(1, true), (2, false), (3, true)], true, |t| t.1);
         assert_eq!(kept, vec![(1, true), (3, true)]);
         assert_eq!(close, vec![(2, false)]);
     }
