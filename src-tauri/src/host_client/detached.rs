@@ -119,7 +119,10 @@ impl Detached {
             .filter(|id| !ids.contains(*id))
             .cloned()
             .collect();
-        close.iter().filter_map(|id| self.panes.remove(id)).collect()
+        close
+            .iter()
+            .filter_map(|id| self.panes.remove(id))
+            .collect()
     }
 
     /// A saved workspace was forgotten: its panes can never be opened.
@@ -199,7 +202,10 @@ mod tests {
     #[test]
     fn release_closes_a_forgotten_workspace_s_panes() {
         let mut d = Detached::from_list(&[info("a", "g1"), info("b", "g2")]);
-        assert_eq!(ids(d.release(&["b".into(), "x".into()])), vec!["b".to_string()]);
+        assert_eq!(
+            ids(d.release(&["b".into(), "x".into()])),
+            vec!["b".to_string()]
+        );
         assert_eq!(d.list().len(), 1);
     }
 

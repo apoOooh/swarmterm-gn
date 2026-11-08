@@ -420,7 +420,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("local");
         let a = locate(&local, "1.2.3", &shipped(dir.path(), b"one"), true).unwrap();
-        let name = a.data_dir.file_name().unwrap().to_string_lossy().into_owned();
+        let name = a
+            .data_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let (version, hash) = name.split_once('-').unwrap();
         assert_eq!(version, "1.2.3");
         assert_eq!(hash.len(), HASH_CHARS);
