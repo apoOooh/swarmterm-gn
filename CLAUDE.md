@@ -481,7 +481,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   id — a killed generation flushes until EOF, even after a same-id respawn),
   one client at a time (a new hello replaces and kicks the old), lock order
   `terminals` → `Output` → `client`; no client and no PTY for 10 min = exit.
-  App side (`host_client/`, Settings → Terminal, default off): every pane is
+  App side (`host_client/`, Settings → Terminal, default on since SWA-82; a
+  saved `enabled: false` stays off): every pane is
   still a `ManagedTerminal` in `AppState.terminals`, only `io` differs
   (`TerminalIo::Local | Host`), so every liveness reader is untouched.
   `pty::plan_spawn` resolves ONE `EnvPlan` for both backends (Local applies

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Terminal host is on by default (ADR 0001 phase 4, SWA-82): new panes run
+  in `swarmterm-host.exe` and survive a quit (on request), a crash or an
+  update. If you turned it off before, it stays off; without a usable host
+  panes still open inside Swarmterm and Settings → Terminal says why.
 - Terminal host: Quit asks *Keep terminals running?* while panes run in the
   host (ADR 0001 phase 4a, SWA-57). **Close all** (default) closes them as
   before, **Keep running** leaves them running and the next start takes them

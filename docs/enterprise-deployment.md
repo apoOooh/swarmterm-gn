@@ -23,12 +23,12 @@ Both release assets are Tauri NSIS installers. They differ in install mode:
 
 Settings and data stay per user in both editions (see [Data locations](#data-locations)).
 
-The terminal host (Settings → Terminal → **Run new panes in the terminal host**, off by default) does not run from the
+The terminal host (Settings → Terminal → **Run new panes in the terminal host**, on by default) does not run from the
 install directory: Swarmterm copies `swarmterm-host.exe` to `%LOCALAPPDATA%\<app id>\host\<version>-<hash>\`,
 checks the copy's SHA-256 against the installed file before every start, and runs it from there, so an update never
 has to replace a running binary. Application control that only allows programs from `%ProgramFiles%` (AppLocker,
 WDAC) blocks that copy; the setting then reports why and panes run inside Swarmterm. Allow the path or keep the
-setting off, which the administrator policy can enforce.
+setting off per user (Settings → Terminal).
 
 Silent install of **Corp**, elevated (for example an Intune Win32 app with install behaviour **System**, or an
 administrator PowerShell):
