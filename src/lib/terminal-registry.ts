@@ -39,7 +39,7 @@ import { parseOsc52 } from '@/lib/osc52'
 import { parseShellMark } from '@/lib/shell-marks'
 import { isPlainShellPane, templateById } from '@/lib/templates'
 import { sanitizePromptText } from '@/lib/prompt-sanitize'
-import { detectPathCandidates, listingDirAbove, listingEntry, parsePathSuffix } from '@/lib/path-link-parse'
+import { detectPathCandidates, isRelativePath, listingDirAbove, listingEntry, parsePathSuffix, relativeBases } from '@/lib/path-link-parse'
 import { classifyOscLink, openPathLocation } from '@/lib/terminal-link-actions'
 import { openUrl } from '@/tauri/opener'
 import {
@@ -531,7 +531,16 @@ export function openPathLink(id: string, event: MouseEvent, text: string): void 
   // stale point would make followLink's drag-vs-click check drop this click.
   const entry = entries.get(id)
   if (entry) entry.lastMouseDown = { clientX: event.clientX, clientY: event.clientY }
-  pathFollowers.get(id)?.(event, text)
+  // Follow the path the provider resolved, not the raw text: a relative path
+  // may have resolved against a base other than the cwd (listing header,
+  // SWA-62 bases), and followLink alone would only retry the cwd.
+  pathFollowers.get(id)?.(event, hovered && hovered.text === text ? withSuffixOf(text, hovered.resolved) : text)
+}
+
+/** `resolved` with the `:line:col` that `text` carried, in a form parsePathSuffix reads back. */
+function withSuffixOf(text: string, resolved: string): string {
+  const { line, col } = parsePathSuffix(text)
+  return line === undefined ? resolved : col === undefined ? `${resolved}:${line}` : `${resolved}:${line}:${col}`
 }
 
 function getOrCreate(id: string): Entry {
@@ -1057,14 +1066,20 @@ function getOrCreate(id: string): Entry {
       const cwd = getTerminalCwd(id) ?? ''
       // Bare names in a `dir` / Get-ChildItem listing are relative to its
       // "Directory:" header, not to the shell's cwd. Looked up lazily, once.
-      let listing: string | null | undefined
-      const listingDir = (): string | null => {
-        if (listing !== undefined) return listing
+      let above: string[] | undefined
+      const linesAbove = (): string[] => {
+        if (above) return above
         const buffer = term.buffer.active
-        const above: string[] = []
+        above = []
         for (let i = y - 2; i >= Math.max(0, y - 302); i--) above.push(buffer.getLine(i)?.translateToString(true) ?? '')
-        return (listing = listingDirAbove(above))
+        return above
       }
+      let listing: string | null | undefined
+      const listingDir = (): string | null => (listing !== undefined ? listing : (listing = listingDirAbove(linesAbove())))
+      // SWA-62: a relative path printed by a tool with its own folder. Only
+      // the newest 100 lines, so an old command's folder rarely wins.
+      let bases: string[] | undefined
+      const otherBases = (): string[] => (bases ??= relativeBases(lineText, linesAbove().slice(0, 100), { exclude: [cwd] }))
       void Promise.all(
         candidates.map(async (c) => {
           const { path } = parsePathSuffix(c.text)
@@ -1073,6 +1088,14 @@ function getOrCreate(id: string): Entry {
           // is no file may still be a folder — the `d-----` rows and the header path.
           let resolved = await resolvePathLink(cwd, path).catch(() => null)
           if (!resolved && bare && listingDir()) resolved = await resolvePathLink(listingDir()!, path).catch(() => null)
+          // Files only, one probe at a time in base order: bare names stay
+          // listing-only (prose words would otherwise light up).
+          if (!resolved && !bare && isRelativePath(path)) {
+            for (const base of otherBases()) {
+              resolved = await resolvePathLink(base, path).catch(() => null)
+              if (resolved) break
+            }
+          }
           let isDir = false
           if (!resolved) {
             resolved = await resolveDirLink(cwd, path).catch(() => null)
@@ -1087,7 +1110,7 @@ function getOrCreate(id: string): Entry {
             range: { start: { x: c.start + 1, y }, end: { x: c.end, y } },
             text: c.text,
             // A folder never goes to an editor or the OS opener: Ctrl+click shows it in Files.
-            activate: (event, text) => { if (isDir) { if (shouldFollowLink(event, isMac, 'path')) revealDirInFiles(id, shown) } else followLink(event, 'path', text) },
+            activate: (event, text) => { if (isDir) { if (shouldFollowLink(event, isMac, 'path')) revealDirInFiles(id, shown) } else followLink(event, 'path', withSuffixOf(text, shown)) },
             hover: () => { hoveredPaths.set(id, { text: c.text, resolved: shown, isDir }) },
             leave: () => { if (hoveredPaths.get(id)?.text === c.text) hoveredPaths.delete(id) }
           }
