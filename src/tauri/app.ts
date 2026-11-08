@@ -4,7 +4,10 @@ import { listen } from '@tauri-apps/api/event'
 
 /** The app version baked into tauri.conf.json (e.g. "0.1.0"). */
 export const getAppVersion = (): Promise<string> => getVersion()
-export const confirmQuit = (): Promise<void> => invoke('confirm_quit')
+/** Quit for good; `keepTerminals` leaves hosted panes running (SWA-57). */
+export const confirmQuit = (keepTerminals = false): Promise<void> => invoke('confirm_quit', { keepTerminals })
+/** Panes a "keep terminals running" quit would leave in the terminal host. */
+export const hostedPaneCount = (): Promise<number> => invoke<number>('quit_hosted_count')
 export const onQuitRequested = (cb: () => void): Promise<() => void> => listen('app:quit-requested', cb)
 
 /** The MCP server stopped unexpectedly; payload is the reason string. */

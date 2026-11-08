@@ -558,6 +558,8 @@ Changes apply to the next pane or routine that starts; running panes keep the en
 
 Hosted panes outlive Swarmterm itself: if the app crashes or is ended from Task Manager, the programs in them keep running. Open the saved workspace again (workspaces set to open on startup do so by themselves) and its panes are taken over where they are, instead of starting again: the output so far is shown again, a full-screen program such as Claude Code repaints, and an agent keeps its Swarmterm connection. A dim line *older output is not available* marks a pane whose history was longer than the host keeps (512 KiB per pane). Running panes that no saved workspace knows are closed shortly after startup; forgetting a saved workspace closes its running panes too. If you switch the host off before starting Swarmterm again, the panes it still runs are closed at startup. Pane ids are stored with saved workspaces only while the host is on. **Quit** in the tray still closes every pane; the idle host then exits on its own after ten minutes.
 
+**Quit and keep terminals running.** When panes run in the terminal host, **Quit** (tray menu) asks *Keep terminals running?* **Close all** (the default, also on Enter in the dialog) closes every pane cleanly as before. **Keep running** quits Swarmterm but leaves the hosted panes running in the background; on the next start they are taken over like after a crash. Panes running inside Swarmterm close either way, and **Cancel** or Esc keeps Swarmterm open. Without hosted panes Quit does not ask.
+
 ## Editions
 
 Swarmterm GN comes in two editions: **Swarmterm GN** and **Swarmterm GN Corp**

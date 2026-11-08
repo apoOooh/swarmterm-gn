@@ -520,6 +520,10 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `spawned`. Pane ids are saved only while the switch is on (`paneIds`).
   MCP rebinds the port kept in the host's app state (`set_app_state`,
   returned by hello).
+  Quit (SWA-57): `quit_hosted_count` > 0 → the renderer asks (`lib/quit-flow.ts`,
+  default close); `confirm_quit(keepTerminals)` makes `quit_blocking` drop the
+  hosted entries without `kill` and never `Conn::close` — `AppSink::lost`
+  skips its reaping reconnect while `quitting`, or it would kill them.
   `input.rs` and `output.rs` are copies of `pty.rs` parts until the
   in-process backend goes away: change both or neither (`job.rs` is shared).
 - **Child process priority (`docs/adr/0005`).** Enforced by the pane's
