@@ -14,7 +14,7 @@ add('/project/photo.png', 'image fixture')
 for (let i = 0; i < 2000; i++) add(`/project/many/file-${i}.ts`, `export const n = ${i}\n`)
 const contexts = new Map<string, string>()
 const terminals = new Map<string, { cwd: string; channel: unknown }>()
-const counters = { created: 0, killed: 0, spawns: [] as Record<string, any>[], writes: [] as string[], unknown: [] as string[], watched: 0, mediaStats: 0, openedMedia: [] as string[], marktext: [] as string[], sessionFolders: [] as string[], gitFolders: [] as string[], accountReads: 0, agentReads: 0 }
+const counters = { created: 0, killed: 0, spawns: [] as Record<string, any>[], writes: [] as string[], unknown: [] as string[], watched: 0, mediaStats: 0, openedMedia: [] as string[], marktext: [] as string[], sessionFolders: [] as string[], gitFolders: [] as string[], accountReads: 0, agentReads: 0, transfers: [] as string[] }
 const missingSessions = new Set<string>()
 const unavailableAgents = new Set<string>()
 const unavailableAccountDirs = new Set<string>()
@@ -46,6 +46,8 @@ mockIPC(async (command, raw) => {
     mcpWrites.push({ ...args }); configured[args.entryId] = 'configured'; return
   }
   if (command === 'list_agent_sessions') { counters.sessionFolders.push(args.folder); return [] }
+  // Fixture sessions never have a transcript on disk: nothing to carry.
+  if (command === 'transfer_agent_session') { counters.transfers.push(`${args.sessionId}:${args.fromAccountId ?? 'default'}->${args.toAccountId ?? 'default'}`); return false }
   // Terminal host off: nothing survived, so saved workspaces open fresh (SWA-56).
   if (command === 'terminal_host_get_settings') return { enabled: false }
   if (command === 'terminal_host_detached') return []
@@ -96,13 +98,14 @@ mockIPC(async (command, raw) => {
   counters.unknown.push(command)
 }, { shouldMockEvents: true })
 const { useAppStore } = await import('../../src/store/app-store')
+const { useAgentAccountsStore } = await import('../../src/store/agent-accounts-store')
 const { useDocumentStore } = await import('../../src/store/document-store')
 const { useExplorerStore } = await import('../../src/store/explorer-store')
 const { useAppearanceStore } = await import('../../src/store/appearance-store')
 const { applyVisualStyle } = await import('../../src/lib/theme-adapter')
 applyVisualStyle(useAppearanceStore.getState().style)
 if (!new URLSearchParams(location.search).has('welcome')) useAppStore.getState().createWorkspace({ cwd: '/project', terminalCount: 2, agentIds: ['terminal', 'terminal'], paneWorktrees: [null, { path: '/worktree', branch: 'feature' }] })
-Object.assign(window, { fixture: { counters, accounts, mcpConfigurations, mcpWrites, files, missingSessions, unavailableAgents, unavailableAccountDirs, emit, useAppStore, useDocumentStore, useExplorerStore, useAppearanceStore,
+Object.assign(window, { fixture: { counters, accounts, mcpConfigurations, mcpWrites, files, missingSessions, unavailableAgents, unavailableAccountDirs, emit, useAppStore, useAgentAccountsStore, useDocumentStore, useExplorerStore, useAppearanceStore,
   change: async (path: string, content: string) => { const e = files[path]; e.content = content; e.version!++; await changes(path.startsWith('/worktree/') ? 'worktree' : 'project', [path]) },
   setNativeFiles: (paths: string[]) => { nativeFiles = paths }, textClipboard: () => textClipboard } })
 const { default: App } = await import('../../src/App')

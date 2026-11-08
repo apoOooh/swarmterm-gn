@@ -4,6 +4,7 @@ import type {
   PtyOut,
   PtyReplay
 } from '@/tauri/terminal'
+import { OutputAcker, utf8Length } from '@/lib/output-ack'
 
 export type TerminalStatus =
   | { kind: 'connecting' }
@@ -13,13 +14,17 @@ export type TerminalStatus =
 
 /** Where decoded pty output is pumped (the xterm instance, in production). */
 export interface SessionSink {
-  write: (data: string) => void
+  /**
+   * `onParsed` (when given) must run once xterm parsed `data` (flow-control
+   * acks); `bytes` is the UTF-8 size of `data`.
+   */
+  write: (data: Uint8Array | string, onParsed?: () => void, bytes?: number) => void
   /**
    * History of a pane taken over from the terminal host (SWA-56), first
    * message of that generation. Not new output: no activity tick, and
    * terminal queries inside it must not be answered toward the pty.
    */
-  replay?: (replay: PtyReplay) => void
+  replay?: (replay: PtyReplay, onParsed?: () => void) => void
 }
 
 /** Tauri bridge functions, injected so the session is testable without Tauri. */
@@ -30,6 +35,10 @@ export interface SessionDeps {
     onOutput: (msg: PtyOut) => void
   ) => Promise<CreateTerminalResult>
   killTerminal: (id: string) => Promise<void>
+  /** Flow-control ack (`ack_output`); absent = no acks (tests). */
+  ackOutput?: (id: string, spawnId: string, bytes: number) => void
+  /** Nobody will ack this generation any more (`release_output`). */
+  releaseOutput?: (id: string, spawnId: string) => void
 }
 
 /**
@@ -47,6 +56,8 @@ export class TerminalSession {
   private generation = 0
   /** Options to spawn with once the current (being-killed) pty reports exit. */
   private pendingRespawn: CreateTerminalOptions | null = null
+  /** Live generation's id, for `releaseOutput` on dispose. */
+  private spawnId: string | null = null
 
   constructor(
     readonly id: string,
@@ -105,6 +116,10 @@ export class TerminalSession {
     }
     this.pendingRespawn = options
     this.emit({ kind: 'connecting' })
+    // The dying generation's output is still parsed (until its exit) but its
+    // shutdown grace can run seconds: open its gate now so it never waits
+    // out the no-ack timeout.
+    if (this.spawnId !== null) this.deps.releaseOutput?.(this.id, this.spawnId)
     void this.deps.killTerminal(this.id)
   }
 
@@ -113,6 +128,10 @@ export class TerminalSession {
     if (this.disposed) return
     this.disposed = true
     this.generation += 1
+    // The xterm goes away with us: open Rust's flow gate now instead of
+    // letting the flusher sit out the no-ack timeout.
+    if (this.spawnId !== null) this.deps.releaseOutput?.(this.id, this.spawnId)
+    this.spawnId = null
     if (this.started) void this.deps.killTerminal(this.id)
   }
 
@@ -120,6 +139,19 @@ export class TerminalSession {
     const generation = this.generation
     const fresh = (): boolean => generation === this.generation && !this.disposed
     let exited = false
+    // The previous generation is gone; a dispose before this create
+    // resolves is handled in `.then` below.
+    this.spawnId = null
+    // Per generation: acks name the generation, and a respawn starts a new
+    // account in Rust.
+    const ackOutput = this.deps.ackOutput
+    const acker = ackOutput
+      ? new OutputAcker((spawnId, bytes) => ackOutput(this.id, spawnId, bytes))
+      : null
+    // The exact bytes Rust's gate counted for this message, measured once
+    // and shared with the sink (renderer policy).
+    const size = (data: Uint8Array | string): number =>
+      typeof data === 'string' ? utf8Length(data) : data.byteLength
 
     this.emit({ kind: 'connecting' })
 
@@ -130,10 +162,13 @@ export class TerminalSession {
         if (msg.type === 'exit') exited = true
         if (!fresh()) return
         if (msg.type === 'data') {
-          this.sink.write(msg.payload)
+          const bytes = msg.bytes ?? size(msg.payload)
+          this.sink.write(msg.payload, acker?.write(bytes), bytes)
         } else if (msg.type === 'replay') {
-          if (this.sink.replay) this.sink.replay(msg.payload)
-          else this.sink.write(msg.payload.data)
+          // The host counts the replay against the gate like live output.
+          const done = acker?.write(msg.payload.data.byteLength)
+          if (this.sink.replay) this.sink.replay(msg.payload, done)
+          else this.sink.write(msg.payload.data, done)
         } else {
           if (this.pendingRespawn) {
             const next = this.pendingRespawn
@@ -145,11 +180,18 @@ export class TerminalSession {
         }
       })
       .then((result) => {
+        if (result.ok && result.spawnId) {
+          acker?.setSpawnId(result.spawnId)
+          if (fresh()) this.spawnId = result.spawnId
+        }
         if (!fresh()) {
           // dispose may have killed before the asynchronous spawn inserted a
           // PTY. Only a disposed session owns this cleanup: a superseded live
           // generation may already have a replacement using the same id.
-          if (this.disposed && result.ok && !exited) void this.deps.killTerminal(this.id)
+          if (this.disposed && result.ok && !exited) {
+            if (result.spawnId) this.deps.releaseOutput?.(this.id, result.spawnId)
+            void this.deps.killTerminal(this.id)
+          }
           return
         }
         if (!result.ok) {

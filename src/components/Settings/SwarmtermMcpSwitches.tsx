@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { MANAGED_LABEL } from '@/lib/policy'
+import { usePolicyStore } from '@/store/policy-store'
 import { setSwarmtermMcp, swarmtermMcpProfiles, type SwarmtermMcpProfile } from '@/tauri/swarmterm-mcp'
 
 const AGENT_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', qwen: 'Qwen Code', opencode: 'OpenCode' }
@@ -12,6 +14,8 @@ export function SwarmtermMcpSwitches(): React.ReactElement {
   const [profiles, setProfiles] = useState<SwarmtermMcpProfile[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // DisableMcp: every profile reads as off and Rust refuses switching on.
+  const mcpLocked = usePolicyStore((s) => s.policy.disableMcp)
   const reload = useCallback(async () => {
     try { setProfiles(await swarmtermMcpProfiles()) } catch (e) { setError(String(e)) }
   }, [])
@@ -25,6 +29,7 @@ export function SwarmtermMcpSwitches(): React.ReactElement {
   return <section className="space-y-3" data-swarmterm-mcp>
     <h2 className="text-lg font-semibold">Swarmterm MCP</h2>
     <p className="text-sm text-muted-foreground">Connects agents to the War Room and Swarmterm's tools. New panes connect automatically; restart a running pane after switching.</p>
+    {mcpLocked && <p className="text-sm font-medium text-amber-500">{MANAGED_LABEL}: the Swarmterm MCP server is off.</p>}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     {profiles === null ? <p className="text-sm text-muted-foreground">Loading…</p> : <ul className="divide-y divide-border rounded border border-border">
       {profiles.map(p => {
@@ -34,7 +39,7 @@ export function SwarmtermMcpSwitches(): React.ReactElement {
             <span className="text-sm">{AGENT_NAMES[p.agentId] ?? p.agentId} · {p.accountName ?? 'Default'}</span>
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               {p.entry === 'foreign' ? 'Own entry kept' : p.enabled ? 'On' : 'Off'}
-              <input type="checkbox" role="switch" aria-label={`Swarmterm MCP for ${AGENT_NAMES[p.agentId] ?? p.agentId} ${p.accountName ?? 'Default'}`} checked={p.enabled} disabled={busy !== null} onChange={() => void toggle(p)} />
+              <input type="checkbox" role="switch" aria-label={`Swarmterm MCP for ${AGENT_NAMES[p.agentId] ?? p.agentId} ${p.accountName ?? 'Default'}`} checked={p.enabled} disabled={busy !== null || mcpLocked} onChange={() => void toggle(p)} />
             </label>
           </div>
           <details className="mt-1 text-xs text-muted-foreground">

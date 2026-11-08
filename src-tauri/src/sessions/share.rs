@@ -170,20 +170,30 @@ fn find_claude(base: &Path, id: &str) -> Option<PathBuf> {
 
 /// Copy one session from the `from` store to the `to` store (config-dir
 /// bases). Same id, same relative path; the source is never modified.
-pub fn transfer(agent_id: &str, id: &str, from: &Path, to: &Path) -> Result<(), String> {
+/// `Ok(false)` when the source has no transcript yet (a session that never
+/// got a turn): there is nothing to carry, so the caller may start fresh.
+pub fn transfer(agent_id: &str, id: &str, from: &Path, to: &Path) -> Result<bool, String> {
     if !super::is_uuid(id) {
         return Err("Invalid session id".into());
     }
     if same_target(from, to) {
-        return Ok(());
+        // Nothing to copy, but a session that never got a turn has no
+        // transcript either: reporting it as carried would make the pane run
+        // `--resume <id>` and the CLI fails with "No conversation found".
+        return Ok(match agent_id {
+            "claude-code" => find_claude(from, id).is_some(),
+            "codex" => super::codex::find_rollout(&from.join("sessions"), id).is_some(),
+            _ => true,
+        });
     }
     let backup = backup_root()
         .unwrap_or_else(|_| to.join("session-share-backups"))
         .join(stamp());
     match agent_id {
         "claude-code" => {
-            let file =
-                find_claude(from, id).ok_or("Session not found in the source subscription")?;
+            let Some(file) = find_claude(from, id) else {
+                return Ok(false);
+            };
             let rel = file.strip_prefix(from).map_err(|e| e.to_string())?;
             copy_file_newer(&file, &to.join(rel), &backup.join(rel))?;
             // Tool-result sidecars next to the transcript, rewind checkpoints.
@@ -200,13 +210,14 @@ pub fn transfer(agent_id: &str, id: &str, from: &Path, to: &Path) -> Result<(), 
                     &backup.join(&history),
                 )?;
             }
-            Ok(())
+            Ok(true)
         }
         "codex" => {
-            let file = super::codex::find_rollout(&from.join("sessions"), id)
-                .ok_or("Session not found in the source subscription")?;
+            let Some(file) = super::codex::find_rollout(&from.join("sessions"), id) else {
+                return Ok(false);
+            };
             let rel = file.strip_prefix(from).map_err(|e| e.to_string())?;
-            copy_file_newer(&file, &to.join(rel), &backup.join(rel)).map(|_| ())
+            copy_file_newer(&file, &to.join(rel), &backup.join(rel)).map(|_| true)
         }
         _ => Err("This agent's sessions cannot be moved between subscriptions".into()),
     }
@@ -537,13 +548,47 @@ mod tests {
         transfer("claude-code", ID, &a, &b).unwrap();
         assert_eq!(fs::read_to_string(&dst).unwrap(), "newer");
         assert!(transfer("claude-code", "../evil", &a, &b).is_err());
-        assert!(transfer(
-            "claude-code",
-            "00000000-0000-0000-0000-000000000000",
-            &a,
-            &b
-        )
-        .is_err());
+        assert_eq!(
+            transfer(
+                "claude-code",
+                "00000000-0000-0000-0000-000000000000",
+                &a,
+                &b
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn transfer_between_shared_stores_only_carries_a_session_with_a_transcript() {
+        let root = tempfile::tempdir().unwrap();
+        let (a, b) = (root.path().join("a"), root.path().join("b"));
+        let (shared, backups) = (root.path().join("shared"), root.path().join("backups"));
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        link_profile(&a, &shared, &backups).unwrap();
+        link_profile(&b, &shared, &backups).unwrap();
+        // Fresh session: no transcript yet, so the pane must start fresh.
+        assert_eq!(transfer("claude-code", ID, &a, &b), Ok(false));
+        write(&a.join("projects/C--x").join(format!("{ID}.jsonl")), "{}\n");
+        assert_eq!(transfer("claude-code", ID, &a, &b), Ok(true));
+    }
+
+    #[test]
+    fn transfer_between_shared_codex_homes_needs_a_rollout() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        assert_eq!(transfer("codex", ID, &a, &a.join(".")), Ok(false));
+        let rel = format!("sessions/2026/10/17/rollout-2026-10-17T10-00-00-{ID}.jsonl");
+        write(
+            &a.join(rel),
+            &format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ID}\",\"cwd\":\"C:/x\"}}}}
+"
+            ),
+        );
+        assert_eq!(transfer("codex", ID, &a, &a.join(".")), Ok(true));
     }
 
     #[test]

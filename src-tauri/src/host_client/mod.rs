@@ -77,6 +77,10 @@ pub struct HostStatus {
     pub connected: bool,
     pub host_version: Option<String>,
     pub error: Option<String>,
+    /// Why new panes run in-process although the host is on: the running
+    /// host predates process priority (ADR 0005) and would run them
+    /// unlimited. Shown under Settings → Terminal → Process priority.
+    pub priority_unsupported: Option<String>,
 }
 
 impl HostHub {
@@ -94,15 +98,15 @@ impl HostHub {
         if !self.enabled() {
             return None;
         }
-        let mut slot = self.client.lock().unwrap();
+        let mut slot = crate::prof::lock("lock.host_hub.client", &self.client);
         if let Some(c) = slot.as_ref().filter(|c| c.conn.is_alive()) {
-            return Some(c.clone());
+            return Self::enforced(c.clone());
         }
         match connect(app, true, false) {
             Ok(c) => {
                 *slot = Some(c.clone());
                 *self.last_error.lock().unwrap() = None;
-                Some(c)
+                Self::enforced(c)
             }
             Err(e) => {
                 eprintln!("[host] falling back to in-process terminals: {e}");
@@ -110,6 +114,15 @@ impl HostHub {
                 None
             }
         }
+    }
+
+    /// A host adopted after an update may predate ADR 0005: it ignores
+    /// `set_priority` and its new panes would run unlimited. Those spawn
+    /// in-process, where the job limits are enforced; the host keeps its
+    /// own panes until it idles out, and the next host is current.
+    #[cfg(windows)]
+    fn enforced(c: Client) -> Option<Client> {
+        spawn_on_host(c.conn.priority, &c.conn.host_version).then_some(c)
     }
 
     #[cfg(not(windows))]
@@ -194,18 +207,30 @@ impl HostHub {
 
     pub fn status(&self) -> HostStatus {
         #[cfg(windows)]
-        let (connected, host_version) = match self.current() {
-            Some(c) => (true, Some(c.conn.host_version.clone())),
-            None => (false, None),
+        let (connected, host_version, priority_unsupported) = match self.current() {
+            Some(c) => (
+                true,
+                Some(c.conn.host_version.clone()),
+                (!c.conn.priority).then(|| {
+                    format!(
+                        "The running terminal host ({}) predates process priority: panes already \
+                         running on it stay unlimited until that host exits, and new panes run \
+                         in-process (limited) meanwhile.",
+                        c.conn.host_version
+                    )
+                }),
+            ),
+            None => (false, None, None),
         };
         #[cfg(not(windows))]
-        let (connected, host_version) = (false, None);
+        let (connected, host_version, priority_unsupported) = (false, None, None);
         HostStatus {
             enabled: self.enabled(),
             supported: cfg!(windows),
             connected,
             host_version,
             error: self.last_error.lock().unwrap().clone(),
+            priority_unsupported,
         }
     }
 }
@@ -237,6 +262,12 @@ fn connect(app: &AppHandle, start: bool, adopt: bool) -> Result<Client, String> 
                 } else {
                     reap(app, &c);
                 }
+                // Before any create on this connection (requests are FIFO),
+                // so new hosted panes are born with the user's settings.
+                c.conn.set_priority(
+                    &app.state::<crate::child_priority::ChildPriority>()
+                        .settings(),
+                );
                 if let Some(port) = *app.state::<HostHub>().mcp_port.lock().unwrap() {
                     c.conn.set_app_state(serde_json::json!({ "mcpPort": port }));
                 }
@@ -260,7 +291,7 @@ fn connect_once(
         app: app.clone(),
         routes: Mutex::default(),
         conn: std::sync::OnceLock::new(),
-        replays: Mutex::default(),
+        replays: PendingReplays::default(),
     });
     let try_connect = |ep: &launch::Endpoint| {
         tauri::async_runtime::block_on(conn::Conn::connect(&ep.pipe, &ep.token, sink.clone()))
@@ -338,7 +369,7 @@ pub struct AppSink {
     conn: std::sync::OnceLock<std::sync::Arc<conn::Conn>>,
     /// Attached generations whose replay frame has not arrived yet: the
     /// first frame becomes `PtyOut::Replay` with these facts.
-    replays: Mutex<std::collections::HashMap<(String, String), ReplayFacts>>,
+    replays: PendingReplays<ReplayFacts>,
 }
 
 #[cfg(windows)]
@@ -358,6 +389,55 @@ impl ReplayFacts {
             rows: self.rows,
             truncated: self.truncated,
         }
+    }
+}
+
+/// Replay facts awaiting each attached generation's first data frame. The
+/// flag mirrors "map non-empty" so every live data frame skips the lock and
+/// the two key allocations (perf phase 3). Both writers run on the
+/// connection's reader task, and the flag is written under the lock, so it
+/// cannot miss an insert that precedes the frame it belongs to.
+#[cfg_attr(not(windows), allow(dead_code))]
+struct PendingReplays<T> {
+    map: Mutex<std::collections::HashMap<(String, String), T>>,
+    has_pending_replay: std::sync::atomic::AtomicBool,
+}
+
+impl<T> Default for PendingReplays<T> {
+    fn default() -> Self {
+        PendingReplays {
+            map: Mutex::default(),
+            has_pending_replay: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl<T> PendingReplays<T> {
+    fn insert(&self, terminal_id: &str, spawn_id: &str, facts: T) {
+        let mut map = self.map.lock().unwrap();
+        map.insert((terminal_id.to_string(), spawn_id.to_string()), facts);
+        self.has_pending_replay
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    fn take(&self, terminal_id: &str, spawn_id: &str) -> Option<T> {
+        use std::sync::atomic::Ordering;
+        if !self.has_pending_replay.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut map = self.map.lock().unwrap();
+        let facts = map.remove(&(terminal_id.to_string(), spawn_id.to_string()));
+        if map.is_empty() {
+            self.has_pending_replay.store(false, Ordering::Release);
+        }
+        facts
+    }
+
+    #[cfg(test)]
+    fn flagged(&self) -> bool {
+        self.has_pending_replay
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -412,17 +492,14 @@ impl conn::Sink for AppSink {
             truncated: facts["truncated"].as_bool().unwrap_or(false),
         };
         if facts["replayBytes"].as_u64().unwrap_or(0) > 0 {
-            self.replays
-                .lock()
-                .unwrap()
-                .insert((terminal_id.to_string(), spawn_id.to_string()), replay);
+            self.replays.insert(terminal_id, spawn_id, replay);
         } else if let Some(channel) = self.routes.lock().unwrap().route(terminal_id, spawn_id) {
             // Nothing to replay; the renderer still learns the size.
             let _ = channel.send(replay.into_out(String::new()));
         }
     }
 
-    fn data(&self, terminal_id: &str, spawn_id: &str, bytes: &[u8]) {
+    fn data(&self, terminal_id: &str, spawn_id: &str, bytes: Vec<u8>) {
         let Some(channel) = self
             .routes
             .lock()
@@ -433,13 +510,16 @@ impl conn::Sink for AppSink {
             return;
         };
         // The host's flusher only emits whole UTF-8 strings (SWA-54
-        // `take_valid_utf8`), so this never splits a character.
-        let text = String::from_utf8_lossy(bytes).into_owned();
-        let replay = self
-            .replays
-            .lock()
-            .unwrap()
-            .remove(&(terminal_id.to_string(), spawn_id.to_string()));
+        // `take_valid_utf8`), so this never splits a character and takes
+        // the frame's buffer as is. The fallback is practically
+        // unreachable; it keeps the byte length, so the renderer (which
+        // acks the UTF-8 length it received) acks exactly what the host's
+        // gate counted. Logged.
+        let text = String::from_utf8(bytes).unwrap_or_else(|e| {
+            eprintln!("[host] non-UTF-8 output frame for {terminal_id}, decoded lossily");
+            decode_same_len(e.as_bytes())
+        });
+        let replay = self.replays.take(terminal_id, spawn_id);
         match replay {
             Some(r) => {
                 crate::pty::deliver_replay(&self.app, terminal_id, r.into_out(text), &channel)
@@ -516,9 +596,9 @@ pub fn init(app: &AppHandle) {
     {
         let app = app.clone();
         if hub.enabled() {
-            std::thread::spawn(move || boot(&app));
+            crate::prof::spawn_named("host-boot", move || boot(&app));
         } else {
-            std::thread::spawn(move || sweep(&app));
+            crate::prof::spawn_named("host-sweep", move || sweep(&app));
         }
     }
     #[cfg(not(windows))]
@@ -658,7 +738,103 @@ pub fn terminal_host_set_settings(
     Ok(settings)
 }
 
+/// Async, so it runs off the main thread: Settings polls it while open,
+/// and `status` waits on the client lock, which a connect can hold for
+/// seconds (host start, retries).
 #[tauri::command]
-pub fn terminal_host_status(hub: tauri::State<'_, HostHub>) -> HostStatus {
-    hub.status()
+pub async fn terminal_host_status(app: AppHandle) -> Result<HostStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<HostHub>().status())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Whether new panes may go to a host that announced (or not) the
+/// `priority` capability: an older host would run them unlimited.
+#[cfg(windows)]
+fn spawn_on_host(priority: bool, host_version: &str) -> bool {
+    if !priority {
+        eprintln!("[host] host {host_version} lacks process priority: new panes run in-process");
+    }
+    priority
+}
+
+#[cfg(all(test, windows))]
+mod capability_tests {
+    use super::{conn::has_cap, spawn_on_host};
+    use serde_json::json;
+
+    /// A host from before ADR 0005: `for_spawn` falls back to in-process.
+    #[test]
+    fn old_host_without_priority_is_not_used_for_new_panes() {
+        let old = json!({"ok": true, "hostVersion": "1.24.2", "capabilities": ["flow-control"]});
+        let p = has_cap(&old, swarmterm_host::protocol::PRIORITY);
+        assert!(!p);
+        assert!(!spawn_on_host(p, "1.24.2"));
+        let none = json!({"ok": true, "hostVersion": "1.0.0"});
+        assert!(!spawn_on_host(
+            has_cap(&none, swarmterm_host::protocol::PRIORITY),
+            "1.0.0"
+        ));
+        let new = json!({"ok": true, "capabilities": ["flow-control", swarmterm_host::protocol::PRIORITY]});
+        assert!(spawn_on_host(
+            has_cap(&new, swarmterm_host::protocol::PRIORITY),
+            "x"
+        ));
+    }
+}
+
+/// Decodes `bytes` replacing every invalid byte with one `?`, so the result
+/// has exactly `bytes.len()` UTF-8 bytes. `from_utf8_lossy` would put a
+/// 3-byte U+FFFD per invalid sequence and the renderer would ack more than
+/// the host's flow gate counted.
+fn decode_same_len(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        out.push_str(chunk.valid());
+        out.extend(std::iter::repeat_n('?', chunk.invalid().len()));
+    }
+    out
+}
+
+#[cfg(test)]
+mod decode_tests {
+    use super::decode_same_len;
+
+    #[test]
+    fn invalid_bytes_keep_the_byte_count() {
+        let cases: [&[u8]; 4] = [
+            b"plain",
+            b"a\xffb",
+            b"\xe2\x82 cut \xf0\x9f\x98",
+            "ok \u{1F600}".as_bytes(),
+        ];
+        for bytes in cases {
+            assert_eq!(decode_same_len(bytes).len(), bytes.len(), "{bytes:?}");
+        }
+        assert_eq!(decode_same_len(b"a\xffb"), "a?b");
+        assert_eq!(decode_same_len(b"\xe2\x82x"), "??x");
+    }
+}
+
+#[cfg(test)]
+mod pending_replay_tests {
+    use super::PendingReplays;
+
+    #[test]
+    fn the_flag_follows_the_map_through_insert_and_take() {
+        let p = PendingReplays::<u8>::default();
+        assert!(!p.flagged());
+        assert_eq!(p.take("t", "g"), None);
+        p.insert("t", "g1", 1);
+        p.insert("u", "g2", 2);
+        assert!(p.flagged());
+        // Another generation's frame takes nothing and keeps the flag.
+        assert_eq!(p.take("t", "other"), None);
+        assert!(p.flagged());
+        assert_eq!(p.take("t", "g1"), Some(1));
+        assert!(p.flagged());
+        assert_eq!(p.take("u", "g2"), Some(2));
+        assert!(!p.flagged());
+        assert_eq!(p.take("u", "g2"), None);
+    }
 }

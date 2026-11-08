@@ -3,7 +3,7 @@ import { useDraggable } from '@dnd-kit/core'
 import { X } from 'lucide-react'
 import { useWarRoomStore, type WarRoomMember } from '@/store/war-room-store'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
-import { useTerminalTypingStore } from '@/store/terminal-typing-store'
+import { releaseHeld } from '@/lib/war-room-delivery'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import { displayState, paneDot } from '@/lib/agent-state/rollup'
 import { warRoomLeave } from '@/tauri/warroom'
@@ -82,15 +82,14 @@ function MemberRow({ member }: { member: WarRoomMember }): ReactElement {
       )}
       {reason !== undefined &&
         heldCount > 0 &&
-        // Only the typing hold is user-releasable; an agent hold (working /
-        // on a prompt) shows the same badge but no click, since clearing the
-        // typing signal can't release it (see HeldDeliveryPill).
+        // Only the typing and pane-busy holds are user-releasable; an agent or
+        // draft hold shows the same badge but no click (see HeldDeliveryPill).
         (holdReasonCopy(reason).releasable ? (
           <button
             data-no-dnd
             onClick={(e) => {
               e.stopPropagation() // the row click would jump to the pane instead
-              useTerminalTypingStore.getState().clearTyping(member.terminalId)
+              releaseHeld(member.terminalId, reason)
             }}
             title={holdReasonCopy(reason).title}
             className={HELD_BADGE_CLASS}

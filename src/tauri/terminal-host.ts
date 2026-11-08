@@ -13,6 +13,8 @@ export interface TerminalHostStatus {
   hostVersion: string | null
   /** Why the last pane fell back to in-process, if it did. */
   error: string | null
+  /** Set when the running host predates process priority (ADR 0005): new panes then run in-process. */
+  priorityUnsupported: string | null
 }
 
 export const getTerminalHostSettings = (): Promise<TerminalHostSettings> =>

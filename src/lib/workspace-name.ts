@@ -9,14 +9,20 @@ import { folderName } from '@/lib/recent-folders'
  * `fallbackNumber` keeps the historical "Workspace N" name alive for the case
  * where no folder was picked (the wizard allows an empty cwd — the shell then
  * starts in the process default), so a tab is never left blank.
+ *
+ * `preferred` is a name the user typed in the wizard; when non-blank it
+ * replaces the folder-derived base but is de-duped the same way.
  */
 export function workspaceNameFor(
   cwd: string,
   existingNames: string[],
-  fallbackNumber: number
+  fallbackNumber: number,
+  preferred?: string
 ): string {
   const trimmed = cwd.trim()
-  const base = trimmed === '' ? `Workspace ${fallbackNumber}` : folderName(trimmed)
+  const wanted = preferred?.trim() ?? ''
+  const base =
+    wanted !== '' ? wanted : trimmed === '' ? `Workspace ${fallbackNumber}` : folderName(trimmed)
   const taken = new Set(existingNames)
   if (!taken.has(base)) return base
   // First free suffix, not "highest + 1": closing "myapp (1)" should let the

@@ -13,6 +13,8 @@ import {
   X
 } from 'lucide-react'
 import { Logo } from '@/components/Logo'
+import { productName } from '@/lib/edition'
+import { useEdition } from '@/store/policy-store'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app-store'
 import { useNavbarVisibilityStore } from '@/store/navbar-visibility-store'
@@ -50,6 +52,7 @@ interface TitleBarProps {
  */
 export function TitleBar({ fullscreen }: TitleBarProps): ReactElement {
   const [isMaximized, setIsMaximized] = useState(false)
+  const edition = useEdition()
   const visible = useNavbarVisibilityStore((s) => s.visible)
   const toggleNavbar = useNavbarVisibilityStore((s) => s.toggle)
   const rightPanelOpen = useGitStore((s) => s.panelOpen)
@@ -98,7 +101,7 @@ export function TitleBar({ fullscreen }: TitleBarProps): ReactElement {
             box collapses, and the mark stops out-weighing the sidebar toggle
             beside it — the button ends up reading as the brand. */}
         <Logo className="h-6 w-6" />
-        <span className="text-xs font-semibold">Swarmterm GN</span>
+        <span className="text-xs font-semibold">{productName(edition)}</span>
       </div>
 
       <div

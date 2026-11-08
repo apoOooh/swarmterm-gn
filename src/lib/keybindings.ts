@@ -82,6 +82,8 @@ export function getShortcutGroups(isMac: boolean): KeybindingGroup[] {
         { description: 'Save active file', keys: [mod, 'S'] },
         { description: 'Cycle Markdown view', keys: [mod, 'Shift', 'V'] },
         { description: 'Find in terminal', keys: [mod, 'F'] },
+        { description: 'Zoom terminal text (pane or all, see Settings)', keys: [mod, '+ Scroll'] },
+        { description: 'Reset terminal text zoom', keys: [mod, '0'] },
         { description: 'Clear the pending input line', keys: [mod, 'Shift', 'Backspace'] },
         { description: 'Start / stop dictation (built-in speech)', keys: [mod, 'Shift', 'Space'] },
         { description: 'Stop the spoken announcement', keys: [mod, 'Shift', 'M'] },

@@ -7,35 +7,76 @@ tag is pushed. macOS and Linux packages are not published or supported.
 
 ## Create a release
 
-Start from the tested `dev` integration branch. Keep release preparation on a
-topic branch, merge it into `dev`, and push before creating the tag.
+Releases are cut from **`main`**. Branches:
+
+- `dev` is the integration branch. Feature and fix branches merge into it.
+- `main` holds only released states. It changes only by merging `dev` for a
+  release, and each release tag sits on that merge commit.
+
+Steps, starting from a tested `dev`:
+
+1. Prepare the release on a topic branch (`chore/release-<version>`): bump the
+   version, write the notes, update the changelog. Merge it into `dev` and
+   push `dev`.
+2. Merge `dev` into `main` with a merge commit titled `Release GN <version>`,
+   and push `main`.
+3. Tag that merge commit on `main` and push the tag. The tag starts the
+   workflow.
 
 ```powershell
-npm run bump -- 1.1.0
-# Write docs/releases/1.1.0.md and update CHANGELOG.md.
-# Commit the version files, notes and workflow changes; merge into dev.
+npm run bump -- 1.20.0
+# Write docs/releases/1.20.0.md and update CHANGELOG.md.
+# Commit them on chore/release-1.20.0, then:
+git switch dev
+git merge --no-ff chore/release-1.20.0
 git push origin dev
-git tag -a v1.1.0 -m "Swarmterm GN 1.1.0: first Windows release"
-git push origin v1.1.0
+git switch main
+git pull --ff-only origin main
+git merge --no-ff dev -m "Release GN 1.20.0"
+git push origin main
+git tag -a v1.20.0 -m "Swarmterm GN 1.20.0: <summary>"
+git push origin v1.20.0
+git switch dev
 ```
+
+Never tag on `dev`, and never commit to `main` directly. Fixes go to `dev`
+first and reach `main` with the next release.
 
 Use a new version for each release. `npm run bump` updates the npm manifest,
 npm lockfile, Tauri configuration, Rust manifest and Rust lockfile together.
 The workflow rejects a tag whose version disagrees with any of them, a tag
-outside `dev` history, or a version without `docs/releases/<version>.md`.
-Existing upstream tags are retained; the first GN release is `v1.1.0`.
+outside `main` history, or a version without `docs/releases/<version>.md`.
+For a new minor or major version, also update the supported-versions table in
+[SECURITY.md](../SECURITY.md).
+Through 1.19.0, tags were on `dev` and `main` was merged afterwards. Those
+tags are on `main`'s history once that merge is pushed, so re-running the
+workflow for them still passes; before it, a retry fails the `main` check.
+Tags inherited from before the fork are retained; the first GN release is `v1.1.0`.
 
 ## What the workflow does
 
 1. Verify the existing tag, version agreement and release notes.
 2. Run the reusable CI workflow: frontend types, unit tests, production build,
-   headless browser tests, full-history secret scan and Windows Rust checks.
-3. Build the Windows x64 NSIS installer with locked Rust dependencies.
-4. Download the build artifact in a separate publishing job and add
-   `SHA256SUMS.txt`.
-5. Create a draft, upload both files, then publish the release only after all
+   headless browser tests, full-history secret scan, Windows Rust checks and
+   the dependency audit (`cargo deny`, `npm audit`).
+3. Build both Windows x64 NSIS installers with locked Rust dependencies, in
+   parallel: **Swarmterm GN** and **Swarmterm GN Corp**
+   (`--config src-tauri/tauri.corp.conf.json -- --features corp`, see
+   [editions.md](editions.md)). Each exe is checked for analytics endpoints;
+   the Corp exe also for the buzzkey and speech-model download endpoints.
+4. Download both build artifacts in a separate publishing job, generate the
+   CycloneDX SBOMs `sbom-rust.cdx.json`, `sbom-rust-host.cdx.json` and
+   `sbom-npm.cdx.json` (they cover both editions; `corp` adds no
+   dependencies), rename the installers to
+   `Swarmterm.GN_<version>_x64-setup.exe` and
+   `Swarmterm.GN.Corp_<version>_x64-setup.exe`, and add
+   `SHA256SUMS.txt` over all assets.
+5. Create signed build provenance (`actions/attest-build-provenance`, Sigstore)
+   for every installer, SBOM and `SHA256SUMS.txt`; it is stored in the
+   repository's attestations and checked with `gh attestation verify`.
+6. Create a draft, upload all files, then publish the release only after all
    checks and the installer build succeed.
-6. Optional: submit the new version to winget (see below). This step is
+7. Optional: submit the new version to winget (see below). This step is
    skipped without the opt-in secret and variable.
 
 The installer remains available as a workflow artifact for 14 days even if
@@ -44,7 +85,11 @@ incomplete release. Rerun failed jobs or use **Actions → Windows release →
 Run workflow** with an existing tag to retry. The workflow refuses to replace
 assets of an already published release. Tags must not be moved or overwritten.
 
-Only the final publishing job receives repository write permission. No
+Every workflow starts with no token permissions (`permissions: {}`); jobs ask
+for what they need. Only the final publishing job receives repository write
+permission, plus `id-token` and `attestations` for the provenance.
+Third-party actions are pinned to full commit SHAs (Dependabot proposes
+updates), and the Rust toolchain comes from `rust-toolchain.toml`. No
 additional repository secrets are required. The workflow is restricted to
 `apoOooh/swarmterm-gn`; other forks can explicitly adapt that condition.
 
@@ -63,8 +108,9 @@ and the publisher name. Nothing in this repository submits on its own.
      --sums winget-tmp/SHA256SUMS.txt --out winget-tmp/manifests
    ```
 
-   They describe the per-user NSIS installer (`InstallerType: nullsoft`,
-   `Scope: user`). Validate with `winget validate winget-tmp/manifests`,
+   They describe the Standard edition's per-user NSIS installer
+   (`InstallerType: nullsoft`, `Scope: user`); a Corp manifest would need
+   `Scope: machine`. Validate with `winget validate winget-tmp/manifests`,
    test with `winget install --manifest winget-tmp/manifests`, then submit
    (for example with `komac new` or `wingetcreate submit`).
 2. Once the package is accepted, enable automatic updates: fork
@@ -84,12 +130,45 @@ held for manual validation.
 
 The first installer is **not Authenticode-signed**. Windows SmartScreen may
 show an unknown publisher warning. This is stated in each release's notes.
-The release supplies SHA-256 checksums alongside the installer.
+The release supplies SHA-256 checksums, CycloneDX SBOMs and signed build
+provenance alongside the installer; users verify downloads as described in
+[enterprise-deployment.md](enterprise-deployment.md#verify-a-download).
 
-Upstream automatic updates remain disabled, and this workflow does not upload
-`latest.json` or updater signatures. The old `release:publish` helper requires
-a configured fork-owned updater and deliberately refuses the current GN
-configuration. GitHub Releases is the supported download path.
+## Release notes template
+
+The notes file becomes the GitHub release body, where relative links resolve
+against the release page and return 404. Link repository files with absolute
+URLs pinned to the tag, e.g.
+`https://github.com/apoOooh/swarmterm-gn/blob/v<version>/docs/editions.md`.
+
+Every `docs/releases/<version>.md` ends with this download section:
+
+```markdown
+## Download
+
+Two Windows x64 setup executables are attached to this release:
+
+- `Swarmterm.GN_<version>_x64-setup.exe`: Standard edition, per-user install.
+- `Swarmterm.GN.Corp_<version>_x64-setup.exe`: Corp edition, per-machine install
+  (needs administrator rights).
+
+The Microsoft WebView2 Runtime is required.
+
+Verify the download in PowerShell before installing:
+
+    Get-FileHash -Algorithm SHA256 .\Swarmterm.GN_<version>_x64-setup.exe
+    # must match the line in SHA256SUMS.txt
+    gh attestation verify .\Swarmterm.GN_<version>_x64-setup.exe --repo apoOooh/swarmterm-gn
+    # proves it was built by this repository's release workflow
+
+The installer is not Authenticode-signed; Windows SmartScreen may show an
+unknown publisher warning. The app never updates itself. Download future
+GN versions from this fork's releases. macOS and Linux are not supported.
+```
+
+The app never updates itself and contains no updater; this workflow uploads no
+`latest.json` or updater signatures. New versions reach users as installers
+from GitHub Releases (or IT software distribution).
 
 For a local installer build, see [release-windows.md](release-windows.md).
 Native clipboard, tray and codec checks remain in

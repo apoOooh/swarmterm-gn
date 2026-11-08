@@ -1,4 +1,4 @@
-// Adapted from parsingk/Astera, debc3098; Apache-2.0. See licenses/Astera/.
+// Adapted from parsingk/Astera, debc3098; Apache-2.0. See third-party-licenses/Astera/.
 // File-operation rules (pure module). The renderer (immediate feedback) and the IPC layer (the
 // trust boundary) share the same rules — two copies would inevitably drift apart. Like paths.ts, it
 // uses string operations only, no node:path (because it is imported from the renderer's web tsconfig).

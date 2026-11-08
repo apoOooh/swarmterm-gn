@@ -9,6 +9,353 @@
   as interrupted, and with **Allow excerpts** the agent's reply is spoken
   for Codex too.
 
+## [1.26.0] - 2026-10-29
+
+Corporate readiness release: no telemetry, no updater, secrets withheld from
+child processes, hardened agent permissions, an administrator policy, a
+second **Swarmterm GN Corp** installer and a verifiable supply chain. Read
+**Changed** and **Removed** before upgrading: several defaults are stricter.
+
+### Added
+
+- Environment filter for every child process: panes, command routines and
+  every program Swarmterm itself starts (git, editors, MarkText, reveal in
+  Explorer, WSL/Codex/OpenCode probes, the buzzkey companion) get a filtered
+  copy of the app's environment. **Settings → Terminal → Environment**:
+  **Hide secrets** (default) drops secret-looking names (`*_API_KEY`,
+  `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_PAT`, `*_DSN`, `PGPASSWORD`,
+  `MYSQL_PWD`, credential variables under the `AWS_`/`ANTHROPIC_`/`OPENAI_`/
+  `AZURE_OPENAI_` prefixes and more; provider settings such as `AWS_REGION`,
+  `AWS_PROFILE` or `ANTHROPIC_BASE_URL` pass) and values that are URLs with credentials; **System variables
+  only** keeps just the Windows variables a shell needs plus
+  `__PSLockdownPolicy`, proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
+  `NO_PROXY`, without credentials) and CA certificate variables; **Always pass these
+  variables** is an allow list (prefixes with `*`). The policy is saved in
+  the app data folder (`env-policy.json`) and applies to panes restored at
+  startup. Git run by Swarmterm always passes `-c core.fsmonitor=`.
+- Agent safety: bypass launch modes (Claude Bypass and **Auto**, Codex YOLO,
+  Gemini/Qwen YOLO, Copilot allow-all, Cursor force) ask for confirmation
+  before launch and mark the pane with a red badge.
+- **Settings → Terminal → Agent safety**: **Allow agents to run prompts in
+  other panes** (War Room execute, off by default) and an opt-in for
+  `worktree.spawn` workers to inherit a bypass mode (off by default).
+- Administrator policy from `HKLM\Software\Policies\SwarmtermGN` (then
+  HKCU; HKLM wins per value), read once at start and enforced in the
+  backend: `DisableBypassModes`, `DisableWarRoomExecute`, `DisableWarRoom`,
+  `DisableWorktreeSpawn`, `DisableMcp`, `DisableCompanion`,
+  `DisableModelDownload`, `DisableRoutineCommands`, `DisablePreviewBrowser`,
+  `EnvPolicy` (`default`/`strict`) and `EnvAllow`. Invalid or unreadable
+  values, and registry read errors, fail closed (`Disable*` counts as on,
+  `EnvPolicy` as `strict`). Locked controls are greyed out with "Managed by your
+  administrator" and Settings lists the active policies. ADMX/ADML
+  templates for Group Policy and Intune are in `docs/admin/`
+  ([admin-policy.md](docs/admin-policy.md)).
+- **Swarmterm GN Corp** edition, a second installer
+  (`Swarmterm.GN.Corp_<version>_x64-setup.exe`): own identifier
+  `com.apooooh.swarmterm.gn.corp`, installs per machine, with
+  `DisableBypassModes`, `DisableWarRoomExecute`, `DisableCompanion`,
+  `DisableModelDownload` and `EnvPolicy=default` compiled in (the registry
+  can add locks, never lift them); the buzzkey installer/updater and the
+  speech-model download are not in the program. Both editions install side
+  by side ([editions.md](docs/editions.md)).
+- Release assets: CycloneDX SBOMs (`sbom-rust.cdx.json`,
+  `sbom-rust-host.cdx.json`, `sbom-npm.cdx.json`), `SHA256SUMS.txt` over the
+  installers and SBOMs, and signed build provenance for every asset
+  (`gh attestation verify`).
+- Documents: [PRIVACY.md](PRIVACY.md), [TERMS.md](TERMS.md),
+  [SECURITY.md](SECURITY.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
+  [security model](docs/security-model.md), [editions](docs/editions.md),
+  [enterprise deployment](docs/enterprise-deployment.md) (incl. download
+  verification), [administrator policy](docs/admin-policy.md), the corporate
+  security review pack in [English](docs/corp-review/review-pack.en.md) and
+  [German](docs/corp-review/review-pack.de.md),
+  [decisions](docs/decisions.md) and
+  [maintainer to-dos](docs/maintainer-todos.md).
+- Swarmterm GN is stated to be an independent project: it started as a fork
+  of duongducnguyen/swarmterm and is no longer based on or synced with it.
+
+### Changed
+
+Entries marked **Behaviour change** or **Upgrade** need attention when
+upgrading.
+
+- **Behaviour change:** secrets in Swarmterm's own environment no longer
+  reach panes, routines or helper programs by default. An agent that
+  authenticates through an environment variable (`ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `GEMINI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, …) needs
+  that name in **Always pass these variables**, or log in through its own
+  configuration (`/login`, Swarmterm accounts), which is unaffected.
+- **Upgrade:** the first start after upgrading uses the default filter
+  (**Hide secrets**, empty allow list) until Settings has saved a policy.
+- **Behaviour change:** Claude **Auto** (`--permission-mode auto`) counts as
+  a dangerous mode: confirmed, badged and locked by `DisableBypassModes`.
+- **Behaviour change:** workers started by `worktree.spawn` no longer
+  inherit a bypass mode from the spawning pane unless the Agent safety
+  setting allows it.
+- **Behaviour change:** War Room execute by agents is refused unless
+  allowed in Settings; the check runs in Rust. Probes and your own sends
+  still work.
+- **Behaviour change:** the MCP server requires `Authorization: Bearer
+  <token>`; other schemes are refused. Each pane gets a random secret token
+  (`SWARMTERM_SESSION`, rotated on respawn) that is separate from the public
+  pane id shown to War Room peers. A pane started by an older version and
+  reattached from the terminal host keeps its pane id as its token until
+  its next respawn, so it keeps working (with the weaker protection
+  described in the [security model](docs/security-model.md)).
+- **Behaviour change:** Markdown and other previews no longer load plain
+  `http:` images (the alt text shows instead); `https:`, relative and data
+  images still load. The release CSP also gains `object-src 'none'`,
+  `base-uri 'self'` and `form-action 'none'`, and the dev-server socket is
+  only allowed in dev builds.
+- Preview webviews (web preview column, popout) no longer have access to
+  the app's IPC; the capability is scoped to the main window.
+- Corp settings are separate from the Standard edition's and are not
+  migrated (different identifier and app data folder).
+
+### Removed
+
+- Google Analytics telemetry. Swarmterm GN sends no telemetry or usage data;
+  the release workflow fails if a built executable or the renderer contains
+  an analytics endpoint.
+- The disabled Tauri updater plugin, its tray entry, update dialogs and the
+  `latest.json` helper. The app never checks for or downloads updates of
+  itself; install new versions from GitHub Releases or your software
+  distribution.
+
+### Security
+
+- Supply chain: third-party GitHub Actions pinned to full commit SHAs,
+  workflows start with no token permissions, release builds use
+  `--locked`, no build cache and the Rust toolchain from
+  `rust-toolchain.toml`; npm packages install without scripts after
+  `npm audit signatures`. CI adds `cargo deny` (advisories, licences,
+  sources), `npm audit`, CodeQL, OpenSSF Scorecard and a REUSE licensing
+  lint; Dependabot and CODEOWNERS are configured.
+- Dependency updates clear the RustSec findings (rustls, webpki, tokio,
+  plist, chacha20, clipboard-win); remaining unmaintained crates are
+  documented in `deny.toml`.
+- Launch-line checks read the agent command with each shell's quoting and
+  ignore worker briefs only when they are safely quoted; briefs are quoted
+  safely for PowerShell, cmd, POSIX shells and fish. A refused launch also
+  stops a surviving detached host pane.
+- A pane launch with an initial command (worker brief) is refused when the
+  requested shell is unavailable, instead of falling back to PowerShell,
+  which would read the brief's quoting differently.
+- In worker briefs sent to cmd or PowerShell panes, `%` and `!` become
+  full-width characters (`％`, `！`) so the shell cannot expand them;
+  control characters are stripped and a brief starting with `-` gets a
+  leading space.
+- The docs describe Claude Code's managed settings
+  `permissions.disableBypassPermissionsMode` and
+  `permissions.disableAutoMode` for organisations that want the agent itself
+  to refuse those modes ([admin-policy.md](docs/admin-policy.md)).
+- Licensing is REUSE compliant (`REUSE.toml`, `LICENSES/`,
+  `third-party-licenses/`).
+
+## [1.25.4] - 2026-10-29
+
+- Media: images detected in pane output load their thumbnail in the strip and
+  popup right away; the click-to-load gate is gone (clicking still opens the
+  image large, the panel never opens by itself).
+- Media: an image wider than the panel is centred and scaled to fit instead of
+  sitting off to the right (the panel column grew to the image's natural
+  width).
+
+## [1.25.3] - 2026-10-30
+
+1.25.0, 1.25.1 and 1.25.2 were tagged but never published: their release checks failed (Rust formatting and one Clippy lint, then the new priority tests could not find `ping` and `node` on the CI runner; the tests now start every program by its full path). 1.25.3 ships the same changes.
+
+## [1.25.0] - 2026-10-29
+
+- Process priority: every process in a pane is now held below Normal by a
+  Windows Job Object from the moment it starts, replacing the 1.24.2 watcher
+  that lowered processes every 500 ms and could be escaped. Processes cannot
+  raise themselves back or break away, and orphans (a parent that exited)
+  stay covered.
+- Settings → Terminal → Process priority: choose the mode (Strict, the
+  default, caps the whole pane including the agent; Agent stays Normal caps
+  only what the agent starts; Off), the pane and build levels (Below normal
+  or Low), and an optional CPU cap in percent of the machine per pane. The
+  old on/off setting is migrated; the per-workspace opt-out stays.
+- Agents installed through npm (Claude Code, Codex, Gemini and others running
+  under `node`) are recognised by their command line, so what they start is
+  lowered too.
+- When the running terminal host is from an older version, new panes run in
+  the app, where the limits are enforced, and Settings says why. Panes already
+  on the old host stay unlimited until it exits.
+- Not covered: processes Windows starts on an agent's behalf (WMI, Task
+  Scheduler, services, COM, Explorer). A process a shell profile starts before
+  the pane is capped, and that already has its own job, has its class forced
+  on every check instead. See `docs/adr/0005-job-object-priority.md`.
+
+## [1.24.2] - 2026-10-25
+
+1.24.0 and 1.24.1 were tagged but never published: their release checks failed (Rust formatting, then two tests that were too strict for the CI runner). 1.24.2 ships the same changes.
+
+- War Room: messages now reach real agent panes whose status line or cursor
+  keeps repainting (they stayed held before), and never get typed into an
+  unsent draft in the agent's input box. The ⏸ badge explains why a message
+  is held, with "Deliver now" for a busy pane.
+- War Room: type `@` in the composer to mention peers, with autocomplete. A message
+  with mentions goes only to those peers, and `@everyone` goes to the whole room.
+  Mentions of anyone outside the room block the send.
+- Performance: one pane's slow resize, creation or flood no longer stalls
+  the others. Keystrokes, acks and resizes skip the app-wide terminals lock,
+  acks run off the UI thread, and a per-pane worker applies only the latest
+  size (a failed resize is logged).
+- Performance: opening a workspace creates its panes in parallel instead of
+  one after another, so restoring many agents is faster.
+- Performance: the explorer stays current during a file watcher event storm
+  (e.g. `cargo build`): a rescan at once, then changed paths at most every
+  16 ms, and a final rescan after 500 ms of quiet (1.23.0 waited for quiet).
+- Performance: output flow control pauses a pane only when it is more than
+  2 MB behind (was 512 KB), and closing or respawning a pane always
+  releases it.
+- Rendering: every pane gets a WebGL renderer when it opens, as in 1.22.1,
+  up to 16 (1.23.0: only visible panes, at most 12); beyond that the oldest
+  pane falls back to the DOM renderer. Hidden panes keep their renderer, so
+  switching workspaces is instant, at the cost of more GPU memory. With 8 or
+  more panes visible and 4 or more flooding (over 64 KB/s for 3 s), the
+  floods move to the DOM renderer and return to WebGL once below 32 KB/s.
+- MCP: a restarted app waits up to 10 s for its previous port (e.g. while
+  the old instance is still shutting down after an update) before falling
+  back to a new one, so reattached panes keep their MCP connection.
+- Performance: processes started by an agent CLI in a pane (builds, tests,
+  tools) run at below-normal priority, so heavy agent work no longer slows the
+  app and your typing. On by default (Settings → Terminal), with a saved
+  per-workspace opt-out.
+- Media: long paths in hard-wrapped tables are detected whole. The thumbnail
+  strip keeps 50 items and scrolls sideways (wheel, scrollbar, arrow buttons
+  and keys), and drag-pan works at any zoom.
+- Dev: optional profiling build feature (dev only, not in releases) with
+  lock, flow-gate and IPC counters for `flood.ps1 -Profile`.
+
+## [1.24.1] - 2026-10-25
+
+Tagged but not published (release checks failed on two tests); see 1.24.2.
+
+## [1.24.0] - 2026-10-25
+
+Tagged but not published (release checks failed on rustfmt); see 1.24.2.
+
+## [1.23.0] - 2026-10-23
+
+- Media panel: a new right-panel tab to inspect images and videos while agents
+  work, from any folder (not only the project). Large viewer, thumbnail strip
+  (newest first, source pane and time), wheel zoom toward the cursor (10%–2000%)
+  and pan. It is user-side only: no MCP tool, nothing is passed to agents, and a
+  file is served to the viewer only after you open it.
+- Media detection: image and video paths printed in a pane are listed by name
+  and counted in a pane badge; clicking opens the file. The media routes answer
+  only the main window, never the web-preview webviews.
+- Media: opt-in auto-show popup (Settings → Media) listing the newest items,
+  hides itself unless you interact, never takes the keyboard.
+- Media: opt-in clipboard capture (Windows) saves copied images to a temp
+  folder (capped, deleted on exit and when switched off).
+- Media: drag a thumbnail into a pane to insert its path like Ctrl+V does, so
+  Claude Code and Codex attach the image.
+- Media: Annotate images with pen, marker, line, arrow, rectangle and ellipse,
+  then save a marked copy and drag it into a pane. The original is never
+  modified.
+- Terminal drop: paths with `%` are no longer expanded by cmd panes.
+- Workspaces: new setting *Open new workspaces on startup by default*
+  (Settings → Workspaces → Open on startup, off by default). Newly created
+  workspaces are pinned to the startup list; existing ones are untouched, and
+  auto-pinning stops at 8 because pinned entries are never evicted.
+- Accounts: switching subscription on a pane whose session has no transcript
+  yet now starts fresh instead of running `--resume` on an unknown id (Claude
+  exited with "No conversation found" when session sharing was on).
+- Performance: the file watcher stops handling individual events during an
+  event storm (a batch of 64+ raw events, e.g. `cargo build` or `npm install`
+  under the root) and sends one rescan once the tree has been quiet for
+  500 ms. With nothing pending it blocks without an idle tick (was a 100 ms
+  poll); stop is a channel message, so unwatching still releases the root at once.
+- Performance: the terminal host's mode tracker skips plain text with
+  `memchr` to the next ESC instead of parsing byte by byte (same results).
+- Performance: end-to-end output flow control. The renderer acks output once
+  xterm parsed it; a pane more than 512 KB behind pauses its output (resumes
+  below 128 KB) and the shell is backpressured, so floods no longer grow
+  WebView memory by GBs. Applies in-process and in the terminal host (new
+  `ack` op, `flow-control` capability; older apps are never gated). The gate
+  opens on detach, exit or 2 s without an ack; input is never gated.
+- Performance: terminal output reaches the renderer as raw bytes instead of
+  JSON strings (no escaping, no copy of the batch) and xterm parses them
+  directly. The host connection decodes many frames per read without
+  shifting its buffer per frame, and the app shares the host's output
+  batching code instead of a copy.
+- Memory: panes hold a WebGL context only while visible (at most 12, least
+  recently shown falls back to DOM first; re-acquired after a context loss).
+  New Settings → Terminal → *Scrollback* (default 5,000 lines). The terminal
+  host keeps 512 KiB of replay history per pane instead of 1 MB.
+- Performance: workspace tabs, the attention badge and the prompt library no
+  longer re-render on every agent state flip, the agent detector skips its
+  screen scan while nothing changed, and `wait_peer` waiters are no longer
+  woken by every output batch.
+- War Room: joining, moving, leaving or deleting a room now wakes pending
+  `wait_peer` calls at once, so a peer that left is reported immediately.
+- Dev: perf benchmark harness (`scripts/perf/flood.ps1`) with an "agents"
+  scenario of synthetic agent-like streams; it never starts an agent CLI.
+
+## [1.22.1] - 2026-10-19
+
+- Terminal: emoji and other wide characters now measure 2 cells (Unicode 11
+  widths), fixing stray characters and broken borders in agent TUI tables
+  (e.g. Claude Code with ✅ ❌ 🔶).
+
+## [1.22.0] - 2026-10-19
+
+- Terminal: Ctrl + mouse wheel zooms the text of the pane under the mouse,
+  of all panes (moves the global Size), or nothing — Settings → Terminal →
+  *Ctrl + scroll zoom*. Per-pane zoom sits on top of the global size and
+  lasts until restart. `Ctrl + 0` resets (rebindable). The wheel is not
+  forwarded to TUIs with mouse tracking and never page-zooms the app.
+- CI: end-to-end tests no longer flake on a cold Vite start.
+
+## [1.21.0] - 2026-10-19
+
+- Panes: the identity dialog can tint the pane's top bar with the identity
+  color (light background, full-color bottom border; a maximized pane keeps
+  its zoom border). Saved with workspaces; dropped on load without a valid
+  color.
+- Panes: identity icons may be any Lucide icon, loaded on demand via
+  `lucide-react/dynamic`. The picker is a scrollable, windowed grid of all
+  icons (current icon, suggestions, then A–Z) with name search.
+- Panes: the identity palette grows from 10 to 20 colors (orange stays out,
+  it marks War Room execute messages).
+- Panes: clicking the identity name in the header opens the identity dialog.
+
+## [1.20.0] - 2026-10-18
+
+- Panes: identity — an icon (curated lucide set or one emoji), a name and a
+  palette color per pane, edited in one dialog from the header's icon slot or
+  the pane context menu (*Set identity…*). The header shows the name in bold
+  with the agent title muted beside it; the sidebar list and the War Room
+  avatar show the icon. Kept with saved workspaces (re-checked on load);
+  never respawns the pane.
+- Composer: optional workspace *Name*; blank keeps the folder-derived name.
+- Fix: renaming a workspace while the focused pane had a file open could hand
+  the keyboard to the editor on a click inside the field, committing a
+  half-typed name. Focus return now leaves a focused text field alone, and
+  the rename inputs keep key and pointer events from the draggable row.
+
+## [1.19.0] - 2026-10-18
+
+- Accounts: a workspace keeps the composer's account choice per agent (fixed
+  profile or round robin), also in saved workspaces. Split panes use it: the
+  fixed profile, or the next account in the rotation. Without a choice, a
+  split pane takes the account of the pane it was split from (same agent).
+- Accounts: switching the account of a pane whose conversation has not had a
+  turn yet (for example a pane just split off) now restarts it on the new
+  account instead of failing with "Session not found in the source
+  subscription".
+- Settings → Appearance: **Highlight panes by agent state** is on by default
+  for anyone who has not changed it.
+- Build: the built-in speech engine (whisper.cpp) is the default Cargo
+  feature `local-speech`. `--no-default-features` (`npm run
+  tauri:dev:no-speech`, `npm run test:rust:no-speech`) builds and tests
+  without LLVM and CMake; built-in dictation then reports that it is not
+  available. Release builds keep it. CI also lints the build without it.
+
 ## [1.18.0] - 2026-10-18
 
 - Panes: every open pane shows a number in its header and the navbar list,

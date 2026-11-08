@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { collectLeaves, updateLeaf } from './layout-tree'
-import { autoOpenList, fromSaved, moveAutoOpen, readSaved, setAutoOpen, toSaved, upsertSaved, SAVED_WORKSPACES_KEY, type SavedLeaf, type SavedNode, type SavedWorkspace } from './saved-workspaces'
+import { autoOpenList, fromSaved, MAX_AUTO_PINNED, moveAutoOpen, pinIfNew, readSaved, setAutoOpen, toSaved, upsertSaved, SAVED_WORKSPACES_KEY, type SavedLeaf, type SavedNode, type SavedWorkspace } from './saved-workspaces'
 import type { Workspace } from '@/store/app-store'
 
 const session = '018f3b2a-7c1d-4e0a-9b2f-1a2b3c4d5e6f'
@@ -25,6 +25,7 @@ describe('saved workspace snapshots', () => {
     const restored = fromSaved(saved(), () => `new-${++n}`)
     expect(restored.savedId).toBe('saved')
     expect(restored.worktreeMode).toBe(true)
+    expect(restored.accountSelections).toBeUndefined()
     expect(restored.layout.type === 'split' && restored.layout.sizes).toEqual([30, 70])
     const leaves = collectLeaves(restored.layout)
     expect(leaves[0]).toMatchObject({ agentId: 'codex', shellId: 'powershell', cwd: 'C:/project', resumeSessionId: session, sessionId: session, launchMode: 'safe' })
@@ -107,8 +108,38 @@ it('retains a session together with its profile across storage and restore while
   expect(collectLeaves(fromSaved(saved(), () => crypto.randomUUID()).layout)[0].accountId).toBeUndefined()
 })
 
+it('keeps the workspace account choice across storage and drops malformed entries', () => {
+  const choice = { 'claude-code': { mode: 'fixed' as const, accountId: 'claude-b' }, codex: { mode: 'round-robin' as const } }
+  const snapshot = { ...toSaved({ ...workspace, accountSelections: choice }, 'default', 20)!, accountSelections: { ...choice, terminal: { mode: 'round-robin' }, gemini: 'x' } }
+  const loaded = readSaved(storage(JSON.stringify({ version: 1, workspaces: [snapshot] })))[0]
+  expect(fromSaved(loaded, () => crypto.randomUUID()).accountSelections).toEqual(choice)
+})
+
+it('keeps the build-priority opt-out across storage', () => {
+  const snapshot = toSaved({ ...workspace, normalBuildPriority: true }, 'default', 20)!
+  const loaded = readSaved(storage(JSON.stringify({ version: 1, workspaces: [snapshot] })))[0]
+  expect(fromSaved(loaded, () => crypto.randomUUID()).normalBuildPriority).toBe(true)
+  expect(toSaved(workspace, 'default', 20)!.normalBuildPriority).toBeUndefined()
+})
+
 describe('open on startup', () => {
   const entry = (id: string, updatedAt: number): SavedWorkspace => ({ ...saved(), id, updatedAt })
+  it('pinIfNew pins a first-seen entry at the end and leaves known ones alone', () => {
+    const list = setAutoOpen([entry('a', 2), entry('b', 1)], 'a', true)
+    expect(pinIfNew(list, entry('c', 3)).autoOpen).toBe(1)
+    expect(pinIfNew(list, entry('b', 3)).autoOpen).toBeUndefined()
+    expect(pinIfNew(list, { ...entry('d', 3), autoOpen: 7 }).autoOpen).toBe(7)
+  })
+  it('pinIfNew skips ids already seen this run (evicted or forgotten) and stops at the cap', () => {
+    expect(pinIfNew([], entry('gone', 1), new Set(['gone'])).autoOpen).toBeUndefined()
+    let list: SavedWorkspace[] = []
+    for (let i = 0; i < MAX_AUTO_PINNED + 3; i++) list = upsertSaved(list, pinIfNew(list, entry(`w${i}`, i)))
+    expect(autoOpenList(list)).toHaveLength(MAX_AUTO_PINNED)
+  })
+  it('pinIfNew numbers past gaps with max+1', () => {
+    const list = [{ ...entry('a', 2), autoOpen: 0 }, { ...entry('b', 1), autoOpen: 5 }]
+    expect(pinIfNew(list, entry('c', 3)).autoOpen).toBe(6)
+  })
   it('appends switched-on entries in order and renumbers on removal', () => {
     let list = [entry('a', 3), entry('b', 2), entry('c', 1)]
     list = setAutoOpen(list, 'c', true)
@@ -156,5 +187,17 @@ describe('pane names (BUZ-5)', () => {
     const raw = JSON.stringify({ version: 1, workspaces: [toSaved({ ...named, layout: updateLeaf(layout, leaves[0].id, { name: '3' }) }, 'powershell', 1)] })
     const storage = { getItem: () => raw }
     expect(collectLeaves(fromSaved(readSaved(storage)[0], () => 'x').layout)[0].name).toBeUndefined()
+  })
+
+  it('round-trips a pane identity icon + color and drops invalid ones on read', () => {
+    const leaves = collectLeaves(workspace.layout)
+    const layout = updateLeaf(workspace.layout, leaves[0].id, { name: 'Reviewer', icon: 'bug', color: '#5865f2', headerTint: true })
+    const raw = JSON.stringify({ version: 1, workspaces: [toSaved({ ...workspace, layout }, 'powershell', 1)] })
+    const leaf = collectLeaves(fromSaved(readSaved({ getItem: () => raw })[0], () => crypto.randomUUID()).layout)[0]
+    expect([leaf.name, leaf.icon, leaf.color, leaf.headerTint]).toEqual(['Reviewer', 'bug', '#5865f2', true])
+    const bad = JSON.stringify({ version: 1, workspaces: [toSaved({ ...workspace, layout: updateLeaf(layout, leaves[0].id, { icon: 'evil text', color: 'red' }) }, 'powershell', 1)] })
+    const dropped = collectLeaves(fromSaved(readSaved({ getItem: () => bad })[0], () => 'x').layout)[0]
+    // A tint whose color was dropped has nothing to paint with.
+    expect([dropped.icon, dropped.color, dropped.headerTint]).toEqual([undefined, undefined, undefined])
   })
 })

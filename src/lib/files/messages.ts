@@ -1,4 +1,4 @@
-// Adapted from parsingk/Astera, debc3098; Apache-2.0. See licenses/Astera/.
+// Adapted from parsingk/Astera, debc3098; Apache-2.0. See third-party-licenses/Astera/.
 export interface Message { key: string; params?: Record<string, string | number> }
 const messages: Record<string, string> = {
   'files.validate.empty': 'Enter a name.', 'files.validate.reserved': 'This name is reserved.',

@@ -1,4 +1,6 @@
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
+import { MANAGED_LABEL, isLaunchModeLocked } from '@/lib/policy'
+import { usePolicyStore } from '@/store/policy-store'
 import { Check, Minus, Plus } from 'lucide-react'
 import { platformShells, type ShellId, type ShellMeta } from '@/lib/terminal-pref'
 import {
@@ -7,18 +9,28 @@ import {
   FONT_SIZE_MAX,
   LINE_HEIGHT_MIN,
   LINE_HEIGHT_MAX,
+  SCROLLBACK_CHOICES,
   customFontStack,
   primaryFamily,
-  type TerminalTextPref
+  type TerminalTextPref,
+  type WheelZoomMode
 } from '@/lib/terminal-text'
 import { useTerminalPrefStore } from '@/store/terminal-pref-store'
 import { useTerminalTextStore } from '@/store/terminal-text-store'
 import { useStatuslineStore } from '@/store/statusline-store'
+import { useBuildPriorityStore } from '@/store/build-priority-store'
+import type { PriorityLevel, PriorityMode } from '@/lib/build-priority'
+import { useEnvPolicyStore } from '@/store/env-policy-store'
+import { ignoredAllowEntries, parseAllowList, type EnvFilterMode } from '@/lib/env-policy'
+import { ToggleRow } from './NotificationsPanel'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { useAgentAvailabilityStore } from '@/store/agent-availability-store'
 import { setSavedPaneIds } from '@/store/saved-workspaces-store'
 import { TEMPLATES, isTemplateAvailable, launchMode } from '@/lib/templates'
 import { AgentIcon } from '@/components/AgentIcon'
+import { DangerousModeDialog, type PendingDangerousMode } from '@/components/DangerousModeDialog'
+import { isDangerousLaunchMode } from '@/lib/launch-mode-safety'
+import { useAgentPolicyStore } from '@/store/agent-policy-store'
 import { listAvailableShells, type AvailableShell } from '@/tauri/shell'
 import {
   getTerminalHostSettings,
@@ -27,6 +39,11 @@ import {
   type TerminalHostStatus
 } from '@/tauri/terminal-host'
 import { describeHostStatus } from '@/lib/terminal-host-status'
+import {
+  getHostStatusSnapshot,
+  setHostStatus,
+  subscribeHostStatus
+} from '@/lib/host-status-store'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -119,6 +136,10 @@ export function TerminalPanel(): ReactElement {
 
       <DefaultLaunchModeSettings />
 
+      <AgentSafetySettings />
+
+      <BuildPrioritySettings />
+      <EnvironmentSettings />
       <StatusLineSettings />
       <TerminalHostSettings />
     </div>
@@ -190,6 +211,23 @@ function DefaultLaunchModeSettings(): ReactElement {
   const prefs = useAgentPrefStore((s) => s.defaultLaunchModes)
   const setDefaultLaunchMode = useAgentPrefStore((s) => s.setDefaultLaunchMode)
   const agents = TEMPLATES.filter((t) => t.launchModes !== undefined && t.launchModes.length > 0)
+  const admin = usePolicyStore((s) => s.policy)
+  // Bypass / YOLO as the default for every new pane is confirmed first.
+  const [pending, setPending] = useState<PendingDangerousMode | undefined>(undefined)
+  // Settings owns the keyboard (no terminal to return to), so focus goes back
+  // to the mode button that opened the dialog instead of falling to <body>.
+  const trigger = useRef<HTMLElement | null>(null)
+  const choose = (agentId: string, modeId: string, active: boolean, el: HTMLElement): void => {
+    if (!active && isDangerousLaunchMode(agentId, modeId)) {
+      trigger.current = el
+      setPending({ agentId, modeId })
+    } else setDefaultLaunchMode(agentId, modeId)
+  }
+  const close = (): void => {
+    setPending(undefined)
+    const el = trigger.current
+    setTimeout(() => el?.focus(), 0)
+  }
 
   return (
     <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
@@ -213,17 +251,22 @@ function DefaultLaunchModeSettings(): ReactElement {
               <div className="flex flex-wrap gap-2">
                 {t.launchModes!.map((m) => {
                   const active = m.id === activeId
+                  const locked = isLaunchModeLocked(admin, m.dangerous === true)
                   return (
                     <button
                       key={m.id}
                       type="button"
                       aria-pressed={active}
-                      onClick={() => setDefaultLaunchMode(t.id, m.id)}
+                      disabled={locked}
+                      title={locked ? MANAGED_LABEL : undefined}
+                      onClick={(e) => choose(t.id, m.id, active, e.currentTarget)}
                       className={cn(
                         'flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm transition-colors',
                         active
                           ? 'border-primary/50 text-foreground ring-2 ring-primary/15'
-                          : 'border-pane-border text-muted-foreground hover:bg-muted/40'
+                          : 'border-pane-border text-muted-foreground hover:bg-muted/40',
+                        m.dangerous && 'text-red-500',
+                        'disabled:cursor-not-allowed disabled:opacity-50'
                       )}
                     >
                       {m.label}
@@ -235,6 +278,60 @@ function DefaultLaunchModeSettings(): ReactElement {
             </div>
           )
         })}
+      </div>
+      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+        Panes started by another agent (worktree.spawn) start in a red mode only if you allow it under Agent safety;
+        otherwise they fall back to this default, or to the provider's first mode if this default is red.
+      </p>
+      {admin.disableBypassModes && (
+        <p className="mt-1 text-xs font-medium text-amber-500">Red modes: {MANAGED_LABEL}</p>
+      )}
+      <DangerousModeDialog
+        pending={pending}
+        onCancel={close}
+        onConfirm={() => {
+          if (pending) setDefaultLaunchMode(pending.agentId, pending.modeId)
+          close()
+        }}
+      />
+    </section>
+  )
+}
+
+/**
+ * "Agent safety": what one agent may make other panes do. Stored here,
+ * enforced in Rust (agent_policy.rs) so an agent cannot route around it.
+ */
+function AgentSafetySettings(): ReactElement {
+  const policy = useAgentPolicyStore((s) => s.policy)
+  const setPolicy = useAgentPolicyStore((s) => s.setPolicy)
+  const admin = usePolicyStore((s) => s.policy)
+  return (
+    <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+      <h2 className="text-sm font-semibold text-foreground">Agent safety</h2>
+      <div className="mt-4 grid gap-4">
+        <ToggleRow
+          label="Allow agents to run prompts in other panes"
+          description={
+            'War Room "execute": an agent pastes a prompt into another pane and runs it. Off: agents can only send ' +
+            'messages (probe) that the other agent reads and decides on. Your own sends from the War Room are not affected. ' +
+            'Not covered: the task prompt an agent gives a new worker pane it spawns (worktree.spawn).'
+          }
+          checked={policy.allowWarRoomExecute && !admin.disableWarRoomExecute && !admin.disableWarRoom}
+          managed={admin.disableWarRoomExecute || admin.disableWarRoom}
+          onChange={(on) => setPolicy({ allowWarRoomExecute: on })}
+        />
+        <ToggleRow
+          label="Spawned workers inherit Bypass/YOLO from the agent that starts them"
+          description={
+            'Off: a worker started by an agent (worktree.spawn) never starts in a red mode. On: a worker of the same ' +
+            'agent starts in the red mode of the agent that asked for it (still badged red). One bad instruction can ' +
+            'then spread to every worker.'
+          }
+          checked={policy.workersInheritBypass && !admin.disableBypassModes}
+          managed={admin.disableBypassModes}
+          onChange={(on) => setPolicy({ workersInheritBypass: on })}
+        />
       </div>
     </section>
   )
@@ -294,25 +391,22 @@ function StatusLineSettings(): ReactElement {
   )
 }
 
+/** Terminal host status, fetched on mount and refreshed while mounted. */
+function useHostStatus(): [
+  TerminalHostStatus | null,
+  (s: TerminalHostStatus | null) => void
+] {
+  const status = useSyncExternalStore(subscribeHostStatus, getHostStatusSnapshot)
+  return [status, setHostStatus]
+}
+
 /**
  * Terminal host (SWA-55, ADR 0001 phase 2): new panes spawn in the separate
  * `swarmterm-host.exe` instead of inside the app. Off by default until
  * panes can survive a restart (phase 3/4); running panes keep their backend.
  */
 function TerminalHostSettings(): ReactElement | null {
-  const [status, setStatus] = useState<TerminalHostStatus | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    getTerminalHostStatus()
-      .then((s) => {
-        if (!cancelled) setStatus(s)
-      })
-      .catch((err) => console.error('[TerminalPanel] terminal host status failed', err))
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const [status, setStatus] = useHostStatus()
 
   if (!status) return null
   const enabled = status.enabled
@@ -471,6 +565,8 @@ function TextSettings(): ReactElement {
   const setFontSize = useTerminalTextStore((s) => s.setFontSize)
   const setLineHeight = useTerminalTextStore((s) => s.setLineHeight)
   const setLigatures = useTerminalTextStore((s) => s.setLigatures)
+  const setWheelZoom = useTerminalTextStore((s) => s.setWheelZoom)
+  const setScrollback = useTerminalTextStore((s) => s.setScrollback)
   const reset = useTerminalTextStore((s) => s.reset)
 
   const matched = MONO_FONTS.find((f) => f.stack === text.fontFamily)
@@ -557,6 +653,22 @@ function TextSettings(): ReactElement {
             atMax={text.fontSize >= FONT_SIZE_MAX}
           />
 
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Ctrl + scroll zoom</span>
+            <select
+              value={text.wheelZoom}
+              onChange={(e) => setWheelZoom(e.target.value as WheelZoomMode)}
+              className="w-full rounded-md border border-pane-border bg-card px-2.5 py-1.5 text-sm text-foreground"
+            >
+              <option value="pane">Pane under the mouse</option>
+              <option value="global">All panes (changes Size)</option>
+              <option value="off">Off</option>
+            </select>
+            <span className="mt-1 block text-[11px] leading-snug text-muted-foreground/70">
+              Hold Ctrl and scroll over a terminal. Ctrl+0 resets.
+            </span>
+          </label>
+
           <Stepper
             label="Line height"
             value={text.lineHeight.toFixed(1)}
@@ -565,6 +677,25 @@ function TextSettings(): ReactElement {
             atMin={text.lineHeight <= LINE_HEIGHT_MIN}
             atMax={text.lineHeight >= LINE_HEIGHT_MAX}
           />
+
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Scrollback</span>
+            <select
+              value={String(text.scrollback)}
+              onChange={(e) => setScrollback(Number(e.target.value))}
+              className="w-full rounded-md border border-pane-border bg-card px-2.5 py-1.5 text-sm text-foreground"
+            >
+              {SCROLLBACK_CHOICES.includes(text.scrollback) ? null : (
+                <option value={String(text.scrollback)}>{text.scrollback.toLocaleString()} lines</option>
+              )}
+              {SCROLLBACK_CHOICES.map((n) => (
+                <option key={n} value={String(n)}>{n.toLocaleString()} lines</option>
+              ))}
+            </select>
+            <span className="mt-1 block text-[11px] leading-snug text-muted-foreground/70">
+              Lines kept per pane. More lines cost more memory in every pane.
+            </span>
+          </label>
 
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -654,5 +785,222 @@ function TextPreview({ text }: { text: TerminalTextPref }): ReactElement {
         <span className="text-muted-foreground">{PREVIEW_GLYPHS}</span>
       </div>
     </div>
+  )
+}
+
+const PRIORITY_MODES: { id: PriorityMode; label: string; description: string }[] = [
+  {
+    id: 'strict',
+    label: 'Strict (recommended)',
+    description:
+      'Everything in a pane, the agent included, runs below normal from the moment it starts; builds and tools an agent starts run lower still. Windows enforces it, so no process in the pane can raise itself back.'
+  },
+  {
+    id: 'agent-normal',
+    label: 'Agent at normal',
+    description:
+      'The shell and the agent keep normal priority; everything the agent starts runs at the build level. Tools in an unrecognised agent may stay normal.'
+  },
+  { id: 'off', label: 'Off', description: 'No limits: everything runs at normal priority.' }
+]
+
+const PRIORITY_LEVELS: { id: PriorityLevel; label: string }[] = [
+  { id: 'below-normal', label: 'Below normal' },
+  { id: 'idle', label: 'Low (idle)' }
+]
+
+const SELECT_CLASS = 'w-full rounded-md border border-pane-border bg-card px-2.5 py-1.5 text-sm text-foreground disabled:opacity-50'
+
+/** "Process priority" — Job Object limits for everything a pane runs (ADR 0005). */
+function BuildPrioritySettings(): ReactElement {
+  const p = useBuildPriorityStore((s) => s.priority)
+  const setPriority = useBuildPriorityStore((s) => s.setPriority)
+  const off = p.mode === 'off'
+  const mode = PRIORITY_MODES.find((m) => m.id === p.mode) ?? PRIORITY_MODES[0]
+  const [capDraft, setCapDraft] = useState<number | null>(null)
+  const [hostStatus] = useHostStatus()
+  const hostNote = hostStatus?.enabled ? hostStatus.priorityUnsupported : null
+  const commitCap = (): void => {
+    if (capDraft !== null && capDraft !== p.cpuCap) setPriority({ cpuCap: capDraft })
+    setCapDraft(null)
+  }
+  return (
+    <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+      <h2 className="text-sm font-semibold text-foreground">Process priority</h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Keeps heavy builds and tools started in a pane from making Windows unresponsive. Applies live to running
+        panes. A workspace can opt out from its ⋮ menu.
+      </p>
+      {hostNote && <p className="mt-2 text-xs text-amber-500">{hostNote}</p>}
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <label className="block sm:col-span-2">
+          <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Mode</span>
+          <select
+            value={p.mode}
+            onChange={(e) => setPriority({ mode: e.target.value as PriorityMode })}
+            className={SELECT_CLASS}
+          >
+            {PRIORITY_MODES.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1.5 block text-xs text-muted-foreground">{mode.description}</span>
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Pane priority (strict)</span>
+          <select
+            value={p.paneLevel}
+            disabled={p.mode !== 'strict'}
+            onChange={(e) => setPriority({ paneLevel: e.target.value as PriorityLevel })}
+            className={SELECT_CLASS}
+          >
+            {PRIORITY_LEVELS.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Builds and tools an agent starts</span>
+          <select
+            value={p.buildLevel}
+            disabled={off}
+            onChange={(e) => setPriority({ buildLevel: e.target.value as PriorityLevel })}
+            className={SELECT_CLASS}
+          >
+            {PRIORITY_LEVELS.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="sm:col-span-2">
+          <ToggleRow
+            label="Cap CPU per pane"
+            description="Hard limit on the share of the whole machine one pane may use, even when the CPU is otherwise idle."
+            checked={!off && p.cpuCap !== null}
+            onChange={(on) => setPriority({ cpuCap: on ? 50 : null })}
+          />
+          {!off && p.cpuCap !== null && (
+            <label className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
+              <input
+                type="range"
+                min={5}
+                max={95}
+                step={5}
+                value={capDraft ?? p.cpuCap}
+                // Dragging only moves the draft; the value is committed on
+                // release, so one drag is one push to every pane's job.
+                onChange={(e) => setCapDraft(Number(e.target.value))}
+                onPointerUp={commitCap}
+                onKeyUp={commitCap}
+                onBlur={commitCap}
+                className="flex-1"
+                aria-label="CPU cap per pane"
+              />
+              <span className="w-10 text-right tabular-nums text-foreground">{capDraft ?? p.cpuCap} %</span>
+            </label>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+const ENV_MODES: { id: EnvFilterMode; label: string; description: string }[] = [
+  {
+    id: 'default',
+    label: 'Hide secrets',
+    description: 'Passes everything except names that look like secrets (API keys, tokens, passwords, URLs with credentials).'
+  },
+  {
+    id: 'strict',
+    label: 'System variables only',
+    description: 'Passes only the Windows variables a shell needs (PATH, SystemRoot, TEMP, USERPROFILE, …) plus the list below.'
+  }
+]
+
+/** "Environment" — what panes and command routines inherit from Swarmterm's own environment. */
+function EnvironmentSettings(): ReactElement {
+  const policy = useEnvPolicyStore((s) => s.policy)
+  const setPolicy = useEnvPolicyStore((s) => s.setPolicy)
+  // EnvPolicy (admin): the filter is forced on and the user's list is not
+  // applied (Rust drops it), so all three controls lock together.
+  const envLocked = usePolicyStore((s) => s.policy.envPolicy !== null)
+  const adminAllow = usePolicyStore((s) => s.policy.envAllow)
+  const [allowDraft, setAllowDraft] = useState<string | null>(null)
+  const mode = ENV_MODES.find((m) => m.id === policy.mode) ?? ENV_MODES[0]
+  // Every edit is stored at once (nothing is lost if Settings closes while
+  // the box has focus); the raw text stays as the draft until blur so
+  // parsing never rewrites what is being typed.
+  const editAllow = (text: string): void => {
+    setAllowDraft(text)
+    setPolicy({ allow: parseAllowList(text) })
+  }
+  const ignored = allowDraft === null ? [] : ignoredAllowEntries(allowDraft)
+  return (
+    <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+      <h2 className="text-sm font-semibold text-foreground">Environment</h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        What new panes and command routines inherit from Swarmterm's own environment. Agents keep their own logins;
+        running panes keep the environment they started with.
+      </p>
+      <div className="mt-4 grid gap-4">
+        <ToggleRow
+          label="Pass secrets from Swarmterm's environment to panes"
+          description="Off: API keys, tokens and passwords Swarmterm was started with are withheld from panes."
+          checked={policy.passSecrets && !envLocked}
+          managed={envLocked}
+          onChange={(on) => setPolicy({ passSecrets: on })}
+        />
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Filter</span>
+          <select
+            value={policy.mode}
+            disabled={policy.passSecrets || envLocked}
+            onChange={(e) => setPolicy({ mode: e.target.value as EnvFilterMode })}
+            className={SELECT_CLASS}
+          >
+            {ENV_MODES.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1.5 block text-xs text-muted-foreground">{mode.description}</span>
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Always pass these variables</span>
+          <textarea
+            value={allowDraft ?? policy.allow.join('\n')}
+            disabled={policy.passSecrets || envLocked}
+            onChange={(e) => editAllow(e.target.value)}
+            onBlur={() => setAllowDraft(null)}
+            rows={3}
+            spellCheck={false}
+            placeholder={'MY_SERVICE_TOKEN\nHTTP_PROXY\nMY_TOOL_*'}
+            className="w-full rounded-md border border-pane-border bg-card px-2.5 py-1.5 font-mono text-xs text-foreground disabled:opacity-50"
+            aria-label="Always pass these variables"
+          />
+          <span className="mt-1.5 block text-xs text-muted-foreground">
+            One name per line (or comma-separated), case-insensitive; a trailing * matches a prefix. Add the
+            variables an agent logs in with (for example ANTHROPIC_API_KEY) if it does not use its own login.
+          </span>
+          {envLocked && <span className="mt-1 block text-xs font-medium text-amber-500">{MANAGED_LABEL}</span>}
+          {adminAllow.length > 0 && (
+            <span className="mt-1 block text-xs text-muted-foreground">
+              Always passed by your administrator: {adminAllow.join(', ')}
+            </span>
+          )}
+          {ignored.length > 0 && (
+            <span className="mt-1 block text-xs text-amber-500">Not variable names, ignored: {ignored.join(', ')}</span>
+          )}
+        </label>
+      </div>
+    </section>
   )
 }

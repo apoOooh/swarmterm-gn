@@ -4,7 +4,9 @@ import { KNOWN_SHELLS, type ShellId } from '@/lib/terminal-pref'
 import { isValidSessionId } from '@/lib/resume-command'
 import { templateById } from '@/lib/templates'
 import { sanitizePaneName } from '@/lib/pane-address'
+import { sanitizePaneColor, sanitizePaneIcon } from '@/lib/pane-identity'
 import type { Workspace } from '@/store/app-store'
+import type { AccountSelection } from '@/lib/agent-accounts'
 
 export const SAVED_WORKSPACES_KEY = 'swarmterm-saved-workspaces'
 export const MAX_SAVED_WORKSPACES = 24
@@ -18,12 +20,15 @@ export interface SavedLeaf {
   worktreeBranch?: string
   sessionId?: string
   name?: string
+  /** Pane identity icon + color (lib/pane-identity); re-sanitised on load. */
+  icon?: string
+  color?: string
+  headerTint?: boolean
   /**
    * The pane's last runtime id: the key a pane that survived in the
-   * terminal host (SWA-56) is reattached by. It doubles as the pane's MCP
-   * bearer (`SWARMTERM_SESSION`), which authorises only while that pane
-   * lives and is already in its own environment — the same user boundary
-   * as this storage.
+   * terminal host (SWA-56) is reattached by. It is NOT the pane's MCP
+   * bearer: `SWARMTERM_SESSION` is a separate per-spawn secret that is
+   * never saved.
    */
   terminalId?: string
 }
@@ -31,7 +36,8 @@ export interface SavedLeaf {
  *  (possibly stale) snapshot, knows its current agent and folder. */
 export interface ReattachLeaf { terminalId: string; agentId?: string; cwd?: string }
 export type SavedNode = SavedLeaf | { type: 'split'; direction: 'horizontal' | 'vertical'; sizes: [number, number]; children: [SavedNode, SavedNode] }
-export interface SavedWorkspace { id: string; name: string; cwd: string; layout: SavedNode; worktreeMode: boolean; updatedAt: number; autoOpen?: number }
+/** `accountSelections`: the workspace's account choice for split panes. */
+export interface SavedWorkspace { id: string; name: string; cwd: string; layout: SavedNode; worktreeMode: boolean; updatedAt: number; autoOpen?: number; accountSelections?: Record<string, AccountSelection>; normalBuildPriority?: true }
 export interface SavedStorage { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void }
 
 function validSession(agent: string, id: string | undefined): string | undefined {
@@ -54,11 +60,14 @@ export function toSaved(ws: Workspace, shell: ShellId, now: number, paneIds = fa
       ...(node.launchMode ? { launchMode: node.launchMode } : {}),
       ...(node.worktreeBranch ? { worktreeBranch: node.worktreeBranch } : {}),
       ...(node.name ? { name: node.name } : {}),
+      ...(node.icon ? { icon: node.icon } : {}),
+      ...(node.color ? { color: node.color } : {}),
+      ...(node.headerTint && node.color ? { headerTint: true } : {}),
       ...(paneIds && validTerminalId(node.terminalId) ? { terminalId: node.terminalId } : {}),
       ...(validSession(agentId, node.sessionId ?? node.resumeSessionId) ? { sessionId: validSession(agentId, node.sessionId ?? node.resumeSessionId) } : {})
     }
   }
-  return { id: ws.savedId, name: ws.name, cwd: ws.cwd, layout: convert(ws.layout), worktreeMode: ws.worktreeMode, updatedAt: now }
+  return { id: ws.savedId, name: ws.name, cwd: ws.cwd, layout: convert(ws.layout), worktreeMode: ws.worktreeMode, updatedAt: now, ...(ws.accountSelections ? { accountSelections: ws.accountSelections } : {}), ...(ws.normalBuildPriority ? { normalBuildPriority: true as const } : {}) }
 }
 
 function validTerminalId(id: unknown): id is string {
@@ -74,14 +83,26 @@ export function fromSaved(saved: SavedWorkspace, uid: () => string, reattach?: (
     const agentId = live?.agentId ? templateById(live.agentId).id : savedAgent
     // A session belongs to the agent it was recorded for.
     const sessionId = agentId === savedAgent ? validSession(agentId, node.sessionId) : undefined
-    return { type: 'leaf', id: uid(), terminalId: live?.terminalId ?? uid(), agentId, accountId: node.accountId, shellId: node.shellId, cwd: live?.cwd || node.cwd, launchMode: agentId === savedAgent ? node.launchMode : undefined, worktreeBranch: node.worktreeBranch, ...(node.name ? { name: node.name } : {}), ...(sessionId ? { resumeSessionId: sessionId, sessionId } : {}) }
+    return { type: 'leaf', id: uid(), terminalId: live?.terminalId ?? uid(), agentId, accountId: node.accountId, shellId: node.shellId, cwd: live?.cwd || node.cwd, launchMode: agentId === savedAgent ? node.launchMode : undefined, worktreeBranch: node.worktreeBranch, ...(node.name ? { name: node.name } : {}), ...(node.icon ? { icon: node.icon } : {}), ...(node.color ? { color: node.color } : {}), ...(node.headerTint && node.color ? { headerTint: true } : {}), ...(sessionId ? { resumeSessionId: sessionId, sessionId } : {}) }
   }
   const layout = convert(saved.layout)
-  return { id: uid(), savedId: saved.id, name: saved.name, cwd: saved.cwd, layout, focusedLeafId: collectLeaves(layout)[0].id, broadcastActive: false, broadcastLeafIds: [], worktreeMode: saved.worktreeMode }
+  return { id: uid(), savedId: saved.id, name: saved.name, cwd: saved.cwd, layout, focusedLeafId: collectLeaves(layout)[0].id, broadcastActive: false, broadcastLeafIds: [], worktreeMode: saved.worktreeMode, ...(saved.accountSelections ? { accountSelections: saved.accountSelections } : {}), ...(saved.normalBuildPriority ? { normalBuildPriority: true } : {}) }
 }
 
 function object(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0 && value.length <= 32768 }
+/** Keeps only well-formed selections; a since-deleted account id is harmless
+ *  (splitAccountFor ignores ids that match no profile). */
+function parseSelections(value: unknown): Record<string, AccountSelection> | undefined {
+  if (!object(value)) return undefined
+  const kept: Record<string, AccountSelection> = {}
+  for (const [agentId, selection] of Object.entries(value)) {
+    if (agentId !== 'claude-code' && agentId !== 'codex' || !object(selection)) continue
+    if (selection.mode === 'round-robin') kept[agentId] = { mode: 'round-robin' }
+    else if (selection.mode === 'fixed' && text(selection.accountId)) kept[agentId] = { mode: 'fixed', accountId: selection.accountId }
+  }
+  return Object.keys(kept).length > 0 ? kept : undefined
+}
 function parseNode(value: unknown, depth = 0): SavedNode | undefined {
   if (!object(value) || depth > 64) return undefined
   if (value.type === 'leaf') {
@@ -91,6 +112,9 @@ function parseNode(value: unknown, depth = 0): SavedNode | undefined {
       ...(text(value.launchMode) ? { launchMode: value.launchMode } : {}),
       ...(text(value.worktreeBranch) ? { worktreeBranch: value.worktreeBranch } : {}),
       ...(typeof value.name === 'string' && sanitizePaneName(value.name) ? { name: sanitizePaneName(value.name) } : {}),
+      ...(typeof value.icon === 'string' && sanitizePaneIcon(value.icon) ? { icon: sanitizePaneIcon(value.icon) } : {}),
+      ...(typeof value.color === 'string' && sanitizePaneColor(value.color) ? { color: sanitizePaneColor(value.color) } : {}),
+      ...(value.headerTint === true && typeof value.color === 'string' && sanitizePaneColor(value.color) ? { headerTint: true } : {}),
       ...(validTerminalId(value.terminalId) ? { terminalId: value.terminalId } : {}),
       ...(text(value.sessionId) && isValidSessionId(value.agentId, value.sessionId) ? { sessionId: value.sessionId } : {}) }
   }
@@ -114,7 +138,8 @@ export function readSaved(storage: Pick<SavedStorage, 'getItem'>): SavedWorkspac
     if (!layout) continue
     seen.add(item.id)
     const autoOpen = typeof item.autoOpen === 'number' && Number.isInteger(item.autoOpen) && item.autoOpen >= 0 ? { autoOpen: item.autoOpen } : {}
-    list.push({ id: item.id, name: item.name, cwd: item.cwd, worktreeMode: item.worktreeMode, updatedAt: item.updatedAt, layout, ...autoOpen })
+    const accountSelections = parseSelections(item.accountSelections)
+    list.push({ id: item.id, name: item.name, cwd: item.cwd, worktreeMode: item.worktreeMode, updatedAt: item.updatedAt, layout, ...autoOpen, ...(accountSelections ? { accountSelections } : {}), ...(item.normalBuildPriority === true ? { normalBuildPriority: true as const } : {}) })
   }
   return capSaved(list)
 }
@@ -134,6 +159,23 @@ export function upsertSaved(list: SavedWorkspace[], entry: SavedWorkspace): Save
   const previous = list.find(w => w.id === entry.id)
   if (!('autoOpen' in entry) && previous?.autoOpen !== undefined) entry = { ...entry, autoOpen: previous.autoOpen }
   return capSaved([entry, ...list.filter(w => w.id !== entry.id)])
+}
+
+export const PIN_NEW_WORKSPACES_KEY = 'swarmterm-pin-new-workspaces'
+export function readPinNew(storage: Pick<SavedStorage, 'getItem'>): boolean {
+  try { return storage.getItem(PIN_NEW_WORKSPACES_KEY) === '1' } catch { return false }
+}
+export function storePinNew(storage: Pick<SavedStorage, 'setItem'>, on: boolean): void {
+  storage.setItem(PIN_NEW_WORKSPACES_KEY, on ? '1' : '0')
+}
+/** Auto-pinning stops here: pinned entries are never evicted, so an unbounded pin set would defeat the saved-workspace cap. */
+export const MAX_AUTO_PINNED = 8
+/** A workspace seen for the first time (`seen` = ids stored or snapshotted this run, so an evicted or forgotten one is not "new") joins the end of the startup list. */
+export function pinIfNew(list: SavedWorkspace[], entry: SavedWorkspace, seen: ReadonlySet<string> = new Set()): SavedWorkspace {
+  if (seen.has(entry.id) || list.some(w => w.id === entry.id) || entry.autoOpen !== undefined) return entry
+  const pinned = autoOpenList(list)
+  if (pinned.length >= MAX_AUTO_PINNED) return entry
+  return { ...entry, autoOpen: Math.max(-1, ...pinned.map(w => w.autoOpen!)) + 1 }
 }
 
 /** Workspaces opened on app start, in their startup order. */

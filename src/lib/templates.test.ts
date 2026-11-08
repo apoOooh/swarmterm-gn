@@ -4,9 +4,13 @@ import {
   DEFAULT_TEMPLATE_ID,
   templateById,
   agentCommand,
+  withLaunchMode,
   isPlainShellPane,
-  isTemplateAvailable
+  isTemplateAvailable,
+  PERF_MOCK_AGENT_ID,
+  PERF_MOCK_AGENT_COMMAND
 } from './templates'
+import { manifestForAgent } from '@/lib/agent-state/manifests'
 
 describe('TEMPLATES catalog', () => {
   it('lists the AI agents first and the plain terminal last', () => {
@@ -140,5 +144,26 @@ describe('isTemplateAvailable', () => {
 
   it('is optimistic when the map has no entry (probe pending or failed)', () => {
     expect(isTemplateAvailable(claude, {})).toBe(true)
+  })
+})
+
+describe('perf mock agent (perf harness only)', () => {
+  it('is never offered in the catalog', () => {
+    expect(TEMPLATES.some((t) => t.id === PERF_MOCK_AGENT_ID)).toBe(false)
+  })
+  it('runs only the local generator in dev builds', () => {
+    expect(agentCommand(PERF_MOCK_AGENT_ID)).toBe(PERF_MOCK_AGENT_COMMAND)
+    expect(PERF_MOCK_AGENT_COMMAND).toBe('node agent-stream.mjs --mock')
+    expect(templateById(PERF_MOCK_AGENT_ID).executable).toBeUndefined()
+    expect(isPlainShellPane(PERF_MOCK_AGENT_ID)).toBe(false)
+    expect(manifestForAgent(PERF_MOCK_AGENT_ID)?.id).toBe(PERF_MOCK_AGENT_ID)
+  })
+  it('cannot start a real CLI by construction', () => {
+    const t = templateById(PERF_MOCK_AGENT_ID)
+    expect(Object.isFrozen(t)).toBe(true)
+    expect(Object.keys(t).sort()).toEqual(['command', 'description', 'id', 'name'])
+    expect(withLaunchMode(PERF_MOCK_AGENT_COMMAND, PERF_MOCK_AGENT_ID, 'yolo')).toBe(PERF_MOCK_AGENT_COMMAND)
+    const realCommands = TEMPLATES.map((x) => x.command?.split(' ')[0]).filter(Boolean)
+    expect(realCommands).not.toContain(PERF_MOCK_AGENT_COMMAND.split(' ')[0])
   })
 })

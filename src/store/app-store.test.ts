@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import {
   appStoreCreator,
@@ -8,7 +8,8 @@ import {
   type CreateWorkspaceConfig,
   type Workspace
 } from './app-store'
-import { collectLeaves, type SplitNode } from '@/lib/layout-tree'
+import { collectLeaves, findLeaf, type SplitNode } from '@/lib/layout-tree'
+import { useAgentAccountsStore } from './agent-accounts-store'
 import { toSaved } from '@/lib/saved-workspaces'
 
 function freshStore(): StoreApi<AppStore> {
@@ -366,6 +367,37 @@ describe('splitPane', () => {
     store.getState().splitPane(original, 'horizontal', 'terminal')
     const created = collectLeaves(activeWorkspace(store).layout).find((l) => l.id !== original)
     expect(created?.agentId).toBeUndefined()
+  })
+
+  describe('account of a split pane', () => {
+    const profiles = [
+      { id: 'claude-a', agentId: 'claude-code' as const, name: 'A', configDir: 'C:/a' },
+      { id: 'claude-b', agentId: 'claude-code' as const, name: 'B', configDir: 'C:/b' }
+    ]
+    beforeEach(() => useAgentAccountsStore.setState({ accounts: profiles }))
+    afterEach(() => useAgentAccountsStore.setState({ accounts: [] }))
+    const splitAccount = (store: ReturnType<typeof storeWithWorkspace>): string | undefined => {
+      const ws = activeWorkspace(store)
+      store.getState().splitPane(ws.focusedLeafId, 'horizontal', 'claude-code')
+      return findLeaf(activeWorkspace(store).layout, activeWorkspace(store).focusedLeafId)?.accountId
+    }
+
+    it('uses the workspace fixed account', () => {
+      const store = storeWithWorkspace({ cwd: 'C:/w', terminalCount: 1, agentIds: ['claude-code'], accountSelections: { 'claude-code': { mode: 'fixed', accountId: 'claude-b' } } })
+      expect(splitAccount(store)).toBe('claude-b')
+    })
+
+    it('continues the workspace round-robin', () => {
+      const store = storeWithWorkspace({ cwd: 'C:/w', terminalCount: 1, agentIds: ['claude-code'], accountSelections: { 'claude-code': { mode: 'round-robin' } } })
+      expect(splitAccount(store)).toBe('claude-a')
+      expect(splitAccount(store)).toBe('claude-b')
+      expect(splitAccount(store)).toBeUndefined()
+    })
+
+    it("inherits the source pane's account without a workspace choice", () => {
+      const store = storeWithWorkspace({ cwd: 'C:/w', terminalCount: 1, agentIds: ['claude-code'], accountIds: ['claude-a'] })
+      expect(splitAccount(store)).toBe('claude-a')
+    })
   })
 })
 
@@ -1040,7 +1072,7 @@ describe('worktree panes', () => {
     expect(after.focusedLeafId).toBe(worker.id)
   })
 
-  it('spawnWorktreePane inherits the requester launch mode for the same agent only', () => {
+  it('spawnWorktreePane never lets a worker inherit bypass, and keeps safe modes per agent', () => {
     const store = workspaceWithWorktrees()
     const requester = collectLeaves(store.getState().workspaces[0].layout)[0]
     store.getState().seedPaneLaunchMode(requester.id, 'bypass')
@@ -1055,8 +1087,45 @@ describe('worktree panes', () => {
     spawn('same')
     spawn('other', 'codex')
     const leaves = collectLeaves(store.getState().workspaces[0].layout)
-    expect(leaves.find((l) => l.worktreeBranch === 'same')?.launchMode).toBe('bypass')
-    expect(leaves.find((l) => l.worktreeBranch === 'other')?.launchMode).toBeUndefined()
+    expect(leaves.find((l) => l.worktreeBranch === 'same')?.launchMode).toBe('default')
+    expect(leaves.find((l) => l.worktreeBranch === 'other')?.launchMode).toBe('auto')
+  })
+
+  it('spawnWorktreePane skips a bypass Settings default when the requester has no own mode', () => {
+    const store = workspaceWithWorktrees()
+    const requester = collectLeaves(store.getState().workspaces[0].layout)[0]
+    store.getState().spawnWorktreePane({
+      requesterTerminalId: requester.terminalId,
+      path: 'C:/dev/myapp.worktrees/c',
+      branch: 'c',
+      prompt: 'x',
+      launchModePrefs: { 'claude-code': 'bypass' }
+    })
+    const worker = collectLeaves(store.getState().workspaces[0].layout).find((l) => l.worktreeBranch === 'c')
+    expect(worker?.launchMode).toBe('default')
+  })
+
+  it('spawnWorktreePane inherits a safe requester mode and skips a bypass Settings default', () => {
+    const store = workspaceWithWorktrees()
+    const requester = collectLeaves(store.getState().workspaces[0].layout)[0]
+    store.getState().seedPaneLaunchMode(requester.id, 'plan')
+    store.getState().spawnWorktreePane({
+      requesterTerminalId: requester.terminalId,
+      path: 'C:/dev/myapp.worktrees/a',
+      branch: 'a',
+      prompt: 'x'
+    })
+    store.getState().spawnWorktreePane({
+      requesterTerminalId: requester.terminalId,
+      path: 'C:/dev/myapp.worktrees/b',
+      branch: 'b',
+      prompt: 'x',
+      agentId: 'codex',
+      launchModePrefs: { codex: 'yolo' }
+    })
+    const leaves = collectLeaves(store.getState().workspaces[0].layout)
+    expect(leaves.find((l) => l.worktreeBranch === 'a')?.launchMode).toBe('plan')
+    expect(leaves.find((l) => l.worktreeBranch === 'b')?.launchMode).toBe('auto')
   })
 
   it('spawnWorktreePane is a no-op when worktreeMode is off or requester unknown', () => {

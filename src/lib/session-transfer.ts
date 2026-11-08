@@ -37,13 +37,13 @@ export interface MovablePane extends ResumePane { moved: boolean; fromAccountId?
  *  conversation is never dropped; the failures are returned for reporting. */
 export async function carryResumePanes(
   panes: MovablePane[],
-  transfer: (agentId: string, sessionId: string, from: string | undefined, to: string | undefined) => Promise<void>
+  transfer: (agentId: string, sessionId: string, from: string | undefined, to: string | undefined) => Promise<boolean>
 ): Promise<{ panes: ResumePane[]; failed: string[] }> {
   const failed: string[] = []
   const out = await Promise.all(panes.map(async ({ moved, fromAccountId, ...pane }) => {
     if (!moved) return pane
     try {
-      await transfer(pane.agentId, pane.sessionId, fromAccountId, pane.accountId)
+      if (!await transfer(pane.agentId, pane.sessionId, fromAccountId, pane.accountId)) throw new Error('Session not found in the source subscription')
       return pane
     } catch (error) {
       failed.push(String(error))

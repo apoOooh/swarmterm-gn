@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { shouldReturnFocus, type FocusedElementInfo } from './terminal-focus'
+import { isEditableElement, shouldReturnFocus, type FocusedElementInfo } from './terminal-focus'
 
 function info(over: Partial<FocusedElementInfo> = {}): FocusedElementInfo {
   return { tagName: 'DIV', isContentEditable: false, inOverlay: false, ...over }
@@ -53,5 +53,25 @@ describe('modal dialogs own the keyboard (review P1)', () => {
     expect(shouldReturnFocus({ tagName: 'TEXTAREA', isContentEditable: false, inOverlay: false, modalOpen: true })).toBe(false)
     expect(shouldReturnFocus({ tagName: 'DIV', isContentEditable: false, inOverlay: false, modalOpen: true })).toBe(false)
     expect(shouldReturnFocus(null, true)).toBe(false)
+  })
+})
+
+describe('isEditableElement', () => {
+  const el = (tagName: string, opts: { inXterm?: boolean; editable?: boolean } = {}) => ({
+    tagName,
+    isContentEditable: opts.editable ?? false,
+    closest: (sel: string) => (sel === '.xterm' && opts.inXterm ? ({} as Element) : null)
+  })
+
+  it('is true for text fields and contenteditable', () => {
+    expect(isEditableElement(el('INPUT'))).toBe(true)
+    expect(isEditableElement(el('textarea'))).toBe(true)
+    expect(isEditableElement(el('DIV', { editable: true }))).toBe(true)
+  })
+
+  it("is false for xterm's helper textarea, plain elements and null", () => {
+    expect(isEditableElement(el('TEXTAREA', { inXterm: true }))).toBe(false)
+    expect(isEditableElement(el('BUTTON'))).toBe(false)
+    expect(isEditableElement(null)).toBe(false)
   })
 })

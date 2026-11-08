@@ -4,8 +4,13 @@
  * Wiring lives outside React (like terminal-registry) because deliveries must
  * fire while the War Room panel — or the whole right panel — is unmounted.
  */
-import { deliverPromptToTerminal, submitTerminalPrompt } from '@/lib/terminal-registry'
-import { NUDGE_IDLE_MS, deliveryHoldReason, type HoldReason } from '@/lib/war-room-nudge'
+import {
+  deliverPromptToTerminal,
+  paneHasPromptDraft,
+  paneOutputRate,
+  submitTerminalPrompt
+} from '@/lib/terminal-registry'
+import { NUDGE_IDLE_MS, busyPaneReady, deliveryHoldReason, type HoldReason } from '@/lib/war-room-nudge'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import { selectFocusedTerminalId, useAppStore } from '@/store/app-store'
 import { useTerminalActivityStore } from '@/store/terminal-activity-store'
@@ -32,8 +37,32 @@ export const SUBMIT_DELAY_MS = 300
  */
 export const HOLD_RECHECK_MS = 750
 
+/** Set while a scheduler runs; see `requestDeliverNow`. */
+let deliverNowHandler: ((terminalId: string) => void) | null = null
+
+/**
+ * The "Deliver now" action for a `pane-busy` hold: waives the output gate
+ * once for this queue. Every other rule (blocked, working, draft, typing)
+ * is still checked — this never presses Enter on a prompt or a draft.
+ */
+export function requestDeliverNow(terminalId: string): void {
+  deliverNowHandler?.(terminalId)
+}
+
+/** What a releasable hold's "Deliver now" click does, per reason (see
+ *  `holdReasonCopy`): typing → clear the typing signal; pane-busy → waive
+ *  the output gate once. Other reasons are not releasable and do nothing. */
+export function releaseHeld(terminalId: string, reason: HoldReason): void {
+  if (reason === 'typing') useTerminalTypingStore.getState().clearTyping(terminalId)
+  else if (reason === 'pane-busy') requestDeliverNow(terminalId)
+}
+
 export function startWarRoomDelivery(): () => void {
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** When each queue started waiting (safety valve + badge delay). */
+  const waitingSince = new Map<string, number>()
+  /** Queues whose output gate the user waived via "Deliver now". */
+  const forced = new Set<string>()
   // Body/submit writes staggered off a fired idle timer. Kept separate from
   // `timers` (which only ever holds the per-terminal idle countdown, one
   // entry per terminal) because a single flush can schedule several of
@@ -53,31 +82,75 @@ export function startWarRoomDelivery(): () => void {
    *  Raw engine state, never displayState: the seen-bit is a UI concern. */
   function holdReason(terminalId: string): HoldReason | null {
     const typing = useTerminalTypingStore.getState()
+    const agentState = useAgentStateStore.getState().byId[terminalId]?.state
     return deliveryHoldReason(
       {
         focused: selectFocusedTerminalId(useAppStore.getState()) === terminalId,
         lastKeyAt: typing.lastKeyAt[terminalId],
         dirty: typing.dirty[terminalId] ?? false,
-        agentState: useAgentStateStore.getState().byId[terminalId]?.state
+        agentState,
+        // Screen read, only here (flush time / held rechecks) — never per
+        // output batch — and skipped when an agent reason already holds.
+        draft: agentState !== 'blocked' && agentState !== 'working' && paneHasPromptDraft(terminalId)
       },
       Date.now()
     )
   }
 
+  /** Every hold-reason change is logged once, so "why didn't my peer get
+   *  it?" can be answered from the devtools console after the fact. */
+  function setHeldLogged(terminalId: string, reason: HoldReason | null): void {
+    const prev = useWarRoomStore.getState().held[terminalId] ?? null
+    if (prev === reason) return
+    console.info(`[war-room] delivery to ${terminalId}: ${reason === null ? 'released' : `held (${reason})`}`)
+    useWarRoomStore.getState().setHeld(terminalId, reason)
+  }
+
+  const onDeliverNow = (terminalId: string): void => {
+    if (useWarRoomStore.getState().held[terminalId] !== 'pane-busy') return
+    forced.add(terminalId)
+    cancel(terminalId)
+    fire(terminalId, true)
+  }
+  deliverNowHandler = onDeliverNow
+
+  /** Arm the one timer a queued terminal has. Quiet pane: the strict
+   *  countdown (`delay`, NUDGE_IDLE_MS by default) — the fast path. Pane
+   *  still printing: a HOLD_RECHECK_MS poll of the relaxed gate
+   *  (`busyPaneReady`), because real agent panes repaint (status line,
+   *  cursor, title) more often than the strict countdown can ever finish.
+   *  Timers only exist while a queue is pending — nothing runs for idle
+   *  panes with nothing to deliver. `delay` applies to the quiet path only:
+   *  a wake-up's `schedule(id, 0)` on a busy pane still waits one poll. */
   function schedule(terminalId: string, delay: number = NUDGE_IDLE_MS): void {
     if (timers.has(terminalId)) return
-    if (useTerminalActivityStore.getState().active[terminalId]) return // wait for idle edge
+    if (!waitingSince.has(terminalId)) waitingSince.set(terminalId, Date.now())
+    const busy = useTerminalActivityStore.getState().active[terminalId] ?? false
     timers.set(
       terminalId,
-      setTimeout(() => fire(terminalId), delay)
+      setTimeout(() => fire(terminalId, busy), busy ? HOLD_RECHECK_MS : delay)
     )
   }
 
-  function fire(terminalId: string): void {
+  function forget(terminalId: string): void {
+    waitingSince.delete(terminalId)
+    forced.delete(terminalId)
+  }
+
+  function fire(terminalId: string, armedBusy: boolean): void {
     timers.delete(terminalId)
-    // Re-check at fire time: output may have restarted, or the pane may
-    // have left the room (leave drops its queue).
-    if (useTerminalActivityStore.getState().active[terminalId]) return
+    const busy = useTerminalActivityStore.getState().active[terminalId] ?? false
+    // A strict countdown that output overtook: the activity edge normally
+    // cancels it first; re-arm as a busy poll instead of flushing.
+    if (busy && !armedBusy) {
+      schedule(terminalId)
+      return
+    }
+    const room = useWarRoomStore.getState()
+    if ((room.queues[terminalId]?.length ?? 0) === 0) {
+      forget(terminalId)
+      return
+    }
     // Membership re-check closes a cross-thread race: the Rust MCP worker
     // (deliver) and the command/reader thread (leave) emit independently,
     // so a `warroom:deliver` for a terminal that just left can be applied
@@ -85,20 +158,51 @@ export function startWarRoomDelivery(): () => void {
     // terminal. Without this, 3s later the flush would type into a
     // revoked (or respawned-but-never-rejoined) pane. Revocation must
     // hold even against event reordering.
-    if (!useWarRoomStore.getState().isMember(terminalId)) return
+    if (!room.isMember(terminalId)) {
+      forget(terminalId)
+      return
+    }
+    const now = Date.now()
+    const since = waitingSince.get(terminalId) ?? now
     // Output-idle is not enough: the user may be mid-line in this very pane,
     // and typing a nudge into it would corrupt what they are writing — or the
     // agent may be sitting on a permission prompt, which is output-idle too,
     // and the flush's Enter would approve it. Hold the queue (never drop it)
-    // and re-arm. There is no maximum hold on purpose — see
-    // `shouldDeferDelivery`.
-    const reason = holdReason(terminalId)
+    // and re-arm. These reasons have no maximum hold on purpose — see
+    // `deliveryHoldReason`; only the output gate below has a safety valve.
+    let reason = holdReason(terminalId)
+    if (reason === null && busy) {
+      const agent = useAgentStateStore.getState().byId[terminalId]
+      const ready = busyPaneReady(
+        {
+          agentState: agent?.state,
+          agentSinceMs: agent?.sinceMs,
+          outputBytesPerSec: paneOutputRate(terminalId),
+          waitingSinceMs: since,
+          forced: forced.has(terminalId)
+        },
+        now
+      )
+      if (!ready) reason = 'pane-busy'
+    }
     if (reason !== null) {
-      useWarRoomStore.getState().setHeld(terminalId, reason)
+      // "Deliver now" waives the output gate for THIS attempt only: held for
+      // another reason, the click is spent, not carried to a later recheck.
+      if (reason !== 'pane-busy') forced.delete(terminalId)
+      // A busy poll shows its hold only once the wait outlived the normal
+      // countdown, so a nudge that goes out a second later never flashes ⏸.
+      if (
+        reason !== 'pane-busy' ||
+        now - since >= NUDGE_IDLE_MS ||
+        useWarRoomStore.getState().held[terminalId] !== undefined
+      ) {
+        setHeldLogged(terminalId, reason)
+      }
       schedule(terminalId, HOLD_RECHECK_MS)
       return
     }
-    useWarRoomStore.getState().setHeld(terminalId, null)
+    setHeldLogged(terminalId, null)
+    forget(terminalId)
     const payloads = useWarRoomStore.getState().takeFlush(terminalId)
     // Multiple payloads in one flush must not interleave their body and
     // Enter writes — deliver payload 0, submit it, only THEN deliver
@@ -138,8 +242,16 @@ export function startWarRoomDelivery(): () => void {
   const unsubActivity = useTerminalActivityStore.subscribe((state, prev) => {
     if (state.active === prev.active) return
     for (const terminalId of Object.keys(useWarRoomStore.getState().queues)) {
-      if (state.active[terminalId]) cancel(terminalId) // burst mid-countdown: restart later
-      else schedule(terminalId)
+      // Either edge restarts the timer: a burst mid-countdown aborts the
+      // strict countdown and arms the busy poll; the idle edge starts a
+      // fresh strict countdown. Only this terminal's own edge — another
+      // pane's output must not restart this queue's timer.
+      if ((state.active[terminalId] ?? false) === (prev.active[terminalId] ?? false)) {
+        schedule(terminalId)
+        continue
+      }
+      cancel(terminalId)
+      schedule(terminalId)
     }
   })
 
@@ -178,6 +290,10 @@ export function startWarRoomDelivery(): () => void {
     unsubActivity()
     unsubTyping()
     unsubAgentState()
+    // Only our own handler: a second scheduler started meanwhile keeps its.
+    if (deliverNowHandler === onDeliverNow) deliverNowHandler = null
+    waitingSince.clear()
+    forced.clear()
     for (const t of timers.values()) clearTimeout(t)
     timers.clear()
     for (const t of pending) clearTimeout(t)

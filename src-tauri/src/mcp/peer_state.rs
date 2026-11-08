@@ -281,14 +281,24 @@ impl PeerStates {
     /// must still be readable by `read_peer`. Never touches `state`/`since_ms`
     /// — output is not a state change; the renderer decides what output means.
     pub fn push_output(&mut self, id: &str, raw: &str, now_ms: u64) {
-        let p = self.peers.entry(id.to_string()).or_insert_with(|| Peer {
-            state: "unknown".to_string(),
-            since_ms: now_ms,
-            last_output_ms: now_ms,
-            tail: ScreenTail::new(SCREEN_TAIL_BYTES),
-        });
-        p.tail.push(raw);
-        p.last_output_ms = now_ms;
+        // Hot path (every output batch): look up by `&str` first so the
+        // common case allocates nothing; only a first chunk pays for the key.
+        if let Some(p) = self.peers.get_mut(id) {
+            p.tail.push(raw);
+            p.last_output_ms = now_ms;
+            return;
+        }
+        let mut tail = ScreenTail::new(SCREEN_TAIL_BYTES);
+        tail.push(raw);
+        self.peers.insert(
+            id.to_string(),
+            Peer {
+                state: "unknown".to_string(),
+                since_ms: now_ms,
+                last_output_ms: now_ms,
+                tail,
+            },
+        );
     }
 
     /// Drop `id` entirely (pty death). Idempotent — both death paths call it

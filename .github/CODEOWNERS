@@ -1,0 +1,12 @@
+# Security-relevant paths need the maintainer's review (enforced once branch
+# protection requires code owner reviews, see docs/maintainer-todos.md).
+/.github/                       @apoOooh
+/src-tauri/capabilities/        @apoOooh
+/src-tauri/tauri*.conf.json     @apoOooh
+/src-tauri/deny.toml            @apoOooh
+/src-tauri/src/policy.rs        @apoOooh
+/docs/admin/                    @apoOooh
+/rust-toolchain.toml            @apoOooh
+/SECURITY.md                    @apoOooh
+/PRIVACY.md                     @apoOooh
+/TERMS.md                       @apoOooh

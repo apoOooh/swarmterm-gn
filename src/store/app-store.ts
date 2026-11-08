@@ -22,6 +22,11 @@ import {
 import type { ShellId } from '@/lib/terminal-pref'
 import { withCloseGuard } from '@/lib/close-guard'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
+import { workerLaunchMode } from '@/lib/launch-mode-safety'
+import { useAgentPolicyStore } from '@/store/agent-policy-store'
+import { usePolicyStore } from '@/store/policy-store'
+import type { LaunchModePrefs } from '@/lib/agent-pref'
+import { useAgentPrefStore } from '@/store/agent-pref-store'
 import { clearWorktree } from '@/tauri/git'
 import { isTransientLock } from '@/lib/worktree-cleanup'
 import { awaitTerminalRelocated } from '@/lib/terminal-registry'
@@ -30,6 +35,9 @@ import { applyPreset } from '@/lib/layout-presets'
 import { fromSaved, type ReattachLeaf, type SavedLeaf, type SavedWorkspace } from '@/lib/saved-workspaces'
 import { isValidSessionId } from '@/lib/resume-command'
 import { sanitizePaneName } from '@/lib/pane-address'
+import { sanitizePaneIdentity, type PaneIdentity } from '@/lib/pane-identity'
+import { splitAccountFor, type AccountSelection } from '@/lib/agent-accounts'
+import { useAgentAccountsStore } from '@/store/agent-accounts-store'
 
 /** A workspace: a named binary split-tree of terminal panes. */
 export interface Workspace {
@@ -47,6 +55,9 @@ export interface Workspace {
   broadcastLeafIds: string[]
   /** Enable MCP worktree tools for every terminal in this workspace. */
   worktreeMode: boolean
+  /** Opt-out of "Lower build priority": processes below this workspace's
+   *  agents keep Normal priority. Absent ⇒ follow the global setting. */
+  normalBuildPriority?: boolean
   /** Leaf shown alone (pane zoom); the others keep running off-screen. */
   zoomedLeafId?: string
   /** Leaves parked in the drawer: hidden from the split view but still in
@@ -60,6 +71,9 @@ export interface Workspace {
   /** Agent a split pane starts with in this workspace (template id).
    *  Absent ⇒ inherit the global default from Settings (agent-pref-store). */
   defaultAgentId?: string
+  /** Account choice per agent CLI from the composer, applied to split panes
+   *  (see `splitAccountFor`). Absent ⇒ splits inherit the source pane's account. */
+  accountSelections?: Record<string, AccountSelection>
 }
 
 /** Whether `leafId` is parked in `ws`'s drawer. */
@@ -119,6 +133,10 @@ export interface CreateWorkspaceConfig {
   resumePanes?: Array<{ agentId: string; sessionId: string; cwd: string; accountId?: string }>
   /** Per-workspace default split agent; absent ⇒ the global default. */
   defaultAgentId?: string
+  /** Workspace account choice per agent CLI, kept for later splits. */
+  accountSelections?: Record<string, AccountSelection>
+  /** Name typed in the wizard; blank/absent ⇒ derived from the folder. */
+  name?: string
 }
 
 /** One worktree to clear: the bound leaf, its worktree path + branch, and the repo root. */
@@ -182,6 +200,7 @@ export interface AppActions {
   promptPane: (target: { agentId: string; accountId?: string; prompt: string; worktree?: { path: string; branch: string } }) => string | undefined
   /** Set (or clear with undefined) a workspace's default split agent. */
   setWorkspaceDefaultAgent: (workspaceId: string, agentId: string | undefined) => void
+  setWorkspaceNormalBuildPriority: (workspaceId: string, on: boolean) => void
   closePane: (leafId: string) => void
   toggleZoom: (leafId: string) => void
   /** Park a pane in its workspace's drawer: hidden like a close, but kept alive. */
@@ -217,12 +236,17 @@ export interface AppActions {
   setPaneShell: (leafId: string, shellId: ShellId) => void
   /** Name a pane of the active workspace (BUZ-5); blank clears it. Never respawns. */
   renamePane: (leafId: string, name: string) => void
+  /** Set a pane's identity (name + icon + color) at once; blank fields clear. Never respawns. */
+  setPaneIdentity: (leafId: string, identity: PaneIdentity) => void
   spawnWorktreePane: (p: {
     requesterTerminalId: string
     path: string
     branch: string
     agentId?: string
     prompt: string
+    /** Settings → default launch mode per agent (lib/launch-mode-safety);
+     *  omitted = read from the pref store, so no caller skips it silently. */
+    launchModePrefs?: LaunchModePrefs
   }) => void
   clearWorktreeBinding: (path: string) => void
   clearWorktrees: (targets: ClearTarget[]) => Promise<void>
@@ -353,7 +377,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         name: workspaceNameFor(
           config.cwd,
           s.workspaces.map((w) => w.name),
-          s.nextWorkspaceNumber
+          s.nextWorkspaceNumber,
+          config.name
         ),
         cwd: config.cwd,
         layout,
@@ -361,7 +386,8 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         broadcastActive: false,
         broadcastLeafIds: [],
         worktreeMode: config.worktreeMode ?? false,
-        ...(config.defaultAgentId ? { defaultAgentId: config.defaultAgentId } : {})
+        ...(config.defaultAgentId ? { defaultAgentId: config.defaultAgentId } : {}),
+        ...(config.accountSelections ? { accountSelections: config.accountSelections } : {})
       }
       return {
         workspaces: [...s.workspaces, ws],
@@ -456,13 +482,17 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   splitPane: (leafId, direction, agentId) =>
     set((s) =>
       mapActive(s, (w) => {
-        if (!findLeaf(w.layout, leafId) || isDrawered(w, leafId)) return w
+        const source = findLeaf(w.layout, leafId)
+        if (!source || isDrawered(w, leafId)) return w
         // Plain shells keep agentId absent (the layout-tree convention). The
         // split pane spawns at the workspace cwd, never in a fresh worktree:
         // a branch per click would litter <repo>.worktrees; agents that need
         // isolation mid-session use the worktree.spawn MCP tool instead.
         const newLeaf: LeafNode =
           agentId && agentId !== DEFAULT_TEMPLATE_ID ? { ...makeLeaf(), agentId } : makeLeaf()
+        const accountId = splitAccountFor(newLeaf.agentId, newLeaf.agentId ? w.accountSelections?.[newLeaf.agentId] : undefined,
+          useAgentAccountsStore.getState().accounts, collectLeaves(w.layout), source)
+        if (accountId) newLeaf.accountId = accountId
         return {
           ...w,
           layout: splitLeaf(w.layout, leafId, direction, newLeaf, uid()),
@@ -518,6 +548,17 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
     )
     return terminalId
   },
+
+  setWorkspaceNormalBuildPriority: (workspaceId, on) =>
+    set((s) => ({
+      workspaces: s.workspaces.map((w) => {
+        if (w.id !== workspaceId) return w
+        if (on) return { ...w, normalBuildPriority: true }
+        const rest = { ...w }
+        delete rest.normalBuildPriority
+        return rest
+      })
+    })),
 
   setWorkspaceDefaultAgent: (workspaceId, agentId) =>
     set((s) => ({
@@ -798,6 +839,9 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
   renamePane: (leafId, name) =>
     set((s) => mapActive(s, (w) => ({ ...w, layout: updateLeaf(w.layout, leafId, { name: sanitizePaneName(name) }) }))),
 
+  setPaneIdentity: (leafId, identity) =>
+    set((s) => mapActive(s, (w) => ({ ...w, layout: updateLeaf(w.layout, leafId, sanitizePaneIdentity(identity)) }))),
+
   // Worker panes are spawned by the backend's worktree.spawn MCP tool: split
   // the *requester's* leaf (which may live in a non-active workspace, so this
   // deliberately avoids mapActive) and let the normal pane-mount path spawn
@@ -813,6 +857,17 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
       // Fall back to the requester's agent; a plain-shell requester yields a
       // plain shell in the worktree — visible, never a silent drop.
       const agentId = p.agentId ?? requester.agentId
+      const launchMode = workerLaunchMode({
+        agentId,
+        requesterAgentId: requester.agentId,
+        requesterMode: requester.launchMode,
+        prefs: p.launchModePrefs ?? useAgentPrefStore.getState().defaultLaunchModes,
+        // The admin bypass lock overrides the user's opt-in (Rust would refuse
+        // the line anyway; this keeps the worker on a safe mode instead).
+        inheritBypass:
+          useAgentPolicyStore.getState().policy.workersInheritBypass &&
+          !usePolicyStore.getState().policy.disableBypassModes
+      })
       const newLeaf: LeafNode = {
         type: 'leaf',
         id: uid(),
@@ -824,12 +879,11 @@ export const appStoreCreator: StateCreator<AppStore> = (set, get) => ({
         cwd: p.path,
         worktreeBranch: p.branch,
         initialPrompt: p.prompt,
-        // A worker runs unattended: inherit the requester's mode (same agent
-        // only — mode ids are per-agent) so a bypassed orchestrator doesn't
-        // spawn workers that stall on the first permission prompt.
-        ...(agentId === requester.agentId && requester.launchMode !== undefined
-          ? { launchMode: requester.launchMode }
-          : {})
+        // A safe requester mode carries over (same agent only), but bypass /
+        // YOLO never does: an agent asked over MCP must not be able to
+        // multiply its own unchecked mode. Explicit, so a bypass Settings
+        // default cannot apply to the worker later either.
+        ...(launchMode !== undefined ? { launchMode } : {})
       }
       return {
         workspaces: s.workspaces.map((w) =>

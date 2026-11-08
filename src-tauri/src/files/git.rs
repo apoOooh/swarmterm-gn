@@ -13,8 +13,13 @@ pub struct Status {
     pub removed: u32,
 }
 fn command(root: &Path) -> Command {
-    let mut cmd = Command::new("git");
-    cmd.arg("--no-optional-locks").arg("-C").arg(root);
+    // Filtered env and no fsmonitor, as in `crate::git::git_command`; the
+    // calls here are read-only, so hooks never run.
+    let mut cmd = crate::terminal_env::command("git");
+    cmd.args(["-c", "core.fsmonitor="])
+        .arg("--no-optional-locks")
+        .arg("-C")
+        .arg(root);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

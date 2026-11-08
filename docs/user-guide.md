@@ -19,6 +19,8 @@ The composer starts from your **workspace defaults**. Below the options, **Save 
 
 **Save as template…** stores the current choices under a name. Saving under an existing name (case doesn't matter) offers to overwrite it. Once you have templates, a **Template** picker appears above *How many terminals?*; choosing one fills in all its choices, and *Defaults* goes back to your defaults. Agents whose CLI isn't installed are left out when a default or template is applied.
 
+**Name** (optional, under *Working folder*) sets the new workspace's name; left blank, the workspace is named after its folder. Duplicate names get a ` (1)`, ` (2)` suffix.
+
 Edit both under **Settings → Workspaces**: change the defaults in place (or **Reset to built-in**), and add, edit, duplicate or delete templates.
 
 ### Choosing a folder
@@ -27,7 +29,8 @@ Every **Browse** / **Choose path** button opens Swarmterm's own folder picker in
 
 ## Panes
 
-- **Pane numbers and names:** every open pane of a workspace carries a small number in its header and in the sidebar's terminal list, in the list's order (drawered panes have none, so parking one renumbers the rest). Double-click a pane's title — in the header or the sidebar — to give it your own name, for example "Backend"; Enter saves, Escape cancels, an empty name goes back to the automatic title. The name replaces the agent's title everywhere and is kept with saved workspaces. A name that is only a number ("3", "zwei") is not accepted, since it would clash with the pane numbers. Renaming never restarts the shell. Numbers and names are what you say to dictate into a pane by voice (see **Voice dictation**).
+- **Pane numbers and names:** every open pane of a workspace carries a small number in its header and in the sidebar's terminal list, in the list's order (drawered panes have none, so parking one renumbers the rest). Double-click a pane's title — in the header or the sidebar — to give it your own name, for example "Backend"; Enter saves, Escape cancels, an empty name goes back to the automatic title. In the pane header the name is shown in bold with the agent's own title muted beside it ("**Backend** · Fixing login tests"); the sidebar shows just the name. Names are kept with saved workspaces. A name that is only a number ("3", "zwei") is not accepted, since it would clash with the pane numbers. Renaming never restarts the shell. Numbers and names are what you say to dictate into a pane by voice (see **Voice dictation**).
+- **Pane identity (icon + name + color):** to tell at a glance who does what, give a pane an identity. Hover the header and click the small smiley left of the title (or right-click the pane → **Set identity…**). The dialog sets the name, an icon — scroll the grid of all ~2,000 Lucide icons (suggestions first, then A–Z) or search them by name ("rocket", "arrow up"; Enter takes the best match) — or any single emoji, and an optional color from 20 — tick **Tint the top bar** to color the pane's whole header bar with it, so a pane is recognisable from across the screen — with a live preview; **Save** (Enter) applies it, **Clear identity** removes all three. The icon also replaces the agent icon in the sidebar list and tints the pane's War Room avatar. Identity is kept with saved workspaces and never restarts the shell. Click the icon or the name in the header to change it again.
 - **Split** from the pane header, drag the separator to resize, and drag a header onto another pane to swap the two — shells keep running.
 - **Corner resize:** where two separators meet, a small handle lights up on hover. Drag it to resize width and height in one move; every pane touching that corner follows.
 - **Even out with a double-click:** double-click a separator to give the panes on both sides of it equal room, along that separator only (left/right for a vertical bar, top/bottom for a horizontal one). With two panes that is 50/50; with one pane beside two, each of the three gets a third. Double-clicking a corner handle evens out both directions at once. Panes further inside keep their own sizes — use **Tidy layout** to even out everything.
@@ -132,6 +135,100 @@ two matching file-stat samples, preserving video position and active playback.
 Inactive workspaces pause video. **Open in default app** and **Reveal file** are
 explicit buttons available for media; previewing a file does not execute it.
 
+**Media panel.** The right panel's **Media** tab lets you look at images and
+videos that come up while you work: a large viewer on top and a strip below,
+newest first, with each file's name, source pane and time. The strip keeps the
+last 50 files and scrolls sideways: use the mouse wheel over it, its scrollbar,
+the ‹ › buttons at its ends, or the arrow keys once it has focus (Tab); the
+shown file is scrolled into view. It is a viewer for
+you only. Agents get no tool for it, cannot open it or put anything into it,
+and nothing in it is passed to an agent. The list is not saved when Swarmterm
+closes.
+
+Swarmterm notices media paths a pane prints: absolute paths
+(`C:\...\shot.png`, spaces included), quoted paths and paths relative to the
+pane's starting folder, also inside tables whose cells the agent wrapped over
+several lines (such as Claude Code's bordered tables). If such a file exists,
+it joins the Media strip with its thumbnail (videos show a film icon), and the
+pane shows a **N new images/videos** pill
+in its top-right corner. To view it large, click the pill (opens the newest),
+the strip item, the popup item, or Ctrl+click the path in the terminal. Ctrl+click
+on a media path outside the project opens it straight in the Media tab. The panel
+never opens by itself, and your keyboard stays in the terminal. Only
+PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local drives are
+accepted. A path printed just before the file is written is retried a few times
+when printed again within seconds. Not detected: newly created files that are
+never printed, POSIX-style paths (`/c/...`, `~/...`), and relative paths after a
+`cd` (they resolve against the folder the pane started in).
+
+**New-media popup.** Settings → Media → **Show popup** (off by default) shows a
+small list in the bottom-right corner whenever new media arrives: thumbnail,
+name, source (pane name or `clipboard`) and time, newest first. Click an item
+to open it in the Media tab. The popup hides by itself after a few seconds
+(**Hide after**, default 6 s); pointing at it keeps it open, and scrolling the
+list restarts the countdown. Close it with ✕, or with Esc while the pointer is
+over it (Esc is otherwise left to your terminal, so agents can still be
+interrupted). It never takes the keyboard from your terminal. While it is up,
+an open web preview is hidden, because the preview would otherwise cover it.
+You can choose how many items it lists and turn it off separately for paths
+printed in a pane and clipboard images.
+
+**Zoom an image.** With the pointer over an image in the Media tab (or an
+image opened as a file, or while annotating), the mouse wheel zooms in and out
+around the pointer, from 10% to 2000% of the image's real size; a touchpad
+pinch works too. Scrolling anywhere else scrolls as usual (over the thumbnail
+strip, sideways). Drag the image to move it, at any zoom level: a larger image
+always covers the panel, a smaller one moves freely but stays inside it, so an
+image can never be pushed out of sight. While annotating,
+drag with the middle mouse button or hold Space and drag, so the pen keeps the
+left button (Space is taken only while the pointer is over the image). The
+corner control shows the zoom level: **Fit** (or a double-click on the image
+outside annotate mode) fits it back to the panel, **1:1** shows real pixels.
+Zoom only changes the view: marks stay on their spot and the saved copy is the
+same at any zoom. Opening another file, or the shown file changing on disk,
+returns to Fit. Videos are not zoomed.
+
+**Drag media into a pane.** Drag an item from the Media tab's thumbnail strip
+(or from the popup) onto a terminal pane: the pane is outlined while you are
+over it, and releasing types the file's path there, then gives that pane the
+keyboard. Claude Code and Codex panes receive it as a paste, exactly like
+Ctrl+V of a screenshot, so the agent attaches the image; other panes get the
+quoted path, as when you drop a file from Explorer. Releasing anywhere else
+(including over the web preview) or pressing Esc cancels. A short click still
+opens the item. Paths containing a quote or line break cannot
+be inserted.
+
+**Annotate an image.** With an opened image in the Media tab, click
+**Annotate** in the viewer's title bar to draw on it: a pen, a wide
+see-through marker, straight lines, arrows (drag from tail to head),
+rectangles and ellipses (outline, or filled with **Fill**), in six colours with
+a width slider. **Undo** steps back one mark (also after **Clear**). Marks stay
+on the spot they mark when the panel is resized. **Save copy** writes the
+image with your marks as a new PNG (named like `shot (marked).png`, at the
+image's full resolution, at most 8192 px on the longest side; an animated
+GIF or WebP keeps only its first frame) and selects it in
+the gallery, ready to drag into a pane; the original file is never changed.
+You can also drag the grip handle in the toolbar straight onto a pane: the
+marked copy is saved on the way and its path inserted as with any media drag.
+**Cancel** or Esc (while the pointer is over the image) discards the marks.
+Marked copies live in a private folder under your Windows temp directory, at
+most 50 files / 300 MB, and are deleted when Swarmterm exits. Agents cannot
+start, read or change any of this. Copying the marked image to the clipboard is
+not supported; drag or save it instead.
+
+**Clipboard images (opt-in).** Settings → Media → **Clipboard images** (off by
+default) adds images you copy (a screenshot, an image copied in a browser or
+image editor) to the Media tab, tagged `clipboard`; copying image or video
+files in Explorer adds those files as they are. **Privacy:** your clipboard can
+hold private content, which is why this is opt-in. Copied images are saved as
+PNG only in a private folder under your Windows temp directory, at most 50
+images / 200 MB (oldest removed first; copying the same image again adds no
+duplicate). Nothing is uploaded or sent anywhere, and the folder is deleted
+when Swarmterm exits (a folder left by a crash is removed on a later run after
+a day). Turning the setting off stops watching at once, deletes the saved images
+and removes all clipboard items from the Media tab; turning it back on starts
+fresh.
+
 **Run** on a supported file starts a separate plain-shell pane in its folder:
 Python files, pytest naming conventions, JavaScript/Node files, Docker Compose
 YAML, .NET projects and solutions. Dirty files must be saved first. The required
@@ -167,7 +264,7 @@ The sidebar header also shows a small counter across **all** workspaces — a re
 
 ### Pane highlighting
 
-Turn on **Settings → Appearance → Highlight panes by agent state** to frame the agent panes themselves in the same colours as their dots — a thin inner border with a soft glow, so you can tell at a glance across a split layout which pane needs you: **red** while it's blocked, **green** after it finished in the background (cleared the moment you focus it, like the dot), and **yellow** while it's working. A long turn drifts from yellow to orange over the **Working gradient** you pick (5, 10 or 30 minutes, or off to stay yellow), so the pane that has been busy for a while stands out. Idle panes and plain Terminal panes are never framed, and the focus and broadcast borders stay visible underneath. Off by default.
+Turn on **Settings → Appearance → Highlight panes by agent state** to frame the agent panes themselves in the same colours as their dots — a thin inner border with a soft glow, so you can tell at a glance across a split layout which pane needs you: **red** while it's blocked, **green** after it finished in the background (cleared the moment you focus it, like the dot), and **yellow** while it's working. A long turn drifts from yellow to orange over the **Working gradient** you pick (5, 10 or 30 minutes, or off to stay yellow), so the pane that has been busy for a while stands out. Idle panes and plain Terminal panes are never framed, and the focus and broadcast borders stay visible underneath. On by default; switch it off there if you prefer plain panes.
 
 ## Notifications
 
@@ -187,7 +284,9 @@ The list records independently of the sound and banner settings above, so muting
 
 Claude Code and Codex panes run in a **launch mode** that sets how much the agent may do without asking. The current mode is shown next to the agent icon, and the agent menu in the pane header switches it: the pane restarts the CLI with the new flags and continues the conversation (the pane's own session id or the folder's latest session). **Resume previous chat…** in the same menu restarts the pane into the CLI's own session picker (current mode kept), so an older conversation can be taken over.
 
-**Settings → Terminal → Default launch mode** picks, per provider, the mode new panes start in. It applies to new panes only — running panes keep the mode they started with. Worker panes spawned by an agent (`worktree.spawn`) inherit the spawning pane's mode when they run the same agent.
+**Settings → Terminal → Default launch mode** picks, per provider, the mode new panes start in. It applies to new panes only — running panes keep the mode they started with. Worker panes spawned by an agent (`worktree.spawn`) inherit the spawning pane's mode when they run the same agent — except **Bypass permissions** and **YOLO**, which are never inherited: such a worker starts in your Settings default for that agent, or in the agent's first mode (Claude **Default**, Codex **Auto**) if that default is itself Bypass/YOLO. An agent cannot multiply its own unchecked mode — unless you turn on **Settings → Terminal → Agent safety → Spawned workers inherit Bypass/YOLO from the agent that starts them** (off by default): then a worker of the same agent starts in the requester's Bypass/YOLO mode too (still badged red, no extra confirmation). Workers of a different agent never inherit it.
+
+**Bypass permissions** (Claude) and **YOLO** (Codex) let the agent run commands and edit files without asking — Codex also outside its sandbox. Faulty or manipulated instructions (from a web page, a file, a dependency or another agent) can then run unwanted commands with your rights. They stay available, but choosing one — in a pane's agent menu or as the Settings default — first shows a confirmation explaining this risk (Cancel is focused; Esc cancels). Both are shown in red in the menus, and a pane running in one of them carries a red badge with the mode in its header.
 
 ### Claude Code
 
@@ -212,7 +311,9 @@ the card and stops saving that open instance; its terminals keep running.
 **Open on startup:** pin a card (pin icon), choose **Open on startup** in an
 open workspace's **⋯** menu in the navbar, or tick it under **Settings →
 Workspaces → Open on startup** to open it automatically every time Swarmterm
-starts — in the navbar, in the order set there, with agents resuming their
+starts. Tick **Open new workspaces on startup by default** in the same place
+to pin every newly created workspace automatically (existing ones are not
+changed). They open in the navbar, in the order set there, with agents resuming their
 sessions. While at least one workspace opens on startup, Welcome is skipped;
 **New workspace** still brings it up. If none of them can be opened, Welcome
 appears with the reason. Startup workspaces are never pushed out of the
@@ -233,7 +334,7 @@ See the [Codex hook documentation](https://learn.chatgpt.com/docs/hooks).
 A missing working folder stops reopening and shows a notice. A missing pane or
 worktree folder falls back to the working folder with a fresh session. A missing
 conversation starts the same agent fresh; an unavailable agent opens a plain
-terminal. An unavailable shell uses the default shell. These fallbacks are shown
+terminal. An unavailable shell uses the default shell; a pane with an initial command or worker brief is refused instead. These fallbacks are shown
 in a notice. Saved data stays on this computer; terminal output, prompts, file
 tabs and unsaved editor buffers are not saved. Closing the window hides it to
 the tray; use **Quit** to test a full app restart.
@@ -266,9 +367,15 @@ Agents talk in two modes:
 - **Probe** — lands in the peer's inbox and nudges it to read: questions, debate, coordination.
 - **Execute** — pasted into the peer's terminal and run as its next prompt: a handover ("we agreed, now do it"). Refused if the target is a plain shell.
 
+**Agents may only use Execute if you allow it.** **Settings → Terminal → Agent safety → Allow agents to run prompts in other panes** is off by default: an agent's `war_room.send` in execute mode is then refused by Swarmterm with a message telling it to use probe instead (the mode is never silently changed). Probe still works, and your own sends as Moderator from the composer — Execute included — are not affected. Turn it on only when you want agents to hand tasks to each other directly; an execute into a pane in Bypass/YOLO runs without any prompt. The setting does not cover `worktree.spawn`: an agent can still start a new worker pane with a task prompt, but that worker never starts in Bypass/YOLO (see [Launch modes](#launch-modes)).
+
 You are a member too — the **Moderator**. The composer at the bottom of the Discussion tab sends to one agent or the whole room, in either mode; replies land in the transcript instead of someone's terminal.
 
-Deliveries never interrupt you: if the target pane has a half-typed — or pasted but not yet sent — command, the message is **held** — a pill in the pane, `⏸N` on the room tab — retries by itself once the pane is free, and "Deliver now" releases it immediately. The same hold applies while the agent is still working or is waiting on a permission/question prompt (so a delivery can never answer a prompt for you); those holds release on their own once the agent is idle and have no "Deliver now". Held messages are never dropped.
+**Mentions:** type `@` in the composer to reference a pane. A list offers the room's members first, then every other open pane you gave a name (unnamed panes are not listed), filtered as you type — `↑`/`↓` pick, `Enter` or `Tab` inserts the highlighted (best) match, `Esc` closes the list, and `Enter` sends as usual once the list is closed or empty. Picking is optional; you can just keep typing. Names with spaces are written quoted, `@"My pane"`. `@everyone` is always offered first.
+
+Mentions decide who gets the message, shown as **To:** above the box: `@reviewer @developer please check X` goes to exactly those two (once each, full text including the mentions), and `@everyone` anywhere goes to the whole room, as do messages without a mention, which still follow the target picker. A mention that is not a member of the room (an unknown name, or a pane outside the War Room, which the list greys out as *not in War Room*) blocks the whole message with an explanation, and your text stays in the box; nothing is ever half-sent or broadcast instead. `@` only counts at the start or after a space, and not inside `` `code` ``. In the transcript a mention is a chip that jumps to the pane; one that no longer matches an open pane is shown greyed.
+
+Deliveries never interrupt you: if the target pane has a half-typed — or pasted but not yet sent — command, the message is **held** — a pill in the pane, `⏸N` on the room tab — retries by itself once the pane is free, and "Deliver now" releases it immediately. The same hold applies while the agent is still working or is waiting on a permission/question prompt (so a delivery can never answer a prompt for you); those holds release on their own once the agent is idle and have no "Deliver now". A message also waits while the agent's input box holds unsent text you typed there (no "Deliver now"; send or clear the draft), and while the pane is still printing output, where "Deliver now" sends it anyway and it goes out by itself once the agent has been idle and the message has waited for 20 seconds each. The ⏸ badge says which of these is holding it. Held messages are never dropped.
 
 No setup is needed: Claude Code, Codex, OpenCode and Qwen Code panes connect to Swarmterm when the agent starts, so a dragged-in agent is ready immediately. Each member chip — and a dot in the pane header — shows **connected**, **waiting** (the agent is still starting) or an error with the reason when the pane has not reached Swarmterm after 15 seconds, for example a plain shell, an agent Swarmterm cannot configure, or a switched-off profile in **Settings → MCP**. An agent can re-read messages it already consumed with `war_room.read_inbox` and `includeRead`. A message is limited to 64k characters. An unread inbox keeps at most 200 messages; if more arrive, the oldest are dropped and the next `read_inbox` says how many were lost.
 
@@ -350,6 +457,9 @@ Click into a pane and press **Ctrl+Shift+Space** (or the microphone in the pane 
 - **Programs can copy to your clipboard** — nvim `"+y`, tmux `set -s set-clipboard on`, yazi and `gh` copy through OSC 52, exactly as in VS Code's terminal. Only writes are honoured: a program can never read your clipboard.
 - **Click a URL** to open it in your browser; `⌘/Ctrl + click` a file path (`src/foo.ts:42:9`, `src/foo.ts(42,9)`, `File "x.py", line 42`) to open project files in the integrated editor at that line; the file is also selected in **Files**, with its folders expanded and the row scrolled into view. Hold `⌘/Ctrl` on a detected path and drag it onto another pane to insert it there (as a path, or an `@` mention in Claude Code). Paths outside the configured project retain the external-editor behavior.
 - **Drop a file or folder** onto a pane — from your OS file manager or from **Files** (several selected entries at once) — to insert its path, quoted for that pane's shell. While dragging from **Files** a label follows the pointer and the cursor shows what a release does: insert into a terminal, move into a folder (hold `Ctrl` to copy), or nothing; `Esc` cancels. Dragged from **Files** onto a Claude Code pane, entries become `@` mentions relative to the pane's folder (`@src/foo.ts`), so Claude attaches them; paths with spaces stay quoted.
+- **Zoom the text with `Ctrl` + mouse wheel** over a terminal (shell or agent CLI): scroll up for bigger, down for smaller (8–32 px). Settings → Terminal → *Ctrl + scroll zoom* picks whether only the pane under the mouse changes (default; the pane keeps its zoom on top of the global size until the app restarts), all panes change (moves the global *Size*, saved), or nothing. `Ctrl + 0` in the focused pane resets the zoom (global mode: back to 13 px).
+- **Scrollback** (Settings → Terminal) sets how many lines each pane keeps (default 5,000). Memory grows with it in every pane: roughly 12 bytes per cell, so 5,000 lines of a 200-column pane are about 12 MB and the maximum of 50,000 about 120 MB. Lowering it trims every open pane at once.
+- **GPU rendering.** Every pane draws with WebGL from the moment it opens and keeps its GPU context while hidden (other workspaces, the drawer, behind a zoomed pane), so switching back is instant. The trade-off is GPU memory: up to 16 panes hold a context at once, also hidden ones. Opening a 17th pane moves the oldest one to the slower DOM renderer. A pane whose GPU context is lost stays on the DOM renderer. With 8 or more panes visible and at least 4 of them flooding output (over 64 KB/s for 3 s), the flooding panes switch to the DOM renderer to keep the window smooth, and switch back once they calm down (below 32 KB/s for 3 s).
 - **Choose your shell** — PowerShell, cmd, PowerShell 7 or Git Bash — per pane, or as a default in Settings.
 
 ## Shell integration
@@ -411,6 +521,33 @@ if ($env:SWARMTERM_SESSION) {
 
 The marks are `A` (prompt drawn), `C` (command started) and `D;<exit>` (command ended); `B` (end of prompt) is optional and omitted above. The very first prompt's `D` is ignored, and a machine you `ssh` into without the snippet simply sends nothing until you are back.
 
+### Builds don't freeze Windows
+
+A CPU-heavy build or tool started in a pane (for example `cargo build` with dozens of jobs, or a test run an agent starts) used to compete at normal priority with Swarmterm, the console, the agent and the rest of Windows, so the whole machine could stop responding. Swarmterm now puts every pane in a Windows **job** that sets its CPU priority. Windows enforces the limit for every process in the pane, including ones started a split second ago, ones whose parent has already exited, and ones that try to raise their own priority. Builds still use every idle core, but your keystrokes, the agent and the desktop come first.
+
+Choose how strict it is in **Settings → Terminal → Process priority**:
+
+- **Strict (recommended, default):** everything in the pane runs at the **pane priority** (Below normal by default, or Low/idle), the agent included. Builds and tools below an agent run at the **build priority** (Low/idle by default), so they also yield to the agent. Nothing a pane runs can reach normal priority.
+- **Agent at normal:** the shell and the agent keep normal priority; everything a recognised agent starts runs at the build priority. In a plain Terminal pane, shells and script hosts (`node`, `cmd`, `pwsh`, `python`, `bash`, …) and interactive programs (`ssh`, `vim`, `less`, …) stay normal, and the first other program with everything it starts runs at the build priority. Agents installed through npm (`node …/@anthropic-ai/claude-code/…`, `@openai/codex`, `@google/gemini-cli`, …) are recognised by their command line.
+- **Off:** no limits.
+- **Cap CPU per pane** (optional, off by default): a hard limit on the share of the whole machine one pane may use, even when the rest of the CPU is idle.
+
+Changes apply at once to running panes; lifting a limit (switching to Off, or opting a workspace out) raises the pane's processes back to normal. A workspace can opt out from its **⋮** menu (**Lower build priority**, checked = on; the opt-out is saved with the workspace).
+
+Known limits: programs that Windows starts on a pane's behalf outside the pane are not covered: processes created through WMI (`Win32_Process.Create`), scheduled tasks and services, out-of-process COM servers, and anything opened through Explorer (`start` of a document or URL hands it to Explorer). A terminal host that was already running before an update keeps its own panes unlimited until it exits; while it runs, new panes open inside Swarmterm instead (limited), and **Process priority** says so. In **Agent at normal** mode, the programs a Node-based agent starts directly (its shell tool, for example) stay normal; what they start runs at the build priority. A program your shell profile starts in the first instant of a new pane that already sits in a job of its own (a Node tool, for example) cannot be put into the pane's job: Swarmterm sets its priority by hand and resets it twice a second, but it is not stopped when the pane closes.
+
+### What panes inherit
+
+Panes, command routines and the other programs Swarmterm starts (git, editors) start with a copy of Swarmterm's own environment, minus variables whose names follow common secret patterns. Agents that log in through their own configuration folders (the usual `/login`, and Swarmterm accounts) are not affected. What Swarmterm no longer passes on is everything else it happened to be started with: API keys, tokens and passwords such as `FOO_API_KEY`, `GITHUB_TOKEN`, `DB_PASSWORD`, `PGPASSWORD`, `SENTRY_DSN` or `AWS_SECRET_ACCESS_KEY`, and any variable whose value is a URL with a user name or password in it (`HTTP_PROXY=http://user:pw@proxy`). Provider settings such as `AWS_REGION`, `AWS_PROFILE`, `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` pass. If an agent authenticates through such a variable (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`), add it to the allowlist below. The filter matches names (and credential URLs) only, so a secret under an unremarkable name still passes; use **System variables only** to be sure. A variable your shell profile sets inside the pane is unaffected.
+
+Configure it in **Settings → Terminal → Environment**:
+
+- **Pass secrets from Swarmterm's environment to panes** (off by default): on passes everything unfiltered, as older versions did.
+- **Filter**: **Hide secrets** drops only secret-looking names; **System variables only** keeps just the Windows variables a shell needs (`PATH`, `SystemRoot`, `TEMP`, `USERPROFILE`, `ProgramFiles`, `PROCESSOR_*`, …) plus `__PSLockdownPolicy`, the proxy variables `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (without credentials) and certificate variables (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, …), so tool variables are dropped too.
+- **Always pass these variables**: names that always pass in either filter, one per line or comma-separated, case-insensitive; `MY_TOOL_*` matches a prefix. Use it for a key a tool in a pane really needs, or for `HTTP_PROXY` with credentials (and, under **System variables only**, `AWS_PROFILE` or `ANTHROPIC_BASE_URL`).
+
+Changes apply to the next pane or routine that starts; running panes keep the environment they started with. The setting is saved, so panes restored at startup use it too; only the first start after upgrading from a version before 1.26.0 uses the default filter (secrets hidden, no allowlist) until Settings saves your choice. Git operations, **Open in editor** and the other helper programs Swarmterm starts get the same filtered environment. Files and links opened in their default Windows application are the exception: Windows starts that application, and it may see Swarmterm's full environment.
+
 ## Settings, tray and quitting
 
 **Settings** (from the navbar) covers appearance, terminal font and default shell with a live preview, the status line toggle, and the full shortcut list — these preferences persist between launches.
@@ -419,39 +556,35 @@ The marks are `A` (prompt drawn), `C` (command started) and `D;<exit>` (command 
 
 **Terminal host (preview).** Settings → Terminal → **Run new panes in the terminal host** starts new panes in a separate background process, `swarmterm-host.exe`, instead of inside Swarmterm. It is off by default. Panes that are already open keep running where they started, so you can switch at any time. If the host cannot be started, new panes open inside Swarmterm as before and the setting shows why. The installer does not include `swarmterm-host.exe` yet, so in installed versions the setting reports *terminal host not found*; it works in source builds after `cargo build -p swarmterm-host`.
 
-Hosted panes outlive Swarmterm itself: if the app crashes or is ended from Task Manager, the programs in them keep running. Open the saved workspace again (workspaces set to open on startup do so by themselves) and its panes are taken over where they are, instead of starting again: the output so far is shown again, a full-screen program such as Claude Code repaints, and an agent keeps its Swarmterm connection. A dim line *older output is not available* marks a pane whose history was longer than the host keeps (1 MB per pane). Running panes that no saved workspace knows are closed shortly after startup; forgetting a saved workspace closes its running panes too. If you switch the host off before starting Swarmterm again, the panes it still runs are closed at startup. Pane ids are stored with saved workspaces only while the host is on. **Quit** in the tray still closes every pane; the idle host then exits on its own after ten minutes.
+Hosted panes outlive Swarmterm itself: if the app crashes or is ended from Task Manager, the programs in them keep running. Open the saved workspace again (workspaces set to open on startup do so by themselves) and its panes are taken over where they are, instead of starting again: the output so far is shown again, a full-screen program such as Claude Code repaints, and an agent keeps its Swarmterm connection. A dim line *older output is not available* marks a pane whose history was longer than the host keeps (512 KiB per pane). Running panes that no saved workspace knows are closed shortly after startup; forgetting a saved workspace closes its running panes too. If you switch the host off before starting Swarmterm again, the panes it still runs are closed at startup. Pane ids are stored with saved workspaces only while the host is on. **Quit** in the tray still closes every pane; the idle host then exits on its own after ten minutes.
+
+## Editions
+
+Swarmterm GN comes in two editions: **Swarmterm GN** and **Swarmterm GN Corp**
+for organisations. Corp has bypass launch modes and War Room execute by agents
+locked, the environment filter always on, and no buzzkey installer or speech
+model download (Settings → Voice hides the buzzkey section and the download
+buttons; your administrator provides models). The edition is shown in the title bar and, for Corp, at the top of
+Settings. Both can be installed side by side with separate settings. Full
+comparison: [Editions](editions.md).
 
 ## Updates
 
-Swarmterm GN disables the upstream updater, including its tray entry, endpoint
-and update artifacts. Update this fork from its `dev` branch and rebuild it.
-Upstream Swarmterm releases do not contain the GN additions.
+Swarmterm GN never updates itself and makes no update checks. New versions are
+installers from this fork's [GitHub Releases](https://github.com/apoOooh/swarmterm-gn/releases)
+(or your IT's software distribution); install one over the existing version.
+Swarmterm GN is an independent project; releases of the original Swarmterm do
+not apply to it.
 
 ## Telemetry
 
-Official release builds send an anonymous usage ping so we can see how many
-people actually run Swarmterm: one `app_open` event at launch, then a
-heartbeat every five minutes while the app is open. Each event carries a
-random id, the app version and the OS name (`macos` / `windows` / `linux`) —
-nothing else. No paths, no terminal content, no hostname, no account.
-Google Analytics infers a country from the request's IP, as any website does;
-Swarmterm never sends the IP itself.
-
-The random id lives in one small file so restarts count as the same person —
-`~/Library/Application Support/com.swarmterm.app/telemetry-id` on macOS,
-`%APPDATA%\com.swarmterm.app\telemetry-id` on Windows,
-`~/.config/com.swarmterm.app/telemetry-id` on Linux. Delete it any time to
-start over as a new anonymous user.
-
-**Builds from source contain no telemetry at all.** The analytics keys are
-injected only when official releases are built; compile Swarmterm yourself
-(`npm run tauri dev` or `npm run tauri build`) and the reporting code
-compiles to nothing. Offline use is fine too — a failed ping is silently
-dropped, never retried loudly, and never blocks the app.
+Swarmterm GN sends no telemetry or usage data.
 
 ## What your agents can do
 
-Every pane is automatically connected to the app over MCP for exactly as long as it lives — nothing to configure for Claude Code, Codex and Qwen Code, which Swarmterm enrolls automatically; other MCP-capable CLIs can be pointed at the per-pane URL by hand (the War Room panel shows the hint). Enrolled agents can drive Swarmterm themselves: **open a web preview** beside their own pane, **spawn / list / remove worktrees** to hand tasks to fresh parallel agents (removal refuses uncommitted changes), and use the **War Room** — list peers, message them in probe or execute mode, read their inbox and reply, wait for a peer to need input or finish (`wait_peer`) and peek at what its screen shows (`read_peer`). An execute hand-off to a peer that is sitting on a prompt is refused until that prompt is answered — the sender is told to wait first.
+Every pane is automatically connected to the app over MCP for exactly as long as it lives — nothing to configure for Claude Code, Codex and Qwen Code, which Swarmterm enrolls automatically; other MCP-capable CLIs can be pointed at the per-pane URL by hand (the War Room panel shows the hint). Enrolled agents can drive Swarmterm themselves: **open a web preview** beside their own pane, **spawn / list / remove worktrees** to hand tasks to fresh parallel agents (removal refuses uncommitted changes), and use the **War Room** — list peers, message them in probe or execute mode, read their inbox and reply, wait for a peer to need input or finish (`wait_peer`) and peek at what its screen shows (`read_peer`). An execute hand-off to a peer that is sitting on a prompt is refused until that prompt is answered — the sender is told to wait first. Agents can send execute at all only when **Settings → Terminal → Agent safety** allows it (off by default). Spawned workers inherit Bypass/YOLO only when the second Agent safety switch allows it (off by default).
+
+On a managed computer your administrator can switch any of these abilities off (and others: the web preview, command routines, buzzkey installs, speech-model downloads, the MCP server, the environment filter). Such controls are greyed out with **Managed by your administrator**, and the top of Settings lists the active policies. Details for administrators: [Administrator policy](admin-policy.md).
 
 War Room abilities only work for panes you dragged into a room, worktree abilities only in workspaces with isolation enabled — and removing a pane from a room revokes its access instantly.
 
@@ -509,6 +642,8 @@ the file editor owns the keyboard.
 | `⌘/Ctrl + Shift + D` | Move the focused pane to the drawer (keeps running; click it in the sidebar to restore) |
 | `⌘/Ctrl + Shift + Space` | Start / stop a dictation with built-in speech recognition (only while it is enabled; without its model on disk the bell says so) |
 | `⌘/Ctrl + Shift + Backspace` | Clear the pending input line of the focused terminal (e.g. after a submit hook refused a prompt). Agents get one Ctrl+C, shells their line-kill; a second press within 2 s is ignored so an agent never quits |
+| `Ctrl + mouse wheel` | Zoom the terminal text (pane under the mouse or all panes, see Settings → Terminal) |
+| `⌘/Ctrl + 0` | Reset the terminal text zoom (not claimed while wheel zoom is off) |
 | `⌘/Ctrl + Shift + J` | Jump to the next pane needing attention (longest-waiting blocked → done → working → idle) |
 
 On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the terminal for tmux.
@@ -518,6 +653,8 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **An agent is missing from the composer** — its CLI isn't on your `PATH`; install it and reopen the composer. A default or template that assigns it uses those slots for plain terminals meanwhile, and picks the agent up again once it's installed — unless you edit and save that default or template before then.
 - **A War Room message never arrived** — look for the pill in the pane or `⏸N` on the room tab: it's held behind an unsubmitted prompt line, or the agent is working / sitting on a prompt (the pill says which). Press Enter or click "Deliver now" for a typing hold; answer the prompt or wait for the agent to finish otherwise.
 - **An agent says its execute was refused** — the target pane is blocked on a permission or question; answer that prompt (or let the sending agent `wait_peer`) and the hand-off goes through on re-send.
+- **A control says "Managed by your administrator"** — your organisation set an [administrator policy](admin-policy.md); it cannot be changed in Swarmterm. Ask your IT department.
+- **An agent says execute is disabled** — **Allow agents to run prompts in other panes** (Settings → Terminal → Agent safety) is off, the default. The agent should use probe; turn the setting on only if you want agents to run prompts in each other's panes.
 - **A War Room send was refused for a "control character"** — the message contained an escape code or other terminal control byte, which Swarmterm never types into a pane (it could break out of the paste and run as keystrokes). Resend as plain text; quote escape sequences as the literal text `ESC[…` instead.
 - **An agent says it isn't in the War Room** — its pane was removed or restarted; drag it back in.
 - **A relative path isn't clickable after `cd`** — a PowerShell quirk; absolute paths (everything agents print) still work.
@@ -541,6 +678,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **Built-in speech recognition runs on the CPU only** — no GPU acceleration yet; larger models (Small, Large v3 Turbo) take several seconds per sentence. One dictation runs at a time, and a recording stops after two minutes.
 - **Hosted panes survive a crash, not a quit** — Quit still closes every pane, and if the host process itself ends, its panes end like an exited shell. Only panes of saved workspaces can be taken over; a running pane of a saved workspace that does not open on startup keeps running unseen until you open that workspace.
 - **What a taken-over pane loses** — its War Room membership (drag it in again) and a dictation that was in progress. If another program took Swarmterm's previous connection port in the meantime, the agent in it shows `mcp offline` until it restarts — and keeps sending its pane token to that program, which could use it to act as that pane toward Swarmterm. Only a program running under your own account can do this.
+- **Panes opened in the first seconds after a restart may start without MCP** — on startup Swarmterm waits up to 10 s for its previous connection port to become free (so agents in taken-over panes reconnect). A pane created during that wait starts without `SWARMTERM_MCP_URL`, so its agent has no Swarmterm tools (War Room, preview); restart that pane once Swarmterm is up.
 - **Claude Code's cursor can lag after a resize** — Claude draws its own cursor block and only redraws it on the next keystroke, so right after dragging a window or pane edge the old block may stay visible. Output and prompt are correct; press any key to refresh.
 
 ## Astera themes
@@ -564,9 +702,9 @@ Your hooks and your `permissions.deny` and `permissions.ask` rules come along th
 
 Choose **Log in** to open a regular terminal pane running the CLI's own login command with that profile's configuration. Complete the normal login flow there. Swarmterm never asks for passwords or stores access tokens; credentials remain in the CLI's configuration files. CLI login flows may request that you visit a URL outside Swarmterm.
 
-In the workspace composer, each supported agent has an account selector. Pick a fixed profile for every new pane of that agent, or choose **Round robin** to rotate through its Default account and named profiles independently of the other agents. Resumed conversations keep the account that owns them. The sessions dialog can filter conversations by account.
+In the workspace composer, each supported agent has an account selector. Pick a fixed profile for every new pane of that agent, or choose **Round robin** to rotate through its Default account and named profiles independently of the other agents. The workspace keeps this choice: a pane split off later uses the fixed profile, or continues the rotation after the workspace's panes of that agent. With the Default account selected, a split pane takes the account of the pane it was split from, when both run the same agent. Saved workspaces keep the choice too. Resumed conversations keep the account that owns them. The sessions dialog can filter conversations by account.
 
-Pane headers and the terminal list show account names. Changing the account from a pane header restarts that agent under the selected profile and carries the current conversation along (see Sessions across subscriptions). It starts a fresh conversation only when the pane has no known session yet or runs another agent than Claude Code or Codex. Saved workspaces retain each pane's profile and exact session reference together.
+Pane headers and the terminal list show account names. Changing the account from a pane header restarts that agent under the selected profile and carries the current conversation along (see Sessions across subscriptions). It starts a fresh conversation only when there is nothing to carry yet (no known session, or one that has not had a turn, such as a pane just split off) or the pane runs another agent than Claude Code or Codex. Saved workspaces retain each pane's profile and exact session reference together.
 
 Removing a profile leaves its configuration folder and credentials on disk, and currently running panes keep running. If a saved workspace references a removed profile, restore reports the missing account and starts that pane fresh with the Default account; it never resumes the old account's conversation under another profile.
 

@@ -83,6 +83,9 @@ pub fn preview_open(
     url: String,
     bounds: Bounds,
 ) -> Result<(), String> {
+    app.state::<crate::pty::AppState>()
+        .admin_policy
+        .check(crate::policy::Lock::PreviewBrowser)?;
     let target: url::Url = url.parse().map_err(|e: url::ParseError| e.to_string())?;
     if !is_http(&target) {
         return Err(format!("scheme {} not allowed", target.scheme()));
@@ -159,6 +162,9 @@ pub fn preview_open(
 
 #[tauri::command]
 pub fn preview_navigate(app: AppHandle, terminal_id: String, url: String) -> Result<(), String> {
+    app.state::<crate::pty::AppState>()
+        .admin_policy
+        .check(crate::policy::Lock::PreviewBrowser)?;
     let target: url::Url = url.parse().map_err(|e: url::ParseError| e.to_string())?;
     if !is_http(&target) {
         return Err(format!("scheme {} not allowed", target.scheme()));

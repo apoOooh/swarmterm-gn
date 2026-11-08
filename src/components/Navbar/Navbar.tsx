@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type ReactElement } from 'react'
-import { Archive, ArrowDownToLine, Check, Columns2, GripHorizontal, LayoutGrid, MoreVertical, Pencil, Pin, Plus, Settings, X } from 'lucide-react'
+import { Archive, ArrowDownToLine, Check, Columns2, Gauge, GripHorizontal, LayoutGrid, MoreVertical, Pencil, Pin, Plus, Settings, X } from 'lucide-react'
 import {
   DndContext,
   DragOverlay,
@@ -383,6 +383,7 @@ function WorkspaceItem({
   const paneCount = collectLeaves(workspace.layout).length
   const drawerCount = workspace.drawerLeafIds?.length ?? 0
   const pinned = useSavedWorkspacesStore((s) => s.entries.some((e) => e.id === workspace.savedId && e.autoOpen !== undefined))
+  const setNormalBuildPriority = useAppStore((s) => s.setWorkspaceNormalBuildPriority)
 
   if (renaming) {
     return (
@@ -456,6 +457,14 @@ function WorkspaceItem({
               <Pin className={cn('h-3.5 w-3.5', pinned && 'fill-current')} />
               Open on startup
               {pinned && <Check className="ml-auto h-3.5 w-3.5" />}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              title="Off: builds started in this workspace compete at normal priority (Settings → Terminal → Lower build priority)."
+              onSelect={() => setNormalBuildPriority(workspace.id, !workspace.normalBuildPriority)}
+            >
+              <Gauge className="h-3.5 w-3.5" />
+              Lower build priority
+              {!workspace.normalBuildPriority && <Check className="ml-auto h-3.5 w-3.5" />}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -543,7 +552,11 @@ function RenameInput({ initialValue, onCommit, onCancel }: RenameInputProps): Re
       ref={inputRef}
       value={value}
       onChange={(e) => setValue(e.target.value)}
+      // Keep keys and pointer presses inside the field: the draggable row
+      // around it (dnd-kit sensors) and app-level handlers must not see them.
+      onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
+        e.stopPropagation()
         if (e.key === 'Enter') {
           e.preventDefault()
           finish(true)

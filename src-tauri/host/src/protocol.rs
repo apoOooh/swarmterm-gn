@@ -17,7 +17,20 @@ pub const VERSION: u64 = 1;
 /// Protocol revisions this host speaks; `hello` picks the highest shared one.
 pub const PROTOS: &[u32] = &[1];
 /// Feature flags reported by `hello`.
-pub const CAPABILITIES: &[&str] = &["app-state", "attach", "binary-data", "write-checked"];
+pub const CAPABILITIES: &[&str] = &[
+    "app-state",
+    "attach",
+    "binary-data",
+    "flow-control",
+    "priority",
+    "write-checked",
+];
+/// Capability a CLIENT announces in its `hello` when its renderer acks
+/// parsed output (`ack`). Only such a client's panes are flow-gated; an
+/// older app never acks, and gating it would stall every pane.
+pub const FLOW_CONTROL: &str = "flow-control";
+/// Host capability: understands `set_priority` (ADR 0005).
+pub const PRIORITY: &str = "priority";
 /// Upper bound for one `set_app_state` payload: it is a handful of numbers
 /// (the MCP port), not a store.
 pub const MAX_APP_STATE: usize = 4096;
@@ -61,6 +74,9 @@ pub enum Op {
         token: String,
         #[serde(default)]
         proto: Vec<u32>,
+        /// What the client supports (`flow-control`); absent = nothing.
+        #[serde(default)]
+        capabilities: Vec<String>,
     },
     Create(CreateSpec),
     #[serde(rename_all = "camelCase")]
@@ -94,6 +110,20 @@ pub enum Op {
     SetAppState {
         state: serde_json::Map<String, Value>,
     },
+    /// The renderer parsed `bytes` more of this generation's output (perf
+    /// phase 2). Never answered: acks are frequent and nothing waits on them.
+    #[serde(rename_all = "camelCase")]
+    Ack {
+        terminal_id: String,
+        spawn_id: String,
+        bytes: u64,
+    },
+    /// Process priority settings (ADR 0005), applied to running panes at once
+    /// and to every later spawn. Until the first one a host enforces the
+    /// defaults (strict), never nothing.
+    SetPriority {
+        settings: crate::priority::Settings,
+    },
 }
 
 const KNOWN_OPS: &[&str] = &[
@@ -106,6 +136,8 @@ const KNOWN_OPS: &[&str] = &[
     "list",
     "attach",
     "set_app_state",
+    "ack",
+    "set_priority",
 ];
 
 #[derive(Debug, PartialEq)]
@@ -265,6 +297,31 @@ mod tests {
     }
 
     #[test]
+    fn parses_ack_and_hello_capabilities() {
+        let r = req(json!({
+            "v": 1, "id": 3, "op": "ack", "terminalId": "t", "spawnId": "g", "bytes": 65536
+        }))
+        .unwrap();
+        assert_eq!(
+            r.op,
+            Op::Ack {
+                terminal_id: "t".into(),
+                spawn_id: "g".into(),
+                bytes: 65536,
+            }
+        );
+        // An older app's hello has no capabilities: it must not be gated.
+        let old = req(json!({"v": 1, "id": 0, "op": "hello", "token": "x"})).unwrap();
+        assert!(matches!(old.op, Op::Hello { capabilities, .. } if capabilities.is_empty()));
+        let new = req(json!({
+            "v": 1, "id": 0, "op": "hello", "token": "x", "capabilities": [FLOW_CONTROL]
+        }))
+        .unwrap();
+        assert!(matches!(new.op, Op::Hello { capabilities, .. } if capabilities == [FLOW_CONTROL]));
+        assert!(CAPABILITIES.contains(&FLOW_CONTROL));
+    }
+
+    #[test]
     fn parses_write_checked_in_camel_case() {
         let r = req(json!({
             "v": 1, "id": 1, "op": "write_checked",
@@ -290,6 +347,19 @@ mod tests {
         };
         assert_eq!(state.get("mcpPort"), Some(&json!(5000)));
         assert!(req(json!({"v": 1, "id": 2, "op": "set_app_state", "state": 5})).is_err());
+    }
+
+    #[test]
+    fn parses_set_priority() {
+        let r = req(json!({"v": 1, "id": 2, "op": "set_priority",
+            "settings": {"mode": "agent-normal", "exempt": ["t"]}}))
+        .unwrap();
+        let Op::SetPriority { settings } = r.op else {
+            panic!("not set_priority")
+        };
+        assert_eq!(settings.mode, crate::priority::Mode::AgentNormal);
+        assert_eq!(settings.exempt, vec!["t".to_string()]);
+        assert!(CAPABILITIES.contains(&PRIORITY));
     }
 
     #[test]

@@ -56,6 +56,129 @@ pub async fn files_request(
         .map_err(|e| e.to_string())?
 }
 
+/// Passive media detection: the renderer found image/video paths in a pane's
+/// output. Relative paths resolve against that terminal's cwd; the answer has
+/// one entry per input (canonical display path of an existing media file, or
+/// null). Validation only, nothing is allow-listed here (see
+/// `FileService::check_detected_media`). Disk work runs off the async executor.
+#[tauri::command]
+pub async fn media_check_detected(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    terminal_id: String,
+    paths: Vec<String>,
+) -> Result<Vec<Option<String>>, String> {
+    files_main_only(&window)?;
+    let cwd = state
+        .terminals
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(&terminal_id)
+        .map(|t| t.cwd.clone())
+        .ok_or("unknown terminal")?;
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        service
+            .check_detected_media(&paths, std::path::Path::new(&cwd))
+            .iter()
+            .map(|p| p.as_deref().map(crate::files::path::display))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// The user opened a media item (gallery/overlay/badge click, Ctrl+click on a
+/// printed path): allow-list that one absolute file for the unrooted route.
+/// Returns the canonical display path.
+#[tauri::command]
+pub async fn media_open(
+    window: tauri::WebviewWindow,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    path: String,
+) -> Result<String, String> {
+    files_main_only(&window)?;
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        service
+            .register_user_media(&path)
+            .map(|p| crate::files::path::display(&p))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Media viewer → Annotate: the opened image's bytes for the flatten canvas
+/// (raw IPC response; see `files::media::read_registered_image`).
+#[tauri::command]
+pub async fn media_read_opened_image(
+    window: tauri::WebviewWindow,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
+    files_main_only(&window)?;
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::files::media::read_registered_image(&service, &path).map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Media viewer → Annotate → save: the renderer sends the flattened PNG as the
+/// raw IPC body (no JSON number array for megabytes). We write it as a NEW
+/// file in our temp store (`marked_media`) and allow-list it like a clipboard
+/// image. Main webview only and no MCP counterpart: user-originated only.
+#[tauri::command]
+pub async fn media_save_marked(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    service: State<'_, std::sync::Arc<crate::files::FileService>>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    files_main_only(&window)?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected the PNG as a raw body".into());
+    };
+    // Reject before the copy below (the body is borrowed from the request,
+    // and the blocking task needs its own copy of up to MAX_PNG_BYTES).
+    crate::marked_media::validate_png(bytes)?;
+    let bytes = bytes.clone();
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        app.state::<crate::marked_media::MarkedMedia>()
+            .save(&service, &bytes)
+            .map(|p| crate::files::path::display(&p))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Settings → Media → Clipboard images (opt-in). Idempotent; the renderer
+/// calls it at startup and on every toggle. Thread start/stop; switching off
+/// also deletes the saved PNGs (a few small files).
+#[tauri::command]
+pub fn clipboard_media_set_enabled(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    files_main_only(&window)?;
+    #[cfg(windows)]
+    {
+        use tauri::Manager;
+        app.state::<crate::clipboard_media::ClipboardMedia>()
+            .set_enabled(&app, enabled)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, enabled);
+        Err("clipboard images are Windows-only".into())
+    }
+}
+
 #[tauri::command]
 pub async fn files_watch(
     window: tauri::WebviewWindow,
@@ -82,6 +205,108 @@ pub fn files_unwatch(
     Ok(())
 }
 
+/// Ids whose `create_terminal` is in flight (see there).
+static SPAWNING: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+/// Signalled whenever a reservation is released.
+static SPAWN_DONE: std::sync::Condvar = std::sync::Condvar::new();
+
+struct SpawnReservation(String);
+
+/// How long a create waits for an in-flight create of the same id. A healthy
+/// spawn finishes well inside the host's create request timeout; twice that
+/// means the first one hung, and the later create fails instead of blocking
+/// a pool thread forever.
+const SPAWN_RESERVE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(2 * crate::host_client::conn::REQUEST_TIMEOUT.as_secs());
+
+impl SpawnReservation {
+    /// Reserve `id`, waiting while another create of the SAME id is in
+    /// flight (the old global SPAWN_LOCK made it wait too). After the wait
+    /// the caller sees the finished spawn, so a duplicate still gets the
+    /// usual "already exists" from `spawn_terminal`, and a create retried
+    /// after a failed one simply proceeds. Creates of different ids never
+    /// wait on each other. Runs on the blocking pool, never the main thread.
+    fn take(id: &str) -> Result<Self, String> {
+        Self::take_within(id, SPAWN_RESERVE_TIMEOUT)
+    }
+
+    fn take_within(id: &str, timeout: std::time::Duration) -> Result<Self, String> {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut set = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
+        while set.get_or_insert_with(Default::default).contains(id) {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return Err(format!(
+                    "Terminal {id} is still being created by an earlier request (waited {}s)",
+                    timeout.as_secs()
+                ));
+            }
+            set = SPAWN_DONE
+                .wait_timeout(set, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        set.get_or_insert_with(Default::default)
+            .insert(id.to_string());
+        Ok(SpawnReservation(id.to_string()))
+    }
+}
+
+impl Drop for SpawnReservation {
+    fn drop(&mut self) {
+        let mut set = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(set) = set.as_mut() {
+            set.remove(&self.0);
+        }
+        SPAWN_DONE.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod spawn_reservation_tests {
+    use super::SpawnReservation;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn same_id_waits_for_the_first_create() {
+        let first = SpawnReservation::take("res-test-a").unwrap();
+        // Timed from before the spawn: a thread that starts late on a busy
+        // machine must not shorten the measured wait.
+        let t0 = Instant::now();
+        let t = std::thread::spawn(move || {
+            let _second = SpawnReservation::take("res-test-a").unwrap();
+            t0.elapsed()
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        drop(first);
+        assert!(t.join().unwrap() >= Duration::from_millis(100));
+    }
+
+    #[test]
+    fn different_ids_do_not_wait() {
+        let _a = SpawnReservation::take("res-test-b").unwrap();
+        let t0 = Instant::now();
+        let _b = SpawnReservation::take("res-test-c").unwrap();
+        assert!(t0.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn hung_same_id_create_times_out_with_an_error() {
+        let _hung = SpawnReservation::take("res-test-d").unwrap();
+        let t0 = Instant::now();
+        let err = SpawnReservation::take_within("res-test-d", Duration::from_millis(100))
+            .err()
+            .expect("second create must give up");
+        assert!(t0.elapsed() >= Duration::from_millis(90));
+        assert!(err.contains("res-test-d"), "{err}");
+        // The id is still reserved by the hung create, not by the loser.
+        drop(_hung);
+        assert!(SpawnReservation::take_within("res-test-d", Duration::from_millis(100)).is_ok());
+    }
+}
+
 #[tauri::command]
 pub async fn create_terminal(
     app: AppHandle,
@@ -91,12 +316,18 @@ pub async fn create_terminal(
 ) -> CreateTerminalResult {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Preserve serialized creation/duplicate-id checks while keeping config
-        // reads, profile enrollment and OS process startup off the UI thread.
-        static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let Ok(_guard) = SPAWN_LOCK.lock() else {
-            return CreateTerminalResult::err("Terminal creation interrupted");
+        // Only the id is reserved, not the whole spawn: config reads, profile
+        // enrollment and the OS process start of different panes overlap, so
+        // a workspace of N agents no longer starts them one after another.
+        // Two creates of the SAME id still serialise: the second waits for
+        // the first and then behaves exactly as it did behind SPAWN_LOCK.
+        let _span = crate::prof::span("cmd.create_terminal");
+        let t0 = crate::prof::now();
+        let _reservation = match SpawnReservation::take(&id) {
+            Ok(r) => r,
+            Err(e) => return CreateTerminalResult::err(e),
         };
+        crate::prof::since("spawn.reserve", t0);
         let state = app.state::<AppState>();
         crate::pty::spawn_terminal(&app, &state, id, options, on_data)
     })
@@ -110,7 +341,8 @@ pub fn write_terminal(state: State<'_, AppState>, id: String, data: String) -> R
     // thread (pty::PtyInput), so a full input pipe can't freeze the UI. An
     // unknown id stays a silent no-op (a pane racing its own close); a full
     // queue is returned so the renderer can tell the user input was dropped.
-    match state.terminals.lock().unwrap().get(&id) {
+    let _span = crate::prof::span("cmd.write_terminal");
+    match crate::prof::lock("lock.terminals.write", &state.terminals).get(&id) {
         Some(t) => t.send(data.as_bytes()).inspect_err(|e| {
             eprintln!("[pty] write to {id} dropped: {e}");
         }),
@@ -139,10 +371,44 @@ pub fn write_terminal_checked(
     t.send_checked(&expected_spawn_id, data.as_bytes())
 }
 
+/// Clone the pane's I/O handle; the `terminals` lock is held only for the
+/// lookup, never across the gate or the PTY call (perf step C).
+fn io_handle(state: &AppState, lock_name: &'static str, id: &str) -> Option<crate::pty::IoHandle> {
+    crate::prof::lock(lock_name, &state.terminals)
+        .get(id)
+        .map(|t| t.handle())
+}
+
+/// The renderer's xterm parsed `bytes` more of generation `spawn_id`'s
+/// output (perf phase 2 flow control; batched, ACK_CHUNK per call). `async`:
+/// a plain command runs on the main thread, which also serves the IPC of
+/// every pane's output, so thousands of acks under a flood queued there.
+/// Acks are additive and the gate saturates, so pool reordering is harmless.
+#[tauri::command(async)]
+pub fn ack_output(state: State<'_, AppState>, id: String, spawn_id: String, bytes: u64) {
+    let _span = crate::prof::span("cmd.ack_output");
+    if let Some(h) = io_handle(&state, "lock.terminals.ack", &id) {
+        h.ack(&spawn_id, bytes);
+    }
+}
+
+/// The renderer disposed generation `spawn_id`'s xterm: open its flow gate
+/// now rather than after the no-ack timeout. Off the main thread like acks.
+#[tauri::command(async)]
+pub fn release_output(state: State<'_, AppState>, id: String, spawn_id: String) {
+    if let Some(h) = io_handle(&state, "lock.terminals.release", &id) {
+        h.release_output(&spawn_id);
+    }
+}
+
+/// Stays a main-thread command on purpose: it is now O(1) (the resize worker
+/// applies the size), and running resizes on the async pool could reorder
+/// them, so an older size could win.
 #[tauri::command]
 pub fn resize_terminal(state: State<'_, AppState>, id: String, cols: u16, rows: u16) {
-    if let Some(t) = state.terminals.lock().unwrap().get(&id) {
-        t.resize(cols, rows);
+    let _span = crate::prof::span("cmd.resize_terminal");
+    if let Some(h) = io_handle(&state, "lock.terminals.resize", &id) {
+        h.resize(cols, rows);
     }
 }
 
@@ -162,7 +428,8 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     //
     // The `let` binding releases the map lock BEFORE the kill/drop, so the reader
     // thread can re-lock the map to clear the id without deadlocking.
-    let removed = state.terminals.lock().unwrap().remove(&id);
+    let _span = crate::prof::span("cmd.kill_terminal");
+    let removed = crate::prof::lock("lock.terminals.kill", &state.terminals).remove(&id);
     if let Some(t) = removed {
         // Closes the master PTY (forcing the reader's EOF) and lets the tree
         // exit cleanly before terminating it; the deadline runs off-thread.
@@ -207,6 +474,7 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     // exists to show. Drop it here and in `read_loop`, mirroring the two
     // places the terminal leaves `AppState.terminals`.
     state.mcp_clients.lock().unwrap().forget(&id);
+    state.forget_session_token(&id);
     // The context chip too: a respawned Claude must not inherit the old %.
     state.context_usage.lock().unwrap().forget(&id);
     state.rate_limit_usage.lock().unwrap().forget(&id);
@@ -215,6 +483,50 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     // see the peer gone rather than run out its timeout.
     state.peer_states.lock().unwrap().forget(&id);
     state.peer_wake.notify_waiters();
+}
+
+/// Settings → Terminal "Environment" (what panes and command routines
+/// inherit from the app). Takes effect for the next spawn; running panes keep
+/// the environment they started with.
+#[tauri::command]
+pub fn env_policy_set(state: State<'_, AppState>, policy: crate::terminal_env::EnvPolicy) {
+    crate::terminal_env::persist(&policy);
+    state.set_env_policy(policy);
+}
+
+/// Settings → Terminal → Agent safety (War Room execute between agents). Checked per MCP call,
+/// so a change applies to the next call without restarting any pane.
+#[tauri::command]
+pub fn agent_policy_set(state: State<'_, AppState>, policy: crate::agent_policy::AgentPolicy) {
+    *state
+        .agent_policy
+        .write()
+        .unwrap_or_else(|e| e.into_inner()) = policy;
+}
+
+/// Admin policy for the renderer: greys out locked controls. Display only —
+/// every lock is enforced again at its point of action in Rust.
+#[tauri::command]
+pub fn policy_get(state: State<'_, AppState>) -> crate::policy::PolicyView {
+    state.admin_policy.view()
+}
+
+/// Settings → Terminal "Process priority" plus the per-workspace opt-outs,
+/// flattened by the renderer into the exempt panes' terminal ids (ADR 0005).
+/// Applied to the in-process panes' jobs at once and forwarded to the
+/// terminal host on a worker thread.
+#[tauri::command]
+pub fn child_priority_set(
+    app: AppHandle,
+    state: State<'_, crate::child_priority::ChildPriority>,
+    settings: crate::child_priority::Settings,
+) {
+    state.set(settings);
+    // Off the main thread: the host client lock may be held by a connect.
+    #[cfg(windows)]
+    crate::child_priority::forward_to_host(app);
+    #[cfg(not(windows))]
+    let _ = app;
 }
 
 /// Screen-independent proof that the pane's agent CLI is still running: a
@@ -311,6 +623,7 @@ pub async fn list_agent_sessions(
 
 /// Copy one session into another subscription's store so it can be resumed
 /// there (a fork; the source stays). `None` is the default profile.
+/// `false` when the session has no transcript yet, so nothing was copied.
 #[tauri::command]
 pub async fn transfer_agent_session(
     app: AppHandle,
@@ -318,7 +631,7 @@ pub async fn transfer_agent_session(
     session_id: String,
     from_account_id: Option<String>,
     to_account_id: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let accounts = accounts_blocking(app).await?;
     let base = |id: &Option<String>| -> Result<std::path::PathBuf, String> {
         match id {
@@ -607,7 +920,10 @@ pub fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
     if !crate::links::is_allowed_editor(&bin) {
         return Err(format!("editor not allowed: {bin}"));
     }
-    std::process::Command::new(&bin)
+    // Filtered like a pane: an editor is a GUI app, but its extensions and
+    // integrated terminals inherit what we pass, and nothing it needs lives
+    // only in the app's secrets (users allow-list what an editor needs).
+    crate::terminal_env::command(&bin)
         .args(&args)
         .spawn()
         .map(|mut child| {
@@ -641,6 +957,7 @@ pub fn war_room_join(
     cwd: String,
     display_name: String,
 ) -> Result<(), String> {
+    state.admin_policy.check(crate::policy::Lock::WarRoom)?;
     let joined_id = terminal_id.clone();
     // TOCTOU: this liveness check and the `war_rooms.join` insert below take
     // two separate mutexes with no lock held across both, so a pane that dies
@@ -657,14 +974,7 @@ pub fn war_room_join(
     if state.mcp_url.get().is_none() {
         return Err("MCP server failed to start this run — War Room is unavailable".into());
     }
-    let outcome = state.war_rooms.lock().unwrap().join(
-        &room_id,
-        terminal_id,
-        agent_id,
-        cwd,
-        display_name,
-        crate::warroom::now_ms(),
-    )?;
+    let outcome = join_war_room(&state, &room_id, terminal_id, agent_id, cwd, display_name)?;
     // Old room's Leave first, then the Join — the renderer's queue cleanup
     // must run before the new membership appears.
     if let Some((old_room, ev)) = outcome.left {
@@ -680,6 +990,152 @@ pub fn war_room_join(
         connect_war_room_member(&app, &joined_id);
     }
     Ok(())
+}
+
+// Membership mutations wake every `wait_peer` sleeper (`peer_wake`, see
+// mcp/tools/peers.rs): a peer that leaves, moves or loses its room must be
+// reported as gone at once, not after the stall/deadline timer. The
+// `war_rooms` lock is released before the wake. The pty death paths
+// (`kill_terminal`, `read_loop`) wake on their own.
+pub(crate) fn join_war_room(
+    state: &AppState,
+    room_id: &str,
+    terminal_id: String,
+    agent_id: Option<String>,
+    cwd: String,
+    display_name: String,
+) -> Result<crate::warroom::JoinOutcome, String> {
+    let outcome = state.war_rooms.lock().unwrap().join(
+        room_id,
+        terminal_id,
+        agent_id,
+        cwd,
+        display_name,
+        crate::warroom::now_ms(),
+    )?;
+    state.peer_wake.notify_waiters();
+    Ok(outcome)
+}
+
+pub(crate) fn leave_war_rooms(
+    state: &AppState,
+    terminal_id: &str,
+) -> Option<(String, crate::warroom::WarRoomEvent)> {
+    let left = state
+        .war_rooms
+        .lock()
+        .unwrap()
+        .leave_everywhere(terminal_id, crate::warroom::now_ms());
+    if left.is_some() {
+        state.peer_wake.notify_waiters();
+    }
+    left
+}
+
+pub(crate) fn delete_war_room(
+    state: &AppState,
+    room_id: &str,
+) -> Result<
+    (
+        Vec<crate::warroom::WarRoomEvent>,
+        Vec<crate::warroom::RoomMeta>,
+    ),
+    String,
+> {
+    let (leaves, rooms) = {
+        let mut reg = state.war_rooms.lock().unwrap();
+        let leaves = reg.delete(room_id, crate::warroom::now_ms())?;
+        (leaves, reg.rooms_meta())
+    };
+    if !leaves.is_empty() {
+        state.peer_wake.notify_waiters();
+    }
+    Ok((leaves, rooms))
+}
+
+#[cfg(test)]
+mod war_room_wake_tests {
+    use super::*;
+    use std::time::Duration;
+
+    // True when a waiter that started listening before `f` is woken by it.
+    async fn wakes(state: &AppState, f: impl FnOnce(&AppState)) -> bool {
+        let mut n = std::pin::pin!(state.peer_wake.notified());
+        n.as_mut().enable();
+        f(state);
+        tokio::time::timeout(Duration::from_millis(50), n)
+            .await
+            .is_ok()
+    }
+
+    fn room(state: &AppState) -> String {
+        state.war_rooms.lock().unwrap().rooms_meta()[0]
+            .room_id
+            .clone()
+    }
+
+    fn join(state: &AppState, room: &str, id: &str) {
+        join_war_room(
+            state,
+            room,
+            id.into(),
+            Some("claude-code".into()),
+            "C:/".into(),
+            id.into(),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn join_wakes_waiters() {
+        let s = AppState::default();
+        let r = room(&s);
+        assert!(wakes(&s, |s| join(s, &r, "t1")).await);
+    }
+
+    #[tokio::test]
+    async fn move_between_rooms_wakes_waiters() {
+        let s = AppState::default();
+        let r1 = room(&s);
+        let r2 = s
+            .war_rooms
+            .lock()
+            .unwrap()
+            .create("Second")
+            .unwrap()
+            .room_id;
+        join(&s, &r1, "t1");
+        assert!(wakes(&s, |s| join(s, &r2, "t1")).await);
+    }
+
+    #[tokio::test]
+    async fn leave_wakes_waiters_only_when_a_member_left() {
+        let s = AppState::default();
+        let r = room(&s);
+        join(&s, &r, "t1");
+        assert!(wakes(&s, |s| assert!(leave_war_rooms(s, "t1").is_some())).await);
+        assert!(!wakes(&s, |s| assert!(leave_war_rooms(s, "t1").is_none())).await);
+    }
+
+    #[tokio::test]
+    async fn delete_with_members_wakes_waiters() {
+        let s = AppState::default();
+        let r2 = s
+            .war_rooms
+            .lock()
+            .unwrap()
+            .create("Second")
+            .unwrap()
+            .room_id;
+        join(&s, &r2, "t1");
+        assert!(
+            wakes(&s, |s| assert_eq!(
+                delete_war_room(s, &r2).unwrap().0.len(),
+                1
+            ))
+            .await
+        );
+    }
 }
 
 /// Flip a room member to connected and emit the transcript event on the
@@ -710,11 +1166,7 @@ pub fn war_room_rooms(state: State<'_, AppState>) -> Vec<crate::warroom::RoomInf
 
 #[tauri::command]
 pub fn war_room_leave(app: AppHandle, state: State<'_, AppState>, terminal_id: String) {
-    let left = state
-        .war_rooms
-        .lock()
-        .unwrap()
-        .leave_everywhere(&terminal_id, crate::warroom::now_ms());
+    let left = leave_war_rooms(&state, &terminal_id);
     if let Some((room_id, event)) = left {
         let _ = app.emit("warroom:event", &crate::warroom::scoped(&room_id, event));
     }
@@ -757,11 +1209,7 @@ pub fn war_room_delete(
     state: State<'_, AppState>,
     room_id: String,
 ) -> Result<(), String> {
-    let (leaves, rooms) = {
-        let mut reg = state.war_rooms.lock().unwrap();
-        let leaves = reg.delete(&room_id, crate::warroom::now_ms())?;
-        (leaves, reg.rooms_meta())
-    };
+    let (leaves, rooms) = delete_war_room(&state, &room_id)?;
     // Leaves first (queue/held cleanup per member), snapshot last (tab strip).
     for ev in leaves {
         let _ = app.emit("warroom:event", &crate::warroom::scoped(&room_id, ev));
@@ -781,6 +1229,7 @@ pub fn war_room_moderator_send(
     content: String,
     mode: Option<String>,
 ) -> Result<usize, String> {
+    state.admin_policy.check(crate::policy::Lock::WarRoom)?;
     let mode = crate::warroom::MessageMode::parse(mode.as_deref())?;
     let (event, deliveries) = {
         let mut reg = state.war_rooms.lock().unwrap();
@@ -1065,6 +1514,13 @@ pub async fn set_swarmterm_mcp(
     enabled: bool,
 ) -> Result<(), String> {
     files_main_only(&window)?;
+    // Switching on under DisableMcp is refused here with the policy message;
+    // `toggle::set_enabled` refuses it again as the backstop.
+    if enabled {
+        app.state::<AppState>()
+            .admin_policy
+            .check(crate::policy::Lock::Mcp)?;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(id) = account_id.as_deref() {
             crate::accounts::resolve(&app, id, Some(&agent_id))?;
@@ -1104,6 +1560,7 @@ pub async fn set_swarmterm_mcp(
 #[tauri::command]
 pub async fn run_routine_command(
     webview: tauri::Webview,
+    state: State<'_, AppState>,
     command: String,
     cwd: String,
     timeout_secs: u64,
@@ -1111,9 +1568,18 @@ pub async fn run_routine_command(
     if webview.label() != "main" {
         return Err("Routines are available only in the main application".into());
     }
+    state
+        .admin_policy
+        .check(crate::policy::Lock::RoutineCommands)?;
     crate::routine_cmd::validate(&command, &cwd, timeout_secs)?;
+    let env = state.env_policy_snapshot().inherited();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::routine_cmd::run(&command, &cwd, std::time::Duration::from_secs(timeout_secs))
+        crate::routine_cmd::run(
+            &command,
+            &cwd,
+            std::time::Duration::from_secs(timeout_secs),
+            &env,
+        )
     })
     .await
     .map_err(|e| e.to_string())?

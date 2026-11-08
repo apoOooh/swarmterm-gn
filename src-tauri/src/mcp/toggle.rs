@@ -10,12 +10,21 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::Value;
 
 static DISABLED: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 static STORE: OnceLock<PathBuf> = OnceLock::new();
+/// Admin policy DisableMcp: every profile counts as switched off, whatever
+/// the user's store says, and the switch cannot be turned back on.
+static POLICY_OFF: AtomicBool = AtomicBool::new(false);
+
+/// Set once at boot from the admin policy, before the first writer runs.
+pub fn set_policy_off(off: bool) {
+    POLICY_OFF.store(off, Ordering::SeqCst);
+}
 
 fn disabled() -> &'static Mutex<BTreeSet<String>> {
     DISABLED.get_or_init(|| Mutex::new(BTreeSet::new()))
@@ -44,14 +53,21 @@ pub fn load(path: PathBuf) {
 }
 
 pub fn is_enabled(agent_id: &str, account_id: Option<&str>) -> bool {
-    !disabled()
-        .lock()
-        .unwrap()
-        .contains(&profile_key(agent_id, account_id))
+    !POLICY_OFF.load(Ordering::SeqCst)
+        && !disabled()
+            .lock()
+            .unwrap()
+            .contains(&profile_key(agent_id, account_id))
 }
 
 /// Flip one profile and persist the whole set (tmp + rename).
 pub fn set_enabled(agent_id: &str, account_id: Option<&str>, enabled: bool) -> Result<(), String> {
+    if enabled && POLICY_OFF.load(Ordering::SeqCst) {
+        return Err(
+            "The Swarmterm MCP server is disabled by your administrator (policy DisableMcp)."
+                .into(),
+        );
+    }
     let text = {
         let mut set = disabled().lock().unwrap();
         let key = profile_key(agent_id, account_id);

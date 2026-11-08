@@ -41,7 +41,7 @@ pub trait Sink: Send + Sync {
     /// rows, replayBytes, outputTotal, truncated). Called on the reader task
     /// before the replay frame is handled, so routing can be bound for it.
     fn attached(&self, terminal_id: &str, facts: &Value);
-    fn data(&self, terminal_id: &str, spawn_id: &str, bytes: &[u8]);
+    fn data(&self, terminal_id: &str, spawn_id: &str, bytes: Vec<u8>);
     fn removed(&self, terminal_id: &str, spawn_id: &str);
     fn exit(&self, terminal_id: &str, spawn_id: &str, exit_code: i32);
     fn input_dropped(&self, terminal_id: &str);
@@ -66,6 +66,12 @@ pub struct Conn {
     pub host_version: String,
     /// What an earlier app instance stored with `set_app_state`, as of hello.
     pub app_state: Value,
+    /// The host gates output on acks (`flow-control`), so `ack` is sent.
+    flow_control: bool,
+    /// The host announced `priority` (ADR 0005): it understands
+    /// `set_priority` and limits its panes. A host from before that ignores
+    /// the op and runs new panes unlimited, so the hub spawns in-process.
+    pub priority: bool,
     /// Ends the reader task (`close`): the sink holds the connection, so
     /// dropping every outside handle never closes the pipe by itself.
     closing: Arc<tokio::sync::Notify>,
@@ -98,7 +104,14 @@ impl Conn {
         // Hello is the first frame on the wire and its answer the first
         // frame back (the host registers the client only after answering),
         // so it is read inline before the reader task takes over.
-        let hello = request_frame(0, json!({"op": "hello", "token": token, "proto": PROTO}));
+        let hello = request_frame(
+            0,
+            json!({
+                "op": "hello", "token": token, "proto": PROTO,
+                // This app acks parsed output; the host gates only then.
+                "capabilities": [swarmterm_host::protocol::FLOW_CONTROL],
+            }),
+        );
         tx.send(hello).map_err(|_| "host-lost".to_string())?;
         let mut dec = Decoder::default();
         let mut chunk = vec![0u8; 64 * 1024];
@@ -128,6 +141,8 @@ impl Conn {
             .unwrap_or("?")
             .to_string();
         let app_state = v.get("appState").cloned().unwrap_or(Value::Null);
+        let flow_control = has_cap(&v, swarmterm_host::protocol::FLOW_CONTROL);
+        let priority = has_cap(&v, swarmterm_host::protocol::PRIORITY);
 
         let closing = Arc::new(tokio::sync::Notify::new());
         let conn = Arc::new(Conn {
@@ -137,6 +152,8 @@ impl Conn {
             alive: alive.clone(),
             host_version,
             app_state,
+            flow_control,
+            priority,
             closing: closing.clone(),
         });
         tokio::spawn(async move {
@@ -236,6 +253,19 @@ impl Conn {
         );
     }
 
+    /// Fire and forget, like `set_app_state`. Not sent to a host without the
+    /// `priority` capability (it would answer `unknown-op`); the hub spawns
+    /// new panes in-process then (`HostHub::for_spawn`).
+    pub fn set_priority(&self, settings: &swarmterm_host::priority::Settings) {
+        if !self.priority {
+            return;
+        }
+        let _ = self.enqueue(
+            json!({"op": "set_priority", "settings": settings}),
+            Waiter::Ignore,
+        );
+    }
+
     pub fn write(&self, terminal_id: &str, data: &[u8]) -> Result<(), String> {
         let op = json!({"op": "write", "terminalId": terminal_id, "data": lossy(data)});
         self.enqueue(op, Waiter::Write(terminal_id.to_string()))
@@ -256,6 +286,22 @@ impl Conn {
         });
         self.enqueue(op, Waiter::Write(terminal_id.to_string()))
             .map(|_| ())
+    }
+
+    /// Forward a renderer ack (perf phase 2). Fire and forget, and only to a
+    /// host with `flow-control`: an older one never gates, so it needs none.
+    pub fn ack(&self, terminal_id: &str, spawn_id: &str, bytes: u64) {
+        if !self.flow_control {
+            return;
+        }
+        let op =
+            json!({"op": "ack", "terminalId": terminal_id, "spawnId": spawn_id, "bytes": bytes});
+        // The host never answers an ack, so no waiter is registered (it
+        // would never be removed).
+        if self.is_alive() {
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let _ = self.tx.send(request_frame(id, op));
+        }
     }
 
     pub fn resize(&self, terminal_id: &str, cols: u16, rows: u16) {
@@ -346,7 +392,7 @@ fn handle(waiters: &Mutex<HashMap<u64, Waiter>>, sink: &dyn Sink, f: Frame) {
             terminal_id,
             spawn_id,
             bytes,
-        } => return sink.data(&terminal_id, &spawn_id, &bytes),
+        } => return sink.data(&terminal_id, &spawn_id, bytes),
         Frame::Json(p) => p,
     };
     let Ok(v) = serde_json::from_slice::<Value>(&payload) else {
@@ -394,6 +440,14 @@ fn handle(waiters: &Mutex<HashMap<u64, Waiter>>, sink: &dyn Sink, f: Frame) {
     }
 }
 
+/// The hello answer lists `cap` among its capabilities.
+pub(super) fn has_cap(hello: &Value, cap: &str) -> bool {
+    hello
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|c| c.iter().any(|c| c == cap))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,10 +471,10 @@ mod tests {
                 facts["spawnId"].as_str().unwrap_or("")
             ));
         }
-        fn data(&self, id: &str, spawn: &str, bytes: &[u8]) {
+        fn data(&self, id: &str, spawn: &str, bytes: Vec<u8>) {
             self.events.lock().unwrap().push(format!(
                 "data {id} {spawn} {}",
-                String::from_utf8_lossy(bytes)
+                String::from_utf8_lossy(&bytes)
             ));
         }
         fn removed(&self, id: &str, spawn: &str) {
@@ -502,6 +556,17 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         panic!("timed out; events: {:?}", rec.events.lock().unwrap());
+    }
+
+    #[test]
+    fn current_host_announces_priority() {
+        let h = start_host();
+        let conn = connect(&h, Arc::new(Recorder::default()));
+        assert!(
+            conn.priority,
+            "this host enforces priority; the hub must use it"
+        );
+        let _ = h.stop.send(true);
     }
 
     #[test]

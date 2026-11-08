@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Button } from '@/components/ui/button'
 import { useModalFocus } from '@/components/ui/use-modal-focus'
 import { dispatchTargets, filterPrompts, type SavedPrompt } from '@/lib/prompt-library'
 import { deliverSavedPrompt } from '@/lib/prompt-delivery'
 import { handoffTargets } from '@/lib/handoff-flow'
+import { recognisedPanes } from '@/lib/pane-selectors'
 import { HOLD_REASON_COPY } from '@/lib/notification-center'
 import { DEFAULT_TEMPLATE_ID, templateById } from '@/lib/templates'
 import { collectLeaves } from '@/lib/layout-tree'
@@ -42,7 +44,10 @@ export function PromptLibraryDialog(): React.ReactElement | null {
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const titles = useTerminalTitleStore((s) => s.titles)
   const accounts = useAgentAccountsStore((s) => s.accounts)
-  const agentStates = useAgentStateStore((s) => s.byId)
+  // Per-pane "agent recognised" flags, not the whole `byId`: state flips
+  // (working ↔ idle) leave these booleans unchanged, so they no longer
+  // re-render the dialog — and while closed it subscribes to nothing at all.
+  const recognised = useAgentStateStore(useShallow((s) => recognisedPanes(s.byId, open)))
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState<Draft>(EMPTY)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -82,14 +87,13 @@ export function PromptLibraryDialog(): React.ReactElement | null {
             // Subscribing to agent state also refreshes the list as agents start.
             running:
               getTerminalStatus(l.terminalId).kind === 'running' &&
-              agentStates[l.terminalId]?.state !== undefined &&
-              agentStates[l.terminalId]?.state !== 'unknown'
+              recognised[l.terminalId] === true
           }))
         })),
         (id) => templateById(id).name
       ),
     // `open` is a dependency on purpose: pty status is read live, not subscribed.
-    [workspaces, titles, agentStates, open]
+    [workspaces, titles, recognised, open]
   )
   const agentTargets = available ? handoffTargets(accounts, available) : []
   const key = (t: { agentId: string; accountId?: string }): string => `${t.agentId}:${t.accountId ?? ''}`

@@ -2,7 +2,7 @@
 name = "swarmterm-host"
 version = "0.1.0"
 description = "Swarmterm terminal host: owns the PTYs so they outlive an app quit or update (ADR 0001)"
-authors = ["Duong Duc Nguyen"]
+authors = ["Swarmterm GN maintainers"]
 license = "GPL-3.0-only"
 edition = "2021"
 publish = false
@@ -20,13 +20,16 @@ portable-pty = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
+memchr = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
+  "Wdk_System_Threading",
   "Win32_Foundation",
   "Win32_Security",
   "Win32_Security_Authorization",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_JobObjects",
   "Win32_System_Threading",
 ] }

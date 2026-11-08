@@ -10,8 +10,10 @@
 
 use std::collections::VecDeque;
 
-/// Default history per pane (ADR 0001: 1 MiB).
-pub const DEFAULT_CAPACITY: usize = 1024 * 1024;
+/// Default history per pane. ADR 0001 chose 1 MiB; lowered to 512 KiB (perf
+/// phase 4): the replay only has to repaint the screen plus recent scrollback,
+/// and every hosted pane pays it. `--ring-bytes` overrides it.
+pub const DEFAULT_CAPACITY: usize = 512 * 1024;
 
 pub struct Ring {
     buf: VecDeque<u8>,
@@ -142,6 +144,11 @@ mod tests {
         assert_eq!(r.snapshot_from(0), b"cdefghij");
         assert_eq!(r.snapshot_from(5), b"fghij");
         assert_eq!(r.snapshot_from(99), b"");
+    }
+
+    #[test]
+    fn default_capacity_is_512_kib() {
+        assert_eq!(DEFAULT_CAPACITY, 512 * 1024);
     }
 
     #[test]

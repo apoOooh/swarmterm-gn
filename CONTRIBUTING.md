@@ -3,6 +3,11 @@
 Thanks for your interest! This page covers everything you need to go from
 `git clone` to a merged pull request.
 
+Swarmterm GN is an independent project (it started as a fork of
+duongducnguyen/swarmterm and is no longer synced with it). Contribute here,
+not upstream. Project decisions are in [`docs/decisions.md`](docs/decisions.md);
+security issues go through [`SECURITY.md`](SECURITY.md), not public issues.
+
 ## Getting set up
 
 The GN fork supports Windows x64. Install the prerequisites from the
@@ -31,6 +36,14 @@ locally first:
 | Rust tests | `cargo test` *(from `src-tauri/`)* |
 | Rust formatting | `cargo fmt --check` *(from `src-tauri/`)* |
 | Rust lints | `cargo clippy --all-targets -- -D warnings` *(from `src-tauri/`)* |
+| Rust advisories, licences, bans, sources | `cargo deny check advisories licenses bans sources` *(from `src-tauri/`, needs `cargo install cargo-deny`)* |
+| npm advisories | `npm audit --omit=dev --audit-level=high` |
+| npm registry signatures | `npm audit signatures` |
+| Licence metadata (REUSE) | `reuse lint` *(`pipx install reuse`)* |
+
+New dependencies must use a licence on the allow list in `src-tauri/deny.toml`.
+A change that adds a network connection or stores new data updates
+[`PRIVACY.md`](PRIVACY.md) in the same pull request.
 
 For changes that touch terminal lifecycle, focus, the War Room, or worktrees,
 also walk the relevant section of
@@ -47,6 +60,9 @@ lives at boundaries (pty, window manager, tray) that unit tests can't reach.
 - **Windows support:** native CI and releases target Windows x64 only. Keep
   existing platform guards in inherited code; macOS/Linux code is retained
   without a support commitment.
+- **Branches:** target `dev` with every change. `main` only receives `dev`
+  when a release is cut, and releases are tagged on `main` (see
+  `docs/release-process.md`).
 - **Commit messages** follow Conventional Commits (`feat(scope): …`,
   `fix: …`, `docs: …`) — mirror the existing history.
 
