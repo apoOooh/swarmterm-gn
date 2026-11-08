@@ -86,7 +86,9 @@ import { useDocumentStore } from '@/store/document-store'
 import { useExplorerStore } from '@/store/explorer-store'
 import { onFileChange } from '@/tauri/files'
 import { registerCloseGuard } from '@/lib/close-guard'
-import { confirmQuit, onMcpServerExited, onQuitRequested, onVoicePipeError, onVoicePipeRecovered } from '@/tauri/app'
+import { confirmQuit, hostedPaneCount, onMcpServerExited, onQuitRequested, onVoicePipeError, onVoicePipeRecovered } from '@/tauri/app'
+import { chooseQuit } from '@/lib/quit-flow'
+import { fileDialog } from '@/store/file-dialog-store'
 import { RightPanel, RightPanelPeek } from '@/components/RightPanel/RightPanel'
 import { Navbar } from '@/components/Navbar/Navbar'
 import { SettingsView } from '@/components/Settings/SettingsView'
@@ -215,7 +217,14 @@ export default function App(): ReactElement {
     })
     const quit = onQuitRequested(() => {
       const ids = useAppStore.getState().workspaces.flatMap((w) => collectLeaves(w.layout).map((l) => l.id))
-      void useDocumentStore.getState().guardPanes(ids).then((allowed) => { if (allowed) { flushSavedWorkspaces(); void confirmQuit() } })
+      void (async () => {
+        if (!await useDocumentStore.getState().guardPanes(ids)) return
+        const choice = await chooseQuit(hostedPaneCount, fileDialog)
+        if (choice === 'cancel') return
+        // Flushed last: kept panes reattach by the saved terminalId (SWA-56).
+        flushSavedWorkspaces()
+        await confirmQuit(choice === 'keep')
+      })()
     })
     const beforeUnload = (event: BeforeUnloadEvent): void => {
       flushSavedWorkspaces()

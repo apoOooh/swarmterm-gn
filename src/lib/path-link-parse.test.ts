@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectPathCandidates, listingDirAbove, listingEntry, parsePathSuffix } from './path-link-parse'
+import { absoluteWindowsPath, detectPathCandidates, isRelativePath, listingDirAbove, listingEntry, parsePathSuffix, relativeBases } from './path-link-parse'
 
 describe('parsePathSuffix', () => {
   it('parses line and column', () => {
@@ -91,5 +91,49 @@ describe('listingDirAbove', () => {
   it('stops at the prompt of an earlier command', () => {
     expect(listingDirAbove(['PS D:\\p> dir', '    Verzeichnis: D:\\old'])).toBeNull()
     expect(listingDirAbove(['nothing here'])).toBeNull()
+  })
+})
+
+describe('isRelativePath', () => {
+  it('is true only for paths without a drive or a leading separator', () => {
+    expect(isRelativePath('out/shot.png')).toBe(true)
+    expect(isRelativePath('..\\x\\y.md')).toBe(true)
+    expect(isRelativePath('D:\\x\\y.md')).toBe(false)
+    expect(isRelativePath('/d/x/y.md')).toBe(false)
+    expect(isRelativePath('\\x\\y.md')).toBe(false)
+  })
+})
+
+describe('absoluteWindowsPath', () => {
+  it('keeps drive paths and maps Git Bash /d/… paths to D:\\…', () => {
+    expect(absoluteWindowsPath('D:\\swarmterm-testlab')).toBe('D:\\swarmterm-testlab')
+    expect(absoluteWindowsPath('d:/lab/run.mjs')).toBe('d:/lab/run.mjs')
+    expect(absoluteWindowsPath('/d/swarmterm-testlab/out')).toBe('D:\\swarmterm-testlab\\out')
+  })
+  it('refuses relative and plain posix paths', () => {
+    expect(absoluteWindowsPath('out/x.png')).toBeNull()
+    expect(absoluteWindowsPath('/usr/lib/x')).toBeNull()
+  })
+})
+
+describe('relativeBases', () => {
+  it('takes absolute paths of the same line, then the lines above, nearest line leading', () => {
+    const bases = relativeBases('Saved in D:\\lab: out/30-fail.png', ['cd /d/far/dir', 'older D:\\old\\notes.md'])
+    expect(bases).toEqual(['D:\\lab', 'D:\\far\\dir', 'D:\\far', 'D:\\old\\notes.md', 'D:\\old'])
+  })
+  it('offers a file path and its folder, strips the line suffix and drops duplicates', () => {
+    expect(relativeBases('', ['at D:\\lab\\run.mjs:12:3', 'D:\\LAB\\run.mjs'])).toEqual(['D:\\lab\\run.mjs', 'D:\\lab'])
+  })
+  it('skips relative paths and stops after the source cap', () => {
+    expect(relativeBases('src/a.ts', ['lib/b.ts'])).toEqual([])
+    const above = ['C:\\a\\x', 'C:\\b\\x', 'C:\\c\\x', 'C:\\d\\x']
+    expect(relativeBases('', above, { maxSources: 2 })).toEqual(['C:\\a\\x', 'C:\\a', 'C:\\b\\x', 'C:\\b'])
+  })
+  it('reads a single-segment folder and ignores URLs', () => {
+    expect(relativeBases('', ['cd D:\\swarmterm-testlab && node run.mjs'])).toEqual(['D:\\swarmterm-testlab'])
+    expect(relativeBases('see https://example.com/a/b', [])).toEqual([])
+  })
+  it('leaves out the bases the caller already tried', () => {
+    expect(relativeBases('D:\\GN_AI\\swarmterm out/x.png', [], { exclude: ['d:\\gn_ai\\swarmterm'] })).toEqual(['D:\\GN_AI'])
   })
 })

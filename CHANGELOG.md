@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Terminal host: Quit asks *Keep terminals running?* while panes run in the
+  host (ADR 0001 phase 4a, SWA-57). **Close all** (default) closes them as
+  before, **Keep running** leaves them running and the next start takes them
+  over. Without hosted panes Quit does not ask.
 - Terminal host: the installer now ships `swarmterm-host.exe` (ADR 0001
   phase 4, SWA-82). Swarmterm copies it to a folder per build under
   `%LOCALAPPDATA%\<app id>\host\`, checks the copy's hash before each
@@ -17,6 +21,12 @@
   pause in the middle of a turn is no longer announced as done, Esc is said
   as interrupted, and with **Allow excerpts** the agent's reply is spoken
   for Codex too.
+- Terminal links: a relative file path that does not exist below the pane's
+  folder is also looked up in the absolute folders printed on the same line
+  and the newest lines above (Windows and Git Bash `/d/…` paths), so
+  Ctrl+click works on paths a tool printed relative to its own folder. The
+  click follows the file the link resolved to, also for bare names in a
+  `dir` listing (SWA-62).
 
 ## [1.26.0] - 2026-10-29
 

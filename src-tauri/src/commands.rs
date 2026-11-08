@@ -12,10 +12,27 @@ fn files_main_only(window: &tauri::WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn confirm_quit(window: tauri::WebviewWindow, app: AppHandle) -> Result<(), String> {
+pub fn confirm_quit(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    keep_terminals: Option<bool>,
+) -> Result<(), String> {
     files_main_only(&window)?;
-    crate::tray::quit(&app);
+    crate::tray::quit(&app, keep_terminals.unwrap_or(false));
     Ok(())
+}
+
+/// How many panes would survive a quit with "keep terminals running": only
+/// hosted ones can, in-process panes always close. The renderer asks before
+/// quitting and shows the choice only when this is non-zero (SWA-57).
+#[tauri::command]
+pub fn quit_hosted_count(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    files_main_only(&window)?;
+    let map = state.terminals.lock().map_err(|e| e.to_string())?;
+    Ok(map.values().filter(|t| t.is_hosted()).count())
 }
 
 #[tauri::command]

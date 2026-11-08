@@ -803,6 +803,16 @@ Use Task Manager → Details → "Base priority" (or Process Explorer).
       start removes its folder.
 - [ ] Upgrade from a build with the old "Lower build priority" switched off → mode shows **Off**.
 
+## Quit with the terminal host
+
+- [ ] Terminal host off, tray → **Quit** → quits without asking, as before.
+- [ ] Terminal host on, `ping -t localhost` in a saved workspace, tray → **Quit** → *Keep terminals running?*;
+      **Cancel** and Esc keep Swarmterm open, panes unchanged.
+- [ ] **Close all** → Swarmterm quits, Task Manager shows no `ping` left, `swarmterm-host.exe` exits.
+- [ ] **Keep running** → Swarmterm quits, `ping` keeps running under `swarmterm-host.exe`; start Swarmterm,
+      open the workspace → the pane is taken over and still counting. Wait two minutes: it stays open.
+- [ ] Keep running with an unsaved file open → the unsaved-changes prompt comes first.
+
 ## Administrator policy
 
 Use a test key under HKCU (if `reg add` is denied, run it from an elevated prompt). Quit Swarmterm from the tray and

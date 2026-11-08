@@ -408,6 +408,18 @@ impl IoHandle {
 }
 
 impl ManagedTerminal {
+    /// The PTY lives in the terminal host over a live connection, so it can
+    /// outlive this app (quit with "keep terminals running", SWA-57).
+    pub fn is_hosted(&self) -> bool {
+        match &self.io {
+            TerminalIo::Local { .. } => false,
+            #[cfg(windows)]
+            TerminalIo::Host { conn, .. } => conn.is_alive(),
+        }
+    }
+}
+
+impl ManagedTerminal {
     /// Close the terminal the way a regular terminal window does, then make
     /// sure nothing survives. Returns the thread enforcing the deadline, if any.
     ///
