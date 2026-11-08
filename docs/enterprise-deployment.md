@@ -16,12 +16,19 @@ Both release assets are Tauri NSIS installers. They differ in install mode:
 |---|---|---|
 | Install mode | **per user** (Tauri's default `currentUser`), no administrator rights | **per machine** (`installMode: perMachine` in `src-tauri/tauri.corp.conf.json`), needs administrator rights |
 | Install directory | `%LOCALAPPDATA%\Swarmterm GN\` | `%ProgramFiles%\Swarmterm GN Corp\` (not writable by users) |
-| Files | `swarmterm.exe`, `uninstall.exe` (the optional terminal host `swarmterm-host.exe` is not in the installer yet) | same |
+| Files | `swarmterm.exe`, `swarmterm-host.exe` (optional terminal host, see below), `uninstall.exe` | same |
 | Start menu entry | per user | all users |
 | Uninstall registration | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\` | `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\` |
 | Prerequisite | Microsoft WebView2 Runtime (preinstalled on Windows 11; the installer fetches Microsoft's bootstrapper if it is missing) | same |
 
 Settings and data stay per user in both editions (see [Data locations](#data-locations)).
+
+The terminal host (Settings → Terminal → **Run new panes in the terminal host**, off by default) does not run from the
+install directory: Swarmterm copies `swarmterm-host.exe` to `%LOCALAPPDATA%\<app id>\host\<version>-<hash>\`,
+checks the copy's SHA-256 against the installed file before every start, and runs it from there, so an update never
+has to replace a running binary. Application control that only allows programs from `%ProgramFiles%` (AppLocker,
+WDAC) blocks that copy; the setting then reports why and panes run inside Swarmterm. Allow the path or keep the
+setting off, which the administrator policy can enforce.
 
 Silent install of **Corp**, elevated (for example an Intune Win32 app with install behaviour **System**, or an
 administrator PowerShell):
@@ -79,7 +86,7 @@ All data belongs to the Windows user; apart from the Corp program files, nothing
 
 - `%APPDATA%\com.apooooh.swarmterm.gn\`: settings files, account profiles (no credentials), local deletion history.
 - `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\`: WebView2 storage (layouts, preferences), downloaded speech models,
-  local endpoint descriptions.
+  local endpoint descriptions, and the terminal host copies under `host\` when the terminal host is used.
 - `%TEMP%\swarmterm-paste\`, `swarmterm-marked\`, `swarmterm-clipboard\`: pasted and annotated images.
 - Entries the app adds to agent CLI configuration (`~/.claude.json`, `~/.claude/settings.json`, `~/.codex/…`) for its
   MCP server, status line and hooks.

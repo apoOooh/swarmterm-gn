@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Terminal host: the installer now ships `swarmterm-host.exe` (ADR 0001
+  phase 4, SWA-82). Swarmterm copies it to a folder per build under
+  `%LOCALAPPDATA%\<app id>\host\`, checks the copy's hash before each
+  start and runs it from there, so an update never replaces a running host.
+  After an update, panes on the previous build's host stay there and can be
+  reopened; new panes go to the new host, and Settings → Terminal says so.
+  An old host disconnects once it holds no pane, and its folder is removed
+  at the next start. Debug builds keep running the host from the build
+  folder (`SWARMTERM_HOST_VERSIONED=1` opts in).
 - Voice: Codex turns end exactly (SWA-71). Swarmterm registers Codex's
   `Stop` and `Interrupt` hooks next to the session capture (one more
   `/hooks` review in Codex). A Codex pane's status follows these edges, a

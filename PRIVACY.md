@@ -35,7 +35,7 @@ same layout under that folder name.
 | Terminal host and voice settings, Swarmterm MCP opt-outs | `%APPDATA%\com.apooooh.swarmterm.gn\terminal-host.json`, `voice-settings.json`, `swarmterm-mcp-disabled.json` | `src-tauri/src/host_client/mod.rs`, `src-tauri/src/voice/mod.rs`, `src-tauri/src/lib.rs` |
 | Local deletion history (copies of files you delete in the file explorer) | `%APPDATA%\com.apooooh.swarmterm.gn\local-history\` | `src-tauri/src/lib.rs`, `src-tauri/src/files/history.rs` |
 | Speech recognition models you download | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\models\` | `src-tauri/src/voice/speech/mod.rs` |
-| Terminal host endpoint (`host-endpoint.json`: pipe name, token) when the terminal host is on | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\` | `src-tauri/src/host_client/launch.rs` |
+| Terminal host endpoint (`host-endpoint.json`: pipe name, token) and the copy of `swarmterm-host.exe` it runs from, one folder per build, when the terminal host is on | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\`, `host\<version>-<hash>\` | `src-tauri/src/host_client/launch.rs` |
 | Voice endpoint description (pipe name, per-launch token, process id) | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\` | `src-tauri/src/voice/pipe.rs` |
 | Pasted clipboard images, annotated image copies, clipboard media | `%TEMP%\swarmterm-paste\`, `%TEMP%\swarmterm-marked\`, `%TEMP%\swarmterm-clipboard\` | `src-tauri/src/paste_image.rs`, `src-tauri/src/marked_media.rs`, `src-tauri/src/clipboard_media.rs` |
 

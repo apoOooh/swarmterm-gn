@@ -77,7 +77,7 @@ impl<P, C> Routes<P, C> {
             .collect()
     }
 
-    #[cfg(test)]
+    /// Nothing in flight and nothing live: the connection serves no pane.
     pub fn is_empty(&self) -> bool {
         self.pending.is_empty() && self.live.is_empty()
     }

@@ -494,13 +494,20 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   for the connection's writer, so sending under the `terminals` lock keeps
   keystroke FIFO; a hosted pane's `input-queue-full` comes back as
   `pty:input-dropped`. Lost connection = every hosted pane exits; the next
-  create reconnects or starts a host (`launch.rs`, binary next to the app
-  exe — dev: `cargo build -p swarmterm-host`); unavailable = in-process
+  create reconnects or starts a host (`launch.rs`: the installer ships it
+  next to the app exe, release builds run a hash-checked copy from
+  `<local data>\host\<version>-<hash>\` with that dir as data dir, so each
+  build is its own host — dev: `cargo build -p swarmterm-host`, run in
+  place unless `SWARMTERM_HOST_VERSIONED=1`); unavailable = in-process
   fallback with the reason in Settings (connect retries 3x for a host that
   was idling out). The host must hold no pane the app does not track: an
   unrequested `spawned` is killed, and every connection — also a
   cleanup-only reconnect after a lost one — `reap_orphans` first, except for
-  the detached set. Quit flushes the host's `kill`s.
+  the detached set. Quit flushes the host's `kill`s. Hosts of older builds
+  (SWA-82) are connected at boot as `legacy` only to attach their panes
+  (`DetachedPane::host` picks the connection, `AttachTicket` keeps
+  `retire_idle` from closing one mid-attach) and closed once they hold
+  nothing; nothing new spawns there.
   Reattach (SWA-56): only the boot connection (`init` → `boot`, host already
   running) `adopt`s; its list becomes the FIXED `detached` set
   (`detached.rs` — never "host list minus map", a same-id respawn would
