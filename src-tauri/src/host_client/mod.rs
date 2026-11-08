@@ -567,6 +567,16 @@ impl conn::Sink for AppSink {
         if !current {
             return;
         }
+        // Quitting: the cleanup reconnect would reap the panes a "keep
+        // terminals running" quit leaves in the host (SWA-57), and a
+        // closing quit already flushed its kills.
+        if self
+            .app
+            .try_state::<crate::pty::AppState>()
+            .is_some_and(|s| s.quitting.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return;
+        }
         let app = self.app.clone();
         std::thread::spawn(move || {
             if let Some(hub) = app.try_state::<HostHub>() {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Terminal host: Quit asks *Keep terminals running?* while panes run in the
+  host (ADR 0001 phase 4a, SWA-57). **Close all** (default) closes them as
+  before, **Keep running** leaves them running and the next start takes them
+  over. Without hosted panes Quit does not ask.
 - Voice: Codex turns end exactly (SWA-71). Swarmterm registers Codex's
   `Stop` and `Interrupt` hooks next to the session capture (one more
   `/hooks` review in Codex). A Codex pane's status follows these edges, a

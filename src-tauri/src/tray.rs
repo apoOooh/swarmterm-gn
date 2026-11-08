@@ -32,13 +32,16 @@ pub fn show_main(app: &tauri::AppHandle) {
     }
 }
 
-/// Kill every pty, then exit the process for good.
+/// Kill every pty, then exit the process for good. `keep_hosted` (the quit
+/// dialog's "Keep running", SWA-57) spares the panes in the terminal host:
+/// they keep running without a client and the next start reattaches them
+/// (SWA-56). In-process panes always close.
 ///
 /// Returns immediately: the graceful close waits up to `KILL_GRACE` for the
 /// pane trees, and doing that on the caller (the main thread, via the sync
 /// `confirm_quit` command) froze the UI for that long. A second request while
 /// one is in flight is a no-op.
-pub fn quit(app: &tauri::AppHandle) {
+pub fn quit(app: &tauri::AppHandle, keep_hosted: bool) {
     static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
@@ -49,10 +52,10 @@ pub fn quit(app: &tauri::AppHandle) {
         .quitting
         .store(true, Ordering::SeqCst);
     let app = app.clone();
-    std::thread::spawn(move || quit_blocking(&app));
+    std::thread::spawn(move || quit_blocking(&app, keep_hosted));
 }
 
-fn quit_blocking(app: &tauri::AppHandle) {
+fn quit_blocking(app: &tauri::AppHandle, keep_hosted: bool) {
     let state = app.state::<AppState>();
     // Remove the voice discovery file so buzzkey never dials a dead pipe.
     crate::voice::shutdown(app);
@@ -65,6 +68,12 @@ fn quit_blocking(app: &tauri::AppHandle) {
         Ok(mut map) => map.drain().map(|(_, t)| t).collect(),
         Err(_) => Vec::new(),
     };
+    // Kept panes only leave the map: dropping a hosted entry sends nothing,
+    // and the pipe closes with the process. No `Conn::close` here — a lost
+    // connection would start the cleanup reconnect, which reaps every host
+    // pane the (now empty) map does not track (`AppSink::lost` skips it
+    // while quitting anyway).
+    let (_kept, terminals) = split_for_quit(terminals, keep_hosted, |t| t.is_hosted());
     let waiters: Vec<_> = terminals.into_iter().filter_map(|t| t.shutdown()).collect();
     // Hosted panes were only asked to close (`kill` is enqueued); wait until
     // the host has read those requests, or they die with our pipe at exit
@@ -81,6 +90,18 @@ fn quit_blocking(app: &tauri::AppHandle) {
         let _ = w.join();
     }
     app.exit(0);
+}
+
+/// `(kept, to_close)`: with `keep_hosted`, hosted panes survive the quit.
+fn split_for_quit<T>(
+    terminals: Vec<T>,
+    keep_hosted: bool,
+    is_hosted: impl Fn(&T) -> bool,
+) -> (Vec<T>, Vec<T>) {
+    if !keep_hosted {
+        return (Vec::new(), terminals);
+    }
+    terminals.into_iter().partition(|t| is_hosted(t))
 }
 
 pub fn setup_tray(app: &App) -> tauri::Result<()> {
@@ -128,5 +149,20 @@ mod tests {
     #[test]
     fn tray_blob_matches_declared_size() {
         assert_eq!(TRAY_MARK.len(), (TRAY_PX * TRAY_PX * 4) as usize);
+    }
+
+    #[test]
+    fn quit_closes_everything_by_default() {
+        let (kept, close) = split_for_quit(vec![(1, true), (2, false)], false, |t| t.1);
+        assert!(kept.is_empty());
+        assert_eq!(close, vec![(1, true), (2, false)]);
+    }
+
+    #[test]
+    fn keep_spares_only_hosted_panes() {
+        let (kept, close) =
+            split_for_quit(vec![(1, true), (2, false), (3, true)], true, |t| t.1);
+        assert_eq!(kept, vec![(1, true), (3, true)]);
+        assert_eq!(close, vec![(2, false)]);
     }
 }

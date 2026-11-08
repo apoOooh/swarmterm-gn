@@ -194,6 +194,7 @@ pub fn run() {
             devlog::dev_log,
             commands::files_open_context,
             commands::confirm_quit,
+            commands::quit_hosted_count,
             commands::run_routine_command,
             commands::save_clipboard_image,
             commands::files_request,
