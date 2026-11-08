@@ -12,6 +12,12 @@
   pause in the middle of a turn is no longer announced as done, Esc is said
   as interrupted, and with **Allow excerpts** the agent's reply is spoken
   for Codex too.
+- Terminal links: a relative file path that does not exist below the pane's
+  folder is also looked up in the absolute folders printed on the same line
+  and the newest lines above (Windows and Git Bash `/d/…` paths), so
+  Ctrl+click works on paths a tool printed relative to its own folder. The
+  click follows the file the link resolved to, also for bare names in a
+  `dir` listing (SWA-62).
 
 ## [1.26.0] - 2026-10-29
 
