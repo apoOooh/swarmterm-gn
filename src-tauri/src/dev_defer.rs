@@ -32,7 +32,7 @@ pub fn command_exe(command: &str) -> Option<&str> {
 
 /// Same executable? Windows paths are case-insensitive and may be recorded
 /// with either slash direction, so compare normalised forms.
-fn same_exe(a: &str, b: &str) -> bool {
+pub(crate) fn same_exe(a: &str, b: &str) -> bool {
     let norm = |s: &str| {
         let s = s.replace('\\', "/");
         if cfg!(windows) {

@@ -989,7 +989,7 @@ fn plan_spawn(
             // per account, so different accounts enroll in parallel.
             let lock = enroll_lock(id);
             let _enroll = lock.lock().unwrap_or_else(|e| e.into_inner());
-            crate::accounts::enroll(&account, state.mcp_url.get().map(|url| url.as_ref()))?;
+            crate::accounts::enroll(&account)?;
             Some(account)
         }
         None => None,
@@ -1105,9 +1105,20 @@ fn plan_spawn(
             options.agent_id.as_deref(),
             options.agent_id.as_deref() == Some("codex") && crate::hook::codex::supported(),
         );
-        // A switched-off profile gets no per-process pin either.
+        // A switched-off profile gets no per-process pin either, and neither
+        // does one whose config.toml already holds the stdio entry (SWA-83
+        // 1b: Codex refuses `url` on a stdio server).
         let mcp_on = options.agent_id.as_deref().is_none_or(|agent| {
             crate::mcp::toggle::is_enabled(agent, options.account_id.as_deref())
+        }) && (options.agent_id.as_deref() != Some("codex") || {
+            let config = match &profile_dir {
+                Some(dir) => dir.join("config.toml"),
+                None => crate::mcp::config::resolve_codex_config_path(
+                    &app.path().home_dir().unwrap_or_default(),
+                    std::env::var("CODEX_HOME").ok().as_deref(),
+                ),
+            };
+            crate::mcp::config::codex_needs_url_pin(&config)
         });
         let ic = crate::hook::codex::with_mcp_url(
             &ic,

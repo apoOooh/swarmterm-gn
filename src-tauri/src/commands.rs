@@ -811,7 +811,7 @@ pub async fn set_claude_statusline(app: AppHandle, enabled: bool) -> Result<(), 
         let mut first_err = default.err();
         for account in crate::accounts::list(&app)? {
             if account.agent_id == "claude-code" {
-                if let Err(e) = crate::accounts::enroll(&account, None) {
+                if let Err(e) = crate::accounts::enroll(&account) {
                     eprintln!(
                         "statusline: cannot update account profile {}: {e}",
                         account.id
@@ -1374,12 +1374,9 @@ pub async fn save_agent_account(
     account: crate::accounts::AccountInput,
 ) -> Result<crate::accounts::AgentAccount, String> {
     files_main_only(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        crate::accounts::save(&app, account, state.mcp_url.get().map(|url| url.as_ref()))
-    })
-    .await
-    .map_err(|_| "Account profile save interrupted")?
+    tauri::async_runtime::spawn_blocking(move || crate::accounts::save(&app, account))
+        .await
+        .map_err(|_| "Account profile save interrupted")?
 }
 #[tauri::command]
 pub async fn delete_agent_account(
@@ -1649,14 +1646,7 @@ pub async fn set_swarmterm_mcp(
         match agent_id.as_str() {
             "claude-code" => crate::mcp::config::write_mcp_config_to_file(&path),
             "qwen" => crate::mcp::config::write_qwen_settings_to_file(&path),
-            // Dev builds pin Codex per process; only the installed app owns
-            // the URL in config.toml (see mcp::start).
-            _ => match app.state::<AppState>().mcp_url.get() {
-                Some(url) if !cfg!(debug_assertions) => {
-                    crate::mcp::config::write_codex_config_to_file(&path, url)
-                }
-                _ => Ok(()),
-            },
+            _ => crate::mcp::config::write_codex_config_to_file(&path),
         }
     })
     .await

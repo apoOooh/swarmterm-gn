@@ -161,12 +161,12 @@ pub fn isolated_command(command: &str, agent: Option<&str>, supported: bool) -> 
     command.into()
 }
 
-/// Pin the pane's Codex to THIS app's MCP server via `-c` overrides. The
-/// shared `config.toml` holds one URL, and a second Swarmterm (the dev build
-/// next to the installed one) rewrites it on boot with its own port — every
-/// pane of the other app then talks to a server that does not know its
-/// bearer and silently never joins the War Room. A per-process override
-/// cannot be clobbered. The URL is our own loopback string; anything outside
+/// Pin the pane's Codex to THIS app's MCP server via `-c` overrides. Only
+/// for a `config.toml` without our stdio entry (`mcp::config::codex_needs_url_pin`): a legacy HTTP entry holds one URL, which a second
+/// Swarmterm (the dev build next to the installed one) rewrote with its own
+/// port — every pane of the other app then talked to a server that did not
+/// know its bearer. The stdio proxy reads the pane's own address instead,
+/// and Codex refuses `url` on a stdio server. The URL is our own loopback string; anything outside
 /// a plain URL charset is refused rather than quoted into a shell line.
 pub fn with_mcp_url(command: &str, agent: Option<&str>, url: Option<&str>) -> String {
     let safe = |u: &str| {

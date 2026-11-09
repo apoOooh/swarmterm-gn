@@ -72,6 +72,15 @@ Tools: open a web preview (http/https URLs only), list/spawn/remove worktrees
 changes and paths outside `<repo>.worktrees`), and the War Room tools.
 Settings → MCP removes the server entry from an agent profile's configuration.
 
+Claude Code and Codex reach the server through a local stdio proxy
+(`swarmterm.exe --mcp-stdio`, `src-tauri/src/mcp_stdio.rs`), which their
+configuration starts as an ordinary MCP server. It opens no port and holds no
+secret of its own: it reads `SWARMTERM_MCP_URL` and `SWARMTERM_SESSION` from the
+pane's environment, accepts only a loopback `http://127.0.0.1:<port>/mcp`
+address and sends the pane's bearer on every request, `initialize` included, so
+the server's checks above apply unchanged. Outside a pane it answers as a server
+without tools and contacts nothing.
+
 `POST /resubmit` (SWA-88) is the one route that carries prompt text: data-shield's
 UserPromptSubmit guard sends the masked form of a prompt it blocked, and Swarmterm
 types it back into the same pane (and, by default, sends it). It accepts a request only
