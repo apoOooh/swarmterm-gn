@@ -302,7 +302,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   exactly `--hook`, exec form only with exactly one arg). The probe never
   runs on the UI thread or under `CONFIG_WRITE`: `setup::boot` hands both
   ensures to blocking workers (`tests/boot_off_ui_thread.rs`), output and
-  exit share one deadline in a kill-on-close job. `CLAUDE_DONE` only holds
+  exit share one deadline in a kill-on-close job, which the
+  probe joins while still suspended (no job = no verdict). `CLAUDE_DONE` only holds
   while `CLAUDE_DONE_FOR` (the verdict used) is `still_current`, so a
   Claude Code update/downgrade is applied at the next pane start.
 - **Native preview webviews.** The preview column is a per-terminal native

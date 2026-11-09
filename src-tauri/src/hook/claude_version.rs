@@ -178,7 +178,13 @@ fn probe(binary: &Path) -> Option<(u32, u32, u32)> {
 /// EOF, so nothing here waits for EOF without a bound, and the whole tree is
 /// captured in a kill-on-close job and torn down at the end, which closes
 /// the pipe for the reader thread too. `None` when the process failed, did
-/// not finish in time, or printed nothing.
+/// not finish in time, printed nothing, or could not be put in the job.
+///
+/// The process is created suspended and resumed only once it is in the job:
+/// a running wrapper could start a pipe-holding child and exit before
+/// `AssignProcessToJobObject`, which then fails (access denied on a dead
+/// root), and that child would outlive the probe. No job, no probe — the
+/// caller's verdict stays unsettled and the shell form is kept.
 fn run_bounded(mut command: Command, timeout: Duration) -> Option<String> {
     let deadline = Instant::now() + timeout;
     command
@@ -188,11 +194,22 @@ fn run_bounded(mut command: Command, timeout: Duration) -> Option<String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     }
     let mut child = command.spawn().ok()?;
     #[cfg(windows)]
-    let job = crate::pty::job::JobHandle::capturing(child.id());
+    let job = match crate::pty::job::JobHandle::capturing(child.id()) {
+        Some(job) if resume(child.id()) => job,
+        // Not in the job, or never resumed: kill it before it runs a single
+        // instruction (a resumed-but-failed case dies with the job's drop).
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    };
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     if let Some(mut out) = child.stdout.take() {
         // Detached on purpose: it ends at EOF, which the teardown below
@@ -240,17 +257,57 @@ fn run_bounded(mut command: Command, timeout: Duration) -> Option<String> {
         }
     }
     #[cfg(windows)]
-    if let Some(job) = &job {
-        job.terminate();
-    }
+    job.terminate();
     let _ = child.kill();
     let _ = child.wait();
     (exited_ok && !text.is_empty()).then(|| String::from_utf8_lossy(&text).into_owned())
 }
 
+/// Resume every thread of the suspended process `pid` (a fresh process has
+/// exactly one). `std` keeps the primary thread handle to itself, so the
+/// threads are found by snapshot. False if none could be resumed.
+#[cfg(windows)]
+fn resume(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+    // SAFETY: every handle is opened and closed here; the entry is a plain
+    // out-struct with its size set as the API requires.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut entry: THREADENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        let mut resumed = false;
+        let mut more = Thread32First(snap, &mut entry) != 0;
+        while more {
+            if entry.th32OwnerProcessID == pid {
+                let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                if !thread.is_null() {
+                    resumed |= ResumeThread(thread) != u32::MAX;
+                    CloseHandle(thread);
+                }
+            }
+            more = Thread32Next(snap, &mut entry) != 0;
+        }
+        CloseHandle(snap);
+        resumed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn resuming_an_unknown_process_fails() {
+        assert!(!resume(u32::MAX));
+    }
 
     #[test]
     fn reads_the_version_line() {

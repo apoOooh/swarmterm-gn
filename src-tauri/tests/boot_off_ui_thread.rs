@@ -23,35 +23,79 @@ fn body_of<'a>(src: &'a str, signature: &str) -> &'a str {
     panic!("unbalanced braces")
 }
 
+/// Byte ranges of every `spawn_blocking(...)` argument list in `body`,
+/// matched by parentheses — a call is on a worker only if it lies inside
+/// one of them, not merely somewhere after one.
+fn worker_spans(body: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    for (at, m) in body.match_indices("spawn_blocking(") {
+        let open = at + m.len() - 1;
+        let mut depth = 0usize;
+        for (i, ch) in body[open..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        spans.push((open, open + i));
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    spans
+}
+
+/// The calls in `body` that would block the UI thread: any probe-reaching
+/// call outside every worker closure.
+fn calls_off_worker(body: &str) -> Vec<String> {
+    let spans = worker_spans(body);
+    let mut bad = Vec::new();
+    for call in [
+        "ensure_claude(",
+        "ensure_codex(",
+        "refresh_prerequisites(",
+        "exec_hooks(",
+        "recheck(",
+    ] {
+        for (at, _) in body.match_indices(call) {
+            if !spans.iter().any(|&(s, e)| s < at && at < e) {
+                bad.push(call.to_owned());
+            }
+        }
+    }
+    bad
+}
+
 #[test]
 fn boot_runs_every_ensure_on_a_worker() {
     let src =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/setup.rs")).unwrap();
     let body = body_of(&src, "pub fn boot(");
-    // Everything before the first worker is plain cloning.
-    let first_worker = body.find("spawn_blocking").expect("boot uses no worker");
-    let head = &body[..first_worker];
-    for blocking in [
-        "ensure_claude",
-        "ensure_codex",
-        "refresh_prerequisites",
-        "exec_hooks",
-        "recheck",
-    ] {
-        assert!(
-            !head.contains(blocking),
-            "setup::boot calls {blocking} on the UI thread"
-        );
+    for call in ["ensure_claude(", "ensure_codex(", "refresh_prerequisites("] {
+        assert!(body.contains(call), "setup::boot no longer calls {call}");
     }
-    // And every call sits inside a spawn_blocking closure.
-    for call in ["ensure_claude(", "ensure_codex("] {
-        for (at, _) in body.match_indices(call) {
-            assert!(
-                body[..at].rfind("spawn_blocking").is_some(),
-                "{call} outside a worker in setup::boot"
-            );
-        }
-    }
+    let bad = calls_off_worker(body);
+    assert!(bad.is_empty(), "setup::boot calls {bad:?} on the UI thread");
+}
+
+#[test]
+fn the_checker_catches_calls_after_a_worker() {
+    // Found in review: a direct call after a worker closure must fail.
+    let body = "{ let a = app.clone(); tauri::async_runtime::spawn_blocking(move || ensure_claude(&a)); ensure_codex(app); refresh_prerequisites(app); }";
+    assert_eq!(
+        calls_off_worker(body),
+        vec![
+            "ensure_codex(".to_owned(),
+            "refresh_prerequisites(".to_owned()
+        ]
+    );
+    let good = "{ let a = app.clone(); spawn_blocking(move || { ensure_claude(&a); refresh_prerequisites(&a); }); let c = app.clone(); spawn_blocking(move || ensure_codex(&c)); }";
+    assert!(calls_off_worker(good).is_empty());
+    let before = "{ ensure_claude(app); spawn_blocking(move || ensure_codex(&c)); }";
+    assert_eq!(calls_off_worker(before), vec!["ensure_claude(".to_owned()]);
 }
 
 #[test]
