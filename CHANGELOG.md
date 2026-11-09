@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-11-09
+
+- Prompts blocked by data-shield come back masked (SWA-88): when
+  data-shield's prompt guard blocks a Claude Code prompt because it contains
+  personal data or a secret, Swarmterm clears the original from Claude's
+  input box, puts the masked version (placeholders instead of the values)
+  back into the same pane and sends it. **Settings → Terminal → Agent
+  safety → Prompts blocked by data-shield**: *put back and send* (default),
+  *put back, I press Enter*, or *do nothing*. A blocked prompt is never
+  announced as done. Administrators can switch it off or forbid the
+  automatic send (`DisablePromptResubmit`, `DisablePromptResubmitSend`; Corp
+  never sends). The text is never logged, announced or stored.
+
+- War Room: every member row, message header, the composer's target list
+  and the `@` list show the pane's number as its header shows it (`Pane 2`,
+  or `Pane 2 · Backend` with more than one workspace open, `Drawer` for a
+  parked pane), so several members with the same title stay apart (SWA-90).
+  The tag follows the layout live; agents see it as `pane` in
+  `war_room.list_peers`.
+
 - Setup assistant on a new installation (SWA-83): four steps for tools and
   agents (what is missing, why, the vendor link and an install command to
   copy — Swarmterm installs nothing itself), sign-in (passing an API key
