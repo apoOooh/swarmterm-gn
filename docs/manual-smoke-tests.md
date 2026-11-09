@@ -843,6 +843,9 @@ start it again after every change; remove the key at the end:
       "Put back, I press Enter" → masked prompt stands unsent. Type a character right after Enter → nothing is
       replaced, the pill offers **Copy masked prompt**. `DisablePromptResubmitSend` = 1 → "send" is greyed and
       the prompt is only put back; `DisablePromptResubmit` = 1 → the select is greyed, nothing is put back.
+      Needs the **installed** release build (first: 1.28.0) and a data-shield guard released after the
+      SWA-88 merge: Claude's `--hook` entry runs the installed exe (dev builds defer), and an older exe
+      sends no prompt fingerprint, so nothing is resubmitted from a `tauri dev` run.
 - [ ] `DisableWarRoomExecute` = 1: the Agent safety execute switch is greyed; an agent's `war_room.send` execute is
       refused with a message naming `DisableWarRoomExecute`; probe still works.
 - [ ] `DisableWarRoom` = 1: the War Room tab shows "Managed by your administrator", the execute switch is greyed,
