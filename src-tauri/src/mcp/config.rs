@@ -475,17 +475,20 @@ pub fn merge_codex_config(existing: Option<&str>, exe: &str) -> Result<String, S
             t.set_implicit(true);
             t
         }))
-        .as_table_mut()
+        // Table-like, not just `[table]`: `mcp_servers = { … }` and
+        // `swarmterm = { … }` inline tables are edited in place, so the
+        // user's keys (`enabled = false`, timeouts) survive the migration.
+        .as_table_like_mut()
         .ok_or("mcp_servers is not a table")?;
     if !servers
         .get("swarmterm")
-        .is_some_and(toml_edit::Item::is_table)
+        .is_some_and(|item| item.is_table_like())
     {
         servers.insert("swarmterm", toml_edit::Item::Table(toml_edit::Table::new()));
     }
     let table = servers
         .get_mut("swarmterm")
-        .and_then(toml_edit::Item::as_table_mut)
+        .and_then(toml_edit::Item::as_table_like_mut)
         .ok_or("mcp_servers.swarmterm is not a table")?;
     for key in entry::LEGACY_TOML_KEYS {
         table.remove(key);
@@ -1124,6 +1127,27 @@ mod tests {
             Some(&toml_edit::Item::Table(t)),
             EXE
         ));
+    }
+
+    #[test]
+    fn codex_migrates_an_inline_entry_without_losing_user_keys() {
+        let existing = "[mcp_servers]\nswarmterm = { url = 'http://127.0.0.1:9/mcp', bearer_token_env_var = 'SWARMTERM_SESSION', startup_timeout_sec = 42, enabled = false }\ngh = { command = 'gh' }\n";
+        let out = merge_codex_config(Some(existing), EXE).unwrap();
+        let doc: toml_edit::DocumentMut = out.parse().unwrap();
+        let t = &doc["mcp_servers"]["swarmterm"];
+        assert!(t.as_inline_table().is_some(), "stays inline: {out}");
+        assert_eq!(t["enabled"].as_bool(), Some(false));
+        assert_eq!(t["startup_timeout_sec"].as_integer(), Some(42));
+        assert!(t.get("url").is_none() && t.get("bearer_token_env_var").is_none());
+        assert!(codex_entry_is_current(Some(t), EXE), "{out}");
+        assert_eq!(doc["mcp_servers"]["gh"]["command"].as_str(), Some("gh"));
+        // A whole inline `mcp_servers` works the same way.
+        let inline_root = "mcp_servers = { swarmterm = { url = 'http://127.0.0.1:9/mcp', bearer_token_env_var = 'SWARMTERM_SESSION', enabled = false } }\n";
+        let out = merge_codex_config(Some(inline_root), EXE).unwrap();
+        let doc: toml_edit::DocumentMut = out.parse().unwrap();
+        let t = &doc["mcp_servers"]["swarmterm"];
+        assert_eq!(t["enabled"].as_bool(), Some(false));
+        assert!(codex_entry_is_current(Some(t), EXE), "{out}");
     }
 
     #[test]

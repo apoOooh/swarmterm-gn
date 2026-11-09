@@ -150,7 +150,11 @@ pub fn remove_codex_entry(text: &str) -> Result<Option<String>, String> {
         return Ok(None);
     }
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("parse: {e}"))?;
-    if let Some(t) = doc.get_mut("mcp_servers").and_then(|m| m.as_table_mut()) {
+    // Table-like: an inline `mcp_servers = { … }` is ours to edit too.
+    if let Some(t) = doc
+        .get_mut("mcp_servers")
+        .and_then(|m| m.as_table_like_mut())
+    {
         t.remove("swarmterm");
     }
     Ok(Some(doc.to_string()))
@@ -246,6 +250,18 @@ mod tests {
         assert_eq!(codex_entry_state(toml), EntryState::Ours);
         let out = remove_codex_entry(toml).unwrap().unwrap();
         assert!(!out.contains("swarmterm"), "{out}");
+    }
+
+    #[test]
+    fn inline_codex_entries_are_removed_too() {
+        for text in [
+            "[mcp_servers]\nswarmterm = { url = 'http://127.0.0.1:9/mcp', bearer_token_env_var = 'SWARMTERM_SESSION' }\ngh = { command = 'gh' }\n",
+            "mcp_servers = { swarmterm = { url = 'http://127.0.0.1:9/mcp', bearer_token_env_var = 'SWARMTERM_SESSION' }, gh = { command = 'gh' } }\n",
+        ] {
+            let out = remove_codex_entry(text).unwrap().unwrap();
+            assert!(!out.contains("swarmterm"), "{out}");
+            assert!(out.contains("gh"), "{out}");
+        }
     }
 
     #[test]
