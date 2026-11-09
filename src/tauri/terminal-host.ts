@@ -15,6 +15,8 @@ export interface TerminalHostStatus {
   error: string | null
   /** Set when the running host predates process priority (ADR 0005): new panes then run in-process. */
   priorityUnsupported: string | null
+  /** Hosts of an earlier build that still run panes after an update, or could not be reached (SWA-82). */
+  olderHosts: string | null
 }
 
 export const getTerminalHostSettings = (): Promise<TerminalHostSettings> =>

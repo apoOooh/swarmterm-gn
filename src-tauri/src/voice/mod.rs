@@ -394,26 +394,28 @@ fn replies_on(s: &VoiceSettings) -> bool {
     s.enabled && s.speak_turns && s.allow_excerpts
 }
 
-fn claude_config_dir_of(app: &AppHandle, terminal_id: &str) -> Option<std::path::PathBuf> {
+fn profile_dir_of(app: &AppHandle, terminal_id: &str) -> Option<std::path::PathBuf> {
     let state = app.state::<AppState>();
     let terminals = state.terminals.lock().ok()?;
     terminals
         .get(terminal_id)
-        .and_then(|t| t.claude_config_dir.clone())
+        .and_then(|t| t.profile_dir.clone())
 }
 
-/// SWA-58: one Claude turn edge from `POST /hook`, already checked against
-/// the pane's live generation and session. The ledger decides; a Stop it
-/// accepts may start a transcript read (only with replies on). Returns true
-/// for a prompt while replies are on: the hook CLI then asks Claude for the
-/// `<voice>` line (`additionalContext`).
+/// SWA-58/71: one Claude or Codex turn edge from `POST /hook`, already
+/// checked against the pane's live generation and session. The ledger
+/// decides; a Stop it accepts may start a transcript read (only with replies
+/// on). Returns true for a prompt while replies are on: the hook CLI then
+/// asks the agent for the `<voice>` line (`additionalContext`).
+#[allow(clippy::too_many_arguments)]
 pub fn hook_turn(
     app: &AppHandle,
     terminal_id: &str,
     spawn_id: &str,
+    agent_id: &str,
     session_id: &str,
     turn: &crate::hook::TurnMark,
-    config_dir: Option<std::path::PathBuf>,
+    profile_dir: Option<std::path::PathBuf>,
 ) -> bool {
     use crate::hook::TurnEdge;
     let Some(hub) = app.try_state::<VoiceHub>() else {
@@ -421,18 +423,18 @@ pub fn hook_turn(
     };
     let settings = hub.settings();
     let replies = replies_on(&settings);
-    let (job, correction) = {
+    let (job, correction, replay) = {
         let mut ledger = hub.ledger.lock().unwrap();
         match turn.edge {
             TurnEdge::Prompt => {
                 ledger.prompt(terminal_id, spawn_id, session_id, &turn.prompt_id);
                 return replies;
             }
-            TurnEdge::Stop | TurnEdge::StopFailure => {
-                let outcome = if turn.edge == TurnEdge::StopFailure {
-                    completion::Outcome::Error
-                } else {
-                    completion::Outcome::Done
+            TurnEdge::Stop | TurnEdge::StopFailure | TurnEdge::Interrupt => {
+                let outcome = match turn.edge {
+                    TurnEdge::StopFailure => completion::Outcome::Error,
+                    TurnEdge::Interrupt => completion::Outcome::Interrupted,
+                    _ => completion::Outcome::Done,
                 };
                 let job = ledger.stop(
                     terminal_id,
@@ -446,10 +448,15 @@ pub fn hook_turn(
                 let correction = (outcome == completion::Outcome::Error)
                     .then(|| ledger.failed_after_publish(terminal_id))
                     .flatten();
-                (job, correction)
+                (job, correction, ledger.take_replay(terminal_id))
             }
         }
     };
+    // SWA-71: the renderer's status came while the turn was open and was
+    // held; this edge is the turn's end, so it is said now.
+    if let Some(r) = replay {
+        speak_replay(app, &settings, terminal_id, spawn_id, r);
+    }
     // The status already went out, then the turn turned out to have
     // failed: one correction, never more.
     if let Some(published) = correction {
@@ -464,9 +471,60 @@ pub fn hook_turn(
         emit_turn_kind(app, terminal_id, TurnKind::Error);
     }
     if let (Some(job), Some(answer)) = (job, turn.answer.clone()) {
-        spawn_read(app, job, spawn_id.to_owned(), answer, config_dir);
+        let source = if agent_id == "codex" {
+            Transcript::Codex
+        } else {
+            Transcript::Claude
+        };
+        spawn_read(app, job, spawn_id.to_owned(), answer, source, profile_dir);
     }
     false
+}
+
+/// Which store a reply is read from.
+#[derive(Clone, Copy)]
+enum Transcript {
+    Claude,
+    Codex,
+}
+
+/// A held status said at its turn's closing edge: as the reply path would
+/// (done → status; the read's commit covers a reply) or as error /
+/// interruption, and pushed like a status that had not been held.
+fn speak_replay(
+    app: &AppHandle,
+    settings: &VoiceSettings,
+    terminal_id: &str,
+    spawn_id: &str,
+    r: completion::Replay,
+) {
+    let kind = match r.outcome {
+        completion::Outcome::Done => TurnKind::Done,
+        completion::Outcome::Error => TurnKind::Error,
+        completion::Outcome::Interrupted => TurnKind::Interrupted,
+    };
+    if kind == TurnKind::Done {
+        let handled = speak_done(
+            app,
+            settings,
+            terminal_id,
+            spawn_id,
+            &r.token,
+            &r.published,
+            None,
+        );
+        let event = TurnInput {
+            terminal_id: terminal_id.to_owned(),
+            kind,
+            pane_name: r.published.pane_name.clone(),
+            agent: r.published.agent.clone(),
+            watched: r.published.watched,
+        };
+        push_turn(app, &event, kind, handled);
+    } else {
+        speak_status(app, settings, terminal_id, spawn_id, &r.published, kind);
+        emit_turn_kind(app, terminal_id, kind);
+    }
 }
 
 /// A Stop/StopFailure for a prompt that is no longer the open one: the
@@ -570,20 +628,35 @@ fn spawn_read(
     job: completion::ReadJob,
     spawn_id: String,
     answer: completion::Fingerprint,
-    config_dir: Option<std::path::PathBuf>,
+    source: Transcript,
+    profile_dir: Option<std::path::PathBuf>,
 ) {
     use completion::{reader, speech_text};
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let reply = app.path().home_dir().ok().and_then(|home| {
-            let root = reader::claude_config_dir(config_dir.as_deref(), &home);
-            let path = reader::locate(&root, &job.session_id)?;
-            let text = reader::final_answer_within(
-                || reader::read_tail(&root, &path),
-                &job.prompt_id,
-                &answer,
-                reader::BUDGET,
-            )?;
+            let text = match source {
+                Transcript::Claude => {
+                    let root = reader::claude_config_dir(profile_dir.as_deref(), &home);
+                    let path = reader::locate(&root, &job.session_id)?;
+                    reader::final_answer_within(
+                        || reader::read_tail(&root, &path),
+                        &job.prompt_id,
+                        &answer,
+                        reader::BUDGET,
+                    )?
+                }
+                Transcript::Codex => {
+                    let root = reader::codex_home(profile_dir.as_deref(), &home);
+                    let path = reader::locate_rollout(&root, &job.session_id)?;
+                    reader::codex_answer_within(
+                        || reader::read_rollout_tail(&root, &path),
+                        &job.prompt_id,
+                        &answer,
+                        reader::BUDGET,
+                    )?
+                }
+            };
             speech_text::reply(&text)
         });
         let hub = app.state::<VoiceHub>();
@@ -976,6 +1049,7 @@ pub fn voice_turn_event(app: AppHandle, event: TurnInput) {
             let handled = settings.speak_turns && app.state::<tts::TtsHub>().ready();
             push_turn(&app, &event, TurnKind::Done, handled);
         }
+        completion::View::Silent => {}
         completion::View::Closed {
             token,
             outcome,
@@ -1011,14 +1085,29 @@ pub fn voice_turn_event(app: AppHandle, event: TurnInput) {
             }
         },
         completion::View::Plain => {
-            let open = (event.kind == TurnKind::Done && replies_on(&settings))
-                .then(|| {
-                    hub.ledger
-                        .lock()
-                        .unwrap()
-                        .open_turn(&event.terminal_id, &spawn_id)
-                })
-                .flatten();
+            // SWA-71: Codex reports its own turn ends (Stop, Interrupt), so
+            // idle while its turn is open is a pause on screen, not the end:
+            // held for the closing edge, which says it (`speak_replay`).
+            if event.kind == TurnKind::Done
+                && event.agent == "codex"
+                && hub
+                    .ledger
+                    .lock()
+                    .unwrap()
+                    .hold(&event.terminal_id, &spawn_id, published.clone())
+            {
+                return;
+            }
+            // The Esc check reads a Claude transcript; Codex has its edge.
+            let open =
+                (event.kind == TurnKind::Done && event.agent != "codex" && replies_on(&settings))
+                    .then(|| {
+                        hub.ledger
+                            .lock()
+                            .unwrap()
+                            .open_turn(&event.terminal_id, &spawn_id)
+                    })
+                    .flatten();
             match open {
                 // A Claude turn went idle without a Stop: Esc fires no hook,
                 // so the transcript decides whether it was interrupted.
@@ -1057,7 +1146,7 @@ fn spawn_interrupt_check(
     published: completion::Published,
 ) {
     use completion::reader;
-    let config_dir = claude_config_dir_of(&app, &event.terminal_id);
+    let config_dir = profile_dir_of(&app, &event.terminal_id);
     tauri::async_runtime::spawn_blocking(move || {
         let interrupted = app.path().home_dir().ok().is_some_and(|home| {
             let root = reader::claude_config_dir(config_dir.as_deref(), &home);

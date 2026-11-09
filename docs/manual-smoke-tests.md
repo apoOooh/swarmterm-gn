@@ -555,6 +555,13 @@ server. The full Quit/restart and conversation checks below require real CLIs.
       perform no steady-state config writes, and never change hook trust.
 - [ ] Check saved storage: no terminal text, prompt, startup command, runtime
       terminal id, file tab, unsaved buffer or broadcast group is persisted.
+- [ ] Codex turn edges (SWA-71, Codex 0.163+): after the update Codex asks
+      to review Swarmterm's new Stop/Interrupt hooks in `/hooks`; trust them.
+      With Speak announcements and Allow excerpts on, a Codex turn in a
+      background pane is announced once with the agent's `<voice>` line,
+      Esc in a running turn is said as interrupted and lands in the bell, and
+      no "fertig" is said while the turn is still running. With the new hooks
+      untrusted, the pane's status and announcements behave as before.
 
 ## Session resume (composer)
 
@@ -788,7 +795,25 @@ Use Task Manager → Details → "Base priority" (or Process Explorer).
 - [ ] Workspace ⋮ → untick **Lower build priority** → that workspace's processes return to "Normal".
       Reopen the saved workspace: still unticked.
 - [ ] Settings → Terminal → **Run terminals in the terminal host** on, new pane → same results as above.
+- [ ] Fresh profile: Settings → Terminal → **Run new panes in the terminal host** is on, and a new pane runs in
+      `swarmterm-host.exe`. A profile that had it switched off keeps it off.
+- [ ] Installed build, terminal host on, a pane open: `swarmterm-host.exe` runs from
+      `%LOCALAPPDATA%\<app id>\host\<version>-<hash>\`, not from the install directory. Install a newer build
+      over it while the pane runs: the installer finishes without a file-in-use prompt. Start the new build: the
+      old pane reopens (saved workspace) on the old host, a new pane starts on a second host, and Settings →
+      Terminal names the old host. Close the old pane: ten minutes later the old host has ended, and the next
+      start removes its folder.
 - [ ] Upgrade from a build with the old "Lower build priority" switched off → mode shows **Off**.
+
+## Quit with the terminal host
+
+- [ ] Terminal host off, tray → **Quit** → quits without asking, as before.
+- [ ] Terminal host on, `ping -t localhost` in a saved workspace, tray → **Quit** → *Keep terminals running?*;
+      **Cancel** and Esc keep Swarmterm open, panes unchanged.
+- [ ] **Close all** → Swarmterm quits, Task Manager shows no `ping` left, `swarmterm-host.exe` exits.
+- [ ] **Keep running** → Swarmterm quits, `ping` keeps running under `swarmterm-host.exe`; start Swarmterm,
+      open the workspace → the pane is taken over and still counting. Wait two minutes: it stays open.
+- [ ] Keep running with an unsaved file open → the unsaved-changes prompt comes first.
 
 ## Administrator policy
 

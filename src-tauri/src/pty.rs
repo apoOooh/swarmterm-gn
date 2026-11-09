@@ -257,9 +257,10 @@ pub struct ManagedTerminal {
     pub io: TerminalIo,
     pub worktree_mode: bool,
     pub repo_root: Option<String>,
-    /// A Claude account profile's own `CLAUDE_CONFIG_DIR` (SWA-58: where the
-    /// excerpt reader looks for this pane's transcripts). `None` = default.
-    pub claude_config_dir: Option<std::path::PathBuf>,
+    /// An account profile's own config dir: `CLAUDE_CONFIG_DIR` for Claude,
+    /// `CODEX_HOME` for Codex (SWA-58/71: where the excerpt reader looks for
+    /// this pane's transcripts). `None` = the agent's default.
+    pub profile_dir: Option<std::path::PathBuf>,
 }
 
 /// Where a pane's PTY lives (SWA-55, ADR 0001).
@@ -402,6 +403,18 @@ impl IoHandle {
             IoHandle::Host {
                 conn, terminal_id, ..
             } => conn.resize(terminal_id, cols, rows),
+        }
+    }
+}
+
+impl ManagedTerminal {
+    /// The PTY lives in the terminal host over a live connection, so it can
+    /// outlive this app (quit with "keep terminals running", SWA-57).
+    pub fn is_hosted(&self) -> bool {
+        match &self.io {
+            TerminalIo::Local { .. } => false,
+            #[cfg(windows)]
+            TerminalIo::Host { conn, .. } => conn.is_alive(),
         }
     }
 }
@@ -785,7 +798,7 @@ fn spawn_terminal_inner(
             // A pane of that kind that survived the last app instance in the
             // terminal host must not keep running detached: end it.
             #[cfg(windows)]
-            if let Some((_, client)) = app
+            if let Some((_, client, _ticket)) = app
                 .try_state::<crate::host_client::HostHub>()
                 .and_then(|hub| hub.take_detached(&id))
             {
@@ -802,7 +815,8 @@ fn spawn_terminal_inner(
         .try_state::<crate::host_client::HostHub>()
         .and_then(|hub| hub.take_detached(&id))
     {
-        Some((pane, client)) => match attach_hosted(state, &id, pane, on_data, client) {
+        // The ticket lives until the attach is answered (`retire_idle`).
+        Some((pane, client, _ticket)) => match attach_hosted(state, &id, pane, on_data, client) {
             Ok(result) => return result,
             Err(on_data) => on_data,
         },
@@ -921,7 +935,7 @@ struct SpawnPlan {
     agent_id: Option<String>,
     worktree_mode: bool,
     repo_root: Option<String>,
-    claude_config_dir: Option<std::path::PathBuf>,
+    profile_dir: Option<std::path::PathBuf>,
     /// This generation's MCP bearer secret (`SWARMTERM_SESSION`); kept in the
     /// host's meta so a reattached pane keeps authorising.
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -978,9 +992,8 @@ fn plan_spawn(
     if let Some(account) = &account {
         crate::accounts::apply_environment(&mut env, account);
     }
-    let claude_config_dir = account
+    let profile_dir = account
         .as_ref()
-        .filter(|a| a.agent_id == "claude-code")
         .map(|a| std::path::PathBuf::from(&a.config_dir));
     env.set("COLORTERM", "truecolor");
     env.set("TERM", "xterm-256color");
@@ -1087,7 +1100,7 @@ fn plan_spawn(
         agent_id: options.agent_id,
         worktree_mode: options.worktree_mode.unwrap_or(false),
         repo_root: options.repo_root,
-        claude_config_dir,
+        profile_dir,
         session_token,
     })
 }
@@ -1194,7 +1207,7 @@ fn spawn_local(
             worktree_mode: plan.worktree_mode,
             repo_root: plan.repo_root,
             cwd: std::path::PathBuf::from(&plan.cwd),
-            claude_config_dir: plan.claude_config_dir,
+            profile_dir: plan.profile_dir,
         },
     );
     state.with_session_tokens(|t| t.settle(&id));
@@ -1253,7 +1266,9 @@ fn spawn_hosted(
         "agentId": plan.agent_id,
         "worktreeMode": plan.worktree_mode,
         "repoRoot": plan.repo_root,
-        "claudeConfigDir": plan.claude_config_dir,
+        // Key kept from SWA-58 so a host started by an older build still
+        // hands the profile back on reattach.
+        "claudeConfigDir": plan.profile_dir,
         "sessionToken": plan.session_token,
     });
     let op = serde_json::json!({
@@ -1274,7 +1289,7 @@ fn spawn_hosted(
             cwd: std::path::PathBuf::from(&plan.cwd),
             worktree_mode: plan.worktree_mode,
             repo_root: plan.repo_root,
-            claude_config_dir: plan.claude_config_dir,
+            profile_dir: plan.profile_dir,
         },
         on_data,
     );
@@ -1335,7 +1350,7 @@ fn attach_hosted(
         cwd: std::path::PathBuf::from(&pane.cwd),
         worktree_mode: meta["worktreeMode"].as_bool().unwrap_or(false),
         repo_root: text("repoRoot"),
-        claude_config_dir: text("claudeConfigDir").map(std::path::PathBuf::from),
+        profile_dir: text("claudeConfigDir").map(std::path::PathBuf::from),
     };
     // The pane's env still carries the secret it was spawned with; re-learn
     // it so the reattached pane keeps authorising. A pane created by a build
@@ -1422,7 +1437,7 @@ pub fn register_hosted(
             },
             worktree_mode: pending.worktree_mode,
             repo_root: pending.repo_root,
-            claude_config_dir: pending.claude_config_dir,
+            profile_dir: pending.profile_dir,
         },
     );
     // Never nest `session_tokens` inside `terminals`.

@@ -278,7 +278,7 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `target/debug/swarmterm.exe`, and cleaning up the worktree breaks each hook
   event. Entries pointing only at a dead binary are still overwritten (the
   repair). Release builds
-  always reclaim their entries; Codex has a similar rule (`hook/codex.rs`, which skips whenever any entry of ours exists).
+  always reclaim their entries; Codex has a similar rule (`hook/codex.rs`, which skips whenever any entry of ours exists — so a debug build never adds the SWA-71 Stop/Interrupt entries to an existing install; test with a fresh `CODEX_HOME`/account profile).
 - **Native preview webviews.** The preview column is a per-terminal native
   child webview (`preview.rs`, label `preview-<terminalId>`, Tauri `unstable`
   feature for `add_child`). Invariant: a preview webview is visible iff
@@ -435,7 +435,19 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   reach the pipe: feeds see done/needs_input of unwatched panes only,
   `excerpt` null, no new op or capability. Error/interrupted go to the bell
   via `voice:turn-kind`. Never hold the ledger lock together with
-  `terminals`, pins or the TTS hub lock. Codex/OpenCode: status only.
+  `terminals`, pins or the TTS hub lock. OpenCode: status only.
+  Codex (SWA-71, ADR 0004 addendum): `hook/codex.rs` also registers
+  `Stop`/`Interrupt` (Interrupt with 3 s, Codex's clamp); `turn_id` is the
+  prompt anchor (`TurnMark::from_codex_input`), `Interrupt` closes the turn
+  as interrupted. `/hook` emits `agent:hook` for Codex only for edges that
+  name its session (a session-less body in a Codex pane is a nested agent
+  → 204). `Ledger::hold` keeps a renderer "done" during an open Codex turn
+  once the pane has proved closing edges (`ends_seen`); the closing edge
+  says it (`take_replay`), a later status is `View::Silent`. Rollouts:
+  `reader::locate_rollout` (name match, newest day first) under
+  `<CODEX_HOME>/sessions`, `completion/codex.rs` anchors on `task_started`.
+  `ManagedTerminal.profile_dir` is the account dir of either agent (host
+  meta key stays `claudeConfigDir`).
 - **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:
   `run_routine_command` (main webview only) runs ONE line via
   `cmd.exe /d /s /c` (`raw_arg`, CREATE_NO_WINDOW) in a kill-on-close job
@@ -469,7 +481,8 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   id — a killed generation flushes until EOF, even after a same-id respawn),
   one client at a time (a new hello replaces and kicks the old), lock order
   `terminals` → `Output` → `client`; no client and no PTY for 10 min = exit.
-  App side (`host_client/`, Settings → Terminal, default off): every pane is
+  App side (`host_client/`, Settings → Terminal, default on since SWA-82; a
+  saved `enabled: false` stays off): every pane is
   still a `ManagedTerminal` in `AppState.terminals`, only `io` differs
   (`TerminalIo::Local | Host`), so every liveness reader is untouched.
   `pty::plan_spawn` resolves ONE `EnvPlan` for both backends (Local applies
@@ -482,13 +495,20 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   for the connection's writer, so sending under the `terminals` lock keeps
   keystroke FIFO; a hosted pane's `input-queue-full` comes back as
   `pty:input-dropped`. Lost connection = every hosted pane exits; the next
-  create reconnects or starts a host (`launch.rs`, binary next to the app
-  exe — dev: `cargo build -p swarmterm-host`); unavailable = in-process
+  create reconnects or starts a host (`launch.rs`: the installer ships it
+  next to the app exe, release builds run a hash-checked copy from
+  `<local data>\host\<version>-<hash>\` with that dir as data dir, so each
+  build is its own host — dev: `cargo build -p swarmterm-host`, run in
+  place unless `SWARMTERM_HOST_VERSIONED=1`); unavailable = in-process
   fallback with the reason in Settings (connect retries 3x for a host that
   was idling out). The host must hold no pane the app does not track: an
   unrequested `spawned` is killed, and every connection — also a
   cleanup-only reconnect after a lost one — `reap_orphans` first, except for
-  the detached set. Quit flushes the host's `kill`s.
+  the detached set. Quit flushes the host's `kill`s. Hosts of older builds
+  (SWA-82) are connected at boot as `legacy` only to attach their panes
+  (`DetachedPane::host` picks the connection, `AttachTicket` keeps
+  `retire_idle` from closing one mid-attach) and closed once they hold
+  nothing; nothing new spawns there.
   Reattach (SWA-56): only the boot connection (`init` → `boot`, host already
   running) `adopt`s; its list becomes the FIXED `detached` set
   (`detached.rs` — never "host list minus map", a same-id respawn would
@@ -508,6 +528,10 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `spawned`. Pane ids are saved only while the switch is on (`paneIds`).
   MCP rebinds the port kept in the host's app state (`set_app_state`,
   returned by hello).
+  Quit (SWA-57): `quit_hosted_count` > 0 → the renderer asks (`lib/quit-flow.ts`,
+  default close); `confirm_quit(keepTerminals)` makes `quit_blocking` drop the
+  hosted entries without `kill` and never `Conn::close` — `AppSink::lost`
+  skips its reaping reconnect while `quitting`, or it would kill them.
   `input.rs` and `output.rs` are copies of `pty.rs` parts until the
   in-process backend goes away: change both or neither (`job.rs` is shared).
 - **Child process priority (`docs/adr/0005`).** Enforced by the pane's

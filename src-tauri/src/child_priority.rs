@@ -76,9 +76,10 @@ pub fn forward_to_host(app: tauri::AppHandle) {
     let spawned = std::thread::Builder::new()
         .name("child-priority-forward".into())
         .spawn(move || {
+            // Every host, so panes still on an older build's host follow too.
             app.state::<ChildPriority>().run_forward(
-                || app.state::<crate::host_client::HostHub>().current(),
-                |c, s| c.conn.set_priority(s),
+                || Some(app.state::<crate::host_client::HostHub>().all()),
+                |clients, s| clients.iter().for_each(|c| c.conn.set_priority(s)),
             );
         });
     if let Err(e) = spawned {

@@ -153,3 +153,40 @@ What Claude Code 2.1.302 provides (checked in the binary):
   excerpt on request.** The first draft did this; dropped by the user:
   replies come automatically, Swarmterm speaks them itself, old and new
   clients see no new kinds.
+
+## Addendum: Codex (SWA-71, 2026-10-18)
+
+Decision 1 no longer reads "Claude Code only": Codex panes get the same
+turn ledger, replies, error-free interruptions and the same opt-in.
+OpenCode stays status only.
+
+- **Turn edges come from Codex's own hooks**, registered next to the
+  session capture (`hook/codex.rs`, additive, Codex's `/hooks` trust
+  untouched): `UserPromptSubmit`, `Stop` and `Interrupt` (Codex 0.163+).
+  Each carries `turn_id` (UUIDv7), which plays the role of `prompt_id`;
+  `Stop` carries `last_assistant_message`, fingerprinted by the CLI like
+  Claude's. `Interrupt` is a real edge, so decision 10 (the transcript
+  marker) is not needed for Codex. Codex has no `StopFailure`. Codex
+  clamps the `Interrupt` hook to 3 s, so that entry asks for 3 s.
+- Codex's `notify` setting was considered and dropped: one top-level key
+  the user may already own, no interrupt signal, and JSON in argv.
+- **`agent:hook` now flows for Codex panes** too, but only for edges that
+  name the pane's own Codex session; a body without one in a Codex pane
+  (a nested `claude`) is dropped.
+- **Idle gaps are held** (`Ledger::hold`): the Codex screen can look idle
+  mid-turn. Once a pane has delivered a closing edge, a renderer "done"
+  while its turn is open is kept and said by the closing edge
+  (`take_replay`); a later status for that turn is silent. Before the
+  first closing edge (new hooks not trusted yet) statuses go out as before.
+- **The file**: `<codex home>/sessions/YYYY/MM/DD/rollout-*-<session>.jsonl`,
+  `<codex home>` = the pane's account profile, `CODEX_HOME` or `~/.codex`.
+  Located by file name, newest day folder first; same open contract as
+  decision 8 with the canonical `sessions` folder as root.
+- **Freshness** (`completion/codex.rs`): the answer belongs to the segment
+  after the `task_started` row of this `turn_id`; a later `task_started`
+  of another turn refuses the read. Codex runs the Stop hook before it
+  writes `task_complete`, so the answer is the turn's last assistant
+  message row, or `task_complete.last_agent_message` once written; either
+  must match the fingerprint byte for byte.
+- `additionalContext` on Codex's `UserPromptSubmit` works the same way, so
+  the `<voice>` line is requested with the same fixed instruction.
