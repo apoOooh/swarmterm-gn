@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-11-09
+
 - Terminal host is on by default (ADR 0001 phase 4, SWA-82): new panes run
   in `swarmterm-host.exe` and survive a quit (on request), a crash or an
   update. If you turned it off before, it stays off; without a usable host
