@@ -527,6 +527,16 @@ pub fn env_policy_set(state: State<'_, AppState>, policy: crate::terminal_env::E
 
 /// Settings → Terminal → Agent safety (War Room execute between agents). Checked per MCP call,
 /// so a change applies to the next call without restarting any pane.
+/// SWA-90: the renderer's "Pane N · Workspace" labels for `war_room.list_peers`.
+/// Replaces the whole map, so closed panes drop out with the next push.
+#[tauri::command]
+pub fn war_room_pane_labels_set(
+    state: State<'_, AppState>,
+    labels: std::collections::HashMap<String, String>,
+) {
+    *state.war_room_pane_labels.lock().unwrap() = crate::warroom::sanitize_pane_labels(labels);
+}
+
 #[tauri::command]
 pub fn agent_policy_set(state: State<'_, AppState>, policy: crate::agent_policy::AgentPolicy) {
     *state

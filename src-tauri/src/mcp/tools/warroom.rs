@@ -93,6 +93,7 @@ mod tests {
             name: "Claude".into(),
             agent_id: Some("claude-code".into()),
             cwd: "/x".into(),
+            pane: Some("Pane 2 · Backend".into()),
             is_self: true,
             connected: false,
         };
@@ -101,6 +102,7 @@ mod tests {
         assert_eq!(j["isSelf"], true);
         assert_eq!(j["agentId"], "claude-code");
         assert_eq!(j["connected"], false);
+        assert_eq!(j["pane"], "Pane 2 · Backend");
     }
 
     #[test]
@@ -171,6 +173,11 @@ pub struct PeerEntry {
     pub name: String,
     pub agent_id: Option<String>,
     pub cwd: String,
+    /// Where the pane sits in the UI, as its header shows it ("Pane 2" or
+    /// "Pane 2 · Backend" with several workspaces). Tells apart members with
+    /// the same name; display only — address peers by terminalId.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane: Option<String>,
     pub is_self: bool,
     /// False = dragged in but no agent has made a war_room call from that
     /// pane yet — it cannot receive messages until it does.
@@ -229,7 +236,7 @@ pub struct ReadInboxArgs {
 impl SwarmtermMcpServer {
     #[tool(
         name = "war_room.list_peers",
-        description = "List the terminals currently in Swarmterm's War Room: name, agent type, working directory. Only works when the user has dragged this pane into the War Room."
+        description = "List the terminals currently in Swarmterm's War Room: name, agent type, working directory, and pane (\"Pane 2 · Backend\" as its header shows it — use it to tell same-named peers apart when talking to the user). Only works when the user has dragged this pane into the War Room."
     )]
     pub async fn war_room_list_peers(
         &self,
@@ -257,11 +264,20 @@ impl SwarmtermMcpServer {
                     name: m.display_name.clone(),
                     agent_id: m.agent_id.clone(),
                     cwd: m.cwd.clone(),
+                    pane: None,
                     connected: m.connected,
                 })
                 .collect();
             (room_id, connected_ev, entry.name.clone(), peers)
         };
+        // Filled after the `war_rooms` lock is dropped: the two are never nested.
+        let mut peers = peers;
+        {
+            let labels = state.war_room_pane_labels.lock().unwrap();
+            for p in &mut peers {
+                p.pane = labels.get(&p.terminal_id).cloned();
+            }
+        }
         if let Some(ev) = connected_ev {
             let _ = self
                 .app

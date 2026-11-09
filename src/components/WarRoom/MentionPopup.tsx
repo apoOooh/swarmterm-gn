@@ -9,6 +9,7 @@ import { Bot, SquareTerminal, Users } from 'lucide-react'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import type { MentionMatch } from '@/lib/war-room-mentions'
 import { cn } from '@/lib/utils'
+import { PaneTag } from './PaneTag'
 
 export const MENTION_LIST_ID = 'war-room-mention-list'
 export const mentionOptionId = (i: number): string => `war-room-mention-opt-${i}`
@@ -78,6 +79,7 @@ function Row({
         <Highlight name={c.name} ranges={match.ranges} />
       </span>
       {c.hint !== undefined && <span className="truncate text-[10px] opacity-60">{c.hint}</span>}
+      <PaneTag terminalId={c.id} className={selected ? 'bg-white/15 text-white' : undefined} />
       <span className="ml-auto shrink-0 pl-2 text-[10px] opacity-60">
         {outside ? `${kind} · not in War Room` : kind}
         {state === 'working' || state === 'blocked' ? ` · ${state}` : state === 'idle' ? ' · idle' : ''}

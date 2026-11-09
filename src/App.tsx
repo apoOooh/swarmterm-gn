@@ -77,6 +77,7 @@ import { resolveDragEnd, memberDisplayName, MEMBER_DRAG_PREFIX } from '@/lib/war
 import { buildIntroText } from '@/lib/war-room-nudge'
 import { startWarRoomDelivery } from '@/lib/war-room-delivery'
 import { resolvePaneTitle } from '@/lib/pane-title'
+import { paneLocationLabels } from '@/lib/pane-location'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { FileDropListener } from '@/components/FileDropListener'
 import { FileDialog } from '@/components/Files/FileDialog'
@@ -124,6 +125,7 @@ import { useTerminalSearchStore } from '@/store/terminal-search-store'
 import { useWarRoomStore } from '@/store/war-room-store'
 import {
   warRoomJoin,
+  warRoomPaneLabelsSet,
   warRoomLeave,
   warRoomRooms,
   onWarRoomEvent,
@@ -409,6 +411,24 @@ export default function App(): ReactElement {
     void useAgentAvailabilityStore.getState().refresh()
     void useShellAvailabilityStore.getState().refresh()
     void useStatuslineStore.getState().sync()
+  }, [])
+
+  // SWA-90: agents see the same "Pane 2 · Backend" in list_peers as the user
+  // in the War Room. Pushed only when a label actually changes (the layout
+  // store changes on every resize/focus; the labels rarely do).
+  useEffect(() => {
+    let last = ''
+    const push = (workspaces: Parameters<typeof paneLocationLabels>[0]): void => {
+      const labels = paneLocationLabels(workspaces)
+      const key = JSON.stringify(labels)
+      if (key === last) return
+      last = key
+      void warRoomPaneLabelsSet(labels).catch((e) => console.warn('war_room_pane_labels_set failed', e))
+    }
+    push(useAppStore.getState().workspaces)
+    return useAppStore.subscribe((s, prev) => {
+      if (s.workspaces !== prev.workspaces) push(s.workspaces)
+    })
   }, [])
 
   // Esc closes the Welcome page when it's closeable and Settings isn't covering it.

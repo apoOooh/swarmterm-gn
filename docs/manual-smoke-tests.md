@@ -457,6 +457,10 @@ Do not mark them passed from the in-memory fixture alone.
       prompts in other panes; agent A sends execute → the prompt runs in pane B
       and the transcript marks it orange. Turn it off again → the next execute
       is refused without restarting anything.
+- [ ] **Pane tag:** two members with the same title show different `Pane N`
+      tags in the member list, message headers and the target list; swap the
+      panes' order → the tags follow; with a second workspace open the tag
+      adds the workspace name; `list_peers` returns the same text as `pane`.
 - [ ] **Revocation:** drag a chip out or press ✕ → the next tool call from that
       pane is refused with "not in the War Room".
 - [ ] **PTY death:** close a member pane → the transcript logs the leave and
