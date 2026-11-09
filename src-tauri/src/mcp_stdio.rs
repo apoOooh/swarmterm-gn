@@ -170,15 +170,18 @@ impl Out {
 enum Posted {
     /// Everything the server sent back was relayed.
     Done,
-    /// The server no longer knows the session (app restarted on the same
+    /// The server no longer knows this session (app restarted on the same
     /// port); initialize again and retry.
-    SessionGone,
+    SessionGone(String),
     Failed(String),
 }
 
 struct Proxy {
     upstream: Option<Upstream>,
     client: reqwest::Client,
+    /// Held while a lost session is renewed, so handlers that lost it
+    /// together renew it once.
+    renew: Mutex<()>,
     session: Mutex<Option<String>>,
     protocol: Mutex<Option<String>>,
     /// The client's own `initialize`, replayed when the session is gone.
@@ -188,16 +191,27 @@ struct Proxy {
 
 impl Proxy {
     fn new(upstream: Option<Upstream>) -> Self {
-        let client = reqwest::Client::builder()
-            // Loopback only: a configured proxy must never see the bearer.
+        let built = reqwest::Client::builder()
+            // Loopback only: a configured proxy must never see the bearer,
+            // and whatever holds the port must not send us elsewhere.
             .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(std::time::Duration::from_secs(3))
-            .build()
-            .unwrap_or_default();
+            .build();
+        // No fallback to a default client (it would honour system proxies):
+        // without ours, serve no tools.
+        let (client, upstream) = match built {
+            Ok(client) => (client, upstream),
+            Err(e) => {
+                eprintln!("swarmterm --mcp-stdio: {e}; serving no tools");
+                (reqwest::Client::new(), None)
+            }
+        };
         Self {
             offline: AtomicBool::new(upstream.is_none()),
             upstream,
             client,
+            renew: Mutex::new(()),
             session: Mutex::new(None),
             protocol: Mutex::new(None),
             init: Mutex::new(None),
@@ -228,8 +242,10 @@ impl Proxy {
             Err(e) => return Posted::Failed(format!("Swarmterm is not reachable: {e}")),
         };
         let status = resp.status();
-        if status == reqwest::StatusCode::NOT_FOUND && session.is_some() {
-            return Posted::SessionGone;
+        if status == reqwest::StatusCode::NOT_FOUND {
+            if let Some(stale) = session {
+                return Posted::SessionGone(stale);
+            }
         }
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -289,7 +305,7 @@ impl Proxy {
                     *self.protocol.lock().await = version;
                     return;
                 }
-                Posted::SessionGone | Posted::Failed(_) => {
+                Posted::SessionGone(_) | Posted::Failed(_) => {
                     // The pane outlived its app, or the app is starting: a
                     // quiet empty server instead of an error in every session.
                     eprintln!("swarmterm --mcp-stdio: Swarmterm not reachable, serving no tools");
@@ -302,8 +318,13 @@ impl Proxy {
         }
     }
 
-    /// Replay the client's `initialize` for a fresh session.
-    async fn reinitialize(&self) -> bool {
+    /// Replay the client's `initialize` for a fresh session, unless another
+    /// handler already replaced `stale` while this one waited.
+    async fn reinitialize(&self, stale: &str) -> bool {
+        let _renew = self.renew.lock().await;
+        if self.session.lock().await.as_deref() != Some(stale) {
+            return true;
+        }
         let Some(mut init) = self.init.lock().await.clone() else {
             return false;
         };
@@ -324,8 +345,8 @@ impl Proxy {
             return;
         }
         let mut outcome = self.post(&msg, Some(&out)).await;
-        if matches!(outcome, Posted::SessionGone) {
-            outcome = if self.reinitialize().await {
+        if let Posted::SessionGone(stale) = &outcome {
+            outcome = if self.reinitialize(stale).await {
                 self.post(&msg, Some(&out)).await
             } else {
                 Posted::Failed("Swarmterm restarted and the session could not be renewed".into())
@@ -333,7 +354,7 @@ impl Proxy {
         }
         let failure = match outcome {
             Posted::Done => return,
-            Posted::SessionGone => "Swarmterm no longer knows this session".to_string(),
+            Posted::SessionGone(_) => "Swarmterm no longer knows this session".to_string(),
             Posted::Failed(why) => why,
         };
         eprintln!("swarmterm --mcp-stdio: {failure}");
@@ -652,20 +673,32 @@ mod tests {
         .unwrap();
         let out_rx = first.1;
         // The app restarts on the same port: it forgets every session.
+        // Three calls hit the lost session together; one renewal serves all.
         fake.sessions.lock().unwrap().clear();
-        in_tx
-            .send(json!({"jsonrpc":"2.0","id":7,"method":"tools/list"}).to_string())
-            .unwrap();
-        let reply = tokio::task::spawn_blocking(move || {
-            out_rx
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .unwrap()
+        for id in [7, 8, 9] {
+            in_tx
+                .send(json!({"jsonrpc":"2.0","id":id,"method":"tools/list"}).to_string())
+                .unwrap();
+        }
+        let replies = tokio::task::spawn_blocking(move || {
+            (0..3)
+                .map(|_| {
+                    out_rx
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
         })
         .await
         .unwrap();
-        let reply: Value = serde_json::from_str(&reply).unwrap();
-        assert_eq!(reply["id"], 7);
-        assert_eq!(reply["result"]["session"], "s1");
+        let mut ids = Vec::new();
+        for reply in replies {
+            let reply: Value = serde_json::from_str(&reply).unwrap();
+            assert_eq!(reply["result"]["session"], "s1", "{reply}");
+            ids.push(reply["id"].as_i64().unwrap());
+        }
+        ids.sort();
+        assert_eq!(ids, [7, 8, 9]);
         assert_eq!(fake.inits.load(Ordering::SeqCst), 2);
         drop(in_tx);
         serving.await.unwrap();

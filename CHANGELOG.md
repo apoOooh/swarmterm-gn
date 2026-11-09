@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+- MCP: Claude Code and Codex now start Swarmterm's server entry as a small
+  local helper, `swarmterm.exe --mcp-stdio` (SWA-83). It forwards to the
+  Swarmterm the pane runs in; in a terminal outside Swarmterm it offers no
+  tools instead of showing a failed server. The previous HTTP entry is
+  replaced at the first start of this version, but only when it is exactly
+  the entry Swarmterm wrote; a server of your own named `swarmterm` is left
+  alone. Codex's `config.toml` is no longer rewritten on every start.
+  Going back to 1.27.0 or older: switch the Swarmterm server off under
+  Settings → MCP before uninstalling this version and on again in the older
+  one, because older versions do not know `--mcp-stdio`.
+
 - Diagnostics: Swarmterm now notices when its window stops responding
   (SWA-85). A background watchdog writes one line (time and duration, no
   content) for every stall of 2 s or more to
