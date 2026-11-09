@@ -144,6 +144,20 @@ static CODEX_ENSURE: Mutex<()> = Mutex::new(());
 /// that the CLI is still there.
 static CLAUDE_DONE: AtomicBool = AtomicBool::new(false);
 static CODEX_DONE: AtomicBool = AtomicBool::new(false);
+/// The hook-form verdict Claude's entries were written with (SWA-83 1c-ii).
+/// `CLAUDE_DONE` only counts while it is still current: a Claude Code
+/// update, downgrade or a probe that failed at first must rewrite the hooks
+/// at the next pane start, without a manual "Check again".
+static CLAUDE_DONE_FOR: Mutex<Option<crate::hook::claude_version::Verdict>> = Mutex::new(None);
+
+fn claude_done() -> bool {
+    CLAUDE_DONE.load(Ordering::Acquire)
+        && CLAUDE_DONE_FOR
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(crate::hook::claude_version::still_current)
+}
 
 /// The renderer's status-line preference, once it has sent one. Applied when
 /// Claude Code turns up after boot (the renderer only syncs at start).
@@ -254,7 +268,7 @@ pub fn ensure_claude(app: &AppHandle) {
         installed,
         missing_config_dir(cfg.as_deref()),
         bash_ok,
-        CLAUDE_DONE.load(Ordering::Acquire),
+        claude_done(),
     );
     update(None, |s| s.claude.git_bash = bash.clone());
     match plan {
@@ -300,14 +314,16 @@ pub fn ensure_claude(app: &AppHandle) {
         }
         ClaudePlan::NeedsGitBash => {
             CLAUDE_DONE.store(false, Ordering::Release);
+            // Probe before the write lock (bounded, cached per binary).
+            let exec = crate::hook::claude_version::exec_hooks();
             let (hooks, mcp, status_line) = {
                 let _lock = crate::accounts::CONFIG_WRITE
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 // Exec-form hooks need no shell (SWA-83 1c-ii); the shell
                 // form of an older Claude Code is taken out instead.
-                let hooks = if crate::hook::claude_version::exec_hooks() {
-                    match crate::hook::install::register(app) {
+                let hooks = if exec {
+                    match crate::hook::install::register(app, true) {
                         Ok(()) => Check::of(State::Ok),
                         Err(e) => {
                             eprintln!("hook: {e}");
@@ -342,11 +358,13 @@ pub fn ensure_claude(app: &AppHandle) {
             });
         }
         ClaudePlan::Write => {
+            // Probe before the write lock (bounded, cached per binary).
+            let verdict = crate::hook::claude_version::current();
             let (hooks, mcp, status_line) = {
                 let _lock = crate::accounts::CONFIG_WRITE
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let hooks = match crate::hook::install::register(app) {
+                let hooks = match crate::hook::install::register(app, verdict.exec) {
                     Ok(()) => Check::of(State::Ok),
                     Err(e) => {
                         eprintln!("hook: {e}");
@@ -366,6 +384,7 @@ pub fn ensure_claude(app: &AppHandle) {
             let ok = hooks.state != State::Error
                 && mcp.state != State::Error
                 && status_line.as_ref().is_none_or(|c| c.state != State::Error);
+            *CLAUDE_DONE_FOR.lock().unwrap_or_else(|e| e.into_inner()) = Some(verdict);
             CLAUDE_DONE.store(ok, Ordering::Release);
             update(Some(app), |s| {
                 s.claude.installed = Some(true);
@@ -551,14 +570,20 @@ fn refresh_prerequisites(app: &AppHandle) {
     update(Some(app), |s| s.prerequisites = tools);
 }
 
-/// Boot: Claude synchronously (hooks are snapshotted when a session starts,
-/// and restored panes spawn right after the renderer mounts), Codex on a
-/// blocking worker so its probe never delays the window.
+/// Boot, called from `setup` on the UI thread: everything goes to blocking
+/// workers, because Claude's first ensure may run `claude --version` and
+/// Codex's `codex --help` (each up to 3 s). Hooks are snapshotted when a
+/// session starts, so a Claude pane restored right after the renderer
+/// mounts must still find them: its spawn calls `ensure_for_agent` on the
+/// create worker, which waits on `CLAUDE_ENSURE` while this one runs.
 pub fn boot(app: &AppHandle) {
-    ensure_claude(app);
-    refresh_prerequisites(app);
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || ensure_codex(&app));
+    let claude = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_claude(&claude);
+        refresh_prerequisites(&claude);
+    });
+    let codex = app.clone();
+    tauri::async_runtime::spawn_blocking(move || ensure_codex(&codex));
 }
 
 /// Pane spawn: make sure the agent about to start finds its entries.

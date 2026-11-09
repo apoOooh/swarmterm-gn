@@ -230,6 +230,9 @@ pub fn resolve(app: &AppHandle, id: &str, agent_id: Option<&str>) -> Result<Agen
 }
 
 pub fn enroll(account: &AgentAccount) -> Result<(), String> {
+    // Before the write lock: the first call may run `claude --version`
+    // (bounded, cached per binary), and no other writer should wait on it.
+    let exec = account.agent_id == "claude-code" && crate::hook::claude_version::exec_hooks();
     // Concurrent pane starts may enroll the same profile. Serialize the entire
     // read/merge/rename sequence so a second writer cannot consume our temp file.
     let _lock = CONFIG_WRITE.lock().map_err(|e| e.to_string())?;
@@ -248,7 +251,6 @@ pub fn enroll(account: &AgentAccount) -> Result<(), String> {
             let bash = !crate::git_bash::REQUIRED || crate::git_bash::find(Some(dir)).is_some();
             // Exec-form hooks run without any shell (SWA-83 1c-ii); only
             // the shell form of an older Claude Code still needs Bash.
-            let exec = crate::hook::claude_version::exec_hooks();
             let hook = (exec || bash)
                 .then(|| crate::hook::install::claude_hook_entry(&exe, cfg!(windows), exec));
             crate::hook::install::write_hooks_to_file(&dir.join("settings.json"), hook.as_ref())?;

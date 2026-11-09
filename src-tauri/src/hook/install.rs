@@ -84,27 +84,50 @@ pub fn claude_hook_entry(exe: &str, windows: bool, exec: bool) -> Value {
 }
 
 /// One hook entry as a command line: `command` itself (shell form), or
-/// `"command" arg …` (exec form). Every "is this ours" and "which binary"
-/// rule reads entries through this, so both shapes are recognised.
+/// `"command" arg` (exec form). Every "is this ours" and "which binary"
+/// rule reads entries through this, so both shapes are recognised. An exec
+/// form we could not have written — more or fewer than one argument, a
+/// non-string argument, a quote inside `command` — has no line at all, so a
+/// stranger's `node ["…/swarmterm/notify.js", "--hook"]` is never flattened
+/// into something that looks like ours.
 pub fn entry_line(entry: &Value) -> Option<String> {
     let command = entry.get("command")?.as_str()?;
     let Some(args) = entry.get("args") else {
         return Some(command.to_owned());
     };
-    let mut line = format!("\"{command}\"");
-    for arg in args.as_array()? {
-        line.push(' ');
-        line.push_str(arg.as_str()?);
+    match args.as_array()?.as_slice() {
+        [arg] if !command.contains('"') => Some(format!("\"{command}\" {}", arg.as_str()?)),
+        _ => None,
     }
-    Some(line)
 }
 
-/// Does this hook command line belong to us? Both halves must match, so our
-/// own `--statusline` entry, a bare `swarmterm`, and a stranger's `--hook`
-/// are all left alone.
+/// The file name of our binary, in every edition and build.
+pub fn is_swarmterm_exe(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or("");
+    name.eq_ignore_ascii_case("swarmterm.exe") || name.eq_ignore_ascii_case("swarmterm")
+}
+
+/// The executable of `"<path>" <flag>` or `<path> <flag>`, exactly that
+/// shape; `None` for anything else.
+pub fn command_with_flag<'a>(line: &'a str, flag: &str) -> Option<&'a str> {
+    let line = line.trim();
+    let (path, rest) = match line.strip_prefix('"') {
+        Some(quoted) => {
+            let end = quoted.find('"')?;
+            (&quoted[..end], &quoted[end + 1..])
+        }
+        None => line.split_once(' ')?,
+    };
+    (!path.is_empty() && rest.trim() == flag).then_some(path)
+}
+
+/// Does this hook command line belong to us? Structurally: exactly our
+/// binary (`swarmterm.exe`, by file name — a folder called `swarmterm` or a
+/// `swarmterm-helper.exe` is not us) followed by exactly `--hook`. Our own
+/// `--statusline` entry, a bare `swarmterm` and a stranger's `--hook` are
+/// all left alone.
 pub fn is_ours_hook(command: &str) -> bool {
-    let c = command.trim().to_ascii_lowercase();
-    c.ends_with("--hook") && c.contains("swarmterm")
+    command_with_flag(command, "--hook").is_some_and(is_swarmterm_exe)
 }
 
 /// The one group we install per event. No `matcher`: it is ignored on most of
@@ -272,10 +295,12 @@ pub fn write_hooks_to_file(path: &Path, entry: Option<&Value>) -> Result<(), Str
 /// `settings.json`: the rename is atomic (never corrupts) and steady state is
 /// zero writes, so any lost-update window is a single first-boot write.
 /// Called through `setup::ensure_claude`, which records the outcome.
-pub fn register(app: &AppHandle) -> Result<(), String> {
+///
+/// `exec` is the caller's `claude_version` verdict: the probe runs before
+/// any write lock is taken.
+pub fn register(app: &AppHandle, exec: bool) -> Result<(), String> {
     let path = default_settings_path(app)?;
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let exec = super::claude_version::exec_hooks();
     let entry = claude_hook_entry(&exe.to_string_lossy(), cfg!(windows), exec);
     write_hooks_to_file(&path, Some(&entry)).map_err(|e| {
         format!(
@@ -411,6 +436,14 @@ mod tests {
             json!({"type":"command","command":"node","args":["notify.js","--hook"]}),
             json!({"type":"command","command":"C:/x/swarmterm.exe","args":["--statusline"]}),
             json!({"type":"command","command":"C:/x/swarmterm.exe","args":[1]}),
+            // Found in review: a path through a folder named swarmterm, a
+            // helper with a similar name, and a flattened multi-arg command.
+            json!({"type":"command","command":"C:/work/swarmterm/custom.exe","args":["--hook"]}),
+            json!({"type":"command","command":"C:/x/swarmterm-helper.exe","args":["--hook"]}),
+            json!({"type":"command","command":"node","args":["C:/work/swarmterm/notify.js","--hook"]}),
+            json!({"type":"command","command":"C:/x/swarmterm.exe","args":["--hook","--verbose"]}),
+            json!({"type":"command","command":"C:/x/swarmterm.exe","args":[]}),
+            json!({"type":"command","command":"C:/x/swarmterm.exe\" --hook \"x","args":["y"]}),
         ];
         for entry in foreign {
             let group = json!({ "hooks": [entry.clone()] });
@@ -460,6 +493,10 @@ mod tests {
         ));
         assert!(!is_ours_hook("swarmterm"));
         assert!(!is_ours_hook("some-other-tool --hook"));
+        assert!(!is_ours_hook("\"C:/work/swarmterm/custom.exe\" --hook"));
+        assert!(!is_ours_hook("C:/x/swarmterm-helper.exe --hook"));
+        assert!(!is_ours_hook("\"C:/x/swarmterm.exe\" --hook --verbose"));
+        assert!(!is_ours_hook("node C:/work/swarmterm/notify.js --hook"));
         assert!(!is_ours_hook(FOREIGN));
         assert!(!is_ours_hook(""));
     }

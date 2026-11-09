@@ -297,7 +297,14 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `claude --version` (keyed by path, size, mtime); older or unknown = the
   shell form `"<exe>" --hook`, gated on Git Bash like the status line (which
   has no exec form). Every ownership rule reads entries via
-  `install::entry_line`, so both shapes are recognised and migrate both ways.
+  `install::entry_line`, so both shapes are recognised and migrate both ways;
+  ownership is structural (`is_ours_hook`: file name `swarmterm(.exe)` plus
+  exactly `--hook`, exec form only with exactly one arg). The probe never
+  runs on the UI thread or under `CONFIG_WRITE`: `setup::boot` hands both
+  ensures to blocking workers (`tests/boot_off_ui_thread.rs`), output and
+  exit share one deadline in a kill-on-close job. `CLAUDE_DONE` only holds
+  while `CLAUDE_DONE_FOR` (the verdict used) is `still_current`, so a
+  Claude Code update/downgrade is applied at the next pane start.
 - **Native preview webviews.** The preview column is a per-terminal native
   child webview (`preview.rs`, label `preview-<terminalId>`, Tauri `unstable`
   feature for `add_child`). Invariant: a preview webview is visible iff
