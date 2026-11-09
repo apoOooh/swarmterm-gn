@@ -228,30 +228,22 @@ pub fn write_hooks_to_file(path: &Path, command: Option<&str>) -> Result<(), Str
 /// Not locked against a concurrently running Claude Code writing
 /// `settings.json`: the rename is atomic (never corrupts) and steady state is
 /// zero writes, so any lost-update window is a single first-boot write.
-pub fn register(app: &AppHandle) {
-    let home = match app.path().home_dir() {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("hook: cannot resolve home dir for Claude Code hooks: {e}");
-            return;
-        }
-    };
+/// Called through `setup::ensure_claude`, which records the outcome.
+pub fn register(app: &AppHandle) -> Result<(), String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("cannot resolve home dir for Claude Code hooks: {e}"))?;
     let cfg_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
     let path = crate::statusline::install::resolve_settings_path(&home, cfg_dir.as_deref());
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("hook: current_exe: {e}");
-            return;
-        }
-    };
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let command = format_command(&exe.to_string_lossy(), cfg!(windows));
-    if let Err(e) = write_hooks_to_file(&path, Some(&command)) {
-        eprintln!(
-            "hook: failed to register Claude Code hooks at {}: {e}",
+    write_hooks_to_file(&path, Some(&command)).map_err(|e| {
+        format!(
+            "failed to register Claude Code hooks at {}: {e}",
             path.display()
-        );
-    }
+        )
+    })
 }
 
 #[cfg(test)]

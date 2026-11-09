@@ -87,6 +87,9 @@ import { useExplorerStore } from '@/store/explorer-store'
 import { onFileChange } from '@/tauri/files'
 import { registerCloseGuard } from '@/lib/close-guard'
 import { confirmQuit, hostedPaneCount, onMcpServerExited, onQuitRequested, onVoicePipeError, onVoicePipeRecovered } from '@/tauri/app'
+import { onSetupChanged } from '@/tauri/setup'
+import { useSetupStatusStore } from '@/store/setup-status-store'
+import { SETUP_ALERT_ID, nextSetupBellAction } from '@/lib/setup-status'
 import { chooseQuit } from '@/lib/quit-flow'
 import { fileDialog } from '@/store/file-dialog-store'
 import { RightPanel, RightPanelPeek } from '@/components/RightPanel/RightPanel'
@@ -906,6 +909,28 @@ export default function App(): ReactElement {
     return () => {
       setInputDroppedHandler(undefined)
       for (const c of cleanups) c()
+    }
+  }, [])
+
+  // Agent integration failures (SWA-83): Rust records what the hook, MCP and
+  // status-line writers did; a real error gets ONE bell entry. Re-added only
+  // when the problem changes, so a read entry does not come back on every
+  // pane spawn, and marked read once the problem is gone.
+  useEffect(() => {
+    const center = useNotificationCenterStore.getState
+    let lastDetail: string | null = null
+    const unsubscribe = useSetupStatusStore.subscribe((s, p) => {
+      if (s.status === p.status || s.status === null) return
+      const action = nextSetupBellAction(lastDetail, s.status, Date.now())
+      lastDetail = action.lastDetail
+      if (action.type === 'add') center().add(action.entry)
+      else if (action.type === 'markRead') center().markTerminalRead(SETUP_ALERT_ID, ['backend'])
+    })
+    void useSetupStatusStore.getState().load()
+    const cleanup = cleanupWhenResolved(onSetupChanged(() => { void useSetupStatusStore.getState().load() }), 'setup:changed')
+    return () => {
+      unsubscribe()
+      cleanup()
     }
   }, [])
 

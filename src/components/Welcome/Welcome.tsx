@@ -23,6 +23,8 @@ import { listAgentSessions } from '@/tauri/sessions'
 import { planWorktreeBranches, provisionWorktrees } from '@/lib/worktree-naming'
 import { folderName, VISIBLE_RECENT_ROWS } from '@/lib/recent-folders'
 import { useRecentsStore } from '@/store/recents-store'
+import { useSetupStatusStore } from '@/store/setup-status-store'
+import { codexHookHint, defaultWelcomeFolder, isBroadFolder } from '@/lib/setup-status'
 import { visibleSlice, hiddenCount } from '@/lib/list-paging'
 import {
   mergeSessions,
@@ -100,23 +102,32 @@ export function Welcome(): ReactElement {
   // deliberately NOT reset by the folder-change effect below.
   const [recentsDialogOpen, setRecentsDialogOpen] = useState(false)
 
-  // Pre-fill the default folder (or the home directory) on mount, unless a
-  // folder is already chosen.
+  // Home folder, only to warn when it (or a drive root) is picked.
+  const [homeDir, setHomeDir] = useState<string | null>(null)
+  // Pre-fill the template's folder or the newest recent one on mount, unless
+  // a folder is already chosen — never the home folder (SWA-83): a first
+  // workspace there watched the whole profile and asked agents to trust it.
   useEffect(() => {
-    if (useAppStore.getState().welcomeFolder !== '') return
-    if (initial.folder.trim() !== '') {
-      setFolder(initial.folder.trim())
-      return
+    const fill = (home: string | null): void => {
+      if (useAppStore.getState().welcomeFolder !== '') return
+      const next = defaultWelcomeFolder(initial.folder, useRecentsStore.getState().recents, home)
+      if (next !== '') setFolder(next)
     }
     void getHomeDir().then((home) => {
-      if (useAppStore.getState().welcomeFolder === '') setFolder(home)
-    }).catch((e) => console.warn('Welcome: home directory unavailable, leaving folder empty:', e))
+      setHomeDir(home)
+      fill(home)
+    }).catch((e) => {
+      console.warn('Welcome: home directory unavailable:', e)
+      fill(null)
+    })
   }, [setFolder, initial.folder])
 
   // Re-probe installed agent CLIs every time Welcome mounts so a CLI installed
   // while the app runs is picked up without a restart.
   useEffect(() => {
     void useAgentAvailabilityStore.getState().refresh()
+    // Same reason for the agents' hooks and MCP entries (SWA-83).
+    void useSetupStatusStore.getState().recheck()
     // A default saved with a since-deleted account would select nothing;
     // fall back to the default account once the profiles are known.
     void useAgentAccountsStore.getState().refresh().then(() => {
@@ -186,6 +197,11 @@ export function Welcome(): ReactElement {
   // Agents the probe has found missing never spawn and are never saved: only
   // installed agents have a row, and the next count edit drops hidden counts.
   const liveCounts = withAvailableAgents({ ...initial, agentCounts: counts }, isAvailable).agentCounts
+  const codexHint = codexHookHint({
+    codexAvailable: availability.codex === true,
+    sessionHooks: codexSessionHooks,
+    codexCount: liveCounts.codex ?? 0
+  })
   const agentIds = allocateAgents(terminalCount, liveCounts)
 
   const trimmedFolder = folder.trim()
@@ -389,6 +405,12 @@ export function Welcome(): ReactElement {
                 Browse
               </Button>
             </div>
+            {isBroadFolder(folder, homeDir) && (
+              <p className="mt-1.5 text-xs text-amber-500" data-testid="broad-folder-warning">
+                This is your whole user folder or a drive. Pick a project folder: Swarmterm watches every file
+                below it, and agents will ask you to trust all of it.
+              </p>
+            )}
           </div>
 
           {/* Workspace name — optional; the placeholder shows the default. */}
@@ -411,9 +433,7 @@ export function Welcome(): ReactElement {
             <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Saved workspaces</h3>
             <div className="max-h-80 space-y-2 overflow-y-auto">{savedWorkspaces.map(workspace => <SavedWorkspaceCard key={workspace.id} workspace={workspace} />)}</div>
           </section>}
-          {availability.codex === true && <p className="mt-3 text-xs text-muted-foreground">{codexSessionHooks
-            ? 'To save Codex conversations, review and trust the Swarmterm session hooks in /hooks. Send a message after trusting them.'
-            : 'Update Codex CLI to a version with session hooks to save new conversations. Workspace layouts are saved now.'}</p>}
+          {codexHint !== null && <p className="mt-3 text-xs text-muted-foreground">{codexHint}</p>}
 
           {/* Recent folders — inline list capped at VISIBLE_RECENT_ROWS;
               "Show all" opens the searchable pick-one dialog over the full

@@ -3,6 +3,18 @@
 Decisions made by the maintainer that every contributor follows. Newest
 first. Architecture decisions with longer reasoning live in [adr/](adr/).
 
+## 2026-11-09
+
+- **No installation from inside the app.** First-run setup (SWA-83) explains
+  a missing prerequisite or agent CLI and shows the vendor link and the
+  install command to copy. Swarmterm never installs anything itself and never
+  types an install command into a pane, not even one that waits for Enter.
+- **Agent config only for installed CLIs.** Swarmterm writes hooks, MCP
+  entries and the status line only for an agent CLI it finds, or into a
+  profile that already holds Swarmterm entries (to keep repairing them).
+  Outcomes are shown in Settings → Setup; only a real failure reaches the
+  bell.
+
 ## 2026-10-29
 
 - **Claude Code "Auto" counts as a dangerous launch mode.** Auto turns the
