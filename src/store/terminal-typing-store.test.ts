@@ -4,7 +4,7 @@ import { useTerminalTypingStore } from './terminal-typing-store'
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-07-28T00:00:00Z'))
-  useTerminalTypingStore.setState({ lastKeyAt: {}, dirty: {} })
+  useTerminalTypingStore.setState({ lastKeyAt: {}, dirty: {}, submittedAt: {} })
 })
 
 afterEach(() => {
@@ -105,5 +105,35 @@ describe('markDraft', () => {
     useTerminalTypingStore.getState().markDraft('t1', 5)
     useTerminalTypingStore.getState().noteInput('t1', '\r')
     expect(useTerminalTypingStore.getState().lastKeyAt['t1']).toBeUndefined()
+  })
+})
+
+describe('submittedAt / takeSubmit (SWA-88)', () => {
+  it('only a real Enter stamps a submit', () => {
+    const s = useTerminalTypingStore.getState()
+    for (const data of ['\x03', '\x15', '\x1b', 'abc']) s.noteInput('t1', data)
+    expect(useTerminalTypingStore.getState().submittedAt['t1']).toBeUndefined()
+    s.noteInput('t1', '\r')
+    expect(useTerminalTypingStore.getState().submittedAt['t1']).toBe(Date.now())
+  })
+
+  it('is taken once and only while fresh', () => {
+    const s = useTerminalTypingStore.getState()
+    s.noteInput('t1', '\r')
+    vi.advanceTimersByTime(1000)
+    expect(s.takeSubmit('t1', Date.now(), 5000)).toBe(true)
+    expect(s.takeSubmit('t1', Date.now(), 5000)).toBe(false)
+    s.noteInput('t1', '\r')
+    vi.advanceTimersByTime(6000)
+    expect(s.takeSubmit('t1', Date.now(), 5000)).toBe(false)
+  })
+
+  it('a dictated draft is no submit, and clearTyping (respawn, dispose) drops the stamp', () => {
+    const s = useTerminalTypingStore.getState()
+    s.markDraft('t1', Date.now())
+    expect(useTerminalTypingStore.getState().submittedAt['t1']).toBeUndefined()
+    s.noteInput('t1', '\r')
+    s.clearTyping('t1')
+    expect(s.takeSubmit('t1', Date.now(), 5000)).toBe(false)
   })
 })

@@ -74,7 +74,7 @@ import {
   type SuppressState
 } from '@/lib/terminal-input-client'
 import { AgentStateDetector, type DetectorDeps } from '@/lib/agent-state/detector'
-import { promptBoxHasDraft } from '@/lib/prompt-draft'
+import { promptBoxDraftText, promptBoxHasDraft, type DraftRow } from '@/lib/prompt-draft'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { acceptsAgentHooks } from '@/lib/agent-state/hook-signal'
 import { useAgentStateStore } from '@/store/agent-state-store'
@@ -1560,6 +1560,37 @@ export function paneHasPromptDraft(id: string): boolean {
     lines.push(text.trimEnd())
   }
   return promptBoxHasDraft(lines.join('\n'))
+}
+
+/**
+ * SWA-88: the draft in a Claude pane's input box as exact text, or
+ * `undefined` when it cannot be read back unambiguously
+ * (`promptBoxDraftText`). Read only to compare with the blocked prompt's
+ * fingerprint; never stored or logged.
+ */
+export function paneDraftText(id: string): string | undefined {
+  const entry = entries.get(id)
+  if (!entry || !entry.opened || entry.config.agentId !== 'claude-code') return undefined
+  const buffer = entry.term.buffer.active
+  const end = buffer.length
+  const start = Math.max(0, end - entry.term.rows)
+  const rows: DraftRow[] = []
+  const cell = buffer.getNullCell()
+  for (let y = start; y < end; y++) {
+    const line = buffer.getLine(y)
+    if (!line) continue
+    let text = ''
+    let dim = false
+    for (let x = 0; x < line.length; x++) {
+      line.getCell(x, cell)
+      const ch = cell.getChars()
+      if (cell.getWidth() === 0) continue
+      if (cell.isDim() && ch !== '' && ch !== ' ') dim = true
+      text += ch === '' || cell.isDim() ? ' ' : ch
+    }
+    rows.push({ text: text.trimEnd(), dim })
+  }
+  return promptBoxDraftText(rows, entry.term.cols)
 }
 
 /**

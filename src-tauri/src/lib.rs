@@ -118,6 +118,9 @@ pub fn run() {
             }
             // UI-stall watchdog (SWA-85): stall log always, dumps opt-in.
             crate::diagnostics::init(app.handle());
+            // SWA-88: prompt fingerprints expire on a timer, not only when
+            // the next request happens to sweep them.
+            crate::resubmit::spawn_expiry(app.handle().clone());
             // Before any pane, routine or other child process spawns: the
             // user's env policy from the last run (admin policy applied), not
             // the built-in default.

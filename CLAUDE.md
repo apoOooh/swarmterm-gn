@@ -468,7 +468,13 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   renderer (`lib/prompt-resubmit.ts`) waits for Claude to restore the
   plaintext, Esc Esc (only on a visible draft — on an empty box it opens
   rewind), re-checks the box, inserts, Enter as a separate delayed write.
-  Any key since the user's Enter → pill with copy, nothing written. Mode =
+  Any key since the user's Enter → pill with copy, nothing written.
+  Hardening (no trust boundary — a pane process can fake the edge): the
+  renderer needs the user's own Enter in that pane (`submittedAt`, typing
+  store, set only by `sendInput`; ≤ 5 s, taken once), a one-row draft that
+  hashes to the event's `asked` fingerprint (`paneDraftText`), re-checks
+  typing/IME/mode/pane before every write, and one attempt with Enter per
+  pane per 30 s (failures count). `Gate::expire` runs on a timer. Mode =
   `AgentPolicy.promptResubmit` tightened by `DisablePromptResubmit(Send)`
   (Corp: send locked). Never log, announce or store the text.
 - **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:

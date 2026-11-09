@@ -10,14 +10,34 @@ import { prepareDictationBody, shouldSubmitDictation } from '@/lib/voice-insert'
  * the box is empty, insert the masked text and, in "send" mode, press Enter
  * as a separate delayed write (same rules as a dictation).
  *
- * Anything the user did since their Enter wins: a key in this pane means
- * the box may hold their text, so nothing is cleared or written and the pill
- * offers the masked text to copy instead. Esc Esc is pressed only on a box
- * that visibly holds a draft — on an empty box it can open Claude's rewind
- * menu.
+ * Hardening, not a trust boundary (`docs/security-model.md`). Everything
+ * Rust checks can be faked by a process in the pane (bearer, edge,
+ * fingerprint), and so can what the screen shows. What such a process
+ * cannot do is press a key in this renderer. So:
+ *
+ * 1. The user really sent a line in this pane (`takeUserSubmit`: Enter
+ *    seen by `sendInput`, at most `USER_SUBMIT_MAX_AGE_MS` before the
+ *    event, consumed once — one resubmit per real submit and generation).
+ * 2. The blocked draft visibly came back and reads back EXACTLY as the
+ *    prompt Rust matched (`draftText` + `asked` fingerprint). Unreadable
+ *    (several rows, DIM cells, edge of the row) or different → fallback.
+ * 3. At most one attempt with Enter per pane per `AUTO_SEND_WINDOW_MS`,
+ *    failed ones included; a further one is inserted without Enter and the
+ *    caller rings the bell.
+ * 4. Any key, IME composition, policy change or lost pane before EVERY
+ *    destructive write — each Esc, during the settle, the insert, the
+ *    Enter — stops the sequence at once, with no further Esc.
+ *
+ * Every fallback offers the masked text in the pane's pill for copying.
  */
 
 export type ResubmitMode = 'send' | 'insert' | 'off'
+
+/** Length (UTF-8 bytes) + SHA-256 hex of the blocked prompt, as Rust matched it. */
+export interface PromptFingerprint {
+  len: number
+  sha256: string
+}
 
 export interface ResubmitRequest {
   terminalId: string
@@ -25,12 +45,21 @@ export interface ResubmitRequest {
   text: string
   /** Rust's verdict (setting AND admin lock); the local setting may lower it. */
   send: boolean
+  asked: PromptFingerprint
 }
 
-export type ResubmitFallback = 'typed' | 'target-busy' | 'not-cleared' | 'write-failed'
+export type ResubmitFallback =
+  | 'typed'
+  | 'target-busy'
+  | 'not-cleared'
+  | 'no-draft'
+  | 'no-user-submit'
+  | 'unverified'
+  | 'write-failed'
 
 export type ResubmitOutcome =
-  | { kind: 'inserted'; submitScheduled: boolean }
+  /** `rateLimited`: Enter was wanted but this pane used its auto-send budget. */
+  | { kind: 'inserted'; submitScheduled: boolean; rateLimited?: boolean }
   /** Not written: the pill offers the masked text for copying. */
   | { kind: 'fallback'; reason: ResubmitFallback }
   /** Nothing to do (switched off, or the pane is gone). */
@@ -42,8 +71,18 @@ export interface ResubmitDeps {
   agentState: (id: string) => AgentEngineState | undefined
   /** Claude's input box shows unsent text (dim placeholder excluded). */
   boxHasDraft: (id: string) => boolean
+  /** The box's draft as exact text, `undefined` when not readable without guessing. */
+  draftText: (id: string) => string | undefined
   /** Typing-store `lastKeyAt`: cleared by the user's Enter, set by any key since. */
   inputStamp: (id: string) => number | undefined
+  /** Typing-store `dirty`: an unsubmitted line the user typed. */
+  inputDirty: (id: string) => boolean
+  /** Consumes the user's last real submit if it is recent enough (typing store). */
+  takeUserSubmit: (id: string, nowMs: number, maxAgeMs: number) => boolean
+  /** Claims the pane's automatic-Enter budget (`createAutoSendLimiter`). */
+  claimAutoSend: (id: string, nowMs: number) => boolean
+  /** Hex SHA-256 of the UTF-8 bytes. */
+  sha256: (text: string) => Promise<string>
   write: (id: string, expectedSpawnId: string, data: string) => Promise<void>
   resetInput: (id: string) => void
   markDraft: (id: string, nowMs: number) => number
@@ -56,11 +95,47 @@ export interface ResubmitDeps {
 export const DRAFT_WAIT_MS = 3000
 /** Settle time after Esc Esc before the box is read again. */
 export const CLEAR_SETTLE_MS = 600
+/**
+ * The user's Enter may be this old when the block arrives. The guard
+ * answers within ~1–5 s of the edge; older means the resubmit belongs to no
+ * prompt the user just sent.
+ */
+export const USER_SUBMIT_MAX_AGE_MS = 5000
+/** At most one attempt with Enter per pane in this window. */
+export const AUTO_SEND_WINDOW_MS = 30_000
 const POLL_MS = 100
 const ESC_GAP_MS = 150
 
-function typedSince(deps: ResubmitDeps, id: string): boolean {
-  return deps.inputStamp(id) !== undefined
+/** Thrown inside the sequence to stop it; turned into the outcome below. */
+class Stop {
+  constructor(readonly outcome: ResubmitOutcome) {}
+}
+
+const fallback = (reason: ResubmitFallback): Stop => new Stop({ kind: 'fallback', reason })
+
+/**
+ * Per-pane budget for attempts with Enter: true claims it. Claimed when the
+ * event arrives, before anything is checked, so a failed or refused attempt
+ * uses the slot too — and a new session or prompt id cannot reset it.
+ */
+export function createAutoSendLimiter(windowMs = AUTO_SEND_WINDOW_MS): (id: string, nowMs: number) => boolean {
+  const last = new Map<string, number>()
+  return (id, nowMs) => {
+    const prev = last.get(id)
+    if (prev !== undefined && nowMs - prev < windowMs) return false
+    last.set(id, nowMs)
+    return true
+  }
+}
+
+/** Exact match of a text against the fingerprint (length first, then hash). */
+export async function matchesFingerprint(
+  text: string,
+  asked: PromptFingerprint,
+  sha256: (text: string) => Promise<string>
+): Promise<boolean> {
+  if (new TextEncoder().encode(text).length !== asked.len) return false
+  return (await sha256(text)) === asked.sha256
 }
 
 function reasonOf(e: unknown): 'target-gone' | 'write-failed' {
@@ -69,43 +144,76 @@ function reasonOf(e: unknown): 'target-gone' | 'write-failed' {
 }
 
 export async function deliverResubmit(req: ResubmitRequest, deps: ResubmitDeps): Promise<ResubmitOutcome> {
-  const mode = deps.mode()
-  if (mode === 'off') return { kind: 'dropped', reason: 'off' }
   const id = req.terminalId
+  if (deps.mode() === 'off') return { kind: 'dropped', reason: 'off' }
   if (!deps.draftInfo(id)) return { kind: 'dropped', reason: 'target-gone' }
-
-  // The guard posts before it exits; Claude restores the blocked text after.
-  let draft = deps.boxHasDraft(id)
-  for (let waited = 0; !draft && waited < DRAFT_WAIT_MS; waited += POLL_MS) {
-    if (typedSince(deps, id)) return { kind: 'fallback', reason: 'typed' }
-    await deps.sleep(POLL_MS)
-    if (!deps.draftInfo(id)) return { kind: 'dropped', reason: 'target-gone' }
-    draft = deps.boxHasDraft(id)
+  const arrived = deps.now()
+  // Consumed first, whatever happens next: one resubmit per real submit.
+  if (!deps.takeUserSubmit(id, arrived, USER_SUBMIT_MAX_AGE_MS)) {
+    return { kind: 'fallback', reason: 'no-user-submit' }
   }
-  if (typedSince(deps, id)) return { kind: 'fallback', reason: 'typed' }
-  if (deps.agentState(id) === 'blocked') return { kind: 'fallback', reason: 'target-busy' }
+  const mayEnter = deps.claimAutoSend(id, arrived)
+
+  /** Before every step: the user, the policy and the pane. */
+  const guard = (): void => {
+    if (deps.mode() === 'off') throw new Stop({ kind: 'dropped', reason: 'off' })
+    const info = deps.draftInfo(id)
+    if (!info) throw new Stop({ kind: 'dropped', reason: 'target-gone' })
+    if (deps.inputStamp(id) !== undefined || deps.inputDirty(id) || info.composing) throw fallback('typed')
+  }
 
   try {
-    if (draft) {
-      for (let i = 0; i < 2; i++) {
-        await deps.write(id, req.spawnId, '\x1b')
-        await deps.sleep(ESC_GAP_MS)
-      }
-      await deps.sleep(CLEAR_SETTLE_MS)
-      if (deps.boxHasDraft(id)) return { kind: 'fallback', reason: 'not-cleared' }
-      if (typedSince(deps, id)) return { kind: 'fallback', reason: 'typed' }
+    // The guard posts before it exits; Claude restores the blocked text after.
+    let draft = deps.boxHasDraft(id)
+    for (let waited = 0; !draft && waited < DRAFT_WAIT_MS; waited += POLL_MS) {
+      guard()
+      await deps.sleep(POLL_MS)
+      draft = deps.boxHasDraft(id)
     }
+    guard()
+    if (deps.agentState(id) === 'blocked') throw fallback('target-busy')
+    if (!draft) throw fallback('no-draft')
+
+    // The restored draft must BE the blocked prompt, read back exactly.
+    const restored = deps.draftText(id)
+    if (restored === undefined || !(await matchesFingerprint(restored, req.asked, deps.sha256))) {
+      throw fallback('unverified')
+    }
+
+    for (let i = 0; i < 2; i++) {
+      // Re-checked before EACH Esc: a key between them means the box may
+      // now hold the user's own text, and another Esc would erase it.
+      guard()
+      // Read right before the Esc: on an empty box Esc opens Claude's
+      // rewind menu (and the first Esc may already have cleared it).
+      if (!deps.boxHasDraft(id)) {
+        if (i === 0) throw fallback('no-draft')
+        break
+      }
+      await deps.write(id, req.spawnId, '\x1b')
+      await deps.sleep(ESC_GAP_MS)
+    }
+    for (let settled = 0; settled < CLEAR_SETTLE_MS; settled += POLL_MS) {
+      guard()
+      await deps.sleep(POLL_MS)
+    }
+    guard()
+    if (deps.boxHasDraft(id)) throw fallback('not-cleared')
     const info = deps.draftInfo(id)
-    if (!info) return { kind: 'dropped', reason: 'target-gone' }
-    if (info.composing) return { kind: 'fallback', reason: 'typed' }
+    if (!info) throw new Stop({ kind: 'dropped', reason: 'target-gone' })
+    // Nothing awaits between this guard and the write: no key slips in.
     // Same order as a dictation: IME baseline, then dirty, then the write.
     deps.resetInput(id)
     const stamp = deps.markDraft(id, deps.now())
     await deps.write(id, req.spawnId, prepareDictationBody(req.text, info.bracketed))
-    const wantSubmit = req.send && mode === 'send' && info.bracketed
+    const wanted = req.send && deps.mode() === 'send' && info.bracketed
+    const wantSubmit = wanted && mayEnter
     if (wantSubmit) void submitLater(req, deps, stamp)
-    return { kind: 'inserted', submitScheduled: wantSubmit }
+    return wanted && !wantSubmit
+      ? { kind: 'inserted', submitScheduled: false, rateLimited: true }
+      : { kind: 'inserted', submitScheduled: wantSubmit }
   } catch (e) {
+    if (e instanceof Stop) return e.outcome
     const reason = reasonOf(e)
     return reason === 'target-gone' ? { kind: 'dropped', reason } : { kind: 'fallback', reason }
   }
@@ -113,17 +221,21 @@ export async function deliverResubmit(req: ResubmitRequest, deps: ResubmitDeps):
 
 async function submitLater(req: ResubmitRequest, deps: ResubmitDeps, stamp: number): Promise<void> {
   await deps.sleep(deps.submitDelayMs)
+  const info = deps.draftInfo(req.terminalId)
   const go = shouldSubmitDictation({
     requested: true,
     allowAutoEnter: deps.mode() === 'send',
-    bracketed: deps.draftInfo(req.terminalId)?.bracketed ?? false,
+    bracketed: info?.bracketed ?? false,
     agentState: deps.agentState(req.terminalId),
     sameGeneration: true,
     inputStampAtInsert: stamp,
     inputStampNow: deps.inputStamp(req.terminalId)
   })
-  if (!go) return
+  // The box must still show the inserted text (our own markDraft stamp is
+  // what `go` compares; the screen check catches a cleared box).
+  if (!go || info?.composing || !deps.boxHasDraft(req.terminalId)) return
   // A failed Enter leaves the masked draft standing: the user sends it.
+  // The spawn id check in `write` keeps it off a respawned generation.
   await deps.write(req.terminalId, req.spawnId, '\r').catch(() => undefined)
 }
 

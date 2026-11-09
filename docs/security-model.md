@@ -84,17 +84,47 @@ placeholder and is at most 256 KiB (`src-tauri/src/resubmit.rs`). The text goes 
 main window only and is never logged, announced, stored or put in the bell.
 The prompt fingerprint (length + SHA-256, never content, like the reply fingerprint of
 SWA-58) is derived from the plaintext prompt, which may contain personal data, so it is
-held only in memory, dropped once matched or after the 10 s window, compared in constant
-time, never logged and never part of an event to the renderer. `HookBody` carries it as an
+held only in memory, compared in constant time and never logged. A timer expires it
+10 s after the edge (or the block report) even when no further request arrives
+(`Gate::expire`); a matched one is dropped at once. The matched fingerprint travels once
+with the masked text to the main window (same rules as the text: never logged, stored or
+forwarded), which compares it with the draft Claude restored. `HookBody` carries it as an
 optional field (`turn.asked`), so older hook binaries still work (they just never match).
-**Remaining risk:** anything running in the pane holds the bearer, but a blocked prompt
-never reaches the transcript, so a process in the pane cannot name its fingerprint unless
-it saw the user's keystrokes. One that did (for example reading the terminal's input) could,
-within 10 s of a real block and before the guard answers, post its own text with a
-placeholder in it, which would then be typed into the pane and sent as the user's next
-prompt. Choose "put back only" (or set `DisablePromptResubmitSend`, the
-Corp default) to keep the final Enter with the user, or turn it off
-(`DisablePromptResubmit`).
+
+**Remaining risk: self-injection.** This is protection against accidents and against a
+simply forged request to the endpoint — not isolation from processes of the same user.
+Everything the route checks can be produced by a process inside the pane: it holds the
+bearer and `SWARMTERM_PTY_GENERATION`, can post its own UserPromptSubmit edge to `/hook`
+with a fingerprint of any text it chooses (the edge checks only agent, generation and the
+form of the ids), and then a matching `/resubmit` with any text that contains a
+placeholder. It can also write whatever it likes to the console, including a fake input
+box. So a process in the pane can fake a block. The renderer makes that much harder
+(`src/lib/prompt-resubmit.ts`):
+
+- **Bound to a real keystroke.** The masked text is only written when the renderer itself
+  saw the user send a line in that pane (Enter from the keyboard or an unframed paste,
+  recorded by `sendInput`; War Room, dictation and the resubmit's own writes never count)
+  at most 5 s before the block arrived. That stamp is consumed by the first resubmit and
+  dropped on respawn, so one Enter allows at most one resubmit, and nothing posted to
+  `/hook` can create or renew it. A process in the pane cannot press keys in the
+  renderer — this is the actual hurdle; the rest narrows the window.
+- **The restored draft must be the blocked prompt.** Right before the first Esc, Claude's
+  box must show a draft that reads back exactly (one row, no DIM cell, not at the row's
+  edge) and matches the fingerprint (UTF-8 length + SHA-256). Anything else — no draft
+  (e.g. while a tool runs), a multi-row or truncated draft, another text — is the
+  fallback: nothing is cleared, the pane offers the masked prompt to copy.
+- **At every step.** A key, an unsubmitted line, an IME composition, switching the
+  setting off or a respawn before each Esc, during the settle, before the insert and
+  before the Enter stops the sequence at once, with no further Esc.
+- **Rate limit.** At most one attempt with Enter per pane every 30 s; failed attempts
+  count, and a new session or prompt id does not reset it. A further one is put back
+  without Enter and the bell says so.
+
+None of this is a trust boundary. A process that can write to the pane's console and wait
+for the user's next real Enter can still get its own text sent once. Choose "put back
+only" (or set `DisablePromptResubmitSend`, the Corp default) to keep the final Enter with
+the user, or turn it off in Settings → Terminal → Agent safety or with
+`DisablePromptResubmit`.
 
 ### War Room
 

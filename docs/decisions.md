@@ -42,6 +42,18 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   mask placeholder required); only where it cannot be done safely
   automatically does the pane fall back to a copy button; the
   remaining risk is described in `security-model.md`.
+- **Automatic send stays the default despite the self-injection risk**
+  (user decision 2026-11-09, SWA-88 review). A review showed that a process
+  inside the pane can fake a block (its own prompt edge with a chosen
+  fingerprint, then `/resubmit`), so the route is no trust boundary. The
+  user kept "put back and send" as the default everywhere; instead the
+  renderer was hardened: the resubmit needs a real Enter of the user in that
+  pane seen by the renderer (≤ 5 s, once), a restored draft that reads back
+  exactly and matches the fingerprint, re-checks of typing, IME, setting and
+  pane before every Esc/insert/Enter, and at most one attempt with Enter per
+  pane every 30 s; fingerprints expire on a timer after 10 s. The remaining
+  risk is documented in `security-model.md`; `DisablePromptResubmitSend` /
+  `DisablePromptResubmit` and the setting stay the way to switch it off.
 
 ## 2026-10-29
 
