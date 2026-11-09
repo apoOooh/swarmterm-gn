@@ -32,6 +32,13 @@ describe('parseAdminPolicy', () => {
     expect(parseAdminPolicy({ disableWarRoom: true }).disableWarRoom).toBe(true)
     expect(POLICY_DESCRIPTIONS.DisableWarRoom).toBe('The War Room is off')
   })
+
+  it('reads the hang dump lock (SWA-85)', () => {
+    expect(parseAdminPolicy({ disableHangDumps: true }).disableHangDumps).toBe(true)
+    expect(parseAdminPolicy({ disableHangDumps: 1 }).disableHangDumps).toBe(false)
+    expect(UNMANAGED_POLICY.disableHangDumps).toBe(false)
+    expect(POLICY_DESCRIPTIONS.DisableHangDumps).toBe('Hang dumps are blocked')
+  })
 })
 
 describe('describeActivePolicies', () => {

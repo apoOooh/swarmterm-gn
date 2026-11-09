@@ -48,8 +48,8 @@ mod imp {
         MiniDumpWithThreadInfo, MiniDumpWriteDump,
     };
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_INFORMATION,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
     };
 
     struct Process(HANDLE);
@@ -64,7 +64,9 @@ mod imp {
         let mut buf = vec![0u16; 1024];
         let mut len = buf.len() as u32;
         // SAFETY: valid handle, buffer of `len` u16.
-        let ok = unsafe { QueryFullProcessImageNameW(p.0, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) };
+        let ok = unsafe {
+            QueryFullProcessImageNameW(p.0, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len)
+        };
         if ok == 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
@@ -79,7 +81,8 @@ mod imp {
     }
 
     pub fn dump(pid: u32, file: &Path) -> Result<(), String> {
-        let access = PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ;
+        let access =
+            PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ;
         // SAFETY: plain FFI call; a null handle is checked below.
         let handle = unsafe { OpenProcess(access, 0, pid) };
         if handle.is_null() {

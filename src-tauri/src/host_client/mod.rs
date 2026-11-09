@@ -1019,7 +1019,12 @@ pub fn terminal_host_keep(app: AppHandle, ids: Vec<String>) {
 /// thread like `terminal_host_keep`.
 #[tauri::command]
 pub fn terminal_host_release(app: AppHandle, ids: Vec<String>) {
-    let close = app.state::<HostHub>().detached.lock().unwrap().release(&ids);
+    let close = app
+        .state::<HostHub>()
+        .detached
+        .lock()
+        .unwrap()
+        .release(&ids);
     close_off_thread(app, close);
 }
 

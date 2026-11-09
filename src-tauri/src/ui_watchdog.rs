@@ -151,7 +151,11 @@ mod runtime {
     }
 
     pub fn start(app: &AppHandle) {
-        let Ok(dir) = app.path().app_local_data_dir().map(|d| d.join("diagnostics")) else {
+        let Ok(dir) = app
+            .path()
+            .app_local_data_dir()
+            .map(|d| d.join("diagnostics"))
+        else {
             return;
         };
         let Ok(exe) = std::env::current_exe() else {
@@ -223,7 +227,11 @@ mod runtime {
     fn spawn_dump(exe: &Path, pid: &str, dir: &Path) -> bool {
         let _ = std::fs::create_dir_all(dir);
         let ages: Vec<Option<SystemTime>> = (0..DUMP_SLOTS)
-            .map(|i| std::fs::metadata(dump_path(dir, i)).and_then(|m| m.modified()).ok())
+            .map(|i| {
+                std::fs::metadata(dump_path(dir, i))
+                    .and_then(|m| m.modified())
+                    .ok()
+            })
             .collect();
         let target = dump_path(dir, pick_slot(&ages));
         use std::os::windows::process::CommandExt;
@@ -258,7 +266,9 @@ mod tests {
 
     /// Drive the monitor with a ping answered `delay` ms after each post.
     fn run(m: &mut Monitor, from: u64, ticks: u64) -> Vec<Step> {
-        (0..ticks).map(|i| m.tick(from + i * TICK_MS, None)).collect()
+        (0..ticks)
+            .map(|i| m.tick(from + i * TICK_MS, None))
+            .collect()
     }
 
     #[test]
@@ -274,7 +284,14 @@ mod tests {
         let mut m = Monitor::default();
         m.tick(0, None);
         let s = m.tick(TICK_MS, Some(30));
-        assert_eq!(s, Step { post: true, dump: false, log: None });
+        assert_eq!(
+            s,
+            Step {
+                post: true,
+                dump: false,
+                log: None
+            }
+        );
     }
 
     #[test]
@@ -299,7 +316,10 @@ mod tests {
         m.tick(0, None);
         let steps = run(&mut m, TICK_MS, 10);
         assert!(steps.iter().all(|s| !s.dump));
-        assert_eq!(m.tick(11 * TICK_MS, Some(LOG_MS + 500)).log, Some(LOG_MS + 500));
+        assert_eq!(
+            m.tick(11 * TICK_MS, Some(LOG_MS + 500)).log,
+            Some(LOG_MS + 500)
+        );
     }
 
     #[test]

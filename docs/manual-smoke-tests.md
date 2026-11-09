@@ -815,6 +815,16 @@ Use Task Manager → Details → "Base priority" (or Process Explorer).
       open the workspace → the pane is taken over and still counting. Wait two minutes: it stays open.
 - [ ] Keep running with an unsaved file open → the unsaved-changes prompt comes first.
 
+## Diagnostics (SWA-85)
+
+- [ ] Settings → Terminal → Diagnostics: **Write a dump when the window stops responding** is off by default; the
+      choice survives a restart (`diagnostics.json`). The description shows the folder `%LOCALAPPDATA%\<app id>\diagnostics\`.
+- [ ] Switch on, freeze the UI thread for more than 4 s (testlab scenario or a debug hook): exactly one
+      `ui-stall-<n>.dmp` appears, `ui-stalls.log` gets one line, and the window recovers. Switch off: a further stall
+      writes the log line but no dump.
+- [ ] Open an image just under 32 MB in the Media tab: it shows and the window stays responsive. An image over 32 MB
+      shows *Open in default app* instead (no freeze); a long video still plays and seeks.
+
 ## Administrator policy
 
 Use a test key under HKCU (if `reg add` is denied, run it from an elevated prompt). Quit Swarmterm from the tray and
@@ -844,6 +854,8 @@ start it again after every change; remove the key at the end:
       fails with the policy message in its last result.
 - [ ] `DisablePreviewBrowser` = 1: the right panel's Preview shows "Managed by your administrator"; an agent's
       `browser.open_preview` is refused.
+- [ ] `DisableHangDumps` = 1: Settings → Terminal → Diagnostics shows the dump switch off and greyed out ("Managed by
+      your administrator"); a long stall writes the log line but no `.dmp`. The Corp build shows it locked without a key.
 - [ ] `reg add … /v EnvPolicy /t REG_SZ /d strict /f` and `reg add … /v EnvAllow /t REG_MULTI_SZ /d CORP_X /f`:
       the Environment controls are greyed, `set` in a new pane shows only system variables plus `CORP_X`.
 - [ ] `DisableMcp` = `REG_SZ "1"` (wrong type): fails closed, MCP is off; the app log has `policy: DisableMcp: expected REG_DWORD … treated as 1`.
