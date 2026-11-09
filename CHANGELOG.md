@@ -4,10 +4,13 @@
 
 - Security: hardened putting back prompts blocked by data-shield (SWA-88
   review). The masked prompt is written only after a real Enter of yours in
-  that pane (within 15 s, once per Enter) and only while Claude shows the
-  restored draft; a one-line draft must also match the blocked prompt
-  (otherwise the pane offers **Copy masked prompt**). Typing, IME input, the setting and the pane
-  are re-checked before every Esc, the insert and the Enter. At most one
+  that pane (within 15 s, once per Enter; a line break with Shift+Enter or
+  Ctrl+J, a paste or a terminal query answer does not count) and only while
+  Claude shows the restored draft; a one-line draft must also match the blocked prompt
+  (otherwise the pane offers **Copy masked prompt**). Any input since that
+  Enter (also Esc, Ctrl+C or a new Enter), IME input, a permission prompt,
+  the setting and the pane are re-checked before every Esc, after every wait,
+  before the insert and before the Enter. At most one
   automatic send per pane every 30 s (failed attempts count); a further one
   is put back without Enter and noted in the bell. Prompt fingerprints now
   expire on a timer after 10 s. The remaining self-injection risk is

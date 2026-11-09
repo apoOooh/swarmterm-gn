@@ -48,6 +48,8 @@ interface Pane {
   readable: boolean
   /** When the user's last real Enter was seen (undefined = none). */
   submitAt: number | undefined
+  /** Typing-store input revision: every real input and every clear moves it on. */
+  rev: number
 }
 
 function harness(over: Partial<Pane> = {}, mode: ResubmitMode = 'send') {
@@ -64,6 +66,7 @@ function harness(over: Partial<Pane> = {}, mode: ResubmitMode = 'send') {
     escClears: true,
     readable: true,
     submitAt: 900,
+    rev: 10,
     ...over
   }
   const writes: string[] = []
@@ -81,12 +84,13 @@ function harness(over: Partial<Pane> = {}, mode: ResubmitMode = 'send') {
     agentState: () => pane.state,
     boxHasDraft: () => pane.box !== '',
     draftText: () => (pane.readable && pane.box !== '' ? pane.box : undefined),
+    inputRevision: () => pane.rev,
     inputStamp: () => pane.stamp,
     inputDirty: () => pane.dirty,
     takeUserSubmit: (_id, now, maxAge) => {
       const at = pane.submitAt
       pane.submitAt = undefined
-      return at !== undefined && now - at <= maxAge
+      return at !== undefined && now - at <= maxAge ? pane.rev : undefined
     },
     claimAutoSend: createAutoSendLimiter(),
     sha256,
@@ -285,6 +289,59 @@ describe('deliverResubmit', () => {
       expect(CLEAR_SETTLE_MS).toBeGreaterThan(0)
     })
 
+    // What the typing store does for a line-ending key: lastKeyAt and dirty
+    // are CLEARED (so the old checks see nothing), only the revision moves.
+    it('Ctrl+C after Esc 1: no Esc 2, no paste, no Enter', async () => {
+      const h = harness()
+      afterWrite(h, ESC, () => {
+        h.pane.rev++
+        h.pane.stamp = undefined
+        h.pane.dirty = false
+      })
+      expect(await deliverResubmit(h.req, h.deps)).toEqual({ kind: 'fallback', reason: 'typed' })
+      await h.flush()
+      expect(h.writes).toEqual([ESC])
+    })
+
+    it('text + Enter after Esc 1 (a new submit) ends the old attempt: nothing more is written', async () => {
+      const h = harness()
+      afterWrite(h, ESC, () => {
+        h.pane.rev += 2
+        h.pane.stamp = undefined
+        h.pane.dirty = false
+        h.pane.submitAt = 1100
+      })
+      expect(await deliverResubmit(h.req, h.deps)).toEqual({ kind: 'fallback', reason: 'typed' })
+      await h.flush()
+      expect(h.writes).toEqual([ESC])
+    })
+
+    it('a clear (Esc, the clear shortcut) during the settle stops the insert', async () => {
+      const h = harness()
+      const sleep = h.deps.sleep
+      h.deps.sleep = async (ms) => {
+        if (h.writes.length === 2) h.pane.rev++
+        await sleep(ms)
+      }
+      expect(await deliverResubmit(h.req, h.deps)).toEqual({ kind: 'fallback', reason: 'typed' })
+      expect(h.writes).toEqual([ESC, ESC])
+    })
+
+    it('input after the insert (revision moved, typing signals cleared) stops the Enter', async () => {
+      const h = harness()
+      const sleep = h.deps.sleep
+      h.deps.sleep = async (ms) => {
+        if (ms === 200) {
+          h.pane.rev++
+          h.pane.stamp = undefined
+        }
+        await sleep(ms)
+      }
+      await deliverResubmit(h.req, h.deps)
+      await h.flush()
+      expect(h.writes).not.toContain('\r')
+    })
+
     it('switching resubmit off mid-sequence stops it', async () => {
       const h = harness()
       afterWrite(h, ESC, () => h.setMode('off'))
@@ -367,6 +424,27 @@ describe('deliverResubmit', () => {
     const h = harness({ state: 'blocked' })
     expect(await deliverResubmit(h.req, h.deps)).toEqual({ kind: 'fallback', reason: 'target-busy' })
     expect(h.writes).toEqual([])
+  })
+
+  it('blocked right after Esc 1: no Esc 2 and no paste', async () => {
+    const h = harness()
+    afterWrite(h, ESC, () => {
+      h.pane.state = 'blocked'
+    })
+    expect(await deliverResubmit(h.req, h.deps)).toEqual({ kind: 'fallback', reason: 'target-busy' })
+    await h.flush()
+    expect(h.writes).toEqual([ESC])
+  })
+
+  it('blocked during the settle: no paste', async () => {
+    const h = harness()
+    const sleep = h.deps.sleep
+    h.deps.sleep = async (ms) => {
+      if (h.writes.length === 2) h.pane.state = 'blocked'
+      await sleep(ms)
+    }
+    expect(await deliverResubmit(h.req, h.deps)).toEqual({ kind: 'fallback', reason: 'target-busy' })
+    expect(h.writes).toEqual([ESC, ESC])
   })
 
   it('a respawned or closed pane is dropped', async () => {

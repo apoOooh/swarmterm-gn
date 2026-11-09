@@ -102,12 +102,16 @@ box. So a process in the pane can fake a block. The renderer makes that much har
 (`src/lib/prompt-resubmit.ts`):
 
 - **Bound to a real keystroke.** The masked text is only written when the renderer itself
-  saw the user send a line in that pane (Enter from the keyboard or an unframed paste,
-  recorded by `sendInput`; War Room, dictation and the resubmit's own writes never count)
-  at most 15 s before the block arrived. That stamp is consumed by the first resubmit and
+  saw the user press a plain Enter key in that pane (the keydown xterm turned into a CR,
+  decided from the key event, not from the bytes — `createSubmitIntent`) at most 15 s
+  before the block arrived. A line break (LF: Shift+Enter in an agent pane, Ctrl+J), a
+  paste with line breaks, xterm's own answers to terminal queries, War Room, dictation and
+  the resubmit's own writes never count. That anchor is consumed by the first resubmit and
   dropped on respawn, so one Enter allows at most one resubmit, and nothing posted to
   `/hook` can create or renew it. A process in the pane cannot press keys in the
-  renderer — this is the actual hurdle; the rest narrows the window.
+  renderer — this is the actual hurdle; the rest narrows the window. With broadcast input
+  on, the Enter is written to every armed member and anchors each of them, by design:
+  the same line was really sent there.
 - **A restored draft must be visible.** Right before the first Esc, Claude's box must show
   a non-empty draft; no draft (e.g. while a tool runs) is the fallback: nothing is cleared,
   the pane offers the masked prompt to copy. Where the draft reads back exactly (one row,
@@ -116,15 +120,24 @@ box. So a process in the pane can fake a block. The renderer makes that much har
   rows, wrapped, a collapsed "[Pasted text …]") is not compared — the Enter binding and the
   visible draft carry it (user decision 2026-11-09), so for such prompts a process that
   can draw a fake box is stopped only by the Enter binding.
-- **At every step.** A key, an unsubmitted line, an IME composition, switching the
-  setting off or a respawn before each Esc, during the settle, before the insert and
-  before the Enter stops the sequence at once, with no further Esc.
+- **At every step.** The anchor carries the pane's input revision, a counter every real
+  input moves on — any key, Esc, Ctrl+C, the clear-input shortcut, a new Enter — and that
+  a clear never resets. Before each Esc, after every wait, during the settle, before the
+  insert and before the Enter the revision must be unchanged, with no IME composition, the
+  agent not waiting on a permission prompt (`blocked`), the setting on and the pane alive;
+  anything else stops the sequence at once, with no further write, and the pane offers the
+  masked prompt to copy. A new Enter therefore ends an attempt still riding on the
+  previous one.
 - **Rate limit.** At most one attempt with Enter per pane every 30 s; failed attempts
   count, and a new session or prompt id does not reset it. A further one is put back
   without Enter and the bell says so.
 
-None of this is a trust boundary. A process that can write to the pane's console and wait
-for the user's next real Enter can still get its own text sent once. Choose "put back
+None of this is a trust boundary. A process in the pane can wait for the user's next real
+Enter and, within those 15 s, draw a fake multi-row input box (which is not compared with
+the fingerprint, see above) and post `/hook` and `/resubmit` itself: its own text is then
+written and sent once. The Enter binding only raises the bar — the attacker needs a real
+Enter in that pane and good timing — and the rate limit only stops repeats, not the first
+attempt. Choose "put back
 only" (or set `DisablePromptResubmitSend`, the Corp default) to keep the final Enter with
 the user, or turn it off in Settings → Terminal → Agent safety or with
 `DisablePromptResubmit`.
