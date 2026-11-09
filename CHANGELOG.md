@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Security: private vulnerability reporting is enabled; [SECURITY.md](SECURITY.md)
+  and the corporate review pack no longer describe the issue fallback as
+  temporary. The repository now protects `main`, `dev` and release tags
+  server-side and requires SHA-pinned actions
+  ([maintainer to-dos](docs/maintainer-todos.md)).
+
 ## [1.27.0] - 2026-11-09
 
 - Terminal host is on by default (ADR 0001 phase 4, SWA-82): new panes run
