@@ -82,6 +82,11 @@ that Swarmterm's own hook reported with that edge, within 10 s, once per edge, n
 PostToolUse following that edge, and only for text that contains at least one mask
 placeholder and is at most 256 KiB (`src-tauri/src/resubmit.rs`). The text goes to the
 main window only and is never logged, announced, stored or put in the bell.
+The prompt fingerprint (length + SHA-256, never content, like the reply fingerprint of
+SWA-58) is derived from the plaintext prompt, which may contain personal data, so it is
+held only in memory, dropped once matched or after the 10 s window, compared in constant
+time, never logged and never part of an event to the renderer. `HookBody` carries it as an
+optional field (`turn.asked`), so older hook binaries still work (they just never match).
 **Remaining risk:** anything running in the pane holds the bearer, but a blocked prompt
 never reaches the transcript, so a process in the pane cannot name its fingerprint unless
 it saw the user's keystrokes. One that did (for example reading the terminal's input) could,

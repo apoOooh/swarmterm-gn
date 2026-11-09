@@ -30,7 +30,8 @@ pub const EDGE_WAIT: Duration = Duration::from_millis(400);
 pub const MAX_TEXT: usize = 256 * 1024;
 /// Blocked prompt ids remembered per pane, for an edge arriving late.
 const BLOCKED_KEEP: usize = 8;
-const BLOCKED_TTL: Duration = Duration::from_secs(30);
+/// As short as the window: the ids carry a fingerprint of a plaintext prompt.
+const BLOCKED_TTL: Duration = WINDOW;
 
 /// Settings → Terminal → Agent safety, enforced here (renderer applies the
 /// same choice again before it writes). Field values in lockstep with
@@ -72,7 +73,9 @@ pub enum Refusal {
     ToolRan,
 }
 
-#[derive(Debug, Clone)]
+/// No `Debug`: the fingerprint is of a plaintext prompt (PII) and must never
+/// reach a log, not even by accident.
+#[derive(Clone)]
 struct Edge {
     spawn_id: String,
     session_id: String,
@@ -84,18 +87,31 @@ struct Edge {
     used: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Pane {
     edge: Option<Edge>,
     blocked: VecDeque<(String, Fingerprint, Instant)>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Gate {
     panes: HashMap<String, Pane>,
 }
 
 impl Gate {
+    /// Fingerprints live only as long as they can be used: an edge past
+    /// the window and expired block reports drop theirs.
+    fn sweep(&mut self, now: Instant) {
+        for pane in self.panes.values_mut() {
+            prune(&mut pane.blocked, now);
+            if let Some(e) = pane.edge.as_mut() {
+                if now.saturating_duration_since(e.at) > WINDOW {
+                    e.asked = None;
+                }
+            }
+        }
+    }
+
     /// A Claude UserPromptSubmit edge reached `/hook`. Returns true when the
     /// guard already reported this prompt as blocked: the caller then keeps
     /// the edge out of the turn ledger and the renderer (no "working").
@@ -108,6 +124,7 @@ impl Gate {
         asked: Option<&Fingerprint>,
         now: Instant,
     ) -> bool {
+        self.sweep(now);
         let pane = self.panes.entry(terminal_id.to_owned()).or_default();
         pane.edge = Some(Edge {
             spawn_id: spawn_id.to_owned(),
@@ -122,7 +139,7 @@ impl Gate {
         asked.is_some_and(|a| {
             pane.blocked
                 .iter()
-                .any(|(p, f, _)| p == prompt_id && f == a)
+                .any(|(p, f, _)| p == prompt_id && same(f, a))
         })
     }
 
@@ -150,12 +167,12 @@ impl Gate {
         asked: &Fingerprint,
         now: Instant,
     ) -> bool {
+        self.sweep(now);
         let pane = self.panes.entry(terminal_id.to_owned()).or_default();
-        prune(&mut pane.blocked, now);
         if !pane
             .blocked
             .iter()
-            .any(|(p, f, _)| p == prompt_id && f == asked)
+            .any(|(p, f, _)| p == prompt_id && same(f, asked))
         {
             if pane.blocked.len() == BLOCKED_KEEP {
                 pane.blocked.pop_front();
@@ -164,7 +181,9 @@ impl Gate {
                 .push_back((prompt_id.to_owned(), asked.clone(), now));
         }
         pane.edge.as_ref().is_some_and(|e| {
-            e.spawn_id == spawn_id && e.prompt_id == prompt_id && e.asked.as_ref() == Some(asked)
+            e.spawn_id == spawn_id
+                && e.prompt_id == prompt_id
+                && e.asked.as_ref().is_some_and(|a| same(a, asked))
         })
     }
 
@@ -179,6 +198,7 @@ impl Gate {
         asked: &Fingerprint,
         now: Instant,
     ) -> Result<(), Refusal> {
+        self.sweep(now);
         let edge = self
             .panes
             .get_mut(terminal_id)
@@ -187,9 +207,6 @@ impl Gate {
         if edge.spawn_id != spawn_id || edge.session_id != session_id || edge.prompt_id != prompt_id
         {
             return Err(Refusal::NotTheEdge);
-        }
-        if edge.asked.as_ref() != Some(asked) {
-            return Err(Refusal::NotTheText);
         }
         if edge.used {
             return Err(Refusal::AlreadyUsed);
@@ -200,7 +217,12 @@ impl Gate {
         if now.saturating_duration_since(edge.at) > WINDOW {
             return Err(Refusal::TooOld);
         }
+        if !edge.asked.as_ref().is_some_and(|a| same(a, asked)) {
+            return Err(Refusal::NotTheText);
+        }
         edge.used = true;
+        // Matched: the fingerprint has done its job and goes.
+        edge.asked = None;
         Ok(())
     }
 
@@ -208,6 +230,17 @@ impl Gate {
     pub fn forget(&mut self, terminal_id: &str) {
         self.panes.remove(terminal_id);
     }
+}
+
+/// Constant-time over the hash, so a probing process learns nothing from
+/// how long a wrong guess takes.
+fn same(a: &Fingerprint, b: &Fingerprint) -> bool {
+    let (x, y) = (a.sha256.as_bytes(), b.sha256.as_bytes());
+    let diff = x.iter().zip(y).fold(
+        (x.len() ^ y.len()) as u8 | (a.len != b.len) as u8,
+        |d, (p, q)| d | (p ^ q),
+    );
+    diff == 0 && x.len() == y.len()
 }
 
 fn prune(blocked: &mut VecDeque<(String, Fingerprint, Instant)>, now: Instant) {
@@ -251,6 +284,48 @@ mod tests {
 
     fn fp() -> Fingerprint {
         Fingerprint::of("the blocked prompt")
+    }
+
+    #[test]
+    fn fingerprints_go_after_the_match_and_after_the_window() {
+        let mut g = Gate::default();
+        let t0 = Instant::now();
+        g.prompt(T, G, S, P, Some(&fp()), t0);
+        assert_eq!(g.check(T, G, S, P, &fp(), t0), Ok(()));
+        assert!(
+            g.panes[T].edge.as_ref().unwrap().asked.is_none(),
+            "dropped on match"
+        );
+        g.prompt(T, G, S, "p2", Some(&fp()), t0);
+        g.block(T, G, "p3", &fp(), t0);
+        // Any later access past the window sweeps every pane.
+        g.tool_ran("other");
+        g.check(
+            "other",
+            G,
+            S,
+            P,
+            &fp(),
+            t0 + WINDOW + Duration::from_millis(1),
+        )
+        .ok();
+        assert!(
+            g.panes[T].edge.as_ref().unwrap().asked.is_none(),
+            "dropped after the window"
+        );
+        assert!(g.panes[T].blocked.is_empty());
+    }
+
+    #[test]
+    fn same_compares_length_and_hash() {
+        assert!(same(&fp(), &fp()));
+        assert!(!same(&fp(), &Fingerprint::of("other")));
+        let mut f = fp();
+        f.len += 1;
+        assert!(!same(&fp(), &f));
+        f = fp();
+        f.sha256.pop();
+        assert!(!same(&fp(), &f));
     }
 
     #[test]
