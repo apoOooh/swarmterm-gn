@@ -1353,10 +1353,44 @@ fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 pub fn init(app: &AppHandle) {
     let hub = app.state::<VoiceHub>();
     if let Ok(path) = settings_path(app) {
-        *hub.settings.lock().unwrap() = settings::load(&path);
+        let pending = crate::first_run::is_pending(app);
+        let (loaded, write) = settings::load_for_boot(&path, pending);
+        if write {
+            // An install from before SWA-83 never had the file: pin its
+            // "voice on" default once, so the new-install default cannot
+            // switch it off later (D3).
+            if let Err(e) = settings::save(&path, &loaded) {
+                eprintln!("voice settings: {e}");
+            }
+        }
+        *hub.settings.lock().unwrap() = loaded;
     }
     tts::start(app);
     apply(app);
+}
+
+/// The setup assistant ended (`first_run::setup_wizard_finish`). A file
+/// written by the Voice step stays as it is. Without one, a new install
+/// keeps voice off on disk (it was only off in memory so far), and a
+/// renderer that reported an older install gets voice back on.
+pub fn settle_first_run(app: &AppHandle, existing: bool) {
+    let Ok(path) = settings_path(app) else {
+        return;
+    };
+    if path.exists() {
+        return;
+    }
+    let hub = app.state::<VoiceHub>();
+    let mut next = hub.settings();
+    next.enabled = existing;
+    if let Err(e) = settings::save(&path, &next) {
+        eprintln!("voice settings: {e}");
+        return;
+    }
+    let previous = std::mem::replace(&mut *hub.settings.lock().unwrap(), next.clone());
+    if previous.enabled != next.enabled {
+        apply(app);
+    }
 }
 
 /// Bring the endpoint in line with the settings. Switching off revokes every

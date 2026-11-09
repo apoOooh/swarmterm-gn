@@ -322,6 +322,20 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   agent and PTY generation before emitting. Codex hook definitions are additive;
   preserve user hooks, hook feature settings and trust. Supported Codex panes
   use `--no-daemon` to keep the hook environment specific to each pane.
+- **First start / setup assistant (SWA-83 phase 2).** `first_run.rs`
+  classifies the install FIRST in `setup`, from named markers in the app
+  data dir (`MARKERS`, never "dir is empty"), and stores the verdict in
+  `setup-state.json` at once (`pending|done|skipped|existing`, flags only) —
+  later boot pushes write markers, so a user who quits mid-assistant must
+  stay `pending`. The renderer (`lib/first-run.ts`) reports `existing` when
+  localStorage holds recents/saved workspaces/appearance. Voice (D3): a
+  missing `voice-settings.json` means off on a pending install (memory
+  only) and on for an older one (written once, `settings::load_for_boot`);
+  `setup_wizard_finish` settles it via `voice::settle_first_run`. The
+  assistant (`components/SetupWizard`, rules in `lib/setup-wizard.ts`) is
+  role=dialog like Settings and only shows install commands to copy (D6):
+  never install, never type into a pane. Debug builds:
+  `SWARMTERM_SETUP_WIZARD=off` treats a fresh profile as existing (testlab).
 - **Session resume.** The composer's "Resume sessions" list is read live from
   the CLIs' own stores (`sessions/` module scans Claude/Codex JSONL; OpenCode
   goes through `opencode session list --format json`). Discovery is fail-open

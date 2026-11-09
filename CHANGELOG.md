@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Setup assistant on a new installation (SWA-83): four steps for tools and
+  agents (what is missing, why, the vendor link and an install command to
+  copy — Swarmterm installs nothing itself), sign-in (passing an API key
+  variable to panes by name), voice and a first workspace. Skippable, and
+  available again under Settings → Setup. Voice dictation is now off by
+  default on a new installation; existing installations keep it as it was.
 - MCP: Claude Code and Codex now start Swarmterm's server entry as a small
   local helper, `swarmterm.exe --mcp-stdio` (SWA-83). It forwards to the
   Swarmterm the pane runs in; in a terminal outside Swarmterm it offers no

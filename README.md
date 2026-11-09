@@ -31,6 +31,7 @@ Real split terminals, one git worktree per agent, and an app your agents can dri
 - Workspaces of real split terminal panes (ConPTY), with live titles, activity and agent-state dots, broadcast typing and zoom.
 - Saved workspaces and templates restore layouts, folders and agent sessions; panes keep running in a separate terminal host across app restarts and updates (on by default).
 - Close to tray; everything keeps running until you quit.
+- Setup assistant on first start: missing tools and agents with the install command to copy, sign-in, voice and a first workspace.
 
 **Agents**
 - Agent catalogue: Claude Code, Codex, OpenCode, Copilot, Qwen Code, Gemini, Amp, Cursor and more, each with launch modes (from confirming to bypass) and session resume.

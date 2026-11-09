@@ -61,6 +61,24 @@ pub fn load(path: &Path) -> VoiceSettings {
         .unwrap_or_default()
 }
 
+/// Boot read (SWA-83, D3): `(settings, write_now)`. A missing file on a new
+/// install (`pending` assistant) means voice off, kept in memory only; on
+/// an install from before the assistant it means the old default, voice
+/// on, which the caller writes once.
+pub fn load_for_boot(path: &Path, pending: bool) -> (VoiceSettings, bool) {
+    if path.exists() {
+        return (load(path), false);
+    }
+    if pending {
+        let settings = VoiceSettings {
+            enabled: false,
+            ..VoiceSettings::default()
+        };
+        return (settings, false);
+    }
+    (VoiceSettings::default(), true)
+}
+
 pub fn save(path: &Path, settings: &VoiceSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
@@ -106,6 +124,22 @@ mod tests {
         assert_eq!(load(&path), s);
         fs::write(&path, "garbage").unwrap();
         assert_eq!(load(&path), VoiceSettings::default());
+    }
+
+    #[test]
+    fn a_new_install_starts_without_voice_and_an_older_one_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("voice-settings.json");
+        let (fresh, write) = load_for_boot(&path, true);
+        assert!(!fresh.enabled && !write);
+        let (older, write) = load_for_boot(&path, false);
+        assert!(older.enabled && write);
+        // A file always wins, also during a pending assistant.
+        save(&path, &VoiceSettings::default()).unwrap();
+        assert_eq!(
+            load_for_boot(&path, true),
+            (VoiceSettings::default(), false)
+        );
     }
 
     #[test]
