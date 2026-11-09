@@ -32,6 +32,15 @@ const VERSION_HEADER: &str = "mcp-protocol-version";
 const FALLBACK_PROTOCOL: &str = "2025-06-18";
 /// How long answers still in flight may finish after stdin closed.
 const DRAIN: std::time::Duration = std::time::Duration::from_secs(2);
+/// Limit for the handshake (`initialize`, a session renewal). Tool calls
+/// have none: a War Room `wait_peer` may legitimately block for minutes.
+/// An app that accepts the connection and never answers must not keep the
+/// client's session start (and the inline `initialize`) hanging.
+const HANDSHAKE: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_millis(500)
+} else {
+    std::time::Duration::from_secs(10)
+};
 
 /// Where to relay to. `None` = answer as the empty server.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -218,6 +227,13 @@ impl Proxy {
         }
     }
 
+    /// `post`, bounded by `HANDSHAKE`.
+    async fn post_handshake(&self, msg: &Value, out: Option<&Out>) -> Posted {
+        tokio::time::timeout(HANDSHAKE, self.post(msg, out))
+            .await
+            .unwrap_or_else(|_| Posted::Failed("Swarmterm did not answer in time".into()))
+    }
+
     /// POST one message; relay whatever comes back to `out` (when given).
     async fn post(&self, msg: &Value, out: Option<&Out>) -> Posted {
         let Some(up) = &self.upstream else {
@@ -300,7 +316,7 @@ impl Proxy {
                 .pointer("/params/protocolVersion")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            match self.post(&msg, Some(out)).await {
+            match self.post_handshake(&msg, Some(out)).await {
                 Posted::Done => {
                     *self.protocol.lock().await = version;
                     return;
@@ -330,11 +346,11 @@ impl Proxy {
         };
         init["id"] = json!("swarmterm-proxy-reinit");
         *self.session.lock().await = None;
-        if !matches!(self.post(&init, None).await, Posted::Done) {
+        if !matches!(self.post_handshake(&init, None).await, Posted::Done) {
             return false;
         }
         let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-        matches!(self.post(&initialized, None).await, Posted::Done)
+        matches!(self.post_handshake(&initialized, None).await, Posted::Done)
     }
 
     async fn handle(self: Arc<Self>, msg: Value, out: Out) {
@@ -753,6 +769,72 @@ mod tests {
         // fallback, the server still never saw a call it accepted.
         let got = run(Some(up), &[init(0)]).await;
         assert_eq!(got[0]["result"]["serverInfo"]["name"], "swarmterm");
+    }
+
+    #[tokio::test]
+    async fn a_redirect_is_never_followed() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new()
+            .route(
+                "/mcp",
+                axum::routing::post(|| async {
+                    (StatusCode::TEMPORARY_REDIRECT, [("location", "/elsewhere")])
+                }),
+            )
+            .route(
+                "/elsewhere",
+                axum::routing::post({
+                    let hits = hits.clone();
+                    move || async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::OK
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let up = Upstream {
+            url: format!("http://127.0.0.1:{port}/mcp"),
+            bearer: "tok".into(),
+        };
+        let got = run(Some(up), &[init(0)]).await;
+        // Not followed: the proxy degrades to the empty server.
+        assert_eq!(got[0]["result"]["serverInfo"]["name"], "swarmterm");
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_silent_app_cannot_hang_the_handshake() {
+        // Accepts the connection, never answers.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((sock, _)) = listener.accept().await {
+                held.push(sock);
+            }
+        });
+        let up = Upstream {
+            url: format!("http://127.0.0.1:{port}/mcp"),
+            bearer: "tok".into(),
+        };
+        let started = std::time::Instant::now();
+        let got = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            run(
+                Some(up),
+                &[
+                    init(0),
+                    json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+                ],
+            ),
+        )
+        .await
+        .expect("the proxy hung on a silent app");
+        assert_eq!(got[0]["result"]["serverInfo"]["name"], "swarmterm");
+        assert_eq!(got[1]["result"]["tools"], json!([]));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[tokio::test]
