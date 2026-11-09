@@ -607,7 +607,7 @@ War Room abilities only work for panes you dragged into a room, worktree abiliti
 
 ## Swarmterm MCP
 
-The top of **Settings → MCP** has one switch per agent and account for Swarmterm's own server (War Room, browser and worktree tools). On is the default. Off removes only Swarmterm's entry from that profile's configuration and keeps it from being written again; restart running panes afterwards. A server of your own that happens to be called `swarmterm` is never changed. **Details** shows the configuration file and the server address.
+The top of **Settings → MCP** has one switch per agent and account for Swarmterm's own server (War Room, browser and worktree tools). On is the default. Off removes only Swarmterm's entry from that profile's configuration and keeps it from being written again; restart running panes afterwards. A server of your own that happens to be called `swarmterm` is never changed. **Details** shows the configuration file and the server address. For Claude Code and Codex the entry starts a small helper, `swarmterm.exe --mcp-stdio`, which forwards to the Swarmterm the pane runs in; in a terminal outside Swarmterm it offers no tools, so the agent shows no failed server there. An entry written by an older version is replaced at the next start.
 
 ## MCP catalogue
 

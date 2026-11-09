@@ -20,6 +20,8 @@ mod json_style;
 mod links;
 mod marked_media;
 mod mcp;
+// Public so `main.rs` can reach `--mcp-stdio` without booting Tauri.
+pub mod mcp_stdio;
 mod paste_image;
 mod policy;
 mod prerequisites;

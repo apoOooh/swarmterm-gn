@@ -72,6 +72,15 @@ Tools: open a web preview (http/https URLs only), list/spawn/remove worktrees
 changes and paths outside `<repo>.worktrees`), and the War Room tools.
 Settings → MCP removes the server entry from an agent profile's configuration.
 
+Claude Code and Codex reach the server through a local stdio proxy
+(`swarmterm.exe --mcp-stdio`, `src-tauri/src/mcp_stdio.rs`), which their
+configuration starts as an ordinary MCP server. It opens no port and holds no
+secret of its own: it reads `SWARMTERM_MCP_URL` and `SWARMTERM_SESSION` from the
+pane's environment, accepts only a loopback `http://127.0.0.1:<port>/mcp`
+address and sends the pane's bearer on every request, `initialize` included, so
+the server's checks above apply unchanged. Outside a pane it answers as a server
+without tools and contacts nothing.
+
 `POST /resubmit` (SWA-88) is the one route that carries prompt text: data-shield's
 UserPromptSubmit guard sends the masked form of a prompt it blocked, and Swarmterm
 types it back into the same pane (and, by default, sends it). It accepts a request only
@@ -257,7 +266,14 @@ duration, no content) to `%LOCALAPPDATA%\<app id>\diagnostics\ui-stalls.log`
 default; locked by `DisableHangDumps` and in the Corp edition, enforced in Rust) is taken by a
 separate process, `swarmterm.exe --dump-ui <pid> <file>`, never in-process, so a stuck UI thread
 cannot deadlock the dump. That mode only dumps a process that runs the same executable, so it
-cannot be used to read another program's memory (`src-tauri/src/dump_ui.rs`). Dumps are thread
+cannot be used to read another program's memory (`src-tauri/src/dump_ui.rs`). Any process can
+start that mode — a pane included — so it enforces the same gates itself before it creates a
+file: the admin policy and the Corp edition (`DisableHangDumps`, read from the registry at
+that moment) and the user's saved opt-in (`diagnostics.json` in the app data dir of the
+build's own identifier, never a path from the command line). A refusal exits non-zero and
+writes nothing. These gates stop a locked or opted-out install from being dumped through the
+CLI; they are no barrier against code of the same user, which could call
+`MiniDumpWriteDump` itself or edit the opt-in file. Dumps are thread
 lists and stacks without the full heap, but can still hold terminal text or session tokens; they
 stay in the user's profile and are never sent anywhere.
 

@@ -199,13 +199,9 @@ fn same_dir(a: &str, b: &str) -> bool {
     normalized(a) == normalized(b)
 }
 
-pub fn save(
-    app: &AppHandle,
-    input: AccountInput,
-    url: Option<&str>,
-) -> Result<AgentAccount, String> {
+pub fn save(app: &AppHandle, input: AccountInput) -> Result<AgentAccount, String> {
     let _lock = STORE_LOCK.lock().map_err(|e| e.to_string())?;
-    save_at_with(&store_path(app)?, input, |account| enroll(account, url))
+    save_at_with(&store_path(app)?, input, enroll)
 }
 
 pub fn delete_at(path: &Path, id: &str) -> Result<(), String> {
@@ -233,7 +229,7 @@ pub fn resolve(app: &AppHandle, id: &str, agent_id: Option<&str>) -> Result<Agen
     Ok(account)
 }
 
-pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
+pub fn enroll(account: &AgentAccount) -> Result<(), String> {
     // Concurrent pane starts may enroll the same profile. Serialize the entire
     // read/merge/rename sequence so a second writer cannot consume our temp file.
     let _lock = CONFIG_WRITE.lock().map_err(|e| e.to_string())?;
@@ -265,10 +261,10 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
             )?;
         }
         "codex" => {
-            // Dev builds leave the Codex URL to the installed app even in a
-            // shared configDir; their panes are pinned per process instead.
-            if let Some(url) = url.filter(|_| mcp_on && !cfg!(debug_assertions)) {
-                crate::mcp::config::write_codex_config_to_file(&dir.join("config.toml"), url)?;
+            // The stdio entry carries no port (SWA-83 1b); a dev build leaves
+            // a live installed app's entry alone (`mcp::entry`).
+            if mcp_on {
+                crate::mcp::config::write_codex_config_to_file(&dir.join("config.toml"))?;
             }
             // Same rule as the default profile: a dev build must not swap the
             // exe path under the installed app's hook and trigger re-trust.

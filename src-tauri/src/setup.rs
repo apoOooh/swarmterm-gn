@@ -470,15 +470,13 @@ pub fn ensure_codex(app: &AppHandle) {
     // Unsupported is final for this run (the probe result is cached);
     // Undecided (probe timed out) is retried by the next call.
     CODEX_DONE.store(
-        hooks.state == State::Ok && mcp.as_ref().is_none_or(|c| c.state != State::Error),
+        hooks.state == State::Ok && mcp.state != State::Error,
         Ordering::Release,
     );
     update(Some(app), |s| {
         s.codex.installed = Some(true);
         s.codex.hooks = hooks;
-        if let Some(mcp) = mcp {
-            s.codex.mcp = mcp;
-        }
+        s.codex.mcp = mcp;
     });
 }
 
@@ -498,30 +496,19 @@ fn codex_hooks_check(result: Result<crate::hook::codex::Registered, String>) -> 
     }
 }
 
-/// Codex reads MCP servers from `config.toml` at session start and cannot
-/// expand env vars in `url`, so the concrete URL is (re)written. Dev builds
-/// skip it: two apps sharing one `config.toml` would overwrite each other's
-/// port, and pane-started Codex is pinned per process anyway. `None` until
-/// the MCP server has a port (`mcp::start` calls `codex_mcp` then). The
-/// caller holds `CONFIG_WRITE` (the hooks write the same `config.toml`).
-fn codex_mcp_locked(app: &AppHandle) -> Option<Check> {
-    use tauri::Manager;
-    if cfg!(debug_assertions) {
-        return Some(codex_mcp_check(None));
-    }
+/// Codex's stdio entry in `config.toml` (SWA-83 1b): written or migrated
+/// once, then only checked; a dev build defers to a live installed app
+/// (`mcp::entry`). The caller holds `CONFIG_WRITE` (the hooks write the same
+/// `config.toml`).
+fn codex_mcp_locked(app: &AppHandle) -> Check {
     if !crate::mcp::toggle::is_enabled("codex", None) {
-        return Some(codex_mcp_check(Some(Ok(false))));
+        return codex_mcp_check(Ok(false));
     }
-    let url = app
-        .state::<crate::pty::AppState>()
-        .mcp_url
-        .get()?
-        .to_string();
-    let result = crate::mcp::config::register_codex(app, &url);
+    let result = crate::mcp::config::register_codex(app);
     if let Err(e) = &result {
         eprintln!("mcp: {e}");
     }
-    Some(codex_mcp_check(Some(result.map(|()| true))))
+    codex_mcp_check(result.map(|()| true))
 }
 
 /// Called by `mcp::start` once the port is known: writes Codex's entry if
@@ -529,40 +516,33 @@ fn codex_mcp_locked(app: &AppHandle) -> Option<Check> {
 /// later gets it from `ensure_codex`.
 pub fn codex_mcp(app: &AppHandle) {
     let check = if crate::agents::find_agent_binary("codex").is_none() {
-        Some(Check::of(State::NotInstalled))
+        Check::of(State::NotInstalled)
     } else {
         let _lock = crate::accounts::CONFIG_WRITE
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         codex_mcp_locked(app)
     };
-    if let Some(check) = check {
-        update(Some(app), |s| s.codex.mcp = check);
-    }
+    update(Some(app), |s| s.codex.mcp = check);
 }
 
-fn codex_mcp_check(result: Option<Result<bool, String>>) -> Check {
+fn codex_mcp_check(result: Result<bool, String>) -> Check {
     match result {
-        // Dev build: not written to the shared `config.toml` on purpose.
-        None => Check {
-            state: State::Deferred,
-            detail: Some("Codex panes started here get the address directly".into()),
-        },
-        Some(Ok(true)) => Check::of(State::Ok),
-        Some(Ok(false)) => Check::of(State::Off),
-        Some(Err(e)) => Check::error(e),
+        Ok(true) => Check::of(State::Ok),
+        Ok(false) => Check::of(State::Off),
+        Err(e) => Check::error(e),
     }
 }
 
-/// Boot: Claude synchronously (hooks are snapshotted when a session starts,
-/// and restored panes spawn right after the renderer mounts), Codex on a
-/// blocking worker so its probe never delays the window.
 /// Re-scan the prerequisites (PATH scan, no process started).
 fn refresh_prerequisites(app: &AppHandle) {
     let tools = crate::prerequisites::current(default_profile_git_bash(app));
     update(Some(app), |s| s.prerequisites = tools);
 }
 
+/// Boot: Claude synchronously (hooks are snapshotted when a session starts,
+/// and restored panes spawn right after the renderer mounts), Codex on a
+/// blocking worker so its probe never delays the window.
 pub fn boot(app: &AppHandle) {
     ensure_claude(app);
     refresh_prerequisites(app);
@@ -668,10 +648,9 @@ mod tests {
 
     #[test]
     fn codex_mcp_outcomes() {
-        assert_eq!(codex_mcp_check(None).state, State::Deferred);
-        assert_eq!(codex_mcp_check(Some(Ok(true))).state, State::Ok);
-        assert_eq!(codex_mcp_check(Some(Ok(false))).state, State::Off);
-        assert_eq!(codex_mcp_check(Some(Err("e".into()))).state, State::Error);
+        assert_eq!(codex_mcp_check(Ok(true)).state, State::Ok);
+        assert_eq!(codex_mcp_check(Ok(false)).state, State::Off);
+        assert_eq!(codex_mcp_check(Err("e".into())).state, State::Error);
     }
 
     #[test]
