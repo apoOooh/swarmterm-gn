@@ -203,6 +203,18 @@ in a pane anyway. It keeps secrets that were only exported into Swarmterm's own
 launch environment away from agents. For corporate use set `EnvPolicy=strict`
 (`docs/admin-policy.md`) and allow-list what the agents need.
 
+### UI hang diagnostics
+
+A watchdog thread logs every stall of the UI thread of 2 s or more as one line (time and
+duration, no content) to `%LOCALAPPDATA%\<app id>\diagnostics\ui-stalls.log`
+(`src-tauri/src/ui_watchdog.rs`). The opt-in minidump (Settings → Terminal → Diagnostics, off by
+default; locked by `DisableHangDumps` and in the Corp edition, enforced in Rust) is taken by a
+separate process, `swarmterm.exe --dump-ui <pid> <file>`, never in-process, so a stuck UI thread
+cannot deadlock the dump. That mode only dumps a process that runs the same executable, so it
+cannot be used to read another program's memory (`src-tauri/src/dump_ui.rs`). Dumps are thread
+lists and stacks without the full heap, but can still hold terminal text or session tokens; they
+stay in the user's profile and are never sent anywhere.
+
 ### Voice pipe
 
 The voice companion talks to the app over a named pipe restricted to the
@@ -234,7 +246,7 @@ wins per value. The policy is read once at start and cannot be changed while
 the app runs. Each lock is enforced in the backend at the point of action
 (`src-tauri/src/policy.rs`): bypass launch lines, War Room execute,
 `worktree.spawn`, the MCP server and its enrollment, companion install and
-updates, speech-model downloads, command routines, the web preview, and a
+updates, speech-model downloads, command routines, the web preview, hang dumps, and a
 forced environment filter with an admin allow list. The renderer only greys out
 locked controls. Details: [admin-policy.md](admin-policy.md).
 
@@ -242,8 +254,8 @@ locked controls. Details: [admin-policy.md](admin-policy.md).
 
 The Swarmterm GN Corp build (Cargo feature `corp`, own identifier
 `com.apooooh.swarmterm.gn.corp`) compiles the locks `DisableBypassModes`,
-`DisableWarRoomExecute`, `DisableCompanion`, `DisableModelDownload` and
-`EnvPolicy=default` into the binary (`policy::Edition::locks`). They are
+`DisableWarRoomExecute`, `DisableCompanion`, `DisableModelDownload`,
+`DisableHangDumps` and `EnvPolicy=default` into the binary (`policy::Edition::locks`). They are
 combined with the registry policy, which can add locks but not lift these. The
 buzzkey download/installer and the speech-model download are compiled out, not
 only locked; the release workflow fails if their endpoints appear in the Corp

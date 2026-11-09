@@ -36,13 +36,23 @@ same layout under that folder name.
 | Local deletion history (copies of files you delete in the file explorer) | `%APPDATA%\com.apooooh.swarmterm.gn\local-history\` | `src-tauri/src/lib.rs`, `src-tauri/src/files/history.rs` |
 | Speech recognition models you download | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\models\` | `src-tauri/src/voice/speech/mod.rs` |
 | Terminal host endpoint (`host-endpoint.json`: pipe name, token) and the copy of `swarmterm-host.exe` it runs from, one folder per build, when the terminal host is on | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\`, `host\<version>-<hash>\` | `src-tauri/src/host_client/launch.rs` |
+| UI stall log (`ui-stalls.log`, rotated to `ui-stalls.old.log` above 64 KB): one line per stall of the window of 2 s or more, with a Unix time in milliseconds and the duration, no content. Always on | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\diagnostics\` | `src-tauri/src/ui_watchdog.rs` |
+| Optional hang dumps (`ui-stall-1.dmp` to `ui-stall-3.dmp`, oldest replaced), written only after you turn on Settings → Terminal → Diagnostics → **Write a dump when the window stops responding** (off by default); the switch is saved in `diagnostics.json` | dumps in `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\diagnostics\`, switch in `%APPDATA%\com.apooooh.swarmterm.gn\diagnostics.json` | `src-tauri/src/dump_ui.rs`, `src-tauri/src/diagnostics.rs` |
 | Voice endpoint description (pipe name, per-launch token, process id) | `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\` | `src-tauri/src/voice/pipe.rs` |
 | Pasted clipboard images, annotated image copies, clipboard media | `%TEMP%\swarmterm-paste\`, `%TEMP%\swarmterm-marked\`, `%TEMP%\swarmterm-clipboard\` | `src-tauri/src/paste_image.rs`, `src-tauri/src/marked_media.rs`, `src-tauri/src/clipboard_media.rs` |
 
 Saved workspaces store structure only (folders, pane layout, agent choice,
 session ids). Terminal output, prompts, startup commands and unsaved editor
-buffers are not saved. Release builds write no log files of their own (a debug-only developer log
+buffers are not saved. Apart from the UI stall log above, release builds write no log files of their own (a debug-only developer log
 exists behind the `SWARMTERM_DEV_LOG` variable, `src-tauri/src/devlog.rs`).
+
+A hang dump is a minidump of Swarmterm (thread list and stacks, no full heap). It can contain
+terminal text and session tokens that happened to be in stack memory, so treat it like a
+terminal log. It stays on your computer and is never sent anywhere; Swarmterm does not upload
+it. To stop writing dumps, turn the switch off; to remove them, delete the `*.dmp` files in the
+`diagnostics` folder (Settings → Terminal → Diagnostics opens it). An administrator can turn
+dumps off for everyone with the policy value `DisableHangDumps`; the Corp edition has them
+locked off.
 
 The application reads, but does not copy or send, the agent CLIs' own files:
 session lists for resuming conversations and, for the Accounts panel, login

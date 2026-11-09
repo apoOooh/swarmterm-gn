@@ -47,6 +47,9 @@ pub struct AdminPolicy {
     pub disable_prompt_resubmit: bool,
     /// SWA-88: the masked prompt is inserted but never sent (Corp default).
     pub disable_prompt_resubmit_send: bool,
+    /// Local UI-hang dumps (SWA-85): opt-in, lockable because a dump holds
+    /// stack memory that may contain terminal text and session tokens.
+    pub disable_hang_dumps: bool,
     /// `Some` = the environment filter is forced on with at least this mode.
     pub env_policy: Option<FilterMode>,
     /// Extra names that always pass the filter (admin's allow list).
@@ -73,6 +76,7 @@ const FLAGS: &[(&str, FlagField)] = &[
     ("DisablePromptResubmitSend", |p| {
         &mut p.disable_prompt_resubmit_send
     }),
+    ("DisableHangDumps", |p| &mut p.disable_hang_dumps),
 ];
 
 /// What `policy_get` returns: the policy plus the active value names, so the
@@ -140,6 +144,9 @@ impl Edition {
                 // SWA-88 (user decision 2026-11-09): the masked prompt is
                 // put back, the user presses Enter.
                 disable_prompt_resubmit_send: true,
+                // A dump is process memory written to disk: Corp keeps
+                // only the stall log line (no content), never the dump.
+                disable_hang_dumps: true,
                 env_policy: Some(FilterMode::Default),
                 ..Default::default()
             },
@@ -160,6 +167,7 @@ pub enum Lock {
     ModelDownload,
     RoutineCommands,
     PreviewBrowser,
+    HangDumps,
 }
 
 impl Lock {
@@ -174,6 +182,7 @@ impl Lock {
             Lock::ModelDownload => "DisableModelDownload",
             Lock::RoutineCommands => "DisableRoutineCommands",
             Lock::PreviewBrowser => "DisablePreviewBrowser",
+            Lock::HangDumps => "DisableHangDumps",
         }
     }
 
@@ -188,6 +197,7 @@ impl Lock {
             Lock::ModelDownload => "Speech model downloads are",
             Lock::RoutineCommands => "Command routines are",
             Lock::PreviewBrowser => "The web preview is",
+            Lock::HangDumps => "Hang dumps are",
         }
     }
 }
@@ -344,6 +354,7 @@ impl AdminPolicy {
             Lock::ModelDownload => self.disable_model_download,
             Lock::RoutineCommands => self.disable_routine_commands,
             Lock::PreviewBrowser => self.disable_preview_browser,
+            Lock::HangDumps => self.disable_hang_dumps,
         }
     }
 
@@ -1544,6 +1555,7 @@ mod tests {
                 "DisableCompanion",
                 "DisableModelDownload",
                 "DisablePromptResubmitSend",
+                "DisableHangDumps",
                 "EnvPolicy"
             ]
         );

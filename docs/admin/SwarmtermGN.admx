@@ -81,6 +81,12 @@
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
+    <policy name="DisableHangDumps" class="Both" displayName="$(string.DisableHangDumps)" explainText="$(string.DisableHangDumps_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableHangDumps">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
     <policy name="EnvPolicy" class="Both" displayName="$(string.EnvPolicy)" explainText="$(string.EnvPolicy_Help)" presentation="$(presentation.EnvPolicy)" key="Software\Policies\SwarmtermGN">
       <parentCategory ref="SwarmtermGN" />
       <supportedOn ref="SUPPORTED_SwarmtermGN" />

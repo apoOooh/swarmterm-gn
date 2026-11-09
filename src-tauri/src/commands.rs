@@ -11,6 +11,18 @@ fn files_main_only(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 
+/// The renderer's one-time "boot finished, show the window" (App mount and
+/// the boot guard). How it appears is decided in Rust (`dev_window`): release
+/// = plain show, debug = without focus behind the active window, debug with
+/// `SWARMTERM_DEV_HIDDEN=1` = not at all.
+#[tauri::command]
+pub fn window_reveal(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("window_reveal is available only in the main window".into());
+    }
+    crate::dev_window::reveal(&window)
+}
+
 #[tauri::command]
 pub fn confirm_quit(
     window: tauri::WebviewWindow,
@@ -952,8 +964,16 @@ pub async fn list_folders(path: String) -> Result<crate::folder_list::FolderList
 
 /// First of `candidates` (an allowlisted editor id) found on PATH. The renderer
 /// asks once and caches; `None` means fall back to revealing in the file manager.
+/// Async (SWA-85): stats PATH × PATHEXT for every candidate, off the UI thread.
 #[tauri::command]
-pub fn find_available_editor(candidates: Vec<String>) -> Option<String> {
+pub async fn find_available_editor(candidates: Vec<String>) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || find_available_editor_blocking(candidates))
+        .await
+        .ok()
+        .flatten()
+}
+
+fn find_available_editor_blocking(candidates: Vec<String>) -> Option<String> {
     let allowed: Vec<String> = candidates
         .into_iter()
         .filter(|c| crate::links::is_allowed_editor(c))
@@ -965,8 +985,16 @@ pub fn find_available_editor(candidates: Vec<String>) -> Option<String> {
 /// Launch an editor by argv. Never goes through a shell, so nothing in `args`
 /// can be reinterpreted as shell syntax, and `bin` is re-checked against the
 /// allowlist because the renderer is not a trust boundary.
+/// Async (SWA-85): CreateProcess can take seconds under load and must not
+/// stall the UI thread.
 #[tauri::command]
-pub fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
+pub async fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_in_editor_blocking(bin, args))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn open_in_editor_blocking(bin: String, args: Vec<String>) -> Result<(), String> {
     if !crate::links::is_allowed_editor(&bin) {
         return Err(format!("editor not allowed: {bin}"));
     }
@@ -988,9 +1016,12 @@ pub fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
 /// Show the file in the OS file manager. Used when no allowlisted editor is on
 /// PATH. Reveal-only: the file is selected, never opened, so this can't execute
 /// anything.
+/// Async like `open_in_editor` (spawns explorer.exe).
 #[tauri::command]
-pub fn reveal_in_file_manager(path: String) -> Result<(), String> {
-    crate::links::reveal_in_file_manager(&path)
+pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::links::reveal_in_file_manager(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Frontend drags a pane into one room's drop zone. Metadata is a frontend

@@ -87,7 +87,7 @@ whisper-rs = { version = "0.16", optional = true }
 cpal = "0.18"
 # Built-in announcements (SWA-66, docs/adr/0003): the system's SAPI voices.
 # Same version tauri/wry already pull in, so this adds features, not a crate.
-windows = { version = "0.61", features = ["Win32_Media_Speech", "Win32_System_Com"] }
+windows = { version = "0.61", features = ["Win32_Media_Speech", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
 junction = "1"
 # Job Objects so killing a terminal tears down the shell's whole process tree
 # (children/grandchildren) instead of just the shell itself.
@@ -104,6 +104,10 @@ windows-sys = { version = "0.59", features = [
   "Win32_Storage_FileSystem",
   # Clipboard sequence-number poll (clipboard_media.rs fallback).
   "Win32_System_DataExchange",
+  # UI-stall dumps (SWA-85, dump_ui.rs): MiniDumpWriteDump needs all three.
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Kernel",
+  "Win32_System_Memory",
 ] }
 
 # Terminal host sidecar (ADR 0001). A workspace member so `cargo test` /
@@ -117,6 +121,9 @@ default-members = [".", "host"]
 # Cargo unions features per crate, so tests get the main tokio features plus
 # `test-util`; release builds are unaffected (dev-deps are test-only).
 tokio = { version = "1", features = ["test-util"] }
+# tests/ui_thread_commands.rs parses src/ to find synchronous commands
+# (SWA-85). Already in Cargo.lock via tauri-macros; test-only.
+syn = { version = "2", features = ["full", "visit"] }
 
 # Profiling build (docs/perf-profiling.md): release codegen plus line tables
 # so samply/WPA resolve symbols. Output lands in target/profiling, apart

@@ -22,6 +22,8 @@ export interface AdminPolicy {
   disablePromptResubmit: boolean
   /** SWA-88: put back, never sent (Corp built-in). */
   disablePromptResubmitSend: boolean
+  /** Local UI-hang dumps (SWA-85) are off and cannot be turned on. */
+  disableHangDumps: boolean
   /** Set = the environment filter is forced on with at least this mode. */
   envPolicy: EnvPolicyMode | null
   envAllow: string[]
@@ -49,6 +51,7 @@ export const UNMANAGED_POLICY: AdminPolicy = {
   disablePreviewBrowser: false,
   disablePromptResubmit: false,
   disablePromptResubmitSend: false,
+  disableHangDumps: false,
   envPolicy: null,
   envAllow: [],
   locked: false,
@@ -68,7 +71,8 @@ const FLAGS = [
   'disableRoutineCommands',
   'disablePreviewBrowser',
   'disablePromptResubmit',
-  'disablePromptResubmitSend'
+  'disablePromptResubmitSend',
+  'disableHangDumps'
 ] as const
 
 /** Field-wise validation of the IPC answer: only a literal `true` locks. A
@@ -98,6 +102,7 @@ export const POLICY_DESCRIPTIONS: Record<string, string> = {
   DisableModelDownload: 'Speech model downloads are blocked',
   DisableRoutineCommands: 'Command routines are blocked',
   DisablePreviewBrowser: 'The web preview is off',
+  DisableHangDumps: 'Hang dumps are blocked',
   EnvPolicy: 'The environment filter is forced on',
   EnvAllow: 'Extra environment names are allowed by the administrator'
 }

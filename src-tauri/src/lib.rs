@@ -7,7 +7,10 @@ mod child_priority;
 mod clipboard_media;
 mod commands;
 mod dev_defer;
+mod dev_window;
 mod devlog;
+mod diagnostics;
+pub mod dump_ui;
 mod files;
 mod folder_list;
 mod git;
@@ -32,6 +35,7 @@ pub mod statusline;
 pub mod hook;
 mod terminal_env;
 mod tray;
+mod ui_watchdog;
 mod voice;
 mod warroom;
 mod window_fit;
@@ -43,6 +47,9 @@ use tauri::WindowEvent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before any thread can read the environment: decides (and removes)
+    // the debug-only SWARMTERM_DEV_HIDDEN switch.
+    let start_mode = dev_window::current();
     #[cfg(feature = "profiling")]
     install_named_runtime();
     tauri::Builder::default()
@@ -69,16 +76,45 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
-        .register_uri_scheme_protocol("swarmterm-media", |context, request| {
-            let service = context
-                .app_handle()
-                .state::<std::sync::Arc<files::FileService>>();
-            files::media_response(&service, context.webview_label(), request)
-        })
+        // Asynchronous on purpose (SWA-85): a synchronous scheme handler runs
+        // inside WebView2's WebResourceRequested callback on the UI thread,
+        // so every media read (up to 256 MB without a range, 8 MiB per range,
+        // 32 MB documents) would stall the window under disk load. The label
+        // is copied before the hop; the webview check stays in the handler.
+        .register_asynchronous_uri_scheme_protocol(
+            "swarmterm-media",
+            |context, request, responder| {
+                let app = context.app_handle().clone();
+                let label = context.webview_label().to_string();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let service = app.state::<std::sync::Arc<files::FileService>>();
+                    responder.respond(files::media_response(&service, &label, request));
+                });
+            },
+        )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
+        .setup(move |app| {
             crate::prof::start(app.handle());
+            // The main window is `create: false` in tauri.conf.json and built
+            // here from that same entry, because whether it may take focus is
+            // a build-type fact (SWA-84, `dev_window`), not config: a second
+            // copy of the whole `windows` array in a dev config would drift.
+            // Built first so every `get_webview_window("main")` below finds it.
+            {
+                let config = app
+                    .config()
+                    .app
+                    .windows
+                    .first()
+                    .cloned()
+                    .ok_or("tauri.conf.json defines no main window")?;
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+                    .focused(start_mode.focused())
+                    .build()?;
+            }
+            // UI-stall watchdog (SWA-85): stall log always, dumps opt-in.
+            crate::diagnostics::init(app.handle());
             // Before any pane, routine or other child process spawns: the
             // user's env policy from the last run (admin policy applied), not
             // the built-in default.
@@ -193,8 +229,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             devlog::dev_log,
+            diagnostics::diagnostics_get,
+            diagnostics::diagnostics_set,
+            diagnostics::debug_ui_stall,
             commands::files_open_context,
             commands::confirm_quit,
+            commands::window_reveal,
             commands::quit_hosted_count,
             commands::run_routine_command,
             commands::save_clipboard_image,
