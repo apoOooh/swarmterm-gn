@@ -101,28 +101,23 @@ pub enum EntryState {
     PerPane,
 }
 
-fn json_is_ours(v: &Value) -> bool {
-    let url = v
-        .get("url")
-        .or_else(|| v.get("httpUrl"))
-        .and_then(Value::as_str);
-    let auth = v
-        .get("headers")
-        .and_then(|h| h.get("Authorization"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    url == Some("${SWARMTERM_MCP_URL}") || auth.contains("SWARMTERM_SESSION")
+/// Our legacy HTTP entry and our stdio entry are both "ours" (SWA-83 1b).
+fn state_of(kind: crate::mcp::entry::Kind) -> EntryState {
+    use crate::mcp::entry::Kind;
+    match kind {
+        Kind::Absent => EntryState::Absent,
+        Kind::Legacy | Kind::Stdio { .. } => EntryState::Ours,
+        Kind::Foreign => EntryState::Foreign,
+    }
 }
 
 pub fn json_entry_state(text: &str) -> EntryState {
     let Ok(doc) = serde_json::from_str::<Value>(text) else {
         return EntryState::Absent;
     };
-    match doc.get("mcpServers").and_then(|m| m.get("swarmterm")) {
-        None => EntryState::Absent,
-        Some(v) if json_is_ours(v) => EntryState::Ours,
-        Some(_) => EntryState::Foreign,
-    }
+    state_of(crate::mcp::entry::classify_json(
+        doc.get("mcpServers").and_then(|m| m.get("swarmterm")),
+    ))
 }
 
 /// New file text without our entry, or None when there is nothing of ours to
@@ -144,16 +139,9 @@ pub fn codex_entry_state(text: &str) -> EntryState {
     let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
         return EntryState::Absent;
     };
-    match doc.get("mcp_servers").and_then(|m| m.get("swarmterm")) {
-        None => EntryState::Absent,
-        Some(e)
-            if e.get("bearer_token_env_var").and_then(|v| v.as_str())
-                == Some("SWARMTERM_SESSION") =>
-        {
-            EntryState::Ours
-        }
-        Some(_) => EntryState::Foreign,
-    }
+    state_of(crate::mcp::entry::classify_toml(
+        doc.get("mcp_servers").and_then(|m| m.get("swarmterm")),
+    ))
 }
 
 /// toml_edit keeps the user's comments and formatting around the removal.
@@ -246,6 +234,18 @@ mod tests {
         assert!(out.contains("# mine"));
         assert!(out.contains("[mcp_servers.github]"));
         assert!(!out.contains("swarmterm"));
+    }
+
+    #[test]
+    fn stdio_entries_are_ours_and_removed() {
+        let json = r#"{"mcpServers":{"swarmterm":{"type":"stdio","command":"C:/Apps/Swarmterm GN/swarmterm.exe","args":["--mcp-stdio"]}}}"#;
+        assert_eq!(json_entry_state(json), EntryState::Ours);
+        let out = remove_json_entry(json).unwrap().unwrap();
+        assert_eq!(json_entry_state(&out), EntryState::Absent);
+        let toml = "[mcp_servers.swarmterm]\ncommand = 'C:\\Apps\\swarmterm.exe'\nargs = [\"--mcp-stdio\"]\nenv_vars = [\"SWARMTERM_MCP_URL\", \"SWARMTERM_SESSION\"]\n";
+        assert_eq!(codex_entry_state(toml), EntryState::Ours);
+        let out = remove_codex_entry(toml).unwrap().unwrap();
+        assert!(!out.contains("swarmterm"), "{out}");
     }
 
     #[test]

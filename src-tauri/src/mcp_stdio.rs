@@ -30,6 +30,8 @@ const SESSION_HEADER: &str = "mcp-session-id";
 const VERSION_HEADER: &str = "mcp-protocol-version";
 /// Used when a client sends no version (never seen; MCP requires one).
 const FALLBACK_PROTOCOL: &str = "2025-06-18";
+/// How long answers still in flight may finish after stdin closed.
+const DRAIN: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Where to relay to. `None` = answer as the empty server.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -384,7 +386,11 @@ pub async fn serve(
         }
         while tasks.try_join_next().is_some() {}
     }
-    // stdin closed: the client is gone; nothing left to answer.
+    // stdin closed. An MCP client shutting down this way no longer reads,
+    // but a one-shot caller (`echo … | swarmterm --mcp-stdio`) still waits
+    // for its answer: let what is in flight finish, bounded so a slow app
+    // never delays the client's shutdown.
+    let _ = tokio::time::timeout(DRAIN, async { while tasks.join_next().await.is_some() {} }).await;
     tasks.abort_all();
     proxy.close().await;
 }
@@ -714,6 +720,20 @@ mod tests {
         // fallback, the server still never saw a call it accepted.
         let got = run(Some(up), &[init(0)]).await;
         assert_eq!(got[0]["result"]["serverInfo"]["name"], "swarmterm");
+    }
+
+    #[tokio::test]
+    async fn a_request_followed_by_eof_is_still_answered() {
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
+        in_tx
+            .send(json!({"jsonrpc":"2.0","id":7,"method":"tools/list"}).to_string())
+            .unwrap();
+        drop(in_tx);
+        serve(in_rx, Out(out_tx), None).await;
+        let line: Value = serde_json::from_str(&out_rx.recv().unwrap()).unwrap();
+        assert_eq!(line["id"], 7);
+        assert_eq!(line["result"]["tools"], json!([]));
     }
 
     #[tokio::test]

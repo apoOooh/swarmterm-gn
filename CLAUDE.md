@@ -216,8 +216,14 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   selection, badged red, and never inherited by `worktree.spawn` workers
   (`lib/launch-mode-safety.ts`) unless the user turns on
   `AgentPolicy.workersInheritBypass` (same agent only, default off, user
-  decision 2026-10-29). Codex enrollment rewrites `~/.codex/config.toml` with
-  the concrete URL on every boot (`mcp/config.rs::register_codex`).
+  decision 2026-10-29). Claude Code and Codex configs hold a stdio entry,
+  `<exe> --mcp-stdio` (`mcp_stdio.rs`, SWA-83 1b): it relays to the pane's
+  `SWARMTERM_MCP_URL` with its bearer and serves no tools outside a pane, so
+  nothing in it depends on the port. Ownership and dev-build deferral live in
+  `mcp/entry.rs` (legacy HTTP entries are migrated by release builds only);
+  Codex needs `env_vars` for the two variables, and the per-process `-c url`
+  pin (`hook::codex::with_mcp_url`) is only added while the profile's
+  `config.toml` has no stdio entry — Codex rejects `url` on a stdio server.
   "Connected" is set by the first inbound MCP request carrying the pane's
   bearer (`record_client` middleware → `connect_war_room_member`) and again
   on join if that client was already seen — no tool call needed. The
