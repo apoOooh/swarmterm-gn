@@ -6,6 +6,7 @@ mod agents;
 mod child_priority;
 mod clipboard_media;
 mod commands;
+mod dev_window;
 mod dev_defer;
 mod devlog;
 mod files;
@@ -41,6 +42,9 @@ use tauri::WindowEvent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before any thread can read the environment: decides (and removes)
+    // the debug-only SWARMTERM_DEV_HIDDEN switch.
+    let start_mode = dev_window::current();
     #[cfg(feature = "profiling")]
     install_named_runtime();
     tauri::Builder::default()
@@ -75,8 +79,25 @@ pub fn run() {
         })
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
+        .setup(move |app| {
             crate::prof::start(app.handle());
+            // The main window is `create: false` in tauri.conf.json and built
+            // here from that same entry, because whether it may take focus is
+            // a build-type fact (SWA-84, `dev_window`), not config: a second
+            // copy of the whole `windows` array in a dev config would drift.
+            // Built first so every `get_webview_window("main")` below finds it.
+            {
+                let config = app
+                    .config()
+                    .app
+                    .windows
+                    .first()
+                    .cloned()
+                    .ok_or("tauri.conf.json defines no main window")?;
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+                    .focused(start_mode.focused())
+                    .build()?;
+            }
             // Before any pane, routine or other child process spawns: the
             // user's env policy from the last run (admin policy applied), not
             // the built-in default.
@@ -194,6 +215,7 @@ pub fn run() {
             devlog::dev_log,
             commands::files_open_context,
             commands::confirm_quit,
+            commands::window_reveal,
             commands::quit_hosted_count,
             commands::run_routine_command,
             commands::save_clipboard_image,

@@ -11,6 +11,18 @@ fn files_main_only(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 
+/// The renderer's one-time "boot finished, show the window" (App mount and
+/// the boot guard). How it appears is decided in Rust (`dev_window`): release
+/// = plain show, debug = without focus behind the active window, debug with
+/// `SWARMTERM_DEV_HIDDEN=1` = not at all.
+#[tauri::command]
+pub fn window_reveal(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("window_reveal is available only in the main window".into());
+    }
+    crate::dev_window::reveal(&window)
+}
+
 #[tauri::command]
 pub fn confirm_quit(
     window: tauri::WebviewWindow,

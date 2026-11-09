@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 const appWindow = getCurrentWindow()
@@ -5,7 +6,9 @@ const appWindow = getCurrentWindow()
 export const minimize = (): Promise<void> => appWindow.minimize()
 export const toggleMaximize = (): Promise<void> => appWindow.toggleMaximize()
 export const closeWindow = (): Promise<void> => appWindow.close()
-export const showWindow = (): Promise<void> => appWindow.show()
+/** Boot reveal. Not `appWindow.show()`: Rust decides how the window appears
+ *  (debug builds start behind the active window without focus, SWA-84). */
+export const showWindow = (): Promise<void> => invoke('window_reveal')
 
 /** Invoke `cb` with the current maximized state now and on every resize.
  *  Returns an unlisten function. */
