@@ -11,6 +11,9 @@ export interface PromptResubmitEvent {
   spawnId: string
   text: string
   send: boolean
+  /** Fingerprint of the blocked plaintext (length + SHA-256), to compare
+   *  with the draft Claude restored. Never log, store or forward it. */
+  asked: { len: number; sha256: string }
 }
 
 /** The blocked prompt had already opened a turn: it never ran. No text. */

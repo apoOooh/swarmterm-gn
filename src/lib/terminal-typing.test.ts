@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyInput, isBracketedPaste } from './terminal-typing'
+import { classifyInput, createSubmitIntent, isBracketedPaste } from './terminal-typing'
 
 const PASTE_START = '\x1b[200~'
 const PASTE_END = '\x1b[201~'
@@ -21,15 +21,19 @@ describe('classifyInput', () => {
 
   it('treats Enter, Ctrl+C, Ctrl+U and a bare Esc as ending the line', () => {
     expect(classifyInput('\r')).toBe('submit')
-    expect(classifyInput('\n')).toBe('submit')
     expect(classifyInput('\x03')).toBe('submit')
     expect(classifyInput('\x15')).toBe('submit')
     expect(classifyInput('\x1b')).toBe('submit')
   })
 
-  it('treats any payload containing a newline as ending the line', () => {
+  it('treats any payload containing a CR as ending the line', () => {
     expect(classifyInput('do the thing\r')).toBe('submit')
-    expect(classifyInput('line one\nline two')).toBe('submit')
+    expect(classifyInput('line one\rline two')).toBe('submit')
+  })
+
+  it('treats LF (Shift+Enter in an agent pane, Ctrl+J) as editing: the line stays unsent (SWA-88)', () => {
+    expect(classifyInput('\n')).toBe('edit')
+    expect(classifyInput('line one\nline two')).toBe('edit')
   })
 
   it('treats escape SEQUENCES as navigation, not as Esc', () => {
@@ -80,5 +84,59 @@ describe('isBracketedPaste', () => {
     expect(isBracketedPaste('\x1b[A')).toBe(false)
     expect(isBracketedPaste('x')).toBe(false)
     expect(isBracketedPaste('')).toBe(false)
+  })
+})
+
+describe('createSubmitIntent (SWA-88)', () => {
+  const key = (over: Partial<KeyboardEvent> = {}) =>
+    ({ type: 'keydown', key: 'Enter', shiftKey: false, ctrlKey: false, altKey: false, metaKey: false, ...over }) as KeyboardEvent
+
+  it('the CR of a plain Enter keydown xterm handled is a real submit, once', () => {
+    const intent = createSubmitIntent()
+    intent.key(key(), true)
+    expect(intent.take('\r')).toBe(true)
+    expect(intent.take('\r')).toBe(false)
+  })
+
+  it('Shift+Enter / the agent newline (LF) is no submit', () => {
+    const intent = createSubmitIntent()
+    intent.key(key({ shiftKey: true }), false)
+    expect(intent.take('\n')).toBe(false)
+  })
+
+  it('Ctrl+J is no submit', () => {
+    const intent = createSubmitIntent()
+    intent.key(key({ key: 'j', ctrlKey: true }), true)
+    expect(intent.take('\n')).toBe(false)
+  })
+
+  it('a bracketed paste with CR is no submit, even right after an Enter keydown', () => {
+    const intent = createSubmitIntent()
+    intent.key(key(), true)
+    expect(intent.take(paste('a\rb\r'))).toBe(false)
+    expect(intent.take('\r')).toBe(false)
+  })
+
+  it('an xterm protocol answer is no submit, and a CR without a key is none either', () => {
+    const intent = createSubmitIntent()
+    expect(intent.take('\x1b[?1;2c')).toBe(false)
+    expect(intent.take('\r')).toBe(false)
+  })
+
+  it('an Enter xterm did not handle, a keyup or an IME Enter arms nothing', () => {
+    const intent = createSubmitIntent()
+    intent.key(key(), false)
+    expect(intent.take('\r')).toBe(false)
+    intent.key(key({ type: 'keyup' }), true)
+    expect(intent.take('\r')).toBe(false)
+    intent.key({ ...key(), isComposing: true } as KeyboardEvent, true)
+    expect(intent.take('\r')).toBe(false)
+  })
+
+  it('disarms at the end of the task: a later CR cannot borrow the intent', async () => {
+    const intent = createSubmitIntent()
+    intent.key(key(), true)
+    await Promise.resolve()
+    expect(intent.take('\r')).toBe(false)
   })
 })

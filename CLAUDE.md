@@ -489,7 +489,20 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   renderer (`lib/prompt-resubmit.ts`) waits for Claude to restore the
   plaintext, Esc Esc (only on a visible draft — on an empty box it opens
   rewind), re-checks the box, inserts, Enter as a separate delayed write.
-  Any key since the user's Enter → pill with copy, nothing written. Mode =
+  Any key since the user's Enter → pill with copy, nothing written.
+  Hardening (no trust boundary — a pane process can fake the edge and, within
+  15 s of a real Enter, draw a fake multi-row box): the renderer needs the
+  user's own Enter KEY in that pane (`submitAnchor`, typing store, armed by
+  `createSubmitIntent` from the keydown — never LF/Shift+Enter/Ctrl+J, paste
+  or xterm replies; broadcast anchors every member on purpose; ≤ 15 s, taken
+  once — the anchor), a
+  visible draft, and where it reads back exactly (`paneDraftText`, one row)
+  a match with the event's `asked` fingerprint; unreadable (multi-row,
+  "[Pasted text …]") is no veto (user decision 2026-11-09), re-checks
+  the input revision (`inputRev`: global counter, moved by every input and
+  every `clearTyping`, never reset — captured with the anchor), IME,
+  `blocked`, mode and pane before every write and after every await, and one attempt with Enter per
+  pane per 30 s (failures count). `Gate::expire` runs on a timer. Mode =
   `AgentPolicy.promptResubmit` tightened by `DisablePromptResubmit(Send)`
   (Corp: send locked). Never log, announce or store the text.
 - **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:
@@ -633,7 +646,10 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   (time + duration, no content); the opt-in dump (`diagnostics.rs`, locked by
   `DisableHangDumps`/Corp) runs `swarmterm --dump-ui <pid> <file>` as a
   SEPARATE process: dumping in-process would suspend threads and deadlock on a
-  heap/loader lock held by the stuck UI thread. It only dumps a same-exe pid.
+  heap/loader lock held by the stuck UI thread. It only dumps a same-exe pid,
+  and the CLI itself re-checks `DisableHangDumps`/Corp and the saved opt-in
+  (`diagnostics.json` under the identifier `build.rs` compiles in as
+  `SWARMTERM_APP_IDENTIFIER`) before creating any file.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that
