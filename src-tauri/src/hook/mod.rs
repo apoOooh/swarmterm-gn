@@ -36,6 +36,7 @@
 //! input, cwd and `transcript_path` are never read into a struct.
 
 pub mod adopt;
+pub mod claude_version;
 pub mod codex;
 pub mod install;
 pub mod post;

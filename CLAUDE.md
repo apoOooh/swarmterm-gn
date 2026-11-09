@@ -291,6 +291,13 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   event. Entries pointing only at a dead binary are still overwritten (the
   repair). Release builds
   always reclaim their entries; Codex has a similar rule (`hook/codex.rs`, which skips whenever any entry of ours exists — so a debug build never adds the SWA-71 Stop/Interrupt entries to an existing install; test with a fresh `CODEX_HOME`/account profile).
+  Hooks (SWA-83 1c-ii) are written in exec form
+  (`"command": <exe>, "args": ["--hook"]`, no shell, so no Git Bash needed)
+  when `hook/claude_version.rs` reads Claude Code >= 2.1.139 from a cached
+  `claude --version` (keyed by path, size, mtime); older or unknown = the
+  shell form `"<exe>" --hook`, gated on Git Bash like the status line (which
+  has no exec form). Every ownership rule reads entries via
+  `install::entry_line`, so both shapes are recognised and migrate both ways.
 - **Native preview webviews.** The preview column is a per-terminal native
   child webview (`preview.rs`, label `preview-<terminalId>`, Tauri `unstable`
   feature for `add_child`). Invariant: a preview webview is visible iff

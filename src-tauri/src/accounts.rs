@@ -246,8 +246,12 @@ pub fn enroll(account: &AgentAccount) -> Result<(), String> {
             // every event (Claude Code falls back to PowerShell), so they
             // are taken out until Bash is there (SWA-83). MCP needs no shell.
             let bash = !crate::git_bash::REQUIRED || crate::git_bash::find(Some(dir)).is_some();
-            let hook = bash.then(|| crate::hook::install::format_command(&exe, cfg!(windows)));
-            crate::hook::install::write_hooks_to_file(&dir.join("settings.json"), hook.as_deref())?;
+            // Exec-form hooks run without any shell (SWA-83 1c-ii); only
+            // the shell form of an older Claude Code still needs Bash.
+            let exec = crate::hook::claude_version::exec_hooks();
+            let hook = (exec || bash)
+                .then(|| crate::hook::install::claude_hook_entry(&exe, cfg!(windows), exec));
+            crate::hook::install::write_hooks_to_file(&dir.join("settings.json"), hook.as_ref())?;
             adopt_default_claude_config(dir);
             crate::sessions::share::ensure_profile(dir);
             let command = (bash && STATUSLINE_ENABLED.load(Ordering::Relaxed))

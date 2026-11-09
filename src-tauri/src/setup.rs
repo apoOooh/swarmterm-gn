@@ -191,19 +191,18 @@ fn claude_profile_has_ours(app: &AppHandle) -> bool {
         .is_some_and(|text| settings_have_ours(&text))
 }
 
-/// Pure half of `claude_profile_has_ours`: any `command` string that is our
-/// `--hook` or `--statusline` entry, wherever it sits in the document.
+/// Pure half of `claude_profile_has_ours`: any entry whose command line
+/// (shell or exec form) is our `--hook` or `--statusline`, wherever it sits
+/// in the document.
 fn settings_have_ours(text: &str) -> bool {
     fn walk(v: &serde_json::Value) -> bool {
         match v {
-            serde_json::Value::Object(map) => map.iter().any(|(k, v)| {
-                (k == "command"
-                    && v.as_str().is_some_and(|c| {
-                        crate::hook::install::is_ours_hook(c)
-                            || crate::statusline::install::is_ours(c)
-                    }))
-                    || walk(v)
-            }),
+            serde_json::Value::Object(map) => {
+                crate::hook::install::entry_line(v).is_some_and(|c| {
+                    crate::hook::install::is_ours_hook(&c)
+                        || crate::statusline::install::is_ours(&c)
+                }) || map.values().any(walk)
+            }
             serde_json::Value::Array(items) => items.iter().any(walk),
             _ => false,
         }
@@ -305,14 +304,26 @@ pub fn ensure_claude(app: &AppHandle) {
                 let _lock = crate::accounts::CONFIG_WRITE
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let hooks = match crate::hook::install::unregister(app) {
-                    Ok(()) => Check::of(State::NeedsGitBash),
-                    Err(e) => {
-                        eprintln!("hook: {e}");
-                        Check::error(e)
+                // Exec-form hooks need no shell (SWA-83 1c-ii); the shell
+                // form of an older Claude Code is taken out instead.
+                let hooks = if crate::hook::claude_version::exec_hooks() {
+                    match crate::hook::install::register(app) {
+                        Ok(()) => Check::of(State::Ok),
+                        Err(e) => {
+                            eprintln!("hook: {e}");
+                            Check::error(e)
+                        }
+                    }
+                } else {
+                    match crate::hook::install::unregister(app) {
+                        Ok(()) => Check::of(State::NeedsGitBash),
+                        Err(e) => {
+                            eprintln!("hook: {e}");
+                            Check::error(e)
+                        }
                     }
                 };
-                // MCP is an HTTP entry and needs no shell.
+                // The MCP entry is a direct spawn and needs no shell.
                 let mcp = mcp_check(crate::mcp::config::register_user_scope(app));
                 let wanted = STATUSLINE_REQUESTED.load(Ordering::Acquire)
                     && crate::accounts::STATUSLINE_ENABLED.load(Ordering::Relaxed);
@@ -659,6 +670,8 @@ mod tests {
         assert!(settings_have_ours(hook));
         let line = r#"{"statusLine":{"type":"command","command":"\"C:/Apps/swarmterm.exe\" --statusline"}}"#;
         assert!(settings_have_ours(line));
+        let exec = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"C:/Apps/swarmterm.exe","args":["--hook"]}]}]}}"#;
+        assert!(settings_have_ours(exec));
         assert!(!settings_have_ours(
             r#"{"hooks":{"Stop":[{"hooks":[{"command":"~/notify.sh"}]}]}}"#
         ));
