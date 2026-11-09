@@ -1002,23 +1002,44 @@ pub async fn terminal_host_detached(app: AppHandle) -> Vec<detached::DetachedPan
 
 /// The renderer loaded the saved workspaces: `ids` are every pane id they
 /// reference. Detached panes outside it can never be shown and are closed.
+///
+/// Synchronous commands run on the UI thread (SWA-85). The `detached` set is
+/// updated inline, so the order against a following `create_terminal`
+/// attach is the IPC order, but the close goes to its own thread: it
+/// waits on the `client` slot, which a connect (host start, `list`/`reap`
+/// with `REQUEST_TIMEOUT`) can hold for seconds.
 #[tauri::command]
-pub fn terminal_host_keep(hub: tauri::State<'_, HostHub>, ids: Vec<String>) {
+pub fn terminal_host_keep(app: AppHandle, ids: Vec<String>) {
     let ids: std::collections::HashSet<String> = ids.into_iter().collect();
-    let close = hub.detached.lock().unwrap().keep(&ids);
-    #[cfg(windows)]
-    hub.close(&close);
-    #[cfg(not(windows))]
-    drop(close);
+    let close = app.state::<HostHub>().detached.lock().unwrap().keep(&ids);
+    close_off_thread(app, close);
 }
 
-/// A saved workspace was forgotten: close its detached panes.
+/// A saved workspace was forgotten: close its detached panes. Off the UI
+/// thread like `terminal_host_keep`.
 #[tauri::command]
-pub fn terminal_host_release(hub: tauri::State<'_, HostHub>, ids: Vec<String>) {
-    let close = hub.detached.lock().unwrap().release(&ids);
-    #[cfg(windows)]
-    hub.close(&close);
-    #[cfg(not(windows))]
+pub fn terminal_host_release(app: AppHandle, ids: Vec<String>) {
+    let close = app
+        .state::<HostHub>()
+        .detached
+        .lock()
+        .unwrap()
+        .release(&ids);
+    close_off_thread(app, close);
+}
+
+#[cfg(windows)]
+fn close_off_thread(app: AppHandle, close: Vec<detached::DetachedPane>) {
+    if close.is_empty() {
+        // `close` would only run `retire_idle`, which takes short locks.
+        app.state::<HostHub>().retire_idle();
+        return;
+    }
+    std::thread::spawn(move || app.state::<HostHub>().close(&close));
+}
+
+#[cfg(not(windows))]
+fn close_off_thread(_: AppHandle, close: Vec<detached::DetachedPane>) {
     drop(close);
 }
 

@@ -9,6 +9,8 @@ mod commands;
 mod dev_defer;
 mod dev_window;
 mod devlog;
+mod diagnostics;
+pub mod dump_ui;
 mod files;
 mod folder_list;
 mod git;
@@ -32,6 +34,7 @@ pub mod statusline;
 pub mod hook;
 mod terminal_env;
 mod tray;
+mod ui_watchdog;
 mod voice;
 mod warroom;
 mod window_fit;
@@ -72,12 +75,22 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
-        .register_uri_scheme_protocol("swarmterm-media", |context, request| {
-            let service = context
-                .app_handle()
-                .state::<std::sync::Arc<files::FileService>>();
-            files::media_response(&service, context.webview_label(), request)
-        })
+        // Asynchronous on purpose (SWA-85): a synchronous scheme handler runs
+        // inside WebView2's WebResourceRequested callback on the UI thread,
+        // so every media read (up to 256 MB without a range, 8 MiB per range,
+        // 32 MB documents) would stall the window under disk load. The label
+        // is copied before the hop; the webview check stays in the handler.
+        .register_asynchronous_uri_scheme_protocol(
+            "swarmterm-media",
+            |context, request, responder| {
+                let app = context.app_handle().clone();
+                let label = context.webview_label().to_string();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let service = app.state::<std::sync::Arc<files::FileService>>();
+                    responder.respond(files::media_response(&service, &label, request));
+                });
+            },
+        )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
@@ -99,6 +112,8 @@ pub fn run() {
                     .focused(start_mode.focused())
                     .build()?;
             }
+            // UI-stall watchdog (SWA-85): stall log always, dumps opt-in.
+            crate::diagnostics::init(app.handle());
             // Before any pane, routine or other child process spawns: the
             // user's env policy from the last run (admin policy applied), not
             // the built-in default.
@@ -213,6 +228,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             devlog::dev_log,
+            diagnostics::diagnostics_get,
+            diagnostics::diagnostics_set,
+            diagnostics::debug_ui_stall,
             commands::files_open_context,
             commands::confirm_quit,
             commands::window_reveal,

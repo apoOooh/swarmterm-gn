@@ -5,6 +5,20 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
 
 ## 2026-11-09
 
+- **Local hang diagnostics; dumps are opt-in.** After the installed app was
+  reported "not responding" twice (SWA-85), Swarmterm records UI stalls
+  locally. The stall log (`diagnostics\ui-stalls.log`: time and duration of a
+  stall of 2 s or more, no content) is always on. A minidump per stall is
+  opt-in (Settings → Terminal → Diagnostics, off by default), written by a
+  separate process, kept on the machine and never uploaded. The admin policy
+  `DisableHangDumps` locks it, and the Corp edition has it locked (built
+  in), because a dump can hold terminal text from memory. The no-telemetry
+  decision of 2026-10-29 is unchanged: nothing is sent.
+- **Media without range requests is limited to 32 MB** (SWA-85). The webview
+  copies a whole-file answer on the UI thread, so the window stalls in
+  proportion to the size (250 MB measured 0.6 s). Larger images show *Open in
+  default app* instead of the in-app viewer; videos stream in ranges and are
+  unaffected.
 - **No installation from inside the app.** First-run setup (SWA-83) explains
   a missing prerequisite or agent CLI and shows the vendor link and the
   install command to copy. Swarmterm never installs anything itself and never

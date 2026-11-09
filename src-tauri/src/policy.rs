@@ -43,6 +43,9 @@ pub struct AdminPolicy {
     pub disable_model_download: bool,
     pub disable_routine_commands: bool,
     pub disable_preview_browser: bool,
+    /// Local UI-hang dumps (SWA-85): opt-in, lockable because a dump holds
+    /// stack memory that may contain terminal text and session tokens.
+    pub disable_hang_dumps: bool,
     /// `Some` = the environment filter is forced on with at least this mode.
     pub env_policy: Option<FilterMode>,
     /// Extra names that always pass the filter (admin's allow list).
@@ -65,6 +68,7 @@ const FLAGS: &[(&str, FlagField)] = &[
         &mut p.disable_routine_commands
     }),
     ("DisablePreviewBrowser", |p| &mut p.disable_preview_browser),
+    ("DisableHangDumps", |p| &mut p.disable_hang_dumps),
 ];
 
 /// What `policy_get` returns: the policy plus the active value names, so the
@@ -129,6 +133,9 @@ impl Edition {
                 disable_war_room_execute: true,
                 disable_companion: true,
                 disable_model_download: true,
+                // A dump is process memory written to disk: Corp keeps
+                // only the stall log line (no content), never the dump.
+                disable_hang_dumps: true,
                 env_policy: Some(FilterMode::Default),
                 ..Default::default()
             },
@@ -149,6 +156,7 @@ pub enum Lock {
     ModelDownload,
     RoutineCommands,
     PreviewBrowser,
+    HangDumps,
 }
 
 impl Lock {
@@ -163,6 +171,7 @@ impl Lock {
             Lock::ModelDownload => "DisableModelDownload",
             Lock::RoutineCommands => "DisableRoutineCommands",
             Lock::PreviewBrowser => "DisablePreviewBrowser",
+            Lock::HangDumps => "DisableHangDumps",
         }
     }
 
@@ -177,6 +186,7 @@ impl Lock {
             Lock::ModelDownload => "Speech model downloads are",
             Lock::RoutineCommands => "Command routines are",
             Lock::PreviewBrowser => "The web preview is",
+            Lock::HangDumps => "Hang dumps are",
         }
     }
 }
@@ -333,6 +343,7 @@ impl AdminPolicy {
             Lock::ModelDownload => self.disable_model_download,
             Lock::RoutineCommands => self.disable_routine_commands,
             Lock::PreviewBrowser => self.disable_preview_browser,
+            Lock::HangDumps => self.disable_hang_dumps,
         }
     }
 
@@ -1477,6 +1488,7 @@ mod tests {
                 "DisableWarRoomExecute",
                 "DisableCompanion",
                 "DisableModelDownload",
+                "DisableHangDumps",
                 "EnvPolicy"
             ]
         );

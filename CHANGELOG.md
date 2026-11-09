@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+- Diagnostics: Swarmterm now notices when its window stops responding
+  (SWA-85). A background watchdog writes one line (time and duration, no
+  content) for every stall of 2 s or more to
+  `%LOCALAPPDATA%\<app id>\diagnostics\ui-stalls.log`; it is always on, stays
+  on your computer and is never sent anywhere. Optional: Settings →
+  Terminal → Diagnostics → **Write a dump when the window stops
+  responding** (off by default) saves one small minidump per stall of 4 s
+  (the last three are kept) so a hang can be analysed. A dump can contain
+  terminal text; it never leaves the machine. Administrators can turn it
+  off with the new policy value `DisableHangDumps`; the Corp edition has it
+  locked.
+- Fix: fewer freezes of the window. The `swarmterm-media` protocol now reads
+  files off the UI thread, and images or documents served whole (without
+  range requests) are limited to 32 MB: the webview copies such an answer on
+  the UI thread, so a 250 MB image froze the window for about 0.6 s. Larger
+  files show **Open in default app**; videos are unaffected. Closing detached panes,
+  the buzzkey status and start, Open in editor, Reveal in Explorer and the
+  editor lookup no longer run on the UI thread. A test now fails when a
+  synchronous command or scheme handler is added without a reason.
 - Security: private vulnerability reporting is enabled; [SECURITY.md](SECURITY.md)
   and the corporate review pack no longer describe the issue fallback as
   temporary. The repository now protects `main`, `dev` and release tags

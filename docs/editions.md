@@ -50,6 +50,7 @@ Legend:
 | Command routines ("Shell command" kind) | Policy-lockable (`DisableRoutineCommands`) | Policy-lockable (`DisableRoutineCommands`) |
 | `worktree.spawn` MCP tool | Policy-lockable (`DisableWorktreeSpawn`) | Policy-lockable (`DisableWorktreeSpawn`) |
 | Web preview (embedded browser) | Policy-lockable (`DisablePreviewBrowser`) | Policy-lockable (`DisablePreviewBrowser`) |
+| Hang dumps (opt-in minidump when the window stops responding) | Off by default, user can turn on; lockable (`DisableHangDumps`) | **Locked (built in)**. The always-on stall log (time and duration, no content) still works. |
 | Local MCP server (`127.0.0.1`, per-pane token) | Policy-lockable (`DisableMcp`) | Policy-lockable (`DisableMcp`) |
 | Terminals, workspaces, Git panel, files and editor, notifications, War Room probes, status line, built-in speech with local models, spoken announcements, terminal host, process priority | Same | Same |
 | Telemetry, self-update | None | None |

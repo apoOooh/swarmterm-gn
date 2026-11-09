@@ -584,6 +584,18 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   timers compile to the plain operation without it, so normal and A/B builds
   are unchanged; never enable it in a release. Use it via
   `scripts/perf/flood.ps1 -Profile` and `docs/perf-profiling.md`.
+- **UI thread (SWA-85).** Synchronous `#[tauri::command]`s and synchronous
+  `register_uri_scheme_protocol` handlers run on the UI thread, so a slow one
+  freezes the window (Windows "not responding"). New commands are `async`
+  (blocking work in `spawn_blocking`) unless provably short; the sync ones
+  live on a reasoned allowlist in `tests/ui_thread_commands.rs`, which also
+  rejects any sync scheme handler (`swarmterm-media` is async; wry still
+  copies the response body on the UI thread). `ui_watchdog.rs` pings the UI
+  thread and logs stalls >= 2 s to `<local data>\diagnostics\ui-stalls.log`
+  (time + duration, no content); the opt-in dump (`diagnostics.rs`, locked by
+  `DisableHangDumps`/Corp) runs `swarmterm --dump-ui <pid> <file>` as a
+  SEPARATE process: dumping in-process would suspend threads and deadlock on a
+  heap/loader lock held by the stuck UI thread. It only dumps a same-exe pid.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that
