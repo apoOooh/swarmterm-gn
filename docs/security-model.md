@@ -104,15 +104,18 @@ box. So a process in the pane can fake a block. The renderer makes that much har
 - **Bound to a real keystroke.** The masked text is only written when the renderer itself
   saw the user send a line in that pane (Enter from the keyboard or an unframed paste,
   recorded by `sendInput`; War Room, dictation and the resubmit's own writes never count)
-  at most 5 s before the block arrived. That stamp is consumed by the first resubmit and
+  at most 15 s before the block arrived. That stamp is consumed by the first resubmit and
   dropped on respawn, so one Enter allows at most one resubmit, and nothing posted to
   `/hook` can create or renew it. A process in the pane cannot press keys in the
   renderer — this is the actual hurdle; the rest narrows the window.
-- **The restored draft must be the blocked prompt.** Right before the first Esc, Claude's
-  box must show a draft that reads back exactly (one row, no DIM cell, not at the row's
-  edge) and matches the fingerprint (UTF-8 length + SHA-256). Anything else — no draft
-  (e.g. while a tool runs), a multi-row or truncated draft, another text — is the
-  fallback: nothing is cleared, the pane offers the masked prompt to copy.
+- **A restored draft must be visible.** Right before the first Esc, Claude's box must show
+  a non-empty draft; no draft (e.g. while a tool runs) is the fallback: nothing is cleared,
+  the pane offers the masked prompt to copy. Where the draft reads back exactly (one row,
+  no DIM cell, not at the row's edge) it must also match the fingerprint (UTF-8 length +
+  SHA-256), otherwise the fallback. A draft that cannot be read back exactly (several
+  rows, wrapped, a collapsed "[Pasted text …]") is not compared — the Enter binding and the
+  visible draft carry it (user decision 2026-11-09), so for such prompts a process that
+  can draw a fake box is stopped only by the Enter binding.
 - **At every step.** A key, an unsubmitted line, an IME composition, switching the
   setting off or a respawn before each Esc, during the settle, before the insert and
   before the Enter stops the sequence at once, with no further Esc.

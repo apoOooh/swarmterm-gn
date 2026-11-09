@@ -471,8 +471,10 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   Any key since the user's Enter → pill with copy, nothing written.
   Hardening (no trust boundary — a pane process can fake the edge): the
   renderer needs the user's own Enter in that pane (`submittedAt`, typing
-  store, set only by `sendInput`; ≤ 5 s, taken once), a one-row draft that
-  hashes to the event's `asked` fingerprint (`paneDraftText`), re-checks
+  store, set only by `sendInput`; ≤ 15 s, taken once — the anchor), a
+  visible draft, and where it reads back exactly (`paneDraftText`, one row)
+  a match with the event's `asked` fingerprint; unreadable (multi-row,
+  "[Pasted text …]") is no veto (user decision 2026-11-09), re-checks
   typing/IME/mode/pane before every write, and one attempt with Enter per
   pane per 30 s (failures count). `Gate::expire` runs on a timer. Mode =
   `AgentPolicy.promptResubmit` tightened by `DisablePromptResubmit(Send)`

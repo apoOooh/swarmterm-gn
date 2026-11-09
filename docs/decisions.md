@@ -48,8 +48,10 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   fingerprint, then `/resubmit`), so the route is no trust boundary. The
   user kept "put back and send" as the default everywhere; instead the
   renderer was hardened: the resubmit needs a real Enter of the user in that
-  pane seen by the renderer (≤ 5 s, once), a restored draft that reads back
-  exactly and matches the fingerprint, re-checks of typing, IME, setting and
+  pane seen by the renderer (≤ 15 s, once — the anchor) and a visible
+  restored draft; a draft that reads back exactly (one row) must also match
+  the fingerprint, while multi-row, wrapped and "[Pasted text …]" drafts are
+  resubmitted without that comparison (user decision 2026-11-09), re-checks of typing, IME, setting and
   pane before every Esc/insert/Enter, and at most one attempt with Enter per
   pane every 30 s; fingerprints expire on a timer after 10 s. The remaining
   risk is documented in `security-model.md`; `DisablePromptResubmitSend` /

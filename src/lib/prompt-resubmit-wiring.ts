@@ -35,8 +35,8 @@ async function sha256Hex(text: string): Promise<string> {
  * - `prompt:resubmit`: put the masked text back (`deliverResubmit`); a
  *   fallback offers it in the pane's pill. Outcomes are logged without text.
  *   It needs a real Enter of the user in that pane just before (typing
- *   store `submittedAt`) and a restored draft that matches the blocked
- *   prompt's fingerprint. A second attempt with Enter in the same pane
+ *   store `submittedAt`) and a visible restored draft (matched against the
+ *   blocked prompt's fingerprint where it reads back exactly). A second attempt with Enter in the same pane
  *   within 30 s is withheld (inserted only) and the bell says so.
  */
 export function wirePromptResubmit(): () => void {

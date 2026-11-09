@@ -145,10 +145,14 @@ describe('deliverResubmit', () => {
       expect(h.writes).toEqual([])
     })
 
-    it('an Enter older than the limit does not count', async () => {
-      const h = harness({ submitAt: 1000 - USER_SUBMIT_MAX_AGE_MS - 10 })
-      expect(await deliverResubmit(h.req, h.deps)).toEqual({ kind: 'fallback', reason: 'no-user-submit' })
-      expect(h.writes).toEqual([])
+    it('an Enter 14 s old counts, one 16 s old does not', async () => {
+      expect(USER_SUBMIT_MAX_AGE_MS).toBe(15_000)
+      // The clock reads 1001 when the event is handled.
+      const fresh = harness({ submitAt: 1001 - 14_000 })
+      expect((await deliverResubmit(fresh.req, fresh.deps)).kind).toBe('inserted')
+      const stale = harness({ submitAt: 1001 - 16_000 })
+      expect(await deliverResubmit(stale.req, stale.deps)).toEqual({ kind: 'fallback', reason: 'no-user-submit' })
+      expect(stale.writes).toEqual([])
     })
 
     it('one Enter allows one resubmit: a second event (e.g. a faked edge) gets nothing', async () => {
@@ -177,13 +181,25 @@ describe('deliverResubmit', () => {
       expect(h.writes).toEqual([])
     })
 
-    it('a draft that cannot be read back exactly (wrap, DIM, edge) falls back', async () => {
-      const h = harness({ readable: false })
-      expect(await deliverResubmit(h.req, h.deps)).toEqual({ kind: 'fallback', reason: 'unverified' })
-      expect(h.writes).toEqual([])
+    it('a multi-row draft that cannot be read back is still cleared, inserted and sent', async () => {
+      // Several rows / wrapped / "[Pasted text …]": no hash, the Enter binding carries it.
+      const h = harness({ readable: false, restoreText: 'first line\nsecond line of the blocked prompt' })
+      const out = await deliverResubmit(h.req, h.deps)
+      await h.flush()
+      expect(out).toEqual({ kind: 'inserted', submitScheduled: true })
+      expect(h.writes).toEqual([ESC, ESC, PASTED, '\r'])
     })
 
-    it('a draft that differs from the fingerprint falls back', async () => {
+    it('an unreadable draft still stops at a key between the Escs', async () => {
+      const h = harness({ readable: false })
+      afterWrite(h, ESC, () => {
+        h.pane.stamp = 31
+      })
+      expect(await deliverResubmit(h.req, h.deps)).toEqual({ kind: 'fallback', reason: 'typed' })
+      expect(h.writes).toEqual([ESC])
+    })
+
+    it('a readable draft that differs from the fingerprint falls back', async () => {
       const h = harness({ restoreText: 'something a process printed' })
       expect(await deliverResubmit(h.req, h.deps)).toEqual({ kind: 'fallback', reason: 'unverified' })
       expect(h.writes).toEqual([])
@@ -314,7 +330,7 @@ describe('deliverResubmit', () => {
 
   it('one attempt with Enter per pane in 30 s, failed ones included: the next is inserted, not sent', async () => {
     const claim = createAutoSendLimiter()
-    const failed = harness({ restoreText: 'not the prompt' })
+    const failed = harness({ restoreText: '' })
     failed.deps.claimAutoSend = claim
     expect((await deliverResubmit(failed.req, failed.deps)).kind).toBe('fallback')
     const next = harness({ restoreAfter: 1 })

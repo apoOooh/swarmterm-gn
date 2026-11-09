@@ -15,12 +15,17 @@ import { prepareDictationBody, shouldSubmitDictation } from '@/lib/voice-insert'
  * fingerprint), and so can what the screen shows. What such a process
  * cannot do is press a key in this renderer. So:
  *
- * 1. The user really sent a line in this pane (`takeUserSubmit`: Enter
- *    seen by `sendInput`, at most `USER_SUBMIT_MAX_AGE_MS` before the
- *    event, consumed once — one resubmit per real submit and generation).
- * 2. The blocked draft visibly came back and reads back EXACTLY as the
- *    prompt Rust matched (`draftText` + `asked` fingerprint). Unreadable
- *    (several rows, DIM cells, edge of the row) or different → fallback.
+ * 1. The anchor: the user really sent a line in this pane
+ *    (`takeUserSubmit`: Enter seen by `sendInput`, at most
+ *    `USER_SUBMIT_MAX_AGE_MS` before the event, consumed once — one
+ *    resubmit per real submit and generation).
+ * 2. A non-empty draft is visible in Claude's box right before the first
+ *    Esc. Where it reads back unambiguously (`draftText`: one row, no DIM
+ *    cell, not at the row's edge) it must also match the `asked`
+ *    fingerprint, else fallback. A draft that cannot be read back exactly
+ *    (several rows, wrapped, "[Pasted text …]") is not compared: the
+ *    user's Enter plus the visible draft carry it (user decision
+ *    2026-11-09).
  * 3. At most one attempt with Enter per pane per `AUTO_SEND_WINDOW_MS`,
  *    failed ones included; a further one is inserted without Enter and the
  *    caller rings the bell.
@@ -97,10 +102,11 @@ export const DRAFT_WAIT_MS = 3000
 export const CLEAR_SETTLE_MS = 600
 /**
  * The user's Enter may be this old when the block arrives. The guard
- * answers within ~1–5 s of the edge; older means the resubmit belongs to no
- * prompt the user just sent.
+ * answers within ~1–5 s of the edge, its first prompt in a session and a
+ * busy machine take longer; older means the resubmit belongs to no prompt
+ * the user just sent (user decision 2026-11-09: 15 s).
  */
-export const USER_SUBMIT_MAX_AGE_MS = 5000
+export const USER_SUBMIT_MAX_AGE_MS = 15_000
 /** At most one attempt with Enter per pane in this window. */
 export const AUTO_SEND_WINDOW_MS = 30_000
 const POLL_MS = 100
@@ -174,9 +180,11 @@ export async function deliverResubmit(req: ResubmitRequest, deps: ResubmitDeps):
     if (deps.agentState(id) === 'blocked') throw fallback('target-busy')
     if (!draft) throw fallback('no-draft')
 
-    // The restored draft must BE the blocked prompt, read back exactly.
+    // Where the restored draft reads back exactly, it must BE the blocked
+    // prompt. Unreadable (multi-row, wrapped, collapsed paste) is not a
+    // verdict: the Enter binding and the visible draft carry it.
     const restored = deps.draftText(id)
-    if (restored === undefined || !(await matchesFingerprint(restored, req.asked, deps.sha256))) {
+    if (restored !== undefined && !(await matchesFingerprint(restored, req.asked, deps.sha256))) {
       throw fallback('unverified')
     }
 
