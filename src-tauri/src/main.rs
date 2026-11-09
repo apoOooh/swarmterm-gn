@@ -29,5 +29,11 @@ fn main() {
         swarmterm_lib::hook::run_cli();
         return;
     }
+    // `swarmterm --dump-ui <pid> <file>`: the UI-stall watchdog's dumper
+    // (SWA-85). A separate process on purpose, see `dump_ui.rs`.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--dump-ui") {
+        std::process::exit(swarmterm_lib::dump_ui::run_cli(&args[1..]));
+    }
     swarmterm_lib::run()
 }

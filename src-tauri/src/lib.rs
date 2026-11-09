@@ -8,6 +8,8 @@ mod clipboard_media;
 mod commands;
 mod dev_defer;
 mod devlog;
+mod diagnostics;
+pub mod dump_ui;
 mod files;
 mod folder_list;
 mod git;
@@ -30,6 +32,7 @@ pub mod statusline;
 pub mod hook;
 mod terminal_env;
 mod tray;
+mod ui_watchdog;
 mod voice;
 mod warroom;
 mod window_fit;
@@ -84,6 +87,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             crate::prof::start(app.handle());
+            // UI-stall watchdog (SWA-85): stall log always, dumps opt-in.
+            crate::diagnostics::init(app.handle());
             // Before any pane, routine or other child process spawns: the
             // user's env policy from the last run (admin policy applied), not
             // the built-in default.
@@ -199,6 +204,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             devlog::dev_log,
+            diagnostics::diagnostics_get,
+            diagnostics::diagnostics_set,
+            diagnostics::debug_ui_stall,
             commands::files_open_context,
             commands::confirm_quit,
             commands::quit_hosted_count,

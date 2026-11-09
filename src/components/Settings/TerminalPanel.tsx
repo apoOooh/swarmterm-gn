@@ -46,6 +46,7 @@ import {
 } from '@/lib/host-status-store'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { getDiagnostics, setHangDumps, type DiagnosticsView } from '@/tauri/diagnostics'
 
 /** The "Terminal" settings category — pick the shell new panes spawn with. */
 export function TerminalPanel(): ReactElement {
@@ -142,7 +143,41 @@ export function TerminalPanel(): ReactElement {
       <EnvironmentSettings />
       <StatusLineSettings />
       <TerminalHostSettings />
+      <DiagnosticsSettings />
     </div>
+  )
+}
+
+/**
+ * Hang diagnostics (SWA-85). The stall log (time and duration only) is always
+ * written; the dump is opt-in because it holds process memory (stacks), which
+ * can include terminal text and session tokens. Enforced in Rust.
+ */
+function DiagnosticsSettings(): ReactElement {
+  const [view, setView] = useState<DiagnosticsView | null>(null)
+  useEffect(() => {
+    void getDiagnostics().then(setView, () => setView(null))
+  }, [])
+  return (
+    <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+      <h2 className="text-sm font-semibold text-foreground">Diagnostics</h2>
+      <div className="mt-4 grid gap-4">
+        <ToggleRow
+          label="Write a dump when the window stops responding"
+          description={
+            'When the window hangs for 4 seconds, Swarmterm saves a small dump (thread stacks) on this computer so the ' +
+            'cause can be found. Off by default: a dump can contain terminal text and session tokens. Nothing is sent ' +
+            'anywhere; every hang is also noted in ui-stalls.log (time and length only).' +
+            (view?.folder ? ` Folder: ${view.folder}` : '')
+          }
+          checked={view?.hangDumps ?? false}
+          managed={view?.locked ?? false}
+          onChange={(on) => {
+            void setHangDumps(on).then(setView, () => undefined)
+          }}
+        />
+      </div>
+    </section>
   )
 }
 
