@@ -144,6 +144,20 @@ static CODEX_ENSURE: Mutex<()> = Mutex::new(());
 /// that the CLI is still there.
 static CLAUDE_DONE: AtomicBool = AtomicBool::new(false);
 static CODEX_DONE: AtomicBool = AtomicBool::new(false);
+/// The hook-form verdict Claude's entries were written with (SWA-83 1c-ii).
+/// `CLAUDE_DONE` only counts while it is still current: a Claude Code
+/// update, downgrade or a probe that failed at first must rewrite the hooks
+/// at the next pane start, without a manual "Check again".
+static CLAUDE_DONE_FOR: Mutex<Option<crate::hook::claude_version::Verdict>> = Mutex::new(None);
+
+fn claude_done() -> bool {
+    CLAUDE_DONE.load(Ordering::Acquire)
+        && CLAUDE_DONE_FOR
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(crate::hook::claude_version::still_current)
+}
 
 /// The renderer's status-line preference, once it has sent one. Applied when
 /// Claude Code turns up after boot (the renderer only syncs at start).
@@ -191,19 +205,18 @@ fn claude_profile_has_ours(app: &AppHandle) -> bool {
         .is_some_and(|text| settings_have_ours(&text))
 }
 
-/// Pure half of `claude_profile_has_ours`: any `command` string that is our
-/// `--hook` or `--statusline` entry, wherever it sits in the document.
+/// Pure half of `claude_profile_has_ours`: any entry whose command line
+/// (shell or exec form) is our `--hook` or `--statusline`, wherever it sits
+/// in the document.
 fn settings_have_ours(text: &str) -> bool {
     fn walk(v: &serde_json::Value) -> bool {
         match v {
-            serde_json::Value::Object(map) => map.iter().any(|(k, v)| {
-                (k == "command"
-                    && v.as_str().is_some_and(|c| {
-                        crate::hook::install::is_ours_hook(c)
-                            || crate::statusline::install::is_ours(c)
-                    }))
-                    || walk(v)
-            }),
+            serde_json::Value::Object(map) => {
+                crate::hook::install::entry_line(v).is_some_and(|c| {
+                    crate::hook::install::is_ours_hook(&c)
+                        || crate::statusline::install::is_ours(&c)
+                }) || map.values().any(walk)
+            }
             serde_json::Value::Array(items) => items.iter().any(walk),
             _ => false,
         }
@@ -255,7 +268,7 @@ pub fn ensure_claude(app: &AppHandle) {
         installed,
         missing_config_dir(cfg.as_deref()),
         bash_ok,
-        CLAUDE_DONE.load(Ordering::Acquire),
+        claude_done(),
     );
     update(None, |s| s.claude.git_bash = bash.clone());
     match plan {
@@ -301,18 +314,32 @@ pub fn ensure_claude(app: &AppHandle) {
         }
         ClaudePlan::NeedsGitBash => {
             CLAUDE_DONE.store(false, Ordering::Release);
+            // Probe before the write lock (bounded, cached per binary).
+            let exec = crate::hook::claude_version::exec_hooks();
             let (hooks, mcp, status_line) = {
                 let _lock = crate::accounts::CONFIG_WRITE
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let hooks = match crate::hook::install::unregister(app) {
-                    Ok(()) => Check::of(State::NeedsGitBash),
-                    Err(e) => {
-                        eprintln!("hook: {e}");
-                        Check::error(e)
+                // Exec-form hooks need no shell (SWA-83 1c-ii); the shell
+                // form of an older Claude Code is taken out instead.
+                let hooks = if exec {
+                    match crate::hook::install::register(app, true) {
+                        Ok(()) => Check::of(State::Ok),
+                        Err(e) => {
+                            eprintln!("hook: {e}");
+                            Check::error(e)
+                        }
+                    }
+                } else {
+                    match crate::hook::install::unregister(app) {
+                        Ok(()) => Check::of(State::NeedsGitBash),
+                        Err(e) => {
+                            eprintln!("hook: {e}");
+                            Check::error(e)
+                        }
                     }
                 };
-                // MCP is an HTTP entry and needs no shell.
+                // The MCP entry is a direct spawn and needs no shell.
                 let mcp = mcp_check(crate::mcp::config::register_user_scope(app));
                 let wanted = STATUSLINE_REQUESTED.load(Ordering::Acquire)
                     && crate::accounts::STATUSLINE_ENABLED.load(Ordering::Relaxed);
@@ -331,11 +358,13 @@ pub fn ensure_claude(app: &AppHandle) {
             });
         }
         ClaudePlan::Write => {
+            // Probe before the write lock (bounded, cached per binary).
+            let verdict = crate::hook::claude_version::current();
             let (hooks, mcp, status_line) = {
                 let _lock = crate::accounts::CONFIG_WRITE
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let hooks = match crate::hook::install::register(app) {
+                let hooks = match crate::hook::install::register(app, verdict.exec) {
                     Ok(()) => Check::of(State::Ok),
                     Err(e) => {
                         eprintln!("hook: {e}");
@@ -355,6 +384,7 @@ pub fn ensure_claude(app: &AppHandle) {
             let ok = hooks.state != State::Error
                 && mcp.state != State::Error
                 && status_line.as_ref().is_none_or(|c| c.state != State::Error);
+            *CLAUDE_DONE_FOR.lock().unwrap_or_else(|e| e.into_inner()) = Some(verdict);
             CLAUDE_DONE.store(ok, Ordering::Release);
             update(Some(app), |s| {
                 s.claude.installed = Some(true);
@@ -540,14 +570,20 @@ fn refresh_prerequisites(app: &AppHandle) {
     update(Some(app), |s| s.prerequisites = tools);
 }
 
-/// Boot: Claude synchronously (hooks are snapshotted when a session starts,
-/// and restored panes spawn right after the renderer mounts), Codex on a
-/// blocking worker so its probe never delays the window.
+/// Boot, called from `setup` on the UI thread: everything goes to blocking
+/// workers, because Claude's first ensure may run `claude --version` and
+/// Codex's `codex --help` (each up to 3 s). Hooks are snapshotted when a
+/// session starts, so a Claude pane restored right after the renderer
+/// mounts must still find them: its spawn calls `ensure_for_agent` on the
+/// create worker, which waits on `CLAUDE_ENSURE` while this one runs.
 pub fn boot(app: &AppHandle) {
-    ensure_claude(app);
-    refresh_prerequisites(app);
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || ensure_codex(&app));
+    let claude = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_claude(&claude);
+        refresh_prerequisites(&claude);
+    });
+    let codex = app.clone();
+    tauri::async_runtime::spawn_blocking(move || ensure_codex(&codex));
 }
 
 /// Pane spawn: make sure the agent about to start finds its entries.
@@ -659,6 +695,8 @@ mod tests {
         assert!(settings_have_ours(hook));
         let line = r#"{"statusLine":{"type":"command","command":"\"C:/Apps/swarmterm.exe\" --statusline"}}"#;
         assert!(settings_have_ours(line));
+        let exec = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"C:/Apps/swarmterm.exe","args":["--hook"]}]}]}}"#;
+        assert!(settings_have_ours(exec));
         assert!(!settings_have_ours(
             r#"{"hooks":{"Stop":[{"hooks":[{"command":"~/notify.sh"}]}]}}"#
         ));

@@ -44,15 +44,16 @@ pub(crate) fn same_exe(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
-/// Every hook and status line command in a Claude Code `settings.json` value.
-fn commands(root: &Value) -> Vec<&str> {
+/// Every hook and status line command line in a Claude Code `settings.json`
+/// value; exec-form hooks as `"<command>" <args>` (`entry_line`).
+fn commands(root: &Value) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(events) = root.get("hooks").and_then(Value::as_object) {
         for groups in events.values().filter_map(Value::as_array) {
             for group in groups {
                 let entries = group.get("hooks").and_then(Value::as_array);
                 for entry in entries.into_iter().flatten() {
-                    out.extend(entry.get("command").and_then(Value::as_str));
+                    out.extend(crate::hook::install::entry_line(entry));
                 }
             }
         }
@@ -60,7 +61,8 @@ fn commands(root: &Value) -> Vec<&str> {
     out.extend(
         root.get("statusLine")
             .and_then(|s| s.get("command"))
-            .and_then(Value::as_str),
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     );
     out
 }
@@ -83,9 +85,9 @@ pub fn owned_by_other_live_exe(
         return false;
     };
     commands(&root)
-        .into_iter()
+        .iter()
         .filter(|c| is_ours(c))
-        .filter_map(command_exe)
+        .filter_map(|c| command_exe(c))
         .any(|exe| !same_exe(exe, own_exe) && exists(exe))
 }
 
@@ -146,6 +148,25 @@ mod tests {
         assert_eq!(command_exe("swarmterm --hook"), None);
         assert_eq!(command_exe("\"\" --hook"), None);
         assert_eq!(command_exe("\"unterminated --hook"), None);
+    }
+
+    #[test]
+    fn reads_the_exe_of_an_exec_form_hook() {
+        let f = format!(
+            r#"{{"hooks":{{"Stop":[{{"hooks":[{{"type":"command","command":"{INSTALLED}","args":["--hook"]}}]}}]}}}}"#
+        );
+        assert!(owned_by_other_live_exe(
+            Some(&f),
+            DEV,
+            is_ours_hook,
+            live(INSTALLED)
+        ));
+        assert!(!owned_by_other_live_exe(
+            Some(&f),
+            DEV,
+            is_ours_hook,
+            |_| false
+        ));
     }
 
     #[test]

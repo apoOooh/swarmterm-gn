@@ -124,6 +124,9 @@ pub fn run() {
             // New install or not (SWA-83): decided from the app data dir
             // before anything below writes a marker file into it.
             crate::first_run::init(app.handle());
+            // SWA-88: prompt fingerprints expire on a timer, not only when
+            // the next request happens to sweep them.
+            crate::resubmit::spawn_expiry(app.handle().clone());
             // Before any pane, routine or other child process spawns: the
             // user's env policy from the last run (admin policy applied), not
             // the built-in default.

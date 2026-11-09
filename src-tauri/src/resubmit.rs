@@ -14,6 +14,11 @@
 //! (a blocked prompt never ran, so a tool call proves it was not blocked).
 //! The text must carry at least one mask placeholder: a resubmit that masks
 //! nothing is not a masked prompt.
+//!
+//! None of this is a trust boundary: the same process can post the edge
+//! with a fingerprint of its own choosing and then the matching resubmit
+//! (`docs/security-model.md`). It makes the path narrow and short-lived; the
+//! renderer adds the visible-draft check and the auto-send rate limit.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -99,6 +104,29 @@ pub struct Gate {
 }
 
 impl Gate {
+    /// The timer's entry point (`spawn_expiry`): sweep, drop panes that hold
+    /// nothing usable any more, and say when the next fingerprint expires.
+    /// Without it a fingerprint would outlive its window until the next
+    /// request touched the gate — possibly forever on a quiet machine.
+    pub fn expire(&mut self, now: Instant) -> Option<Instant> {
+        self.sweep(now);
+        self.panes.retain(|_, p| {
+            !p.blocked.is_empty() || p.edge.as_ref().is_some_and(|e| e.asked.is_some())
+        });
+        self.panes
+            .values()
+            .flat_map(|p| {
+                let edge = p
+                    .edge
+                    .as_ref()
+                    .filter(|e| e.asked.is_some())
+                    .map(|e| e.at + WINDOW);
+                let blocked = p.blocked.iter().map(|(_, _, at)| *at + BLOCKED_TTL);
+                edge.into_iter().chain(blocked)
+            })
+            .min()
+    }
+
     /// Fingerprints live only as long as they can be used: an edge past
     /// the window and expired block reports drop theirs.
     fn sweep(&mut self, now: Instant) {
@@ -273,9 +301,79 @@ fn has_placeholder(text: &str) -> bool {
     })
 }
 
+/// Hard TTL for fingerprints: wakes when the next one expires (at the
+/// latest every `EXPIRY_IDLE`, so an entry added while it sleeps is never
+/// missed) and expires it, whether or not any request comes.
+pub fn spawn_expiry(app: tauri::AppHandle) {
+    use tauri::Manager;
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let now = Instant::now();
+            let next = app
+                .state::<crate::pty::AppState>()
+                .resubmit
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .expire(now);
+            tokio::time::sleep(sleep_for(now, next)).await;
+        }
+    });
+}
+
+/// Idle wake-up of the expiry timer. Entries live `WINDOW` (10 s), so a
+/// one-second idle tick always sees a new entry long before it expires and
+/// then sleeps exactly until that expiry.
+const EXPIRY_IDLE: Duration = Duration::from_secs(1);
+/// `sweep` drops at `> WINDOW`: wake just past the deadline.
+const EXPIRY_SLACK: Duration = Duration::from_millis(5);
+
+fn sleep_for(now: Instant, next: Option<Instant>) -> Duration {
+    next.map_or(EXPIRY_IDLE, |at| {
+        (at.saturating_duration_since(now) + EXPIRY_SLACK).min(EXPIRY_IDLE)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expire_drops_fingerprints_without_any_request() {
+        let mut g = Gate::default();
+        let t0 = Instant::now();
+        g.prompt(T, G, S, P, Some(&fp()), t0);
+        g.block("t2", G, "p9", &fp(), t0 + Duration::from_secs(3));
+        assert_eq!(g.expire(t0), Some(t0 + WINDOW), "earliest deadline");
+        let after_edge = t0 + WINDOW + Duration::from_millis(1);
+        assert_eq!(
+            g.expire(after_edge),
+            Some(t0 + Duration::from_secs(3) + BLOCKED_TTL)
+        );
+        assert!(
+            !g.panes.contains_key(T),
+            "edge pane gone with its fingerprint"
+        );
+        let after_all = t0 + Duration::from_secs(3) + BLOCKED_TTL + Duration::from_millis(1);
+        assert_eq!(g.expire(after_all), None);
+        assert!(g.panes.is_empty(), "nothing left to hold");
+        // A used edge holds no fingerprint: gone at the next tick.
+        g.prompt(T, G, S, P, Some(&fp()), t0);
+        g.check(T, G, S, P, &fp(), t0).unwrap();
+        assert_eq!(g.expire(t0), None);
+        assert!(g.panes.is_empty());
+    }
+
+    #[test]
+    fn the_timer_wakes_right_after_the_next_expiry() {
+        let t0 = Instant::now();
+        assert_eq!(sleep_for(t0, None), EXPIRY_IDLE);
+        assert_eq!(
+            sleep_for(t0, Some(t0 + Duration::from_millis(200))),
+            Duration::from_millis(200) + EXPIRY_SLACK
+        );
+        assert_eq!(sleep_for(t0, Some(t0 + WINDOW)), EXPIRY_IDLE);
+        assert_eq!(sleep_for(t0 + WINDOW, Some(t0)), EXPIRY_SLACK);
+    }
 
     const T: &str = "t1";
     const G: &str = "gen1";

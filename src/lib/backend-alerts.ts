@@ -19,6 +19,23 @@ export function voicePipeErrorEntry(payload: { message?: string } | null | undef
 }
 
 export const INPUT_ALERT_ID = 'backend:input'
+export const RESUBMIT_ALERT_ID = 'backend:resubmit'
+
+/**
+ * SWA-88: a masked prompt was put back but not sent, because the pane
+ * already had an automatic send in the last 30 s. No pane id and no text:
+ * the entry must not replace the agent's own attention entry, and the
+ * masked prompt never goes into the bell.
+ */
+export function resubmitHeldEntry(at: number): NewCenterEntry {
+  return {
+    kind: 'backend',
+    terminalId: RESUBMIT_ALERT_ID,
+    title: 'Masked prompt not sent',
+    detail: 'Inserted without Enter: only one automatic send per pane every 30 seconds. Check it and press Enter.',
+    at
+  }
+}
 
 /**
  * A pane's pty input queue was full (the program stopped reading) and a write

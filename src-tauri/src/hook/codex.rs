@@ -204,7 +204,8 @@ pub fn format_command(exe: &str, windows: bool) -> String {
 }
 
 pub fn merge_json(existing: Option<&str>, command: &str) -> Result<HooksWrite, String> {
-    merge_events_timed(existing, Some(command), &EVENTS, is_ours, timeout_for)
+    let entry = serde_json::json!({ "type": "command", "command": command });
+    merge_events_timed(existing, Some(&entry), &EVENTS, is_ours, timeout_for)
 }
 
 /// Edit the existing representation in place, preserving comments and foreign

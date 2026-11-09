@@ -30,7 +30,7 @@ export interface Prerequisite {
 
 const PREREQUISITE_LABEL: Record<Prerequisite['id'], { name: string; missing: string }> = {
   git: { name: 'Git', missing: 'Not found — needed for worktrees and Git Bash' },
-  gitBash: { name: 'Git Bash', missing: 'Not found — Claude Code needs it for hooks' },
+  gitBash: { name: 'Git Bash', missing: 'Not found — Claude Code needs it for the status line' },
   winget: { name: 'winget', missing: 'Not found — the install commands to copy use it' },
   node: { name: 'Node.js', missing: 'Not found — only needed for npm-installed CLIs' },
   npm: { name: 'npm', missing: 'Not found — only needed for npm-installed CLIs' },
@@ -140,15 +140,19 @@ export interface GitBashHint {
 }
 
 /**
- * Claude Code on Windows runs hooks and the status line through Git Bash;
- * without it they would fail in every Claude session, so Rust leaves them out
- * (`needsGitBash`). The hint says why and how to get it.
+ * Claude Code on Windows runs the status line through Git Bash, and before
+ * 2.1.139 also the hooks (newer ones get exec-form hooks that need no shell);
+ * without it those would fail in every Claude session, so Rust leaves them
+ * out (`needsGitBash`). The hint names what is affected and how to get it.
  */
 export function gitBashHint(status: SetupStatus): GitBashHint | null {
   const c = status.claude
-  if (![c.hooks, c.statusLine].some(check => check.state === 'needsGitBash')) return null
+  const hooks = c.hooks.state === 'needsGitBash'
+  const line = c.statusLine.state === 'needsGitBash'
+  if (!hooks && !line) return null
+  const what = hooks && line ? 'hooks and status line' : hooks ? 'hooks' : 'status line'
   return {
-    text: "Claude Code runs Swarmterm's hooks and status line through Git Bash, which is not installed. " +
+    text: `Claude Code runs Swarmterm's ${what} through Git Bash, which is not installed. ` +
       'Install Git for Windows, then press Check again — no restart needed.',
     link: 'https://git-scm.com/downloads/win',
     command: GIT_INSTALL_COMMAND
