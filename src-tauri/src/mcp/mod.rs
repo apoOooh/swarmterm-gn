@@ -6,6 +6,7 @@ pub mod catalog;
 pub mod clients;
 pub mod config;
 pub mod context_usage;
+pub mod entry;
 pub mod peer_state;
 pub mod rate_limits;
 pub mod server;
@@ -82,9 +83,9 @@ pub async fn start(app: AppHandle) -> Result<Arc<str>, String> {
         .set(url.clone())
         .map_err(|_| "mcp: mcp_url already set (start called twice?)".to_string())?;
 
-    // Codex cannot expand env vars in `url`, so its entry carries the
-    // concrete URL; `setup` writes it (release builds, Codex installed, under
-    // the config lock) and again for a Codex installed later.
+    // Codex's stdio entry (SWA-83 1b) no longer carries the port, but it is
+    // still checked here once at boot (migration, exe path repair); `setup`
+    // does it again for a Codex installed later.
     // Blocking worker: it takes the (std) config lock.
     let setup_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || crate::setup::codex_mcp(&setup_app));
