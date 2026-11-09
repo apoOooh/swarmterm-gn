@@ -171,7 +171,10 @@ mod tests {
 
     #[test]
     fn background_sinks_only_on_the_first_reveal() {
-        assert_eq!(reveal_action(StartMode::Background, true), Reveal::ShowBehind);
+        assert_eq!(
+            reveal_action(StartMode::Background, true),
+            Reveal::ShowBehind
+        );
         assert_eq!(reveal_action(StartMode::Background, false), Reveal::Nothing);
     }
 
