@@ -4,6 +4,12 @@
 
 ## [1.28.0] - 2026-11-09
 
+- Security: updated the MCP library `rmcp` from 2.1 to 3.9 (RUSTSEC-2026-0457,
+  RUSTSEC-2026-0462). Both advisories concern rmcp's OAuth and Streamable
+  HTTP *client*, which Swarmterm does not use (it only runs the server), so
+  no Swarmterm build was exposed; the update keeps the dependency audit
+  clean.
+
 - Prompts blocked by data-shield come back masked (SWA-88): when
   data-shield's prompt guard blocks a Claude Code prompt because it contains
   personal data or a secret, Swarmterm clears the original from Claude's

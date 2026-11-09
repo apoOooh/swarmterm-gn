@@ -40,14 +40,14 @@
 //!   are the constructors used to map auth/validation failures to
 //!   JSON-RPC-shaped protocol errors (the MCP client renders these as 4xx-ish
 //!   failures, distinct from a tool-level `CallToolResult::error`).
-//! - `ServerInfo` (`= InitializeResult`) and `Implementation` are both
+//! - `ServerConfig` (formerly `ServerInfo`, `= InitializeResult`) and `Implementation` are both
 //!   `#[non_exhaustive]`, so `get_info` below builds them via their `new`/
 //!   `with_*` builder methods rather than a struct literal.
 
 use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo};
+use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerConfig};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::{
     StreamableHttpServerConfig, StreamableHttpService,
@@ -149,11 +149,11 @@ impl SwarmtermMcpServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SwarmtermMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        // `ServerInfo` (aka `InitializeResult`) is `#[non_exhaustive]`, so a
+    fn get_info(&self) -> ServerConfig {
+        // `ServerConfig` (formerly `ServerInfo`, aka `InitializeResult`) is `#[non_exhaustive]`, so a
         // field literal is rejected even naming every field — use its builder
         // methods instead.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::LATEST)
             .with_server_info(
                 Implementation::new("swarmterm", env!("CARGO_PKG_VERSION")).with_title("Swarmterm"),
