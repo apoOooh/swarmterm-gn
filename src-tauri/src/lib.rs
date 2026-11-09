@@ -26,6 +26,7 @@ mod prerequisites;
 mod preview;
 mod prof;
 mod pty;
+mod resubmit;
 mod routine_cmd;
 mod runtime_path;
 mod sessions;
@@ -248,6 +249,7 @@ pub fn run() {
             commands::child_priority_set,
             commands::env_policy_set,
             commands::agent_policy_set,
+            commands::war_room_pane_labels_set,
             commands::policy_get,
             commands::media_save_marked,
             commands::media_read_opened_image,

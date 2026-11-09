@@ -28,6 +28,20 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   profile that already holds Swarmterm entries (to keep repairing them).
   Outcomes are shown in Settings → Setup; only a real failure reaches the
   bell.
+- **Blocked prompts come back masked, automatically** (user decision,
+  SWA-88). When data-shield's guard blocks a Claude Code prompt, it reports
+  the masked version to `POST /resubmit`; Swarmterm clears the restored
+  plaintext from the input box (Esc Esc, never Ctrl+C), puts the masked
+  prompt there and sends it — nothing interactive. "Put back only" and "off"
+  stay selectable in Settings → Terminal → Agent safety. A key typed in the
+  pane since the Enter wins: nothing is replaced, the pane offers the masked
+  prompt to copy. Corp puts it back but never sends it
+  (`DisablePromptResubmitSend` built in); `DisablePromptResubmit` turns it
+  off. The self-injection safeguards stay (bound to the prompt edge and the
+  blocked prompt's fingerprint, once, 10 s, refused after a tool call, a
+  mask placeholder required); only where it cannot be done safely
+  automatically does the pane fall back to a copy button; the
+  remaining risk is described in `security-model.md`.
 
 ## 2026-10-29
 

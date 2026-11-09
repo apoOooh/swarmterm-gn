@@ -479,6 +479,8 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     // A pinned dictation must not type into (or show its pill on) a dead or
     // respawned shell. Idempotent with read_loop, like the War Room leave.
     crate::voice::drop_terminal(&app, &id);
+    // SWA-88: a respawned pane answers no resubmit for its predecessor.
+    state.resubmit.lock().unwrap().forget(&id);
     // A dead pane's preview must not linger as an orphaned native webview
     // painting over nothing. Idempotent with the renderer's GC sweep and with
     // read_loop below — whoever runs second finds the label gone.
@@ -525,6 +527,16 @@ pub fn env_policy_set(state: State<'_, AppState>, policy: crate::terminal_env::E
 
 /// Settings → Terminal → Agent safety (War Room execute between agents). Checked per MCP call,
 /// so a change applies to the next call without restarting any pane.
+/// SWA-90: the renderer's "Pane N · Workspace" labels for `war_room.list_peers`.
+/// Replaces the whole map, so closed panes drop out with the next push.
+#[tauri::command]
+pub fn war_room_pane_labels_set(
+    state: State<'_, AppState>,
+    labels: std::collections::HashMap<String, String>,
+) {
+    *state.war_room_pane_labels.lock().unwrap() = crate::warroom::sanitize_pane_labels(labels);
+}
+
 #[tauri::command]
 pub fn agent_policy_set(state: State<'_, AppState>, policy: crate::agent_policy::AgentPolicy) {
     *state

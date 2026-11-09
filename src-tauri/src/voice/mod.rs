@@ -548,6 +548,17 @@ pub fn stale_stop(
     })
 }
 
+/// SWA-88: a hook blocked the open prompt, so the turn never ran. The
+/// renderer's later idle status is answered `View::Silent`.
+pub fn blocked_turn(app: &AppHandle, terminal_id: &str, spawn_id: &str, prompt_id: &str) {
+    if let Some(hub) = app.try_state::<VoiceHub>() {
+        hub.ledger
+            .lock()
+            .unwrap()
+            .blocked(terminal_id, spawn_id, prompt_id);
+    }
+}
+
 /// SessionStart/SessionEnd: the conversation in this pane is over.
 pub fn forget_turns(app: &AppHandle, terminal_id: &str) {
     if let Some(hub) = app.try_state::<VoiceHub>() {

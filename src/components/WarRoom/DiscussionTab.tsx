@@ -13,6 +13,7 @@ import { tokenizeMarkdown } from '@/lib/war-room-markdown'
 import { cn } from '@/lib/utils'
 import { Avatar, jumpToTerminal } from './Avatar'
 import { ModeratorComposer } from './ModeratorComposer'
+import { PaneTag } from './PaneTag'
 
 function Markdown({ text }: { text: string }): ReactElement {
   return (
@@ -177,6 +178,7 @@ function MessageGroup({ item }: { item: Extract<TranscriptItem, { kind: 'group' 
         >
           {item.fromName}
         </button>
+        <PaneTag terminalId={item.fromId} />
         <span className="shrink-0 text-[10px] text-muted-foreground">{formatTime(item.firstTs)}</span>
       </div>
       <div className="ml-8 flex flex-col gap-0.5">

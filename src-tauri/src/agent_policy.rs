@@ -20,6 +20,10 @@ pub struct AgentPolicy {
     /// so the admin lock (DisableBypassModes) can force it off, and the
     /// spawn-time line check refuses such a worker anyway under that lock.
     pub workers_inherit_bypass: bool,
+    /// SWA-88: what happens to a prompt data-shield blocked: its masked form
+    /// is put back and sent (default, user decision 2026-11-09), only put
+    /// back, or nothing. Admin locks tighten it (`AdminPolicy::apply_agent`).
+    pub prompt_resubmit: crate::resubmit::ResubmitMode,
 }
 
 /// Returned to the agent verbatim; it names the allowed alternative so the

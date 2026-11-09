@@ -457,6 +457,10 @@ Do not mark them passed from the in-memory fixture alone.
       prompts in other panes; agent A sends execute → the prompt runs in pane B
       and the transcript marks it orange. Turn it off again → the next execute
       is refused without restarting anything.
+- [ ] **Pane tag:** two members with the same title show different `Pane N`
+      tags in the member list, message headers and the target list; swap the
+      panes' order → the tags follow; with a second workspace open the tag
+      adds the workspace name; `list_peers` returns the same text as `pane`.
 - [ ] **Revocation:** drag a chip out or press ✕ → the next tool call from that
       pane is refused with "not in the War Room".
 - [ ] **PTY death:** close a member pane → the transcript logs the leave and
@@ -837,6 +841,15 @@ start it again after every change; remove the key at the end:
       is off and greyed. A saved workspace with a Bypass pane restored → that pane shows "Launch refused … DisableBypassModes".
 - [ ] Settings → Terminal → Agent safety → **Spawned workers inherit Bypass/YOLO** (no policy): on, Claude pane in
       Bypass asks `worktree.spawn` → the worker starts in Bypass with the red badge. Off → worker starts in Default.
+- [ ] **Blocked prompt (SWA-88, real Claude, data-shield guard on):** in a Claude pane inside the guarded
+      workspace, send a prompt with a test IBAN → the original disappears from the input box, the masked
+      prompt appears and is sent; no clipboard copy, no "done" announcement or bell entry for the blocked one.
+      "Put back, I press Enter" → masked prompt stands unsent. Type a character right after Enter → nothing is
+      replaced, the pill offers **Copy masked prompt**. `DisablePromptResubmitSend` = 1 → "send" is greyed and
+      the prompt is only put back; `DisablePromptResubmit` = 1 → the select is greyed, nothing is put back.
+      Needs the **installed** release build (first: 1.28.0) and a data-shield guard released after the
+      SWA-88 merge: Claude's `--hook` entry runs the installed exe (dev builds defer), and an older exe
+      sends no prompt fingerprint, so nothing is resubmitted from a `tauri dev` run.
 - [ ] `DisableWarRoomExecute` = 1: the Agent safety execute switch is greyed; an agent's `war_room.send` execute is
       refused with a message naming `DisableWarRoomExecute`; probe still works.
 - [ ] `DisableWarRoom` = 1: the War Room tab shows "Managed by your administrator", the execute switch is greyed,

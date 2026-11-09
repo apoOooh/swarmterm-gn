@@ -18,6 +18,10 @@ export interface AdminPolicy {
   disableModelDownload: boolean
   disableRoutineCommands: boolean
   disablePreviewBrowser: boolean
+  /** SWA-88: blocked prompts are never put back masked. */
+  disablePromptResubmit: boolean
+  /** SWA-88: put back, never sent (Corp built-in). */
+  disablePromptResubmitSend: boolean
   /** Local UI-hang dumps (SWA-85) are off and cannot be turned on. */
   disableHangDumps: boolean
   /** Set = the environment filter is forced on with at least this mode. */
@@ -45,6 +49,8 @@ export const UNMANAGED_POLICY: AdminPolicy = {
   disableModelDownload: false,
   disableRoutineCommands: false,
   disablePreviewBrowser: false,
+  disablePromptResubmit: false,
+  disablePromptResubmitSend: false,
   disableHangDumps: false,
   envPolicy: null,
   envAllow: [],
@@ -64,6 +70,8 @@ const FLAGS = [
   'disableModelDownload',
   'disableRoutineCommands',
   'disablePreviewBrowser',
+  'disablePromptResubmit',
+  'disablePromptResubmitSend',
   'disableHangDumps'
 ] as const
 

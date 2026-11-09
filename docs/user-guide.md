@@ -363,6 +363,8 @@ The **Preview** tab is a browser column docked beside the terminals, with a real
 
 Drag a pane by its header onto the right panel and the agent joins the room, receiving a short introduction to who else is there. The tab strip holds multiple rooms — `+` adds, double-click renames, `✕` deletes (two-step confirm; the last room stays) — each with its own transcript, members and moderator seat. **A pane belongs to at most one room**; dragging it onto another room's tab moves it.
 
+**Which pane is it?** Every member row, every message header, the composer's target list and the `@` list show a small tag with the pane's number as its header shows it — `Pane 2`, or `Pane 2 · Backend` when more than one workspace is open (`Drawer` for a parked pane). Several members with the same title (four "Claude Code" panes in one repo) stay apart that way, so you know which one you can close or move. The tag follows the layout live: reorder or park panes and it changes with them. Agents see the same text as `pane` in `war_room.list_peers`.
+
 Agents talk in two modes:
 
 - **Probe** — lands in the peer's inbox and nudges it to read: questions, debate, coordination.
@@ -383,6 +385,10 @@ No setup is needed: Claude Code, Codex, OpenCode and Qwen Code panes connect to 
 Drag a member chip out (or press its `✕`) and the agent instantly loses access. Closing a pane removes it automatically — and so does restarting one (switching its agent, shell or folder); just drag it back in.
 
 A full walkthrough — Claude Code and Codex negotiating an API contract — is in [`war-room-demo.md`](war-room-demo.md).
+
+## Prompts blocked by data-shield
+
+If you use data-shield's prompt guard with Claude Code, a prompt it blocks (because it contains personal data or a secret) comes back masked into the same pane: Swarmterm clears the original from Claude's input box, puts the masked version there (`[IBAN_…]`-style placeholders instead of the values) and sends it. You do nothing. **Settings → Terminal → Agent safety → Prompts blocked by data-shield** offers *put back and send* (default), *put back, I press Enter*, or *do nothing*. If you typed in the pane after pressing Enter, nothing is replaced: a pill in the pane offers **Copy masked prompt** instead. A blocked prompt is never announced as done. Administrators can switch it off or forbid the automatic send (`DisablePromptResubmit`, `DisablePromptResubmitSend`; Corp never sends).
 
 ## Status line in Claude Code panes
 
