@@ -454,6 +454,23 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `<CODEX_HOME>/sessions`, `completion/codex.rs` anchors on `task_started`.
   `ManagedTerminal.profile_dir` is the account dir of either agent (host
   meta key stays `claudeConfigDir`).
+- **Prompt resubmit (SWA-88).** `POST /resubmit` (below the MCP layer, like
+  `/hook`) is the ONE route that carries prompt text: data-shield's guard
+  sends the masked form of a prompt it blocked. `resubmit.rs::Gate` (pure)
+  binds it to the pane's newest Claude UserPromptSubmit edge (same spawn,
+  session, `prompt_id`, and the prompt's fingerprint `TurnMark.asked` that
+  our `--hook` sends — the guard sends the same; ≤ 10 s; once; refused
+  after a PostToolUse, which arrives session-less) and needs a mask placeholder; browser headers are
+  refused. The block is always reported: an edge already here is closed
+  silently (`Ledger::blocked` → `View::Silent`, `agent:prompt-blocked` →
+  renderer publishes idle as seen), a late edge is muted in `/hook` (no
+  turn, no `agent:hook`). The text goes `emit_to("main")` only; the
+  renderer (`lib/prompt-resubmit.ts`) waits for Claude to restore the
+  plaintext, Esc Esc (only on a visible draft — on an empty box it opens
+  rewind), re-checks the box, inserts, Enter as a separate delayed write.
+  Any key since the user's Enter → pill with copy, nothing written. Mode =
+  `AgentPolicy.promptResubmit` tightened by `DisablePromptResubmit(Send)`
+  (Corp: send locked). Never log, announce or store the text.
 - **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:
   `run_routine_command` (main webview only) runs ONE line via
   `cmd.exe /d /s /c` (`raw_arg`, CREATE_NO_WINDOW) in a kill-on-close job

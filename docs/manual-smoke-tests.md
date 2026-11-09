@@ -837,6 +837,12 @@ start it again after every change; remove the key at the end:
       is off and greyed. A saved workspace with a Bypass pane restored → that pane shows "Launch refused … DisableBypassModes".
 - [ ] Settings → Terminal → Agent safety → **Spawned workers inherit Bypass/YOLO** (no policy): on, Claude pane in
       Bypass asks `worktree.spawn` → the worker starts in Bypass with the red badge. Off → worker starts in Default.
+- [ ] **Blocked prompt (SWA-88, real Claude, data-shield guard on):** in a Claude pane inside the guarded
+      workspace, send a prompt with a test IBAN → the original disappears from the input box, the masked
+      prompt appears and is sent; no clipboard copy, no "done" announcement or bell entry for the blocked one.
+      "Put back, I press Enter" → masked prompt stands unsent. Type a character right after Enter → nothing is
+      replaced, the pill offers **Copy masked prompt**. `DisablePromptResubmitSend` = 1 → "send" is greyed and
+      the prompt is only put back; `DisablePromptResubmit` = 1 → the select is greyed, nothing is put back.
 - [ ] `DisableWarRoomExecute` = 1: the Agent safety execute switch is greyed; an agent's `war_room.send` execute is
       refused with a message naming `DisableWarRoomExecute`; probe still works.
 - [ ] `DisableWarRoom` = 1: the War Room tab shows "Managed by your administrator", the execute switch is greyed,

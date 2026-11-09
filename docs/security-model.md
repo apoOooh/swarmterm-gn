@@ -72,6 +72,30 @@ Tools: open a web preview (http/https URLs only), list/spawn/remove worktrees
 changes and paths outside `<repo>.worktrees`), and the War Room tools.
 Settings → MCP removes the server entry from an agent profile's configuration.
 
+`POST /resubmit` (SWA-88) is the one route that carries prompt text: data-shield's
+UserPromptSubmit guard sends the masked form of a prompt it blocked, and Swarmterm
+types it back into the same pane (and, by default, sends it). It accepts a request only
+from the pane's own bearer, without browser headers (`Origin`, `Sec-Fetch-*`), for a
+Claude Code pane, as the answer to that pane's newest UserPromptSubmit edge of the same
+generation and session (`prompt_id`), naming the length and SHA-256 of the blocked prompt
+that Swarmterm's own hook reported with that edge, within 10 s, once per edge, never after a
+PostToolUse following that edge, and only for text that contains at least one mask
+placeholder and is at most 256 KiB (`src-tauri/src/resubmit.rs`). The text goes to the
+main window only and is never logged, announced, stored or put in the bell.
+The prompt fingerprint (length + SHA-256, never content, like the reply fingerprint of
+SWA-58) is derived from the plaintext prompt, which may contain personal data, so it is
+held only in memory, dropped once matched or after the 10 s window, compared in constant
+time, never logged and never part of an event to the renderer. `HookBody` carries it as an
+optional field (`turn.asked`), so older hook binaries still work (they just never match).
+**Remaining risk:** anything running in the pane holds the bearer, but a blocked prompt
+never reaches the transcript, so a process in the pane cannot name its fingerprint unless
+it saw the user's keystrokes. One that did (for example reading the terminal's input) could,
+within 10 s of a real block and before the guard answers, post its own text with a
+placeholder in it, which would then be typed into the pane and sent as the user's next
+prompt. Choose "put back only" (or set `DisablePromptResubmitSend`, the
+Corp default) to keep the final Enter with the user, or turn it off
+(`DisablePromptResubmit`).
+
 ### War Room
 
 War Room tools work only for panes the user dragged into a room; removing a

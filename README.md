@@ -42,6 +42,7 @@ Real split terminals, one git worktree per agent, and an app your agents can dri
 **Agents drive the app (MCP)**
 - Every pane is connected to a local Swarmterm MCP server: agents open a web preview, spawn and remove worktrees, and talk to each other.
 - War Room: panes you drag in can message each other or hand over prompts, with you as moderator.
+- data-shield companion: a Claude Code prompt the guard blocks comes back masked into the same pane and is sent, no clipboard detour.
 - MCP catalogue: add Playwright, GitHub, Context7 and other servers to an agent profile.
 - Settings → Setup shows the hooks, MCP entry and status line Swarmterm added to each agent CLI. Nothing is written for a CLI that is not installed.
 
