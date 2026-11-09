@@ -211,7 +211,14 @@ duration, no content) to `%LOCALAPPDATA%\<app id>\diagnostics\ui-stalls.log`
 default; locked by `DisableHangDumps` and in the Corp edition, enforced in Rust) is taken by a
 separate process, `swarmterm.exe --dump-ui <pid> <file>`, never in-process, so a stuck UI thread
 cannot deadlock the dump. That mode only dumps a process that runs the same executable, so it
-cannot be used to read another program's memory (`src-tauri/src/dump_ui.rs`). Dumps are thread
+cannot be used to read another program's memory (`src-tauri/src/dump_ui.rs`). Any process can
+start that mode — a pane included — so it enforces the same gates itself before it creates a
+file: the admin policy and the Corp edition (`DisableHangDumps`, read from the registry at
+that moment) and the user's saved opt-in (`diagnostics.json` in the app data dir of the
+build's own identifier, never a path from the command line). A refusal exits non-zero and
+writes nothing. These gates stop a locked or opted-out install from being dumped through the
+CLI; they are no barrier against code of the same user, which could call
+`MiniDumpWriteDump` itself or edit the opt-in file. Dumps are thread
 lists and stacks without the full heap, but can still hold terminal text or session tokens; they
 stay in the user's profile and are never sent anywhere.
 

@@ -612,7 +612,10 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   (time + duration, no content); the opt-in dump (`diagnostics.rs`, locked by
   `DisableHangDumps`/Corp) runs `swarmterm --dump-ui <pid> <file>` as a
   SEPARATE process: dumping in-process would suspend threads and deadlock on a
-  heap/loader lock held by the stuck UI thread. It only dumps a same-exe pid.
+  heap/loader lock held by the stuck UI thread. It only dumps a same-exe pid,
+  and the CLI itself re-checks `DisableHangDumps`/Corp and the saved opt-in
+  (`diagnostics.json` under the identifier `build.rs` compiles in as
+  `SWARMTERM_APP_IDENTIFIER`) before creating any file.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that

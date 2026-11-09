@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Security: `swarmterm --dump-ui <pid> <file>` now enforces the hang-dump
+  gates itself (SWA-85 review): `DisableHangDumps`, the Corp edition and the
+  opt-in in Settings → Terminal → Diagnostics. Before, any process (a pane
+  included) could start it directly and get a dump of Swarmterm despite a
+  lock or without the opt-in. A refused call exits with code 1 and creates
+  no file.
+
 - Diagnostics: Swarmterm now notices when its window stops responding
   (SWA-85). A background watchdog writes one line (time and duration, no
   content) for every stall of 2 s or more to

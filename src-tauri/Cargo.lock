@@ -4502,6 +4502,7 @@ dependencies = [
  "axum",
  "clipboard-rs",
  "cpal",
+ "dirs",
  "dunce",
  "junction",
  "libc",
