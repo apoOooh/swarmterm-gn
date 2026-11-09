@@ -27,9 +27,46 @@ pub fn parse_args(args: &[String]) -> Result<(u32, std::path::PathBuf), String> 
     Ok((pid, file))
 }
 
+/// The app's own gates, enforced HERE and not only in the watchdog that
+/// normally starts this entry point: any process (a pane included) can run
+/// `swarmterm --dump-ui`, so a lock that lived only in the app would be
+/// bypassed by calling the CLI directly. Order: the admin policy / Corp
+/// edition (`DisableHangDumps`), then the user's saved opt-in. Checked before
+/// any file is created; a refusal writes nothing.
+pub fn allowed(
+    policy: &crate::policy::AdminPolicy,
+    saved: &crate::diagnostics::DiagnosticsSettings,
+) -> Result<(), String> {
+    policy.check(crate::policy::Lock::HangDumps)?;
+    if !crate::diagnostics::effective(saved, false) {
+        return Err("hang dumps are off (Settings → Terminal → Diagnostics)".into());
+    }
+    Ok(())
+}
+
+/// `diagnostics.json` of THIS build's app instance: the roaming app data dir
+/// plus the identifier compiled in by `build.rs`, the same path Tauri's
+/// `app_data_dir()` gives `diagnostics.rs`. Not taken from the command line:
+/// the caller must not choose which opt-in file counts. `None` = no
+/// app data dir, which reads as "not opted in".
+fn settings_path() -> Option<std::path::PathBuf> {
+    Some(
+        dirs::data_dir()?
+            .join(env!("SWARMTERM_APP_IDENTIFIER"))
+            .join("diagnostics.json"),
+    )
+}
+
 /// Entry point from `main.rs`; exit code 0 on success.
 pub fn run_cli(args: &[String]) -> i32 {
-    match parse_args(args).and_then(|(pid, file)| imp::dump(pid, &file)) {
+    let result = parse_args(args).and_then(|(pid, file)| {
+        let saved = settings_path()
+            .map(|p| crate::diagnostics::load(&p))
+            .unwrap_or_default();
+        allowed(&crate::policy::load(), &saved)?;
+        imp::dump(pid, &file)
+    });
+    match result {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("dump-ui: {e}");
@@ -146,6 +183,67 @@ mod tests {
         assert!(parse_args(&args(&["0", "a.dmp"])).is_err());
         assert!(parse_args(&args(&["42", "a.txt"])).is_err());
         assert!(parse_args(&args(&["42", "a.dmp", "extra"])).is_err());
+    }
+
+    #[test]
+    fn needs_the_opt_in_and_no_lock() {
+        use crate::diagnostics::DiagnosticsSettings;
+        use crate::policy::{AdminPolicy, Edition};
+        let on = DiagnosticsSettings { hang_dumps: true };
+        let off = DiagnosticsSettings::default();
+        let open = Edition::Standard.locks();
+        assert!(allowed(&open, &on).is_ok());
+        assert!(allowed(&open, &off).is_err());
+        let admin = AdminPolicy {
+            disable_hang_dumps: true,
+            ..Default::default()
+        };
+        assert!(allowed(&admin, &on).is_err());
+        // The Corp edition locks dumps without any registry value.
+        assert!(Edition::Corp
+            .locks()
+            .check_for(Edition::Corp, crate::policy::Lock::HangDumps)
+            .is_err());
+    }
+
+    #[cfg(feature = "corp")]
+    #[test]
+    fn corp_build_refuses_even_with_the_opt_in() {
+        let on = crate::diagnostics::DiagnosticsSettings { hang_dumps: true };
+        // `load` adds the compiled-in Corp locks to whatever the registry says.
+        assert!(allowed(&crate::policy::load(), &on).is_err());
+    }
+
+    #[test]
+    fn a_refused_cli_call_writes_no_file() {
+        // No opt-in can be assumed on the test machine, and the pid is this
+        // test process (same exe): only the gate can stop it, so this
+        // exercises run_cli's order. Skipped when the machine opted in.
+        let saved = settings_path()
+            .map(|p| crate::diagnostics::load(&p))
+            .unwrap_or_default();
+        if allowed(&crate::policy::load(), &saved).is_ok() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("swa85-cli-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("refused.dmp");
+        let code = run_cli(&args(&[
+            &std::process::id().to_string(),
+            file.to_str().unwrap(),
+        ]));
+        assert_ne!(code, 0);
+        assert!(!file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_path_uses_the_compiled_identifier() {
+        let path = settings_path().expect("app data dir");
+        assert!(path.ends_with(
+            std::path::Path::new(env!("SWARMTERM_APP_IDENTIFIER")).join("diagnostics.json")
+        ));
+        assert!(env!("SWARMTERM_APP_IDENTIFIER").starts_with("com.apooooh.swarmterm.gn"));
     }
 
     #[cfg(windows)]
