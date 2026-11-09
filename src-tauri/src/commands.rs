@@ -629,7 +629,7 @@ pub fn report_agent_state(state: State<'_, AppState>, id: String, display: Strin
 /// Async: the first call probes PATH for shells; keep that off the UI thread.
 #[tauri::command]
 pub async fn list_available_shells() -> Vec<crate::shell::ShellEntry> {
-    tauri::async_runtime::spawn_blocking(|| crate::shell::list_shells().to_vec())
+    tauri::async_runtime::spawn_blocking(crate::shell::list_shells)
         .await
         .unwrap_or_default()
 }
@@ -792,13 +792,16 @@ pub async fn set_claude_statusline(app: AppHandle, enabled: bool) -> Result<(), 
         let default = if crate::setup::status_line_requested(&app) {
             // `settings.json` also holds the hooks `setup::ensure_claude`
             // writes; the shared config lock keeps either from losing the other.
+            // Without Git Bash the command would fail on every render; it is
+            // removed instead and the status says why (SWA-83).
+            let bash = crate::setup::git_bash_ok(&app);
             let result = {
                 let _lock = crate::accounts::CONFIG_WRITE
                     .lock()
                     .map_err(|_| "Status line configuration update interrupted")?;
-                crate::statusline::install::apply(&app, enabled)
+                crate::statusline::install::apply(&app, enabled && bash)
             };
-            crate::setup::record_status_line(&app, enabled, &result);
+            crate::setup::record_status_line(&app, enabled, bash, &result);
             crate::statusline::install::tolerate_foreign(result)
         } else {
             Ok(())
@@ -1521,6 +1524,9 @@ pub struct SwarmtermMcpProfile {
     entry: crate::mcp::toggle::EntryState,
     config_path: String,
     url: Option<String>,
+    /// The agent's CLI is found (refreshed PATH). Settings says "Not
+    /// installed" instead of "On" otherwise (SWA-83 V5).
+    installed: bool,
 }
 
 fn swarmterm_mcp_path(
@@ -1563,14 +1569,24 @@ pub async fn swarmterm_mcp_profiles(
         for a in crate::accounts::list(&app)? {
             rows.push((a.agent_id, Some(a.id), Some(a.name)));
         }
+        let claude = crate::agents::find_agent_binary("claude").is_some();
+        let codex = crate::agents::find_agent_binary("codex").is_some();
+        // qwen and opencode rows exist only when their CLI was found.
+        let installed = |agent: &str| match agent {
+            "claude-code" => claude,
+            "codex" => codex,
+            _ => true,
+        };
         rows.into_iter()
             .map(|(agent_id, account_id, account_name)| {
+                let installed = installed(&agent_id);
                 if agent_id == "opencode" {
                     return Ok(SwarmtermMcpProfile {
                         enabled: crate::mcp::toggle::is_enabled("opencode", None),
                         entry: crate::mcp::toggle::EntryState::PerPane,
                         config_path: "OPENCODE_CONFIG_CONTENT (per pane)".into(),
                         url: url.clone(),
+                        installed,
                         agent_id,
                         account_id,
                         account_name,
@@ -1582,6 +1598,7 @@ pub async fn swarmterm_mcp_profiles(
                     entry: crate::mcp::toggle::entry_state_of_file(&path, agent_id == "codex"),
                     config_path: path.to_string_lossy().into_owned(),
                     url: url.clone(),
+                    installed,
                     agent_id,
                     account_id,
                     account_name,

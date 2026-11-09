@@ -10,6 +10,8 @@ export interface SwarmtermMcpProfile {
   entry: 'absent' | 'ours' | 'foreign' | 'perPane'
   configPath: string
   url: string | null
+  /** The agent's CLI was found; "Not installed" is shown instead of On/Off. */
+  installed: boolean
 }
 
 export const swarmtermMcpProfiles = (): Promise<SwarmtermMcpProfile[]> => invoke('swarmterm_mcp_profiles')

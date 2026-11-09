@@ -230,17 +230,38 @@ pub fn write_hooks_to_file(path: &Path, command: Option<&str>) -> Result<(), Str
 /// zero writes, so any lost-update window is a single first-boot write.
 /// Called through `setup::ensure_claude`, which records the outcome.
 pub fn register(app: &AppHandle) -> Result<(), String> {
-    let home = app
-        .path()
-        .home_dir()
-        .map_err(|e| format!("cannot resolve home dir for Claude Code hooks: {e}"))?;
-    let cfg_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
-    let path = crate::statusline::install::resolve_settings_path(&home, cfg_dir.as_deref());
+    let path = default_settings_path(app)?;
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let command = format_command(&exe.to_string_lossy(), cfg!(windows));
     write_hooks_to_file(&path, Some(&command)).map_err(|e| {
         format!(
             "failed to register Claude Code hooks at {}: {e}",
+            path.display()
+        )
+    })
+}
+
+fn default_settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("cannot resolve home dir for Claude Code hooks: {e}"))?;
+    let cfg_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
+    Ok(crate::statusline::install::resolve_settings_path(
+        &home,
+        cfg_dir.as_deref(),
+    ))
+}
+
+/// Remove our hook entries from the default profile (Git Bash missing,
+/// SWA-83): without it Claude Code runs them through PowerShell, where they
+/// fail on every event, also in sessions outside Swarmterm. Foreign hooks
+/// stay; a dev build still defers to the installed app's live entries.
+pub fn unregister(app: &AppHandle) -> Result<(), String> {
+    let path = default_settings_path(app)?;
+    write_hooks_to_file(&path, None).map_err(|e| {
+        format!(
+            "failed to remove Claude Code hooks at {}: {e}",
             path.display()
         )
     })

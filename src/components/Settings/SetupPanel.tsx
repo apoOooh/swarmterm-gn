@@ -1,7 +1,9 @@
-import { useEffect, type ReactElement } from 'react'
-import { CheckCircle2, CircleAlert, CircleMinus, RefreshCw, TriangleAlert } from 'lucide-react'
+import { useEffect, useState, type ReactElement } from 'react'
+import { Check, CheckCircle2, CircleAlert, CircleMinus, Copy, ExternalLink, RefreshCw, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { setupRows, type SetupTone } from '@/lib/setup-status'
+import { gitBashHint, prerequisiteRows, setupRows, type GitBashHint, type SetupTone } from '@/lib/setup-status'
+import { writeClipboard } from '@/tauri/clipboard'
+import { openUrl } from '@/tauri/opener'
 import { useSetupStatusStore } from '@/store/setup-status-store'
 import { cn } from '@/lib/utils'
 
@@ -19,6 +21,30 @@ const TONE_CLASS: Record<SetupTone, string> = {
   error: 'text-destructive'
 }
 
+/** Git Bash missing: why, where to get it, and the command to copy (never run). */
+function GitBashNote({ hint }: { hint: GitBashHint }): ReactElement {
+  const [copied, setCopied] = useState(false)
+  const copy = (): void => {
+    void writeClipboard(hint.command).then(() => setCopied(true), () => setCopied(false))
+  }
+  return (
+    <div data-setup-hint="git-bash" className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+      <p className="text-foreground">{hint.text}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <code className="rounded bg-muted px-2 py-1 font-mono text-xs text-foreground">{hint.command}</code>
+        <Button variant="ghost" size="sm" onClick={copy} className="gap-1 text-muted-foreground">
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => void openUrl(hint.link)} className="gap-1 text-muted-foreground">
+          <ExternalLink className="h-3.5 w-3.5" />
+          git-scm.com
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 /**
  * Settings → Setup (SWA-83): what Swarmterm wrote into Claude Code's and
  * Codex's configuration and whether it worked. Read-only apart from
@@ -33,6 +59,8 @@ export function SetupPanel(): ReactElement {
   useEffect(() => { void recheck() }, [recheck])
 
   const rows = status ? setupRows(status) : []
+  const bashHint = status ? gitBashHint(status) : null
+  const tools = status ? prerequisiteRows(status) : []
   const agents = [...new Set(rows.map(r => r.agent))]
 
   return (
@@ -58,6 +86,7 @@ export function SetupPanel(): ReactElement {
           <p className="text-sm text-muted-foreground">Checking…</p>
         ) : (
           <div className="space-y-5">
+            {bashHint !== null && <GitBashNote hint={bashHint} />}
             {agents.map(agent => (
               <div key={agent}>
                 <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{agent}</h3>
@@ -85,6 +114,26 @@ export function SetupPanel(): ReactElement {
           </div>
         )}
       </section>
+
+      {tools.length > 0 && (
+        <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+          <h2 className="mb-4 text-sm font-semibold text-foreground">Prerequisites</h2>
+          <ul className="divide-y divide-border rounded-lg border border-border" aria-label="Prerequisites">
+            {tools.map(tool => {
+              const Icon = tool.found ? CheckCircle2 : CircleMinus
+              return (
+                <li key={tool.id} data-prerequisite={tool.id} data-found={tool.found} className="flex items-start gap-3 px-3 py-2.5">
+                  <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', TONE_CLASS[tool.found ? 'ok' : 'muted'])} aria-hidden />
+                  <div className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
+                    <span className="text-sm text-foreground">{tool.name}</span>
+                    <span className={cn('min-w-0 break-all text-right text-xs text-muted-foreground', tool.found && 'font-mono')}>{tool.text}</span>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
     </div>
   )
 }

@@ -24,7 +24,7 @@ import { planWorktreeBranches, provisionWorktrees } from '@/lib/worktree-naming'
 import { folderName, VISIBLE_RECENT_ROWS } from '@/lib/recent-folders'
 import { useRecentsStore } from '@/store/recents-store'
 import { useSetupStatusStore } from '@/store/setup-status-store'
-import { codexHookHint, defaultWelcomeFolder, isBroadFolder } from '@/lib/setup-status'
+import { codexHookHint, defaultWelcomeFolder, gitInstalled, isBroadFolder, worktreeOptionNote } from '@/lib/setup-status'
 import { visibleSlice, hiddenCount } from '@/lib/list-paging'
 import {
   mergeSessions,
@@ -86,6 +86,10 @@ export function Welcome(): ReactElement {
   const [templateName, setTemplateName] = useState<string | null>(null)
   const [savedNotice, setSavedNotice] = useState('')
   const [isGitRepo, setIsGitRepo] = useState(false)
+  // A failed `git init`/first commit used to vanish into the console (SWA-83 V4).
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const git = gitInstalled(useSetupStatusStore(s => s.status))
+  const worktreeNote = worktreeOptionNote({ git, isGitRepo })
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Optional workspace name; blank ⇒ named after the folder on create.
   const [workspaceName, setWorkspaceName] = useState('')
@@ -209,6 +213,8 @@ export function Welcome(): ReactElement {
 
   // Probe whether the chosen folder is inside a git repo. list returns []
   // for non-repos and for the home-dir guard.
+  useEffect(() => { setSubmitError(null) }, [trimmedFolder, isolateWorktrees])
+
   useEffect(() => {
     if (trimmedFolder === '') {
       setIsGitRepo(false)
@@ -296,10 +302,11 @@ export function Welcome(): ReactElement {
     // the same plan, racing two workspaces into existence.
     if (!canCreate || isSubmitting) return
     setIsSubmitting(true)
+    setSubmitError(null)
     try {
       addRecentFolder(trimmedFolder)
 
-      const isolate = isolateWorktrees
+      const isolate = isolateWorktrees && git !== false
       let paneWorktrees: ({ path: string; branch: string } | null)[] | undefined
 
       if (isolate) {
@@ -308,7 +315,7 @@ export function Welcome(): ReactElement {
           await ensureRepoWithCommit(trimmedFolder)
         } catch (err) {
           setIsSubmitting(false)
-          console.error('failed to initialize git repo:', err)
+          setSubmitError(`Could not set up git in this folder: ${String(err)}`)
           return
         }
 
@@ -626,14 +633,15 @@ export function Welcome(): ReactElement {
           <label
             className={cn(
               'mb-3 flex cursor-pointer items-start gap-2',
-              !isGitRepo && 'cursor-not-allowed opacity-50'
+              worktreeNote !== null && 'opacity-50',
+              git === false && 'cursor-not-allowed'
             )}
-            title={isGitRepo ? undefined : 'Will auto-initialize git when you create'}
+            title={worktreeNote ?? undefined}
           >
             <input
               type="checkbox"
-              disabled={false}
-              checked={isolateWorktrees}
+              disabled={git === false}
+              checked={isolateWorktrees && git !== false}
               onChange={(e) => setIsolateWorktrees(e.target.checked)}
               className="mt-0.5 accent-current"
             />
@@ -642,7 +650,7 @@ export function Welcome(): ReactElement {
                 Isolate features in git worktrees
               </span>
               <span className="block text-xs text-muted-foreground">
-                Each agent pane starts in its own worktree and branch.
+                {git === false ? worktreeNote : 'Each agent pane starts in its own worktree and branch.'}
               </span>
             </span>
           </label>
@@ -713,6 +721,9 @@ export function Welcome(): ReactElement {
             >
               {isSubmitting ? 'Creating worktrees…' : 'Create workspace'}
             </Button>
+            {submitError !== null && (
+              <p role="alert" data-welcome-error className="mt-2 break-words text-center text-xs text-destructive">{submitError}</p>
+            )}
             <p className="mt-2 text-center text-xs text-muted-foreground">
               {canCreate ? 'Press ⌘↵ / Ctrl+↵ to create' : 'Choose a working folder to continue'}
             </p>

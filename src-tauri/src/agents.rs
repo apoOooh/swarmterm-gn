@@ -72,7 +72,9 @@ pub fn find_agent_binary(exe: &str) -> Option<PathBuf> {
 /// that a Finder-launched GUI app does not inherit from the login shell —
 /// that's where npm/homebrew put `claude`/`codex`.
 fn search_dirs() -> Vec<PathBuf> {
-    let path_var = std::env::var("PATH").unwrap_or_default();
+    // The registry PATH as of now, not the app's launch snapshot: a CLI
+    // installed while Swarmterm runs must count as installed (SWA-83 V3).
+    let path_var = crate::runtime_path::current();
     let mut dirs: Vec<PathBuf> = std::env::split_paths(&path_var).collect();
     dirs.extend(extra_bin_dirs());
     dirs
@@ -110,7 +112,7 @@ fn extra_bin_dirs() -> Vec<PathBuf> {
 /// candidate per extension (lowercased), plus the bare name last. Unix: the
 /// bare name only. `windows` is a parameter rather than `cfg!` so both
 /// branches are unit-testable on any host.
-fn candidates(name: &str, pathext: &str, windows: bool) -> Vec<String> {
+pub(crate) fn candidates(name: &str, pathext: &str, windows: bool) -> Vec<String> {
     if !windows {
         return vec![name.to_string()];
     }

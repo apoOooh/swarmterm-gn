@@ -246,14 +246,15 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
             if mcp_on {
                 crate::mcp::config::write_mcp_config_to_file(&dir.join(".claude.json"))?;
             }
-            crate::hook::install::write_hooks_to_file(
-                &dir.join("settings.json"),
-                Some(&crate::hook::install::format_command(&exe, cfg!(windows))),
-            )?;
+            // Without Git Bash our hook and status-line commands fail on
+            // every event (Claude Code falls back to PowerShell), so they
+            // are taken out until Bash is there (SWA-83). MCP needs no shell.
+            let bash = !crate::git_bash::REQUIRED || crate::git_bash::find(Some(dir)).is_some();
+            let hook = bash.then(|| crate::hook::install::format_command(&exe, cfg!(windows)));
+            crate::hook::install::write_hooks_to_file(&dir.join("settings.json"), hook.as_deref())?;
             adopt_default_claude_config(dir);
             crate::sessions::share::ensure_profile(dir);
-            let command = STATUSLINE_ENABLED
-                .load(Ordering::Relaxed)
+            let command = (bash && STATUSLINE_ENABLED.load(Ordering::Relaxed))
                 .then(|| crate::statusline::install::format_command(&exe, cfg!(windows)));
             // A foreign status line remains owned by the user.
             crate::statusline::install::tolerate_foreign(
