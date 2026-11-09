@@ -323,6 +323,11 @@ struct ResubmitEvent {
     spawn_id: String,
     text: String,
     send: bool,
+    /// The blocked prompt's fingerprint, matched above: the renderer
+    /// compares it with the draft Claude restored before it touches the box
+    /// (SWA-88 hardening). Same rules as the text: main webview only, never
+    /// logged.
+    asked: crate::voice::completion::Fingerprint,
 }
 
 /// A browser can reach loopback too. Every browser request carries Origin or
@@ -437,6 +442,7 @@ async fn resubmit_handler(
                 spawn_id,
                 text,
                 send: mode == crate::resubmit::ResubmitMode::Send,
+                asked: body.fingerprint,
             },
         )
         .is_ok();

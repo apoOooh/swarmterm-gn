@@ -74,7 +74,7 @@ import {
   type SuppressState
 } from '@/lib/terminal-input-client'
 import { AgentStateDetector, type DetectorDeps } from '@/lib/agent-state/detector'
-import { promptBoxHasDraft } from '@/lib/prompt-draft'
+import { promptBoxDraftText, promptBoxHasDraft, type DraftRow } from '@/lib/prompt-draft'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { acceptsAgentHooks } from '@/lib/agent-state/hook-signal'
 import { useAgentStateStore } from '@/store/agent-state-store'
@@ -82,6 +82,7 @@ import type { BufferView } from '@/lib/agent-state/snapshot'
 import type { AgentHookSignal } from '@/tauri/agent-state'
 import { createFrameBatch } from '@/lib/frame-batch'
 import { agentNewlineFor } from '@/lib/agent-newline'
+import { createSubmitIntent } from '@/lib/terminal-typing'
 
 export type { TerminalStatus }
 
@@ -683,8 +684,12 @@ function getOrCreate(id: string): Entry {
   // in the running program as typed input. Keys typed in that window are
   // dropped too; accepted, since parsing the replay takes a frame or two.
   let replaying = 0
+  const submitIntent = createSubmitIntent()
   const sendInput = (data: string): void => {
-    if (replaying > 0) return
+    if (replaying > 0) {
+      submitIntent.take(data)
+      return
+    }
     // A focus report belongs to the pane that changed focus only: fanned out
     // it would type `ESC[I` into every broadcast member, and recorded as
     // typing it would hold that pane's War Room deliveries for a line the
@@ -702,8 +707,12 @@ function getOrCreate(id: string): Entry {
     const targets = ws
       ? resolveBroadcastTargets(ws.layout, ws.broadcastActive, ws.broadcastLeafIds, id)
       : [id]
+    // SWA-88: a real Enter is decided from the key event, not the bytes
+    // (`createSubmitIntent`). Broadcast hands the source's intent to every
+    // target on purpose: the same CR was written there and sent that line.
+    const keyboardEnter = submitIntent.take(data)
     for (const target of targets) {
-      useTerminalTypingStore.getState().noteInput(target, data)
+      useTerminalTypingStore.getState().noteInput(target, data, keyboardEnter)
       void writeTerminal(target, data)
     }
     userInput?.()
@@ -1121,7 +1130,14 @@ function getOrCreate(id: string): Entry {
         .catch(() => callback(undefined))
     }
   })
+  // Wrapped so every verdict reaches `submitIntent` (SWA-88): only a plain
+  // Enter that xterm goes on to handle may arm it.
   term.attachCustomKeyEventHandler((event) => {
+    const passed = decideKey(event)
+    submitIntent.key(event, passed)
+    return passed
+  })
+  function decideKey(event: KeyboardEvent): boolean {
     // App.tsx's window-capture listener calls `event.preventDefault()` for a
     // claimed app shortcut (Cmd/Ctrl+B, +Shift+B, +F — see keybindings.ts),
     // but that only suppresses the BROWSER's default action; it does nothing
@@ -1195,7 +1211,7 @@ function getOrCreate(id: string): Entry {
       return false
     }
     return true
-  })
+  }
 
   const session = new TerminalSession(
     id,
@@ -1560,6 +1576,37 @@ export function paneHasPromptDraft(id: string): boolean {
     lines.push(text.trimEnd())
   }
   return promptBoxHasDraft(lines.join('\n'))
+}
+
+/**
+ * SWA-88: the draft in a Claude pane's input box as exact text, or
+ * `undefined` when it cannot be read back unambiguously
+ * (`promptBoxDraftText`). Read only to compare with the blocked prompt's
+ * fingerprint; never stored or logged.
+ */
+export function paneDraftText(id: string): string | undefined {
+  const entry = entries.get(id)
+  if (!entry || !entry.opened || entry.config.agentId !== 'claude-code') return undefined
+  const buffer = entry.term.buffer.active
+  const end = buffer.length
+  const start = Math.max(0, end - entry.term.rows)
+  const rows: DraftRow[] = []
+  const cell = buffer.getNullCell()
+  for (let y = start; y < end; y++) {
+    const line = buffer.getLine(y)
+    if (!line) continue
+    let text = ''
+    let dim = false
+    for (let x = 0; x < line.length; x++) {
+      line.getCell(x, cell)
+      const ch = cell.getChars()
+      if (cell.getWidth() === 0) continue
+      if (cell.isDim() && ch !== '' && ch !== ' ') dim = true
+      text += ch === '' || cell.isDim() ? ' ' : ch
+    }
+    rows.push({ text: text.trimEnd(), dim })
+  }
+  return promptBoxDraftText(rows, entry.term.cols)
 }
 
 /**
