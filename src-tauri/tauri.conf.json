@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "create": false,
         "title": "Swarmterm GN",
         "width": 1280,
         "height": 920,

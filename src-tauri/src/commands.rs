@@ -11,6 +11,18 @@ fn files_main_only(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 
+/// The renderer's one-time "boot finished, show the window" (App mount and
+/// the boot guard). How it appears is decided in Rust (`dev_window`): release
+/// = plain show, debug = without focus behind the active window, debug with
+/// `SWARMTERM_DEV_HIDDEN=1` = not at all.
+#[tauri::command]
+pub fn window_reveal(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("window_reveal is available only in the main window".into());
+    }
+    crate::dev_window::reveal(&window)
+}
+
 #[tauri::command]
 pub fn confirm_quit(
     window: tauri::WebviewWindow,
@@ -726,6 +738,23 @@ async fn accounts_blocking(app: AppHandle) -> Result<Vec<crate::accounts::AgentA
         .map_err(|e| e.to_string())?
 }
 
+/// Last outcome of each agent integration (hooks, MCP entry, status line).
+/// Never probes or writes; `setup_recheck` does.
+#[tauri::command]
+pub fn setup_status() -> crate::setup::SetupStatus {
+    crate::setup::status()
+}
+
+/// Re-run the integration checks (Welcome mount, Settings → Setup): a CLI
+/// installed while the app runs gets its entries without a restart. Blocking
+/// worker: the first Codex check runs `codex --help` (up to 3 s).
+#[tauri::command]
+pub async fn setup_recheck(app: AppHandle) -> Result<crate::setup::SetupStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::setup::recheck(&app))
+        .await
+        .map_err(|_| "Setup check interrupted".to_string())
+}
+
 /// Install or remove Claude Code's `statusLine` entry. Driven from the renderer
 /// (on boot and on toggle) rather than from Rust's `setup`, because the
 /// preference lives in localStorage and only the renderer can read it. That
@@ -743,11 +772,25 @@ pub async fn set_claude_statusline(app: AppHandle, enabled: bool) -> Result<(), 
             .map_err(|_| "Status line configuration update interrupted")?;
         let enabled =
             crate::accounts::STATUSLINE_ENABLED.load(std::sync::atomic::Ordering::Relaxed);
-        // A custom status line in the default profile is the user's and stays;
-        // it must not stop the profiles below from following the switch.
-        let default = crate::statusline::install::tolerate_foreign(
-            crate::statusline::install::apply(&app, enabled),
-        );
+        // Without Claude Code there is no default profile to configure
+        // (SWA-83); `setup::ensure_claude` applies the preference once the
+        // CLI turns up. A custom status line in the default profile is the
+        // user's and stays; it must not stop the profiles below from
+        // following the switch.
+        let default = if crate::setup::status_line_requested(&app) {
+            // `settings.json` also holds the hooks `setup::ensure_claude`
+            // writes; the shared config lock keeps either from losing the other.
+            let result = {
+                let _lock = crate::accounts::CONFIG_WRITE
+                    .lock()
+                    .map_err(|_| "Status line configuration update interrupted")?;
+                crate::statusline::install::apply(&app, enabled)
+            };
+            crate::setup::record_status_line(&app, enabled, &result);
+            crate::statusline::install::tolerate_foreign(result)
+        } else {
+            Ok(())
+        };
         // One broken profile must not leave the others on the old setting:
         // enroll all, then report the first failure.
         let mut first_err = default.err();

@@ -67,6 +67,7 @@ const ALLOWED_SYNC: &[(&str, &str)] = &[
         "resize_terminal",
         "O(1) resize call, enqueued for hosted panes",
     ),
+    ("setup_status", "clone of the stored status, never probes"),
     ("terminal_host_get_settings", "short lock"),
     (
         "terminal_host_keep",
@@ -116,6 +117,10 @@ const ALLOWED_SYNC: &[(&str, &str)] = &[
     ("war_room_rename", "short lock plus event"),
     ("war_room_rooms", "short lock"),
     ("windows_build_number", "one registry read"),
+    (
+        "window_reveal",
+        "window show; background mode needs the UI thread anyway",
+    ),
     ("write_terminal", "enqueue only (pty::PtyInput)"),
     (
         "write_terminal_checked",

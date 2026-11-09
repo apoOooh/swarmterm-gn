@@ -15,7 +15,7 @@ Agent detection re-runs every time the composer opens, so installing a CLI needs
 
 ### Defaults and templates
 
-The composer starts from your **workspace defaults**. Below the options, **Save as default** stores everything you've chosen (folder, terminal count, agents and their accounts, worktree isolation, *Split opens*) as the starting point for every new workspace. With no default folder the composer starts in your home directory.
+The composer starts from your **workspace defaults**. Below the options, **Save as default** stores everything you've chosen (folder, terminal count, agents and their accounts, worktree isolation, *Split opens*) as the starting point for every new workspace. With no default folder the composer starts in your most recent folder, or empty on a first start. It never suggests your home folder or a drive root, and picking one shows a warning: Swarmterm watches every file below a workspace folder, and agents ask you to trust all of it.
 
 **Save as template…** stores the current choices under a name. Saving under an existing name (case doesn't matter) offers to overwrite it. Once you have templates, a **Template** picker appears above *How many terminals?*; choosing one fills in all its choices, and *Defaults* goes back to your defaults. Agents whose CLI isn't installed are left out when a default or template is applied.
 
@@ -322,6 +322,7 @@ saved list by newer ones.
 Claude Code and Codex session hooks record each pane's exact conversation,
 including when several panes share a folder. For Codex, review and trust the
 Swarmterm hooks in **`/hooks`**, then send a message so its session is recorded.
+The composer reminds you of this while it is about to start Codex panes.
 The Stop and Interrupt hooks (Codex 0.163 and later) also tell Swarmterm
 exactly when a Codex turn ends; after an update that adds them, Codex asks
 once more in `/hooks`. Until they are trusted, a Codex pane's status comes
@@ -552,6 +553,8 @@ Changes apply to the next pane or routine that starts; running panes keep the en
 
 **Settings** (from the navbar) covers appearance, terminal font and default shell with a live preview, the status line toggle, and the full shortcut list — these preferences persist between launches.
 
+**Setup.** Settings → **Setup** lists what Swarmterm added to Claude Code and Codex so panes can report their state, show the status line and reach the War Room: the hooks, the Swarmterm MCP entry and the status line, each with its state. Swarmterm writes nothing for a CLI that is not installed; entries it added earlier are still kept up to date, even when it cannot find that CLI itself. Install one while Swarmterm runs and its entries are added the next time the composer opens, a pane of that agent starts, or you press **Check again**. Your own status line is kept, and an entry you switched off under Settings → MCP shows as switched off. Only a real failure, such as a configuration file that cannot be read, puts one *Agent setup needs attention* entry in the bell. It names the first problem; this page shows all of them.
+
 **Closing the window hides Swarmterm to the tray** and everything keeps running; tray → **Quit** is what actually exits. Launching a second copy just focuses the window you already have. On Windows, closing a pane kills the entire process tree it started — no orphaned build servers.
 
 **Diagnostics.** Settings → Terminal → Diagnostics has **Write a dump when the window stops responding** (off by default); its description shows the folder the files are written to. See *Swarmterm stopped responding* under Troubleshooting.
@@ -654,6 +657,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 
 ## Troubleshooting
 
+- **The bell says "Agent setup needs attention"** — Swarmterm could not add its hooks, MCP entry or status line to an agent's configuration, usually because `settings.json`, `.claude.json` or `config.toml` is not valid JSON or TOML, or because `CLAUDE_CONFIG_DIR` points to a folder that does not exist. Settings → Setup shows the reason. Fix the file or the variable, then press **Check again**.
 - **An agent is missing from the composer** — its CLI isn't on your `PATH`; install it and reopen the composer. A default or template that assigns it uses those slots for plain terminals meanwhile, and picks the agent up again once it's installed — unless you edit and save that default or template before then.
 - **A War Room message never arrived** — look for the pill in the pane or `⏸N` on the room tab: it's held behind an unsubmitted prompt line, or the agent is working / sitting on a prompt (the pill says which). Press Enter or click "Deliver now" for a typing hold; answer the prompt or wait for the agent to finish otherwise.
 - **An agent says its execute was refused** — the target pane is blocked on a permission or question; answer that prompt (or let the sending agent `wait_peer`) and the hand-off goes through on re-send.

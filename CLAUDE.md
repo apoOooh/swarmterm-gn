@@ -169,6 +169,12 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   menus/dialogs. New chrome that swallows clicks should carry
   `data-focus-return`; anything that owns the keyboard (Welcome, Settings, the
   right panel) must not.
+- **Main window is built in `setup`** (SWA-84). `tauri.conf.json` (and
+  `tauri.macos.conf.json`) mark it `create: false`; `lib.rs` builds it first
+  from that entry so debug builds can pass `focused(false)`
+  (`dev_window.rs`). The renderer reveals it via `window_reveal`, never
+  `appWindow.show()` (that permission is removed): debug = first reveal
+  behind every window without focus, `SWARMTERM_DEV_HIDDEN=1` = never shown.
 - **Close-to-tray vs Quit.** Closing the window hides it to the tray (pty stays
   alive); `on_window_event` calls `prevent_close()` unless `AppState.quitting` is
   set (tray → Quit). Killing the app for real must set that flag.

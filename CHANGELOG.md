@@ -21,6 +21,11 @@
   the buzzkey status and start, Open in editor, Reveal in Explorer and the
   editor lookup no longer run on the UI thread. A test now fails when a
   synchronous command or scheme handler is added without a reason.
+- Security: private vulnerability reporting is enabled; [SECURITY.md](SECURITY.md)
+  and the corporate review pack no longer describe the issue fallback as
+  temporary. The repository now protects `main`, `dev` and release tags
+  server-side and requires SHA-pinned actions
+  ([maintainer to-dos](docs/maintainer-todos.md)).
 
 ## [1.27.0] - 2026-11-09
 

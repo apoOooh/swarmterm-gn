@@ -460,11 +460,12 @@ function TerminalHostSettings(): ReactElement | null {
   return (
     <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
       <div className="mb-4">
-        <h2 className="text-sm font-semibold text-foreground">Terminal host (preview)</h2>
+        <h2 className="text-sm font-semibold text-foreground">Terminal host</h2>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           Runs new panes in a separate background process instead of inside
-          Swarmterm. Groundwork for keeping terminals alive across a restart;
-          today it behaves like the built-in terminals.
+          Swarmterm, so they keep running if Swarmterm crashes or is ended.
+          Opening the saved workspace again takes them over where they are.
+          On by default.
         </p>
       </div>
 

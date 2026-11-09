@@ -19,6 +19,15 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   proportion to the size (250 MB measured 0.6 s). Larger images show *Open in
   default app* instead of the in-app viewer; videos stream in ranges and are
   unaffected.
+- **No installation from inside the app.** First-run setup (SWA-83) explains
+  a missing prerequisite or agent CLI and shows the vendor link and the
+  install command to copy. Swarmterm never installs anything itself and never
+  types an install command into a pane, not even one that waits for Enter.
+- **Agent config only for installed CLIs.** Swarmterm writes hooks, MCP
+  entries and the status line only for an agent CLI it finds, or into a
+  profile that already holds Swarmterm entries (to keep repairing them).
+  Outcomes are shown in Settings → Setup; only a real failure reaches the
+  bell.
 
 ## 2026-10-29
 
@@ -126,3 +135,11 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   locally and `dev` is pushed directly; releases merge `dev` into `main` the
   same way (`docs/release-process.md`). Branch rulesets therefore only block
   deletion and force-push, and do not require pull requests or status checks.
+- **Debug builds start in the background** (user decision 2026-11-09,
+  SWA-84). Scripts, the testlab and agents in panes start debug builds while
+  the user works elsewhere, so a debug build shows its main window without
+  focus and at the bottom of the z-order (`HWND_BOTTOM`, behind every window,
+  only on the first reveal). `SWARMTERM_DEV_HIDDEN=1` keeps it hidden for
+  unattended runs driven over CDP. Release builds never read the variable
+  and keep showing the window in front. Tray "Show" and a second launch
+  still bring the window forward in every build.

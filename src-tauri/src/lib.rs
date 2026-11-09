@@ -7,6 +7,7 @@ mod child_priority;
 mod clipboard_media;
 mod commands;
 mod dev_defer;
+mod dev_window;
 mod devlog;
 mod diagnostics;
 pub mod dump_ui;
@@ -25,6 +26,7 @@ mod prof;
 mod pty;
 mod routine_cmd;
 mod sessions;
+mod setup;
 mod shell;
 // Public so `main.rs` can reach `--statusline` without booting Tauri.
 pub mod statusline;
@@ -44,6 +46,9 @@ use tauri::WindowEvent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before any thread can read the environment: decides (and removes)
+    // the debug-only SWARMTERM_DEV_HIDDEN switch.
+    let start_mode = dev_window::current();
     #[cfg(feature = "profiling")]
     install_named_runtime();
     tauri::Builder::default()
@@ -88,8 +93,25 @@ pub fn run() {
         )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
+        .setup(move |app| {
             crate::prof::start(app.handle());
+            // The main window is `create: false` in tauri.conf.json and built
+            // here from that same entry, because whether it may take focus is
+            // a build-type fact (SWA-84, `dev_window`), not config: a second
+            // copy of the whole `windows` array in a dev config would drift.
+            // Built first so every `get_webview_window("main")` below finds it.
+            {
+                let config = app
+                    .config()
+                    .app
+                    .windows
+                    .first()
+                    .cloned()
+                    .ok_or("tauri.conf.json defines no main window")?;
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+                    .focused(start_mode.focused())
+                    .build()?;
+            }
             // UI-stall watchdog (SWA-85): stall log always, dumps opt-in.
             crate::diagnostics::init(app.handle());
             // Before any pane, routine or other child process spawns: the
@@ -159,18 +181,17 @@ pub fn run() {
                     crate::sessions::share::repair(&accounts);
                 }
             }
-            crate::mcp::config::register_user_scope(app.handle());
-            // Register `swarmterm --hook` under Claude Code's hook events in
-            // ~/.claude/settings.json so Claude Code panes report exact
-            // working/blocked/idle edges instead of relying on screen-scrape
-            // alone. Additive on `hooks` (the user's own groups survive),
-            // one-shot, idempotent, log-only. Must run BEFORE any pane launches
-            // `claude`: hooks are snapshotted at session start.
-            crate::hook::install::register(app.handle());
-            crate::hook::codex::register(app.handle());
-            // `codex --help` probe can take seconds on a cold start; pay it
-            // here, off-thread, instead of on the first Codex pane spawn.
-            crate::hook::codex::warm();
+            // Claude Code: the user-scope MCP entry (~/.claude.json) and
+            // `swarmterm --hook` under its hook events in settings.json, so
+            // panes report exact working/blocked/idle edges. Additive (the
+            // user's own groups survive), idempotent, never blocks boot, and
+            // only for a CLI that is installed (SWA-83). Synchronous because
+            // hooks are snapshotted at session start and restored panes spawn
+            // right after the renderer mounts. Codex's hooks need a
+            // `codex --help` probe of up to 3 s, so they go to a blocking
+            // worker; a Codex pane spawned meanwhile waits for it
+            // (`setup::ensure_for_agent`). Outcomes: Settings → Setup.
+            crate::setup::boot(app.handle());
             // Voice dictation endpoint (SWA-12): named pipe + discovery file
             // for buzzkey; follows Settings → Voice. Failure is logged only.
             crate::voice::init(app.handle());
@@ -212,6 +233,7 @@ pub fn run() {
             diagnostics::debug_ui_stall,
             commands::files_open_context,
             commands::confirm_quit,
+            commands::window_reveal,
             commands::quit_hosted_count,
             commands::run_routine_command,
             commands::save_clipboard_image,
@@ -289,6 +311,8 @@ pub fn run() {
             commands::set_session_share,
             commands::inspect_saved_workspace,
             commands::set_claude_statusline,
+            commands::setup_status,
+            commands::setup_recheck,
             commands::resolve_path_link,
             commands::resolve_dir_link,
             commands::list_folders,

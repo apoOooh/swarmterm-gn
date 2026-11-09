@@ -87,7 +87,7 @@ whisper-rs = { version = "0.16", optional = true }
 cpal = "0.18"
 # Built-in announcements (SWA-66, docs/adr/0003): the system's SAPI voices.
 # Same version tauri/wry already pull in, so this adds features, not a crate.
-windows = { version = "0.61", features = ["Win32_Media_Speech", "Win32_System_Com"] }
+windows = { version = "0.61", features = ["Win32_Media_Speech", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
 junction = "1"
 # Job Objects so killing a terminal tears down the shell's whole process tree
 # (children/grandchildren) instead of just the shell itself.
