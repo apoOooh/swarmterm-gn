@@ -121,3 +121,11 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   locally and `dev` is pushed directly; releases merge `dev` into `main` the
   same way (`docs/release-process.md`). Branch rulesets therefore only block
   deletion and force-push, and do not require pull requests or status checks.
+- **Debug builds start in the background** (user decision 2026-11-09,
+  SWA-84). Scripts, the testlab and agents in panes start debug builds while
+  the user works elsewhere, so a debug build shows its main window without
+  focus and at the bottom of the z-order (`HWND_BOTTOM`, behind every window,
+  only on the first reveal). `SWARMTERM_DEV_HIDDEN=1` keeps it hidden for
+  unattended runs driven over CDP. Release builds never read the variable
+  and keep showing the window in front. Tray "Show" and a second launch
+  still bring the window forward in every build.
