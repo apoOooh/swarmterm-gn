@@ -345,8 +345,11 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   stay `pending`. The renderer (`lib/first-run.ts`) reports `existing` when
   localStorage holds recents/saved workspaces/appearance. Voice (D3): a
   missing `voice-settings.json` means off on a pending install (memory
-  only) and on for an older one (written once, `settings::load_for_boot`);
-  `setup_wizard_finish` settles it via `voice::settle_first_run`. The
+  only), off and written once after done/skipped, and on only for
+  `existing` (written once, `settings::load_for_boot`).
+  `setup_wizard_finish` settles voice (`voice::settle_first_run`) BEFORE it
+  stores the outcome and fails if that save fails, so the assistant stays
+  pending; done/skipped without a file is the fallback for older states. The
   assistant (`components/SetupWizard`, rules in `lib/setup-wizard.ts`) is
   role=dialog like Settings and only shows install commands to copy (D6):
   never install, never type into a pane. Debug builds:

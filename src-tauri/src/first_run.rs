@@ -148,11 +148,10 @@ pub fn init(app: &AppHandle) {
     });
 }
 
-/// Is this boot a new installation whose assistant is not finished? Voice
-/// starts switched off then (D3).
-pub fn is_pending(app: &AppHandle) -> bool {
+/// The verdict of this boot; `Existing` when `init` did not run.
+pub fn wizard(app: &AppHandle) -> Wizard {
     app.try_state::<FirstRun>()
-        .is_some_and(|f| f.wizard() == Wizard::Pending)
+        .map_or(Wizard::Existing, |f| f.wizard())
 }
 
 #[tauri::command]
@@ -166,18 +165,18 @@ pub async fn setup_wizard_state(app: AppHandle) -> Wizard {
 #[tauri::command]
 pub async fn setup_wizard_finish(app: AppHandle, outcome: Wizard) -> Result<Wizard, String> {
     let first = app.state::<FirstRun>();
-    let next = {
-        let mut wizard = first.wizard.lock().unwrap_or_else(|e| e.into_inner());
-        let next = next(*wizard, outcome)?;
-        if let Some(dir) = &first.dir {
-            if !wizard_disabled_for_tests() {
-                write_state(dir, next)?;
-            }
+    let next = next(first.wizard(), outcome)?;
+    // Voice first, the outcome second: a crash or a failed voice save in
+    // between leaves the assistant pending (voice off, shown again), never
+    // a finished install without its voice answer on disk (D3).
+    crate::voice::settle_first_run(&app, next == Wizard::Existing)?;
+    let mut wizard = first.wizard.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(dir) = &first.dir {
+        if !wizard_disabled_for_tests() {
+            write_state(dir, next)?;
         }
-        *wizard = next;
-        next
-    };
-    crate::voice::settle_first_run(&app, next == Wizard::Existing);
+    }
+    *wizard = next;
     Ok(next)
 }
 
@@ -247,6 +246,25 @@ mod tests {
         fs::write(dir.path().join(STATE_FILE), "garbage").unwrap();
         fs::write(dir.path().join("agent-accounts.json"), "[]").unwrap();
         assert_eq!(classify(dir.path()), Wizard::Existing);
+    }
+
+    #[test]
+    fn a_finish_interrupted_after_the_outcome_boots_with_voice_off() {
+        use crate::voice::settings::{load_for_boot, save};
+        let dir = tempfile::tempdir().unwrap();
+        for ended in [Wizard::Done, Wizard::Skipped] {
+            // Outcome on disk, voice file missing (crash or a failed save
+            // under an older order): the next boot must not turn voice on.
+            let voice = dir.path().join("voice-settings.json");
+            let _ = fs::remove_file(&voice);
+            write_state(dir.path(), ended).unwrap();
+            let wizard = classify(dir.path());
+            assert_eq!(wizard, ended);
+            let (settings, write) = load_for_boot(&voice, wizard);
+            assert!(!settings.enabled && write, "{ended:?}");
+            save(&voice, &settings).unwrap();
+            assert!(!load_for_boot(&voice, classify(dir.path())).0.enabled);
+        }
     }
 
     #[test]
