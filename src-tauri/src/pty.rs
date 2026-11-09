@@ -962,6 +962,13 @@ fn plan_spawn(
     id: &str,
     options: CreateTerminalOptions,
 ) -> Result<SpawnPlan, String> {
+    // The agent about to start must find its hooks and MCP entry, also when
+    // its CLI was installed after boot or the boot-time Codex probe is still
+    // running (SWA-83). A no-op once they are in place. Before enrollment:
+    // both take `CONFIG_WRITE`, which is not reentrant.
+    if options.initial_command.is_some() {
+        crate::setup::ensure_for_agent(app, options.agent_id.as_deref());
+    }
     let account = match options.account_id.as_deref() {
         Some(id) => {
             let account = crate::accounts::resolve(app, id, options.agent_id.as_deref())?;

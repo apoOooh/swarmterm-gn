@@ -82,13 +82,12 @@ pub async fn start(app: AppHandle) -> Result<Arc<str>, String> {
         .set(url.clone())
         .map_err(|_| "mcp: mcp_url already set (start called twice?)".to_string())?;
 
-    // Codex reads MCP servers from config.toml at session start and cannot
-    // expand env vars in `url`, so the concrete URL is (re)written every boot.
-    // Dev builds skip it: two apps sharing one config.toml would overwrite
-    // each other's port, and pane-started Codex is pinned per process anyway.
-    if !cfg!(debug_assertions) && toggle::is_enabled("codex", None) {
-        config::register_codex(&app, &url);
-    }
+    // Codex cannot expand env vars in `url`, so its entry carries the
+    // concrete URL; `setup` writes it (release builds, Codex installed, under
+    // the config lock) and again for a Codex installed later.
+    // Blocking worker: it takes the (std) config lock.
+    let setup_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::setup::codex_mcp(&setup_app));
     // Qwen expands env vars in settings.json, so its placeholder entry is
     // written once (Claude-style); it just rides along at the same call site.
     if toggle::is_enabled("qwen", None) {
