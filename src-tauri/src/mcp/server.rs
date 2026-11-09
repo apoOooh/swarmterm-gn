@@ -235,6 +235,14 @@ pub fn axum_router(app: AppHandle) -> axum::Router {
         ))
         .route("/status", get(status_handler))
         .route("/hook", post(hook_handler))
+        // SWA-88: below the layer like `/hook` (data-shield's guard, not an
+        // MCP client). JSON escapes may double the text, hence 2x.
+        .route(
+            "/resubmit",
+            post(resubmit_handler).layer(axum::extract::DefaultBodyLimit::max(
+                2 * crate::resubmit::MAX_TEXT + 1024,
+            )),
+        )
         .with_state(app)
 }
 
@@ -288,6 +296,151 @@ fn bearer_header(headers: &HeaderMap) -> &str {
         .get(AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("")
+}
+
+/// SWA-88 `POST /resubmit` body, sent by data-shield's UserPromptSubmit guard
+/// after it blocked a prompt. `text` is the masked prompt; without it the
+/// POST only reports the block (masking failed, or the masked form still
+/// had a finding).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResubmitBody {
+    session_id: String,
+    prompt_id: String,
+    /// Length + SHA-256 of the ORIGINAL (blocked) prompt, matched against
+    /// the one our `--hook` sent with the edge.
+    fingerprint: crate::voice::completion::Fingerprint,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+/// To the main webview only (`src/tauri/prompt-resubmit.ts`). The one event
+/// that carries prompt text: masked, and never logged or forwarded.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResubmitEvent {
+    terminal_id: String,
+    spawn_id: String,
+    text: String,
+    send: bool,
+}
+
+/// A browser can reach loopback too. Every browser request carries Origin or
+/// Fetch Metadata; the guard (node:http) sends neither.
+fn from_browser(headers: &HeaderMap) -> bool {
+    ["origin", "sec-fetch-site", "sec-fetch-mode"]
+        .iter()
+        .any(|h| headers.contains_key(*h))
+}
+
+/// The guard waits for this answer (≈1 s budget): `accepted` = the masked
+/// prompt goes back into the pane, so the guard skips its clipboard copy.
+fn resubmit_answer(accepted: bool) -> Response {
+    (
+        StatusCode::ACCEPTED,
+        [(axum::http::header::CONNECTION, "close")],
+        Json(serde_json::json!({ "accepted": accepted })),
+    )
+        .into_response()
+}
+
+async fn resubmit_handler(
+    AxumState(app): AxumState<AppHandle>,
+    headers: HeaderMap,
+    Json(body): Json<ResubmitBody>,
+) -> Response {
+    use std::time::{Duration, Instant};
+    use tauri::Emitter;
+    if from_browser(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(terminal_id) = live_caller(&app, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !crate::sessions::is_uuid(&body.session_id)
+        || !crate::sessions::is_uuid(&body.prompt_id)
+        || !body.fingerprint.is_valid()
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let state = app.state::<crate::pty::AppState>();
+    let spawn_id = {
+        let terminals = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        terminals
+            .get(&terminal_id)
+            .filter(|t| t.agent_id.as_deref() == Some("claude-code"))
+            .map(|t| t.spawn_id.clone())
+    };
+    let Some(spawn_id) = spawn_id else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    // The block is reported whatever the setting: a prompt that never ran
+    // must not be announced as done.
+    let edge_here = state
+        .resubmit
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .block(
+            &terminal_id,
+            &spawn_id,
+            &body.prompt_id,
+            &body.fingerprint,
+            Instant::now(),
+        );
+    if edge_here {
+        crate::voice::blocked_turn(&app, &terminal_id, &spawn_id, &body.prompt_id);
+        let _ = app.emit(
+            "agent:prompt-blocked",
+            &serde_json::json!({ "terminalId": terminal_id, "atMs": crate::warroom::now_ms() }),
+        );
+    }
+    let mode = state.agent_policy_snapshot().prompt_resubmit;
+    let Some(text) = body.text.filter(|t| {
+        mode != crate::resubmit::ResubmitMode::Off && crate::resubmit::is_masked_prompt(t)
+    }) else {
+        return resubmit_answer(false);
+    };
+    // Both hooks run in parallel; ours is usually first, but a slow
+    // `--hook` start can let the guard overtake it.
+    let deadline = Instant::now() + crate::resubmit::EDGE_WAIT;
+    loop {
+        let verdict = state
+            .resubmit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .check(
+                &terminal_id,
+                &spawn_id,
+                &body.session_id,
+                &body.prompt_id,
+                &body.fingerprint,
+                Instant::now(),
+            );
+        use crate::resubmit::Refusal;
+        match verdict {
+            Ok(()) => break,
+            Err(Refusal::NoEdge | Refusal::NotTheEdge) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(_) => return resubmit_answer(false),
+        }
+    }
+    let delivered = app
+        .emit_to(
+            "main",
+            "prompt:resubmit",
+            &ResubmitEvent {
+                terminal_id,
+                spawn_id,
+                text,
+                send: mode == crate::resubmit::ResubmitMode::Send,
+            },
+        )
+        .is_ok();
+    resubmit_answer(delivered)
 }
 
 /// Record one context-usage sample for a pane and emit `agent:context` only
@@ -430,6 +583,27 @@ async fn hook_handler(
             );
         }
         if let Some(turn) = &body.turn {
+            // SWA-88: the edge a `/resubmit` must answer. A prompt the guard
+            // already reported as blocked never ran: it opens no turn and
+            // drives no "working" (nothing to announce when it runs out).
+            if turn.edge == crate::hook::TurnEdge::Prompt
+                && session.agent_id == "claude-code"
+                && app
+                    .state::<crate::pty::AppState>()
+                    .resubmit
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .prompt(
+                        &terminal_id,
+                        &spawn_id,
+                        &session.session_id,
+                        &turn.prompt_id,
+                        turn.asked.as_ref(),
+                        std::time::Instant::now(),
+                    )
+            {
+                return StatusCode::NO_CONTENT.into_response();
+            }
             // A Stop for a prompt that is already over must not end the turn
             // in progress: no ledger change and no idle edge for the renderer.
             if crate::voice::stale_stop(&app, &terminal_id, &spawn_id, &session.session_id, turn) {
@@ -453,6 +627,15 @@ async fn hook_handler(
     // detector.
     if body.session.is_none() {
         let state = app.state::<crate::pty::AppState>();
+        // SWA-88: Claude sends PostToolUse without a session. A tool call
+        // after a prompt edge proves that prompt ran, so no resubmit for it.
+        if matches!(body.signal, crate::hook::Signal::Working) {
+            state
+                .resubmit
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .tool_ran(&terminal_id);
+        }
         let codex_pane = state
             .terminals
             .lock()

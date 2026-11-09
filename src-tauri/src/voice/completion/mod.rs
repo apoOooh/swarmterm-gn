@@ -434,6 +434,37 @@ impl Ledger {
             .any(|p| p.open.is_none() && p.closed.as_ref().is_some_and(|c| c.token == token))
     }
 
+    /// SWA-88: a UserPromptSubmit hook (data-shield) blocked `prompt_id`, so
+    /// the turn never ran. Closed silently: the status the renderer reports
+    /// when its working edge runs out is `View::Silent`, never a "fertig"
+    /// for a prompt the agent never saw. True if it was the open turn.
+    pub fn blocked(&mut self, terminal_id: &str, spawn_id: &str, prompt_id: &str) -> bool {
+        let open = self
+            .panes
+            .get(terminal_id)
+            .is_some_and(|p| p.spawn_id == spawn_id && p.open.as_deref() == Some(prompt_id));
+        if !open {
+            return false;
+        }
+        let token = self.token(terminal_id);
+        let Some(pane) = self.panes.get_mut(terminal_id) else {
+            return false;
+        };
+        pane.open = None;
+        pane.held = None;
+        pane.closed = Some(Closed {
+            token,
+            prompt_id: prompt_id.to_owned(),
+            outcome: Outcome::Done,
+            reply: None,
+            pending: false,
+            published: None,
+            replayed: true,
+            replay_due: false,
+        });
+        true
+    }
+
     /// SessionStart/SessionEnd, kill, respawn: the conversation is over.
     pub fn forget(&mut self, terminal_id: &str) {
         self.panes.remove(terminal_id);
@@ -724,5 +755,23 @@ mod tests {
         ));
         l.forget(T);
         assert!(!l.holds(&job.token));
+    }
+
+    #[test]
+    fn a_blocked_prompt_closes_silently_and_only_the_open_one() {
+        let mut l = Ledger::default();
+        assert!(!l.blocked(T, G, "p1"), "unknown pane");
+        l.prompt(T, G, S, "p1");
+        assert!(!l.blocked(T, "gen2", "p1"), "other generation");
+        assert!(!l.blocked(T, G, "p0"), "not the open prompt");
+        assert!(l.blocked(T, G, "p1"));
+        assert_eq!(l.open_turn(T, G), None);
+        assert_eq!(l.publish(T, G, published(false)), View::Silent);
+        // A late Stop of the blocked prompt closes nothing more.
+        assert_eq!(stop(&mut l, "p1"), None);
+        // The resubmitted prompt is an ordinary new turn.
+        l.prompt(T, G, S, "p2");
+        assert!(stop(&mut l, "p2").is_some());
+        assert!(matches!(l.publish(T, G, published(false)), View::Pending));
     }
 }

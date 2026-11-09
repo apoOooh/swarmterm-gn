@@ -18,6 +18,10 @@ export interface AdminPolicy {
   disableModelDownload: boolean
   disableRoutineCommands: boolean
   disablePreviewBrowser: boolean
+  /** SWA-88: blocked prompts are never put back masked. */
+  disablePromptResubmit: boolean
+  /** SWA-88: put back, never sent (Corp built-in). */
+  disablePromptResubmitSend: boolean
   /** Set = the environment filter is forced on with at least this mode. */
   envPolicy: EnvPolicyMode | null
   envAllow: string[]
@@ -43,6 +47,8 @@ export const UNMANAGED_POLICY: AdminPolicy = {
   disableModelDownload: false,
   disableRoutineCommands: false,
   disablePreviewBrowser: false,
+  disablePromptResubmit: false,
+  disablePromptResubmitSend: false,
   envPolicy: null,
   envAllow: [],
   locked: false,
@@ -60,7 +66,9 @@ const FLAGS = [
   'disableCompanion',
   'disableModelDownload',
   'disableRoutineCommands',
-  'disablePreviewBrowser'
+  'disablePreviewBrowser',
+  'disablePromptResubmit',
+  'disablePromptResubmitSend'
 ] as const
 
 /** Field-wise validation of the IPC answer: only a literal `true` locks. A

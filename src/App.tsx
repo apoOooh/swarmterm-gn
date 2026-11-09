@@ -142,6 +142,7 @@ import { showWindow } from '@/tauri/window'
 import { onAgentSession } from '@/tauri/sessions'
 import { wireSavedWorkspaces, flushSavedWorkspaces, useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
 import { stopAnnouncements, toggleDictation, wireVoice } from '@/lib/voice-wiring'
+import { wirePromptResubmit } from '@/lib/prompt-resubmit-wiring'
 import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import { builtinSwitchedOn } from '@/lib/voice-dictation'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
@@ -666,6 +667,8 @@ export default function App(): ReactElement {
 
   // Voice dictation (SWA-12): answers Rust's focus/insert requests.
   useEffect(() => wireVoice(() => settingsOpenRef.current), [])
+  // SWA-88: prompts data-shield blocked come back masked into their pane.
+  useEffect(() => wirePromptResubmit(), [])
 
   /** Focus the active workspace's focused terminal, unless something is typing. */
   const returnFocusToTerminal = useCallback(() => {

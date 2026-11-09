@@ -21,6 +21,7 @@ mod policy;
 mod preview;
 mod prof;
 mod pty;
+mod resubmit;
 mod routine_cmd;
 mod sessions;
 mod setup;

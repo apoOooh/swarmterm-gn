@@ -49,6 +49,7 @@ Legend:
 | War Room as a whole (rooms, probes, `read_peer`, all `war_room.*` tools) | Policy-lockable (`DisableWarRoom`) | Policy-lockable (`DisableWarRoom`); not compiled in (decision 2026-10-29) |
 | Command routines ("Shell command" kind) | Policy-lockable (`DisableRoutineCommands`) | Policy-lockable (`DisableRoutineCommands`) |
 | `worktree.spawn` MCP tool | Policy-lockable (`DisableWorktreeSpawn`) | Policy-lockable (`DisableWorktreeSpawn`) |
+| Resubmit a prompt data-shield blocked (masked) | Put back and sent by default; policy-lockable (`DisablePromptResubmit`, `DisablePromptResubmitSend`) | Put back only, never sent (`DisablePromptResubmitSend` built in); `DisablePromptResubmit` lockable |
 | Web preview (embedded browser) | Policy-lockable (`DisablePreviewBrowser`) | Policy-lockable (`DisablePreviewBrowser`) |
 | Local MCP server (`127.0.0.1`, per-pane token) | Policy-lockable (`DisableMcp`) | Policy-lockable (`DisableMcp`) |
 | Terminals, workspaces, Git panel, files and editor, notifications, War Room probes, status line, built-in speech with local models, spoken announcements, terminal host, process priority | Same | Same |

@@ -43,6 +43,10 @@ pub struct AdminPolicy {
     pub disable_model_download: bool,
     pub disable_routine_commands: bool,
     pub disable_preview_browser: bool,
+    /// SWA-88: a prompt data-shield blocked is never put back into the pane.
+    pub disable_prompt_resubmit: bool,
+    /// SWA-88: the masked prompt is inserted but never sent (Corp default).
+    pub disable_prompt_resubmit_send: bool,
     /// `Some` = the environment filter is forced on with at least this mode.
     pub env_policy: Option<FilterMode>,
     /// Extra names that always pass the filter (admin's allow list).
@@ -65,6 +69,10 @@ const FLAGS: &[(&str, FlagField)] = &[
         &mut p.disable_routine_commands
     }),
     ("DisablePreviewBrowser", |p| &mut p.disable_preview_browser),
+    ("DisablePromptResubmit", |p| &mut p.disable_prompt_resubmit),
+    ("DisablePromptResubmitSend", |p| {
+        &mut p.disable_prompt_resubmit_send
+    }),
 ];
 
 /// What `policy_get` returns: the policy plus the active value names, so the
@@ -129,6 +137,9 @@ impl Edition {
                 disable_war_room_execute: true,
                 disable_companion: true,
                 disable_model_download: true,
+                // SWA-88 (user decision 2026-11-09): the masked prompt is
+                // put back, the user presses Enter.
+                disable_prompt_resubmit_send: true,
                 env_policy: Some(FilterMode::Default),
                 ..Default::default()
             },
@@ -396,6 +407,12 @@ impl AdminPolicy {
         }
         if self.disable_bypass_modes {
             out.workers_inherit_bypass = false;
+        }
+        use crate::resubmit::ResubmitMode;
+        if self.disable_prompt_resubmit {
+            out.prompt_resubmit = ResubmitMode::Off;
+        } else if self.disable_prompt_resubmit_send {
+            out.prompt_resubmit = out.prompt_resubmit.min(ResubmitMode::Insert);
         }
         out
     }
@@ -1227,11 +1244,57 @@ mod tests {
         let agent = crate::agent_policy::AgentPolicy {
             allow_war_room_execute: true,
             workers_inherit_bypass: true,
+            ..Default::default()
         };
         assert!(
             AdminPolicy::default()
                 .apply_agent(agent)
                 .allow_war_room_execute
+        );
+    }
+
+    #[test]
+    fn resubmit_locks_only_tighten_the_user_mode() {
+        use crate::resubmit::ResubmitMode;
+        let user = |m| crate::agent_policy::AgentPolicy {
+            prompt_resubmit: m,
+            ..Default::default()
+        };
+        let off = AdminPolicy {
+            disable_prompt_resubmit: true,
+            disable_prompt_resubmit_send: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            off.apply_agent(user(ResubmitMode::Send)).prompt_resubmit,
+            ResubmitMode::Off
+        );
+        let no_send = AdminPolicy {
+            disable_prompt_resubmit_send: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            no_send
+                .apply_agent(user(ResubmitMode::Send))
+                .prompt_resubmit,
+            ResubmitMode::Insert
+        );
+        assert_eq!(
+            no_send.apply_agent(user(ResubmitMode::Off)).prompt_resubmit,
+            ResubmitMode::Off
+        );
+        assert_eq!(
+            AdminPolicy::default()
+                .apply_agent(user(ResubmitMode::Send))
+                .prompt_resubmit,
+            ResubmitMode::Send
+        );
+        assert_eq!(
+            Edition::Corp
+                .locks()
+                .apply_agent(user(ResubmitMode::Send))
+                .prompt_resubmit,
+            ResubmitMode::Insert
         );
     }
 
@@ -1244,6 +1307,7 @@ mod tests {
         let agent = crate::agent_policy::AgentPolicy {
             allow_war_room_execute: true,
             workers_inherit_bypass: true,
+            ..Default::default()
         };
         let eff = admin.apply_agent(agent.clone());
         assert!(!eff.allow_war_room_execute);
@@ -1420,6 +1484,8 @@ mod tests {
             assert!(corp.is_locked(lock), "{lock:?}");
         }
         assert_eq!(corp.env_policy, Some(FilterMode::Default));
+        // SWA-88: put back, never sent; switching it off stays a registry choice.
+        assert!(corp.disable_prompt_resubmit_send && !corp.disable_prompt_resubmit);
         // Core workflow stays available, lockable by the registry.
         for lock in [
             Lock::RoutineCommands,
@@ -1477,6 +1543,7 @@ mod tests {
                 "DisableWarRoomExecute",
                 "DisableCompanion",
                 "DisableModelDownload",
+                "DisablePromptResubmitSend",
                 "EnvPolicy"
             ]
         );

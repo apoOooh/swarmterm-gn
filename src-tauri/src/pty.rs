@@ -567,6 +567,10 @@ pub struct AppState {
     /// afterwards: the snapshots below apply it on every read, so a renderer
     /// push can never loosen a lock.
     pub admin_policy: crate::policy::AdminPolicy,
+    /// SWA-88: prompt edges and blocked prompt ids per pane (`resubmit.rs`).
+    /// Statement-scoped like `context_usage`: never held with `terminals`
+    /// or any voice lock.
+    pub resubmit: Mutex<crate::resubmit::Gate>,
 }
 
 impl AppState {
@@ -662,6 +666,7 @@ impl Default for AppState {
             env_policy: Default::default(),
             agent_policy: Default::default(),
             admin_policy: Default::default(),
+            resubmit: Mutex::new(Default::default()),
         }
     }
 }
@@ -1626,6 +1631,7 @@ pub fn finish_generation(
             let _ = app.emit("warroom:event", &crate::warroom::scoped(&room_id, event));
         }
         crate::voice::drop_terminal(app, id);
+        state.resubmit.lock().unwrap().forget(id);
         // Same preview cleanup as kill_terminal: this is the path a shell
         // takes when it exits on its own (typed `exit`, crashed), where no one
         // called kill_terminal. preview:closed tells the renderer too — the
