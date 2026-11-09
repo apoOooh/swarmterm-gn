@@ -44,6 +44,9 @@ can add locks on top but never lift those. See [Editions](editions.md).
 | `DisableModelDownload` | DWORD | No speech-model downloads for built-in dictation. Already downloaded models stay usable. | `voice/mod.rs` (`voice_model_download`) |
 | `DisableRoutineCommands` | DWORD | Routines of kind "Shell command" are refused. Agent routines are not affected. | `commands.rs` (`run_routine_command`) |
 | `DisablePreviewBrowser` | DWORD | The built-in web preview (embedded browser) cannot be opened by the user or by agents (`browser.open_preview`). | `preview.rs`, `mcp/tools/browser.rs` |
+| `DisablePromptResubmit` | DWORD | A Claude Code prompt that data-shield blocked is never put back into the pane in its masked form (`POST /resubmit` only reports the block). | `policy.rs` `apply_agent`, `mcp/server.rs` `resubmit_handler` |
+| `DisablePromptResubmitSend` | DWORD | The masked prompt is put back but never sent; the user presses Enter. Built into Corp. | same |
+| `DisableHangDumps` | DWORD | No minidump is written when the window stops responding, and the Settings → Terminal → Diagnostics switch is greyed out. The `swarmterm --dump-ui` entry point refuses too (exit code 1, no file). The always-on stall log (time and duration only) is not affected. | `policy.rs` (`Lock::HangDumps`), `diagnostics.rs`, `dump_ui.rs` |
 | `EnvPolicy` | SZ `default` \| `strict` | Forces the terminal environment filter on: panes, command routines and every other child process Swarmterm starts (git, editors, probes; see `docs/security-model.md`) never get secrets from Swarmterm's environment. Recommended for corporate use: `strict`. `default` withholds secret-looking names; `strict` passes only the Windows variables a shell needs, plus `__PSLockdownPolicy`, proxies without credentials and CA bundle variables (`docs/security-model.md`). A stricter user choice is kept. The user's own allow list is **ignored** while this is set. | `policy.rs` `apply_env` (via `env_policy_snapshot`) |
 | `EnvAllow` | MULTI_SZ | Names that always pass the filter (case-insensitive, a trailing `*` matches a prefix). Merged with the user's list when `EnvPolicy` is not set, and the only allow list when it is. | same |
 
@@ -84,6 +87,7 @@ Windows Registry Editor Version 5.00
 "DisableModelDownload"=dword:00000001
 "DisableRoutineCommands"=dword:00000001
 "DisablePreviewBrowser"=dword:00000001
+"DisableHangDumps"=dword:00000001
 "EnvPolicy"="strict"
 ; REG_MULTI_SZ "CORP_PROXY", "HTTPS_PROXY" (UTF-16LE, double-NUL terminated)
 "EnvAllow"=hex(7):43,00,4f,00,52,00,50,00,5f,00,50,00,52,00,4f,00,58,00,59,00,00,00,48,00,54,00,54,00,50,00,\

@@ -169,6 +169,12 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   menus/dialogs. New chrome that swallows clicks should carry
   `data-focus-return`; anything that owns the keyboard (Welcome, Settings, the
   right panel) must not.
+- **Main window is built in `setup`** (SWA-84). `tauri.conf.json` (and
+  `tauri.macos.conf.json`) mark it `create: false`; `lib.rs` builds it first
+  from that entry so debug builds can pass `focused(false)`
+  (`dev_window.rs`). The renderer reveals it via `window_reveal`, never
+  `appWindow.show()` (that permission is removed): debug = first reveal
+  behind every window without focus, `SWARMTERM_DEV_HIDDEN=1` = never shown.
 - **Close-to-tray vs Quit.** Closing the window hides it to the tray (pty stays
   alive); `on_window_event` calls `prevent_close()` unless `AppState.quitting` is
   set (tray → Quit). Killing the app for real must set that flag.
@@ -210,8 +216,14 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   selection, badged red, and never inherited by `worktree.spawn` workers
   (`lib/launch-mode-safety.ts`) unless the user turns on
   `AgentPolicy.workersInheritBypass` (same agent only, default off, user
-  decision 2026-10-29). Codex enrollment rewrites `~/.codex/config.toml` with
-  the concrete URL on every boot (`mcp/config.rs::register_codex`).
+  decision 2026-10-29). Claude Code and Codex configs hold a stdio entry,
+  `<exe> --mcp-stdio` (`mcp_stdio.rs`, SWA-83 1b): it relays to the pane's
+  `SWARMTERM_MCP_URL` with its bearer and serves no tools outside a pane, so
+  nothing in it depends on the port. Ownership and dev-build deferral live in
+  `mcp/entry.rs` (legacy HTTP entries are migrated by release builds only);
+  Codex needs `env_vars` for the two variables, and the per-process `-c url`
+  pin (`hook::codex::with_mcp_url`) is only added while the profile's
+  `config.toml` has no stdio entry — Codex rejects `url` on a stdio server.
   "Connected" is set by the first inbound MCP request carrying the pane's
   bearer (`record_client` middleware → `connect_war_room_member`) and again
   on join if that client was already seen — no tool call needed. The
@@ -279,6 +291,21 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   event. Entries pointing only at a dead binary are still overwritten (the
   repair). Release builds
   always reclaim their entries; Codex has a similar rule (`hook/codex.rs`, which skips whenever any entry of ours exists — so a debug build never adds the SWA-71 Stop/Interrupt entries to an existing install; test with a fresh `CODEX_HOME`/account profile).
+  Hooks (SWA-83 1c-ii) are written in exec form
+  (`"command": <exe>, "args": ["--hook"]`, no shell, so no Git Bash needed)
+  when `hook/claude_version.rs` reads Claude Code >= 2.1.139 from a cached
+  `claude --version` (keyed by path, size, mtime); older or unknown = the
+  shell form `"<exe>" --hook`, gated on Git Bash like the status line (which
+  has no exec form). Every ownership rule reads entries via
+  `install::entry_line`, so both shapes are recognised and migrate both ways;
+  ownership is structural (`is_ours_hook`: file name `swarmterm(.exe)` plus
+  exactly `--hook`, exec form only with exactly one arg). The probe never
+  runs on the UI thread or under `CONFIG_WRITE`: `setup::boot` hands both
+  ensures to blocking workers (`tests/boot_off_ui_thread.rs`), output and
+  exit share one deadline in a kill-on-close job, which the
+  probe joins while still suspended (no job = no verdict). `CLAUDE_DONE` only holds
+  while `CLAUDE_DONE_FOR` (the verdict used) is `still_current`, so a
+  Claude Code update/downgrade is applied at the next pane start.
 - **Native preview webviews.** The preview column is a per-terminal native
   child webview (`preview.rs`, label `preview-<terminalId>`, Tauri `unstable`
   feature for `add_child`). Invariant: a preview webview is visible iff
@@ -310,6 +337,23 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   agent and PTY generation before emitting. Codex hook definitions are additive;
   preserve user hooks, hook feature settings and trust. Supported Codex panes
   use `--no-daemon` to keep the hook environment specific to each pane.
+- **First start / setup assistant (SWA-83 phase 2).** `first_run.rs`
+  classifies the install FIRST in `setup`, from named markers in the app
+  data dir (`MARKERS`, never "dir is empty"), and stores the verdict in
+  `setup-state.json` at once (`pending|done|skipped|existing`, flags only) —
+  later boot pushes write markers, so a user who quits mid-assistant must
+  stay `pending`. The renderer (`lib/first-run.ts`) reports `existing` when
+  localStorage holds recents/saved workspaces/appearance. Voice (D3): a
+  missing `voice-settings.json` means off on a pending install (memory
+  only), off and written once after done/skipped, and on only for
+  `existing` (written once, `settings::load_for_boot`).
+  `setup_wizard_finish` settles voice (`voice::settle_first_run`) BEFORE it
+  stores the outcome and fails if that save fails, so the assistant stays
+  pending; done/skipped without a file is the fallback for older states. The
+  assistant (`components/SetupWizard`, rules in `lib/setup-wizard.ts`) is
+  role=dialog like Settings and only shows install commands to copy (D6):
+  never install, never type into a pane. Debug builds:
+  `SWARMTERM_SETUP_WIZARD=off` treats a fresh profile as existing (testlab).
 - **Session resume.** The composer's "Resume sessions" list is read live from
   the CLIs' own stores (`sessions/` module scans Claude/Codex JSONL; OpenCode
   goes through `opencode session list --format json`). Discovery is fail-open
@@ -448,6 +492,36 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   `<CODEX_HOME>/sessions`, `completion/codex.rs` anchors on `task_started`.
   `ManagedTerminal.profile_dir` is the account dir of either agent (host
   meta key stays `claudeConfigDir`).
+- **Prompt resubmit (SWA-88).** `POST /resubmit` (below the MCP layer, like
+  `/hook`) is the ONE route that carries prompt text: data-shield's guard
+  sends the masked form of a prompt it blocked. `resubmit.rs::Gate` (pure)
+  binds it to the pane's newest Claude UserPromptSubmit edge (same spawn,
+  session, `prompt_id`, and the prompt's fingerprint `TurnMark.asked` that
+  our `--hook` sends — the guard sends the same; ≤ 10 s; once; refused
+  after a PostToolUse, which arrives session-less) and needs a mask placeholder; browser headers are
+  refused. The block is always reported: an edge already here is closed
+  silently (`Ledger::blocked` → `View::Silent`, `agent:prompt-blocked` →
+  renderer publishes idle as seen), a late edge is muted in `/hook` (no
+  turn, no `agent:hook`). The text goes `emit_to("main")` only; the
+  renderer (`lib/prompt-resubmit.ts`) waits for Claude to restore the
+  plaintext, Esc Esc (only on a visible draft — on an empty box it opens
+  rewind), re-checks the box, inserts, Enter as a separate delayed write.
+  Any key since the user's Enter → pill with copy, nothing written.
+  Hardening (no trust boundary — a pane process can fake the edge and, within
+  15 s of a real Enter, draw a fake multi-row box): the renderer needs the
+  user's own Enter KEY in that pane (`submitAnchor`, typing store, armed by
+  `createSubmitIntent` from the keydown — never LF/Shift+Enter/Ctrl+J, paste
+  or xterm replies; broadcast anchors every member on purpose; ≤ 15 s, taken
+  once — the anchor), a
+  visible draft, and where it reads back exactly (`paneDraftText`, one row)
+  a match with the event's `asked` fingerprint; unreadable (multi-row,
+  "[Pasted text …]") is no veto (user decision 2026-11-09), re-checks
+  the input revision (`inputRev`: global counter, moved by every input and
+  every `clearTyping`, never reset — captured with the anchor), IME,
+  `blocked`, mode and pane before every write and after every await, and one attempt with Enter per
+  pane per 30 s (failures count). `Gate::expire` runs on a timer. Mode =
+  `AgentPolicy.promptResubmit` tightened by `DisablePromptResubmit(Send)`
+  (Corp: send locked). Never log, announce or store the text.
 - **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:
   `run_routine_command` (main webview only) runs ONE line via
   `cmd.exe /d /s /c` (`raw_arg`, CREATE_NO_WINDOW) in a kill-on-close job
@@ -578,6 +652,21 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   timers compile to the plain operation without it, so normal and A/B builds
   are unchanged; never enable it in a release. Use it via
   `scripts/perf/flood.ps1 -Profile` and `docs/perf-profiling.md`.
+- **UI thread (SWA-85).** Synchronous `#[tauri::command]`s and synchronous
+  `register_uri_scheme_protocol` handlers run on the UI thread, so a slow one
+  freezes the window (Windows "not responding"). New commands are `async`
+  (blocking work in `spawn_blocking`) unless provably short; the sync ones
+  live on a reasoned allowlist in `tests/ui_thread_commands.rs`, which also
+  rejects any sync scheme handler (`swarmterm-media` is async; wry still
+  copies the response body on the UI thread). `ui_watchdog.rs` pings the UI
+  thread and logs stalls >= 2 s to `<local data>\diagnostics\ui-stalls.log`
+  (time + duration, no content); the opt-in dump (`diagnostics.rs`, locked by
+  `DisableHangDumps`/Corp) runs `swarmterm --dump-ui <pid> <file>` as a
+  SEPARATE process: dumping in-process would suspend threads and deadlock on a
+  heap/loader lock held by the stuck UI thread. It only dumps a same-exe pid,
+  and the CLI itself re-checks `DisableHangDumps`/Corp and the saved opt-in
+  (`diagnostics.json` under the identifier `build.rs` compiles in as
+  `SWARMTERM_APP_IDENTIFIER`) before creating any file.
 - **App shortcut gate contract.** Window-level app shortcuts matched by
   `matchAppShortcut` must go through TWO places: `App.tsx`'s keydown handler
   (dispatch) AND `terminal-registry.ts::attachCustomKeyEventHandler` (gate that

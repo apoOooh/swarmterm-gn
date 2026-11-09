@@ -14,7 +14,7 @@ function mem(initial: Record<string, string> = {}): Storage {
 describe('agent policy', () => {
   it('defaults to War Room execute off', () => {
     expect(DEFAULT_AGENT_POLICY.allowWarRoomExecute).toBe(false)
-    expect(readAgentPolicy(mem())).toEqual({ allowWarRoomExecute: false, workersInheritBypass: false })
+    expect(readAgentPolicy(mem())).toEqual({ allowWarRoomExecute: false, workersInheritBypass: false, promptResubmit: 'send' })
   })
 
   it('only a literal true enables execute', () => {
@@ -31,8 +31,11 @@ describe('agent policy', () => {
 
   it('round-trips through storage and survives corrupt JSON', () => {
     const s = mem()
-    storeAgentPolicy(s, { allowWarRoomExecute: true, workersInheritBypass: true })
-    expect(readAgentPolicy(s)).toEqual({ allowWarRoomExecute: true, workersInheritBypass: true })
+    storeAgentPolicy(s, { allowWarRoomExecute: true, workersInheritBypass: true, promptResubmit: 'insert' })
+    expect(readAgentPolicy(s)).toEqual({ allowWarRoomExecute: true, workersInheritBypass: true, promptResubmit: 'insert' })
+    // A policy stored before SWA-88 gets the default mode.
+    s.setItem(AGENT_POLICY_KEY, JSON.stringify({ allowWarRoomExecute: true }))
+    expect(readAgentPolicy(s).promptResubmit).toBe('send')
     expect(readAgentPolicy(mem({ [AGENT_POLICY_KEY]: '{bad' }))).toEqual(DEFAULT_AGENT_POLICY)
   })
 })

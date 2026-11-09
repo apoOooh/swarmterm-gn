@@ -36,6 +36,7 @@
 //! input, cwd and `transcript_path` are never read into a struct.
 
 pub mod adopt;
+pub mod claude_version;
 pub mod codex;
 pub mod install;
 pub mod post;
@@ -77,6 +78,10 @@ pub struct HookInput {
     /// Only ever fingerprinted, see the module doc. Never sent, never logged.
     #[serde(default)]
     pub last_assistant_message: Option<String>,
+    /// SWA-88: UserPromptSubmit's prompt. Only ever fingerprinted, like
+    /// `last_assistant_message`: never sent, never logged.
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 /// Which edge of a turn a hook event is (SWA-58).
@@ -102,6 +107,11 @@ pub struct TurnMark {
     /// `stop_hook_active`: a Stop hook sent Claude back to work.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub continued: bool,
+    /// SWA-88: fingerprint of the prompt on a Prompt edge. A `/resubmit`
+    /// must name the same one: a blocked prompt never reaches the
+    /// transcript, so nothing else in the pane can know it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked: Option<crate::voice::completion::Fingerprint>,
 }
 
 impl TurnMark {
@@ -144,12 +154,22 @@ impl TurnMark {
             prompt_id,
             answer,
             continued: edge == TurnEdge::Stop && input.stop_hook_active == Some(true),
+            asked: (edge == TurnEdge::Prompt)
+                .then(|| {
+                    input
+                        .prompt
+                        .as_deref()
+                        .map(crate::voice::completion::Fingerprint::of)
+                })
+                .flatten()
+                .filter(|f| f.is_valid()),
         })
     }
 
     pub fn is_valid(&self) -> bool {
         crate::sessions::is_uuid(&self.prompt_id)
             && self.answer.as_ref().is_none_or(|a| a.is_valid())
+            && self.asked.as_ref().is_none_or(|a| a.is_valid())
     }
 }
 
@@ -594,9 +614,16 @@ mod tests {
             "prompt_id":PROMPT,"prompt":"private"}))
         .unwrap();
         assert_eq!(
-            (p.edge, p.answer, p.continued),
+            (p.edge, p.answer.clone(), p.continued),
             (TurnEdge::Prompt, None, false)
         );
+        // SWA-88: the prompt edge carries the prompt's fingerprint, never its text.
+        assert_eq!(
+            p.asked,
+            Some(crate::voice::completion::Fingerprint::of("private"))
+        );
+        let wire = serde_json::to_string(&p).unwrap();
+        assert!(!wire.contains("private") && wire.contains("asked"));
         // A Stop without last_assistant_message has no anchor for a read.
         let s = mark(
             serde_json::json!({"hook_event_name":"Stop","prompt_id":PROMPT,

@@ -24,6 +24,12 @@
       <string id="DisableRoutineCommands_Help">Routines of kind "Shell command" are refused. Agent routines (a brief sent to an agent pane) are not affected.</string>
       <string id="DisablePreviewBrowser">Turn off the web preview</string>
       <string id="DisablePreviewBrowser_Help">The built-in web preview column (embedded browser) cannot be opened, neither by the user nor by agents.</string>
+      <string id="DisablePromptResubmit">Turn off resubmitting prompts blocked by data-shield</string>
+      <string id="DisablePromptResubmit_Help">When data-shield blocks a Claude Code prompt, its masked version is never put back into the pane. The block is still reported, so the pane is not announced as done.</string>
+      <string id="DisablePromptResubmitSend">Do not send resubmitted prompts</string>
+      <string id="DisablePromptResubmitSend_Help">The masked version of a prompt data-shield blocked is put back into the pane but never sent; the user presses Enter. Built into the Corp edition.</string>
+      <string id="DisableHangDumps">Block hang dumps</string>
+      <string id="DisableHangDumps_Help">Swarmterm will not write a diagnostic dump when its window stops responding, and the switch in Settings is greyed out. A dump can contain terminal text. The stall log (time and duration only) stays on.</string>
       <string id="EnvPolicy">Force the terminal environment filter</string>
       <string id="EnvPolicy_Help">Panes, command routines and every other program Swarmterm starts (git, editors, probes) always get a filtered copy of Swarmterm's environment. Recommended for corporate use: Strict. A value of the wrong type or unknown text is treated as Strict. "Default" withholds secret-looking variables (API keys, tokens, passwords); "Strict" passes only the Windows variables a shell needs. A user's stricter choice is kept; the user's own allow list is ignored while this policy is set (use "Allow environment variables" instead).</string>
       <string id="EnvPolicy_Default">Default (withhold secrets)</string>

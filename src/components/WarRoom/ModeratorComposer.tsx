@@ -42,6 +42,7 @@ import {
   type MentionMatch
 } from '@/lib/war-room-mentions'
 import { MENTION_LIST_ID, MentionPopup, caretOffset, mentionOptionId } from './MentionPopup'
+import { PaneTag } from './PaneTag'
 
 const MAX_ROWS = 6
 
@@ -411,6 +412,7 @@ export function ModeratorComposer(): ReactElement {
                     />
                   )}
                   <span className="truncate">{t.label}</span>
+                  {t.id !== EVERYONE && <PaneTag terminalId={t.id} />}
                   {t.disabled !== null && (
                     <span className="ml-auto pl-3 text-[10px] text-muted-foreground">
                       unavailable

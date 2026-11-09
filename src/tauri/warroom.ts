@@ -89,6 +89,12 @@ export function onWarRoomRooms(handler: (rooms: WarRoomRoomMeta[]) => void): Pro
 /** The human user's seat — mirrors MODERATOR_ID in src-tauri/src/warroom.rs. */
 export const MODERATOR_ID = '__moderator__'
 
+/** SWA-90: "Pane N · Workspace" per terminal id for `war_room.list_peers`
+ *  (whole map; closed panes drop out). Display only. */
+export function warRoomPaneLabelsSet(labels: Record<string, string>): Promise<void> {
+  return invoke('war_room_pane_labels_set', { labels })
+}
+
 /** Send as the Moderator. `to: null` broadcasts. Resolves to the number of
  *  panes that will be typed into — which is not the number of recipients: a
  *  member without an agent CLI still gets the message, it just is never

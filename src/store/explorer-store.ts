@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { openRetryDelay } from '@/lib/explorer-open-retry'
 import { getFileGitStatus, listFiles, openFileContext, type FileContext, type FileChange } from '@/tauri/files'
 import { FileWatchLease } from '@/lib/files/watch-lease'
 import type { Directory } from '@/lib/files/tree'
@@ -63,7 +64,8 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     set({ current: null, loading: terminalId !== null, error: null })
     if (!terminalId) return
     let lastError: unknown
-    for (let attempt = 0; attempt < 20 && token === generation; attempt++) {
+    const started = Date.now()
+    while (token === generation) {
       try {
         // Rust compares canonical directories, so symlinked project folders are accepted too.
         const context = await openFileContext(terminalId, configuredRoot)
@@ -78,8 +80,9 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
         return
       } catch (e) {
         lastError = e
-        if (!String(e).toLowerCase().includes('not ready')) break
-        await new Promise((r) => setTimeout(r, 250))
+        const delay = openRetryDelay(e, Date.now() - started)
+        if (delay === null) break
+        await new Promise((r) => setTimeout(r, delay))
       }
     }
     if (token === generation) set({ loading: false, error: String(lastError ?? 'Cannot open this project') })

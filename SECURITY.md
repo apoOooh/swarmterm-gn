@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---|---|
-| 1.27.x | Yes |
-| < 1.27 | No |
+| 1.28.x | Yes |
+| < 1.28 | No |
 
 Only the latest release on
 [GitHub Releases](https://github.com/apoOooh/swarmterm-gn/releases) receives
@@ -19,8 +19,7 @@ Report vulnerabilities privately through GitHub Security Advisories:
 <https://github.com/apoOooh/swarmterm-gn/security/advisories/new>.
 Do not open a public issue for a vulnerability.
 
-If that page is not available (private vulnerability reporting is not yet
-enabled for this repository), open a
+If you cannot use GitHub Security Advisories, open a
 [GitHub issue](https://github.com/apoOooh/swarmterm-gn/issues/new) that only
 asks for a private contact, without any details of the vulnerability. A
 maintainer will reply with a private channel.

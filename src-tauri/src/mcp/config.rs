@@ -4,14 +4,18 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-/// The MCP entry Swarmterm writes into `.mcp.json`. Uses `${VAR}` syntax that
-/// Claude Code expands from the shell env — the two vars are set on every PTY
-/// by `pty::spawn_terminal`.
-pub fn swarmterm_entry() -> Value {
+use crate::mcp::entry;
+
+/// Claude Code's entry: our stdio proxy (SWA-83 1b). It reads the pane's
+/// `SWARMTERM_MCP_URL`/`SWARMTERM_SESSION` itself and serves no tools
+/// outside a pane, so a Claude session started anywhere else no longer
+/// reports a broken server. Claude Code passes stdio servers its whole
+/// environment, so no `env` block is needed.
+pub fn swarmterm_entry(exe: &str) -> Value {
     json!({
-        "type": "http",
-        "url": "${SWARMTERM_MCP_URL}",
-        "headers": { "Authorization": "Bearer ${SWARMTERM_SESSION}" }
+        "type": "stdio",
+        "command": exe,
+        "args": [entry::STDIO_ARG],
     })
 }
 
@@ -52,7 +56,11 @@ pub fn swarmterm_qwen_entry() -> Value {
 ///   untouched.
 /// * If `existing` is malformed JSON, return `Err` — the caller logs it and
 ///   leaves the file untouched.
-fn merge_mcp_servers_json(existing: Option<&str>, entry: Value) -> Result<String, String> {
+fn merge_mcp_servers_json(
+    existing: Option<&str>,
+    entry: Value,
+    drop: &[&str],
+) -> Result<String, String> {
     let mut root: Value = match existing.map(str::trim).filter(|s| !s.is_empty()) {
         None => json!({ "mcpServers": {} }),
         Some(s) => serde_json::from_str(s).map_err(|e| format!("parse: {e}"))?,
@@ -72,6 +80,9 @@ fn merge_mcp_servers_json(existing: Option<&str>, entry: Value) -> Result<String
     match servers.get_mut("swarmterm") {
         // Existing object entry: overwrite only the keys we own.
         Some(Value::Object(slot)) => {
+            for key in drop {
+                slot.remove(*key);
+            }
             for (k, v) in entry.as_object().expect("entry is an object") {
                 slot.insert(k.clone(), v.clone());
             }
@@ -202,25 +213,90 @@ fn write_mcp_servers_json_to_file(
             );
         }
     }
-    let merged = merge_mcp_servers_json(existing.as_deref(), entry)?;
-    // `.claude.json` → `.claude.json.tmp` (same for `settings.json`):
-    // with_extension replaces the trailing `json` segment, preserving the
-    // leading dot-name.
+    let merged = merge_mcp_servers_json(existing.as_deref(), entry, &[])?;
+    write_json_atomic(path, merged)
+}
+
+/// tmp + rename. `.claude.json` → `.claude.json.tmp` (same for
+/// `settings.json`): with_extension replaces the trailing `json` segment,
+/// preserving the leading dot-name.
+fn write_json_atomic(path: &Path, text: String) -> Result<(), String> {
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, merged).map_err(|e| format!("write tmp: {e}"))?;
+    fs::write(&tmp, text).map_err(|e| format!("write tmp: {e}"))?;
     fs::rename(&tmp, path).map_err(|e| {
         // Best-effort tmp cleanup on rename failure so we don't leave litter.
         let _ = fs::remove_file(&tmp);
         format!("rename: {e}")
-    })?;
-    Ok(())
+    })
+}
+
+fn read_optional(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read: {e}")),
+    }
+}
+
+fn own_exe() -> Result<String, String> {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| format!("current_exe: {e}"))
 }
 
 /// Claude Code variant (`~/.claude.json`). The parent dir is home — never
 /// created here (a missing/typo'd CLAUDE_CONFIG_DIR must fail, not be
 /// fabricated).
 pub fn write_mcp_config_to_file(path: &Path) -> Result<(), String> {
-    write_mcp_servers_json_to_file(path, swarmterm_entry(), false)
+    write_claude_entry(path, &own_exe()?, entry::is_dev_build(), |p| {
+        Path::new(p).is_file()
+    })
+}
+
+/// Does `slot` hold exactly the stdio entry for `exe` (user extras allowed,
+/// legacy keys not)?
+fn claude_entry_is_current(slot: Option<&Value>, exe: &str) -> bool {
+    let Some(slot) = slot else { return false };
+    slot.get("type").and_then(Value::as_str) == Some("stdio")
+        && slot
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|c| crate::dev_defer::same_exe(c, exe))
+        && slot.get("args") == Some(&json!([entry::STDIO_ARG]))
+        && entry::LEGACY_JSON_KEYS
+            .iter()
+            .all(|k| slot.get(*k).is_none())
+}
+
+/// Write (or migrate to) the stdio entry unless `entry::should_write` says
+/// the file belongs to the user or to another live Swarmterm.
+fn write_claude_entry(
+    path: &Path,
+    exe: &str,
+    debug: bool,
+    exists: impl Fn(&str) -> bool,
+) -> Result<(), String> {
+    let existing = read_optional(path)?;
+    if let Some(text) = existing.as_deref().filter(|s| !s.trim().is_empty()) {
+        let root: Value = serde_json::from_str(text).map_err(|e| format!("parse: {e}"))?;
+        let slot = root.get("mcpServers").and_then(|m| m.get("swarmterm"));
+        let kind = entry::classify_json(slot);
+        if !entry::should_write(
+            &kind,
+            claude_entry_is_current(slot, exe),
+            exe,
+            debug,
+            exists,
+        ) {
+            return Ok(());
+        }
+    }
+    let merged = merge_mcp_servers_json(
+        existing.as_deref(),
+        swarmterm_entry(exe),
+        &entry::LEGACY_JSON_KEYS,
+    )?;
+    write_json_atomic(path, merged)
 }
 
 /// Add the default profile's user-scope MCP servers to a named account
@@ -308,29 +384,29 @@ pub fn write_qwen_settings_to_file(path: &Path) -> Result<(), String> {
 /// entry is placeholder-only, so re-running on an already-registered config
 /// writes identical bytes. Log-only: a failure here must never block boot, and
 /// leaves Swarmterm fully usable minus the agent-facing MCP tools.
-pub fn register_user_scope(app: &AppHandle) {
+///
+/// `Ok(false)` = switched off (Settings → MCP or DisableMcp); the outcome is
+/// recorded by `setup::ensure_claude`.
+pub fn register_user_scope(app: &AppHandle) -> Result<bool, String> {
     if !crate::mcp::toggle::is_enabled("claude-code", None) {
-        return;
+        return Ok(false);
     }
-    let home = match app.path().home_dir() {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("mcp: cannot resolve home dir for global MCP config: {e}");
-            return;
-        }
-    };
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("cannot resolve home dir for global MCP config: {e}"))?;
     let cfg_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
     let path = resolve_global_config_path(&home, cfg_dir.as_deref());
     // Note: read-merge-rename is not locked against a concurrently running
     // Claude Code writing ~/.claude.json; the rename is atomic (never corrupts),
     // and the skip-if-present check keeps this to at most a first-run write, so
     // any lost-update window is a single boot-time write, not steady-state.
-    if let Err(e) = write_mcp_config_to_file(&path) {
-        eprintln!(
-            "mcp: failed to register global MCP config at {}: {e}",
+    write_mcp_config_to_file(&path).map(|()| true).map_err(|e| {
+        format!(
+            "failed to register global MCP config at {}: {e}",
             path.display()
-        );
-    }
+        )
+    })
 }
 
 /// Resolve Claude Code's user-scope config file (`.claude.json`). Honors
@@ -378,13 +454,14 @@ pub fn register_qwen(app: &AppHandle) {
     }
 }
 
-/// Codex CLI does not expand `${VAR}` in `url` (unlike Claude Code), so the
-/// concrete endpoint is written on every boot AFTER the port is bound. The
-/// bearer still comes from env via `bearer_token_env_var`, so the entry works
-/// for every pane without per-pane rewrites. toml_edit (not toml) because
+/// Codex's entry: the same stdio proxy as Claude's (SWA-83 1b). Codex hands
+/// a stdio server only a short default environment, so the pane's two
+/// variables are named in `env_vars`. Nothing in it depends on the port, so
+/// it is no longer rewritten on every boot. Keys the user added under our
+/// table survive; the legacy HTTP keys go. toml_edit (not toml) because
 /// config.toml is the user's hand-edited file — formatting and comments must
 /// survive the merge.
-pub fn merge_codex_config(existing: Option<&str>, url: &str) -> Result<String, String> {
+pub fn merge_codex_config(existing: Option<&str>, exe: &str) -> Result<String, String> {
     let mut doc: toml_edit::DocumentMut = existing
         .unwrap_or("")
         .parse()
@@ -398,39 +475,93 @@ pub fn merge_codex_config(existing: Option<&str>, url: &str) -> Result<String, S
             t.set_implicit(true);
             t
         }))
-        .as_table_mut()
+        // Table-like, not just `[table]`: `mcp_servers = { … }` and
+        // `swarmterm = { … }` inline tables are edited in place, so the
+        // user's keys (`enabled = false`, timeouts) survive the migration.
+        .as_table_like_mut()
         .ok_or("mcp_servers is not a table")?;
-    let mut entry = toml_edit::Table::new();
-    entry.insert("url", toml_edit::value(url));
-    entry.insert(
-        "bearer_token_env_var",
-        toml_edit::value("SWARMTERM_SESSION"),
+    if !servers
+        .get("swarmterm")
+        .is_some_and(|item| item.is_table_like())
+    {
+        servers.insert("swarmterm", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let table = servers
+        .get_mut("swarmterm")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .ok_or("mcp_servers.swarmterm is not a table")?;
+    for key in entry::LEGACY_TOML_KEYS {
+        table.remove(key);
+    }
+    table.insert("command", toml_edit::value(exe));
+    table.insert(
+        "args",
+        toml_edit::value(toml_edit::Array::from_iter([entry::STDIO_ARG])),
     );
-    servers.insert("swarmterm", toml_edit::Item::Table(entry));
-    Ok(doc.to_string())
+    table.insert(
+        "env_vars",
+        toml_edit::value(toml_edit::Array::from_iter(entry::ENV_VARS)),
+    );
+    Ok(keep_line_endings(existing, doc.to_string()))
 }
 
-/// Same skip-if-current + tmp+rename policy as the Claude writer above.
-pub fn write_codex_config_to_file(path: &Path, url: &str) -> Result<(), String> {
-    let existing = match fs::read_to_string(path) {
-        Ok(s) => Some(s),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(format!("read: {e}")),
+/// toml_edit renders new and edited lines with `\n`; a CRLF file (the
+/// user's, often saved by a Windows editor) keeps CRLF throughout.
+pub(crate) fn keep_line_endings(original: Option<&str>, rendered: String) -> String {
+    if original.is_some_and(|s| s.contains("\r\n")) {
+        rendered.replace("\r\n", "\n").replace('\n', "\r\n")
+    } else {
+        rendered
+    }
+}
+
+fn codex_entry_is_current(table: Option<&toml_edit::Item>, exe: &str) -> bool {
+    let Some(t) = table else { return false };
+    let strings = |key: &str| -> Option<Vec<String>> {
+        t.get(key)?.as_array().map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
     };
+    t.get("command")
+        .and_then(|c| c.as_str())
+        .is_some_and(|c| crate::dev_defer::same_exe(c, exe))
+        && strings("args") == Some(vec![entry::STDIO_ARG.to_string()])
+        && strings("env_vars") == Some(entry::ENV_VARS.map(str::to_string).to_vec())
+        && entry::LEGACY_TOML_KEYS.iter().all(|k| t.get(k).is_none())
+}
+
+/// Write (or migrate to) the stdio entry in a Codex `config.toml`; same
+/// ownership and dev-build rules as Claude's (`entry::should_write`).
+pub fn write_codex_config_to_file(path: &Path) -> Result<(), String> {
+    write_codex_entry(path, &own_exe()?, entry::is_dev_build(), |p| {
+        Path::new(p).is_file()
+    })
+}
+
+fn write_codex_entry(
+    path: &Path,
+    exe: &str,
+    debug: bool,
+    exists: impl Fn(&str) -> bool,
+) -> Result<(), String> {
+    let existing = read_optional(path)?;
     if let Some(s) = existing.as_deref() {
-        if let Ok(doc) = s.parse::<toml_edit::DocumentMut>() {
-            let current = doc.get("mcp_servers").and_then(|m| m.get("swarmterm"));
-            let url_ok = current.and_then(|c| c.get("url")).and_then(|v| v.as_str()) == Some(url);
-            let bearer_ok = current
-                .and_then(|c| c.get("bearer_token_env_var"))
-                .and_then(|v| v.as_str())
-                == Some("SWARMTERM_SESSION");
-            if url_ok && bearer_ok {
-                return Ok(());
-            }
+        let doc: toml_edit::DocumentMut = s.parse().map_err(|e| format!("parse: {e}"))?;
+        let table = doc.get("mcp_servers").and_then(|m| m.get("swarmterm"));
+        let kind = entry::classify_toml(table);
+        if !entry::should_write(
+            &kind,
+            codex_entry_is_current(table, exe),
+            exe,
+            debug,
+            exists,
+        ) {
+            return Ok(());
         }
     }
-    let merged = merge_codex_config(existing.as_deref(), url)?;
+    let merged = merge_codex_config(existing.as_deref(), exe)?;
     let tmp = path.with_extension("toml.tmp");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
@@ -442,6 +573,26 @@ pub fn write_codex_config_to_file(path: &Path, url: &str) -> Result<(), String> 
     })
 }
 
+/// Does a Codex started with this `config.toml` need the per-process URL
+/// pin (`hook::codex::with_mcp_url`)? Only while the file holds no stdio
+/// entry: on top of one, `-c mcp_servers.swarmterm.url=` makes Codex refuse
+/// the server ("url is not supported for stdio"), and the proxy reads the
+/// pane's own address anyway. A user's own `swarmterm` entry is not
+/// overridden either. An unreadable or malformed file pins, as before 1b.
+pub fn codex_needs_url_pin(path: &Path) -> bool {
+    let Ok(Some(text)) = read_optional(path) else {
+        return true;
+    };
+    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
+        return true;
+    };
+    let table = doc.get("mcp_servers").and_then(|m| m.get("swarmterm"));
+    matches!(
+        entry::classify_toml(table),
+        entry::Kind::Absent | entry::Kind::Legacy
+    )
+}
+
 /// `$CODEX_HOME/config.toml` when set (Codex's own relocation mechanism),
 /// else `~/.codex/config.toml`. Blank env treated as unset.
 pub fn resolve_codex_config_path(home: &Path, codex_home: Option<&str>) -> PathBuf {
@@ -451,23 +602,21 @@ pub fn resolve_codex_config_path(home: &Path, codex_home: Option<&str>) -> PathB
     }
 }
 
-/// Register the just-bound MCP URL for Codex. Log-only, like register_user_scope.
-pub fn register_codex(app: &AppHandle, url: &str) {
-    let home = match app.path().home_dir() {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("mcp: cannot resolve home dir for codex config: {e}");
-            return;
-        }
-    };
+/// Register Codex's entry in its default profile. The caller (`setup`)
+/// records the outcome.
+pub fn register_codex(app: &AppHandle) -> Result<(), String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("cannot resolve home dir for codex config: {e}"))?;
     let codex_home = std::env::var("CODEX_HOME").ok();
     let path = resolve_codex_config_path(&home, codex_home.as_deref());
-    if let Err(e) = write_codex_config_to_file(&path, url) {
-        eprintln!(
-            "mcp: failed to register codex MCP config at {}: {e}",
+    write_codex_config_to_file(&path).map_err(|e| {
+        format!(
+            "failed to register codex MCP config at {}: {e}",
             path.display()
-        );
-    }
+        )
+    })
 }
 
 #[cfg(test)]
@@ -489,12 +638,22 @@ mod tests {
         serde_json::from_str(s).unwrap()
     }
 
+    /// The pre-1b HTTP entry: the generic merge tests below exercise
+    /// `merge_mcp_servers_json` with it, the writer tests migrate from it.
+    fn legacy_entry() -> Value {
+        json!({
+            "type": "http",
+            "url": "${SWARMTERM_MCP_URL}",
+            "headers": { "Authorization": "Bearer ${SWARMTERM_SESSION}" }
+        })
+    }
+
     fn merge_claude(existing: Option<&str>) -> Result<String, String> {
-        merge_mcp_servers_json(existing, swarmterm_entry())
+        merge_mcp_servers_json(existing, legacy_entry(), &[])
     }
 
     fn merge_qwen(existing: Option<&str>) -> Result<String, String> {
-        merge_mcp_servers_json(existing, swarmterm_qwen_entry())
+        merge_mcp_servers_json(existing, swarmterm_qwen_entry(), &[])
     }
 
     #[test]
@@ -679,7 +838,8 @@ mod tests {
         write_mcp_config_to_file(&path).unwrap();
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.contains("\"swarmterm\""));
-        assert!(contents.contains("${SWARMTERM_MCP_URL}"));
+        assert!(contents.contains("--mcp-stdio"));
+        assert!(!contents.contains("SWARMTERM_MCP_URL"));
     }
 
     const DEFAULT_USER: &str = r#"{"projects":{"/p":{}},"mcpServers":{
@@ -738,7 +898,10 @@ mod tests {
         assert!(!copy_default_user_servers(&profile, &default).unwrap());
         let v = parse(&std::fs::read_to_string(&profile).unwrap());
         assert!(v["mcpServers"]["board"].is_object());
-        assert_eq!(v["mcpServers"]["swarmterm"], swarmterm_entry());
+        assert_eq!(
+            v["mcpServers"]["swarmterm"],
+            swarmterm_entry(&own_exe().unwrap())
+        );
     }
 
     #[test]
@@ -757,7 +920,7 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["numStartups"], 42);
         assert_eq!(v["mcpServers"]["1devtool"]["command"], "x");
-        assert_eq!(v["mcpServers"]["swarmterm"]["type"], "http");
+        assert_eq!(v["mcpServers"]["swarmterm"]["type"], "stdio");
     }
 
     #[test]
@@ -790,10 +953,66 @@ mod tests {
         // we must not reformat/reorder the user's ~/.claude.json on repeat boots.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".claude.json");
-        let compact = r#"{"numStartups":7,"mcpServers":{"swarmterm":{"type":"http","url":"${SWARMTERM_MCP_URL}","headers":{"Authorization":"Bearer ${SWARMTERM_SESSION}"}}}}"#;
+        let compact = r#"{"numStartups":7,"mcpServers":{"swarmterm":{"type":"stdio","command":"C:/Apps/Swarmterm GN/swarmterm.exe","args":["--mcp-stdio"],"timeout":9}}}"#;
         std::fs::write(&path, compact).unwrap();
-        write_mcp_config_to_file(&path).unwrap();
+        write_claude_entry(&path, EXE, false, |_| true).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), compact);
+    }
+
+    const EXE: &str = r"C:\Apps\Swarmterm GN\swarmterm.exe";
+    const DEV_EXE: &str = r"D:\wt\src-tauri\target\debug\swarmterm.exe";
+
+    fn claude_slot(path: &Path) -> Value {
+        parse(&std::fs::read_to_string(path).unwrap())["mcpServers"]["swarmterm"].clone()
+    }
+
+    #[test]
+    fn claude_writer_migrates_the_legacy_entry_and_keeps_user_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".claude.json");
+        let mut legacy = legacy_entry();
+        legacy["timeout"] = json!(9);
+        std::fs::write(
+            &path,
+            json!({"mcpServers":{"swarmterm":legacy}}).to_string(),
+        )
+        .unwrap();
+        write_claude_entry(&path, EXE, false, |_| true).unwrap();
+        let slot = claude_slot(&path);
+        assert_eq!(slot["type"], "stdio");
+        assert_eq!(slot["command"], EXE);
+        assert_eq!(slot["args"], json!(["--mcp-stdio"]));
+        assert_eq!(slot["timeout"], 9);
+        assert!(slot.get("url").is_none() && slot.get("headers").is_none());
+    }
+
+    #[test]
+    fn claude_writer_leaves_a_foreign_entry_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".claude.json");
+        let text = r#"{"mcpServers":{"swarmterm":{"command":"my-own"}}}"#;
+        std::fs::write(&path, text).unwrap();
+        write_claude_entry(&path, EXE, false, |_| true).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+
+    #[test]
+    fn claude_writer_in_a_dev_build_defers_to_the_installed_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".claude.json");
+        // Legacy entry: the installed (older) app migrates it, not us.
+        let legacy = json!({"mcpServers":{"swarmterm":legacy_entry()}}).to_string();
+        std::fs::write(&path, &legacy).unwrap();
+        write_claude_entry(&path, DEV_EXE, true, |_| true).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+        // A live installed exe keeps its entry ...
+        write_claude_entry(&path, EXE, false, |_| true).unwrap();
+        let installed = std::fs::read_to_string(&path).unwrap();
+        write_claude_entry(&path, DEV_EXE, true, |_| true).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), installed);
+        // ... a dead one is repaired.
+        write_claude_entry(&path, DEV_EXE, true, |_| false).unwrap();
+        assert_eq!(claude_slot(&path)["command"], DEV_EXE);
     }
 
     #[test]
@@ -878,21 +1097,29 @@ mod tests {
         assert_eq!(p, Path::new("/home/duong/.qwen/settings.json"));
     }
 
-    const URL: &str = "http://127.0.0.1:4242/mcp";
+    fn codex_table(text: &str) -> toml_edit::Table {
+        let doc: toml_edit::DocumentMut = text.parse().unwrap();
+        doc["mcp_servers"]["swarmterm"].as_table().unwrap().clone()
+    }
 
     #[test]
     fn codex_creates_from_nothing() {
-        let out = merge_codex_config(None, URL).unwrap();
+        let out = merge_codex_config(None, EXE).unwrap();
         assert!(out.contains("[mcp_servers.swarmterm]"));
-        assert!(out.contains(&format!("url = \"{URL}\"")));
-        assert!(out.contains("bearer_token_env_var = \"SWARMTERM_SESSION\""));
+        assert!(!out.contains("[mcp_servers]\n"), "{out}");
+        let t = codex_table(&out);
+        assert_eq!(t["command"].as_str(), Some(EXE));
+        assert!(codex_entry_is_current(
+            Some(&toml_edit::Item::Table(t)),
+            EXE
+        ));
     }
 
     #[test]
     fn codex_preserves_other_tables_and_comments() {
         let existing =
             "# my codex settings\nmodel = \"o4\"\n\n[mcp_servers.other]\ncommand = \"x\"\n";
-        let out = merge_codex_config(Some(existing), URL).unwrap();
+        let out = merge_codex_config(Some(existing), EXE).unwrap();
         assert!(out.contains("# my codex settings"));
         assert!(out.contains("model = \"o4\""));
         assert!(out.contains("[mcp_servers.other]"));
@@ -900,26 +1127,86 @@ mod tests {
     }
 
     #[test]
-    fn codex_updates_stale_url() {
-        let existing = "[mcp_servers.swarmterm]\nurl = \"http://127.0.0.1:9/mcp\"\nbearer_token_env_var = \"SWARMTERM_SESSION\"\n";
-        let out = merge_codex_config(Some(existing), URL).unwrap();
-        assert!(out.contains(&format!("url = \"{URL}\"")));
-        assert!(!out.contains("127.0.0.1:9"));
+    fn codex_migrates_the_legacy_entry_and_keeps_user_keys() {
+        let existing = "[mcp_servers.swarmterm]\nurl = \"http://127.0.0.1:9/mcp\"\nbearer_token_env_var = \"SWARMTERM_SESSION\"\nstartup_timeout_sec = 20\n";
+        let out = merge_codex_config(Some(existing), EXE).unwrap();
+        let t = codex_table(&out);
+        assert!(t.get("url").is_none() && t.get("bearer_token_env_var").is_none());
+        assert_eq!(t["startup_timeout_sec"].as_integer(), Some(20));
+        assert!(codex_entry_is_current(
+            Some(&toml_edit::Item::Table(t)),
+            EXE
+        ));
+    }
+
+    #[test]
+    fn codex_migrates_an_inline_entry_without_losing_user_keys() {
+        let existing = "[mcp_servers]\nswarmterm = { url = 'http://127.0.0.1:9/mcp', bearer_token_env_var = 'SWARMTERM_SESSION', startup_timeout_sec = 42, enabled = false }\ngh = { command = 'gh' }\n";
+        let out = merge_codex_config(Some(existing), EXE).unwrap();
+        let doc: toml_edit::DocumentMut = out.parse().unwrap();
+        let t = &doc["mcp_servers"]["swarmterm"];
+        assert!(t.as_inline_table().is_some(), "stays inline: {out}");
+        assert_eq!(t["enabled"].as_bool(), Some(false));
+        assert_eq!(t["startup_timeout_sec"].as_integer(), Some(42));
+        assert!(t.get("url").is_none() && t.get("bearer_token_env_var").is_none());
+        assert!(codex_entry_is_current(Some(t), EXE), "{out}");
+        assert_eq!(doc["mcp_servers"]["gh"]["command"].as_str(), Some("gh"));
+        // A whole inline `mcp_servers` works the same way.
+        let inline_root = "mcp_servers = { swarmterm = { url = 'http://127.0.0.1:9/mcp', bearer_token_env_var = 'SWARMTERM_SESSION', enabled = false } }\n";
+        let out = merge_codex_config(Some(inline_root), EXE).unwrap();
+        let doc: toml_edit::DocumentMut = out.parse().unwrap();
+        let t = &doc["mcp_servers"]["swarmterm"];
+        assert_eq!(t["enabled"].as_bool(), Some(false));
+        assert!(codex_entry_is_current(Some(t), EXE), "{out}");
+    }
+
+    #[test]
+    fn codex_keeps_a_crlf_file_crlf() {
+        let existing = "# mine\r\nmodel = \"o4\"\r\n\r\n[mcp_servers.swarmterm]\r\nurl = \"http://127.0.0.1:9/mcp\"\r\nbearer_token_env_var = \"SWARMTERM_SESSION\"\r\n";
+        let out = merge_codex_config(Some(existing), EXE).unwrap();
+        assert!(out.contains("command"), "{out}");
+        assert_eq!(
+            out.matches('\n').count(),
+            out.matches("\r\n").count(),
+            "{out:?}"
+        );
+        // An LF file stays LF.
+        let out = merge_codex_config(Some("model = \"o4\"\n"), EXE).unwrap();
+        assert!(!out.contains('\r'));
     }
 
     #[test]
     fn codex_errors_on_malformed_toml() {
-        assert!(merge_codex_config(Some("mcp_servers = ["), URL).is_err());
+        assert!(merge_codex_config(Some("mcp_servers = ["), EXE).is_err());
     }
 
     #[test]
     fn codex_file_write_skips_when_current() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        write_codex_config_to_file(&path, URL).unwrap();
+        write_codex_config_to_file(&path).unwrap();
         let first = std::fs::read_to_string(&path).unwrap();
-        write_codex_config_to_file(&path, URL).unwrap();
+        write_codex_config_to_file(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+    }
+
+    #[test]
+    fn codex_writer_keeps_foreign_entries_and_defers_in_dev_builds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let foreign = "[mcp_servers.swarmterm]\ncommand = \"gh\"\n";
+        std::fs::write(&path, foreign).unwrap();
+        write_codex_entry(&path, EXE, false, |_| true).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), foreign);
+
+        let legacy = "[mcp_servers.swarmterm]\nurl = \"http://127.0.0.1:9/mcp\"\nbearer_token_env_var = \"SWARMTERM_SESSION\"\n";
+        std::fs::write(&path, legacy).unwrap();
+        write_codex_entry(&path, DEV_EXE, true, |_| true).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+        write_codex_entry(&path, EXE, false, |_| true).unwrap();
+        let installed = std::fs::read_to_string(&path).unwrap();
+        write_codex_entry(&path, DEV_EXE, true, |_| true).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), installed);
     }
 
     #[test]
@@ -927,8 +1214,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "mcp_servers = [").unwrap();
-        assert!(write_codex_config_to_file(&path, URL).is_err());
+        assert!(write_codex_config_to_file(&path).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "mcp_servers = [");
+    }
+
+    #[test]
+    fn codex_url_pin_only_without_a_stdio_or_foreign_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        assert!(codex_needs_url_pin(&path), "missing file");
+        std::fs::write(&path, "model = \"o4\"\n").unwrap();
+        assert!(codex_needs_url_pin(&path), "no entry");
+        std::fs::write(&path, "[mcp_servers.swarmterm]\nurl = \"http://127.0.0.1:9/mcp\"\nbearer_token_env_var = \"SWARMTERM_SESSION\"\n").unwrap();
+        assert!(codex_needs_url_pin(&path), "legacy");
+        write_codex_entry(&path, EXE, false, |_| true).unwrap();
+        assert!(!codex_needs_url_pin(&path), "stdio");
+        std::fs::write(&path, "[mcp_servers.swarmterm]\ncommand = \"gh\"\n").unwrap();
+        assert!(!codex_needs_url_pin(&path), "foreign");
     }
 
     #[test]

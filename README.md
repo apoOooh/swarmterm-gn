@@ -31,6 +31,7 @@ Real split terminals, one git worktree per agent, and an app your agents can dri
 - Workspaces of real split terminal panes (ConPTY), with live titles, activity and agent-state dots, broadcast typing and zoom.
 - Saved workspaces and templates restore layouts, folders and agent sessions; panes keep running in a separate terminal host across app restarts and updates (on by default).
 - Close to tray; everything keeps running until you quit.
+- Setup assistant on first start: missing tools and agents with the install command to copy, sign-in, voice and a first workspace.
 
 **Agents**
 - Agent catalogue: Claude Code, Codex, OpenCode, Copilot, Qwen Code, Gemini, Amp, Cursor and more, each with launch modes (from confirming to bypass) and session resume.
@@ -41,8 +42,10 @@ Real split terminals, one git worktree per agent, and an app your agents can dri
 
 **Agents drive the app (MCP)**
 - Every pane is connected to a local Swarmterm MCP server: agents open a web preview, spawn and remove worktrees, and talk to each other.
-- War Room: panes you drag in can message each other or hand over prompts, with you as moderator.
+- War Room: panes you drag in can message each other or hand over prompts, with you as moderator; every member and message is tagged with its pane number.
+- data-shield companion: a Claude Code prompt the guard blocks comes back masked into the same pane and is sent, no clipboard detour.
 - MCP catalogue: add Playwright, GitHub, Context7 and other servers to an agent profile.
+- Settings → Setup shows the hooks, MCP entry and status line Swarmterm added to each agent CLI. Nothing is written for a CLI that is not installed.
 
 **Right panel and files**
 - Web preview column per terminal, with address bar and history.

@@ -7,6 +7,17 @@ settings, keyboard shortcuts, troubleshooting and current limits.
 Swarmterm GN supports **Windows x64**. Use the Ctrl bindings where inherited
 shortcut labels show both Ctrl and Command. macOS and Linux are not supported.
 
+## First start
+
+On a new installation Swarmterm opens the **setup assistant** in four steps. You can skip it at any time, and run it again from Settings → Setup → **Run setup assistant again**.
+
+1. **Tools and agents** — whether Git (with Git Bash), Node.js with npm and, optionally, Python are installed, and which of Claude Code, Codex and OpenCode start on this PC, with the state of Swarmterm's hooks, MCP entry and status line for each. For anything missing you get one sentence on why it is needed, a link to the vendor's download page and the install command to copy (`winget` for Git, Node.js, Python and Claude Code, `npm install -g` for Codex and OpenCode; without winget only the link). Swarmterm never installs anything itself — run the command in a terminal of your choice, then press **Check again**; no restart is needed.
+2. **Sign-in** — every agent signs in on its first start in a pane with its own login, which is the recommended way. If you sign in with an API key variable instead (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), the assistant shows which ones are set — names only — and offers **Pass to panes**: Swarmterm holds secrets back from panes by default (see **What panes inherit**), so the name goes on the always-pass list. An administrator policy for the environment filter decides this instead.
+3. **Voice** — off (the default for a new installation), the buzzkey app, or built-in speech recognition. The last two are finished in Settings → Voice (installing buzzkey, downloading a model).
+4. **First workspace** — a project folder (with a warning for your user folder or a drive root), one, two or four panes, and the agent for them; only agents that start on this PC are offered. **Finish without workspace** leaves you on the usual composer.
+
+An existing installation never sees the assistant on its own, and keeps voice dictation as it was.
+
 ## Create a workspace
 
 Swarmterm opens on the **composer**: pick a folder (the working directory for every pane), choose how many terminals, and use the steppers to assign AI agents — **Claude Code**, **Codex**, **OpenCode**, **GitHub Copilot**, **Qwen Code**, **Amp**, **Gemini CLI**, **Cursor Agent**, **Antigravity** or **OMP (Oh My Pi)** — the rest stay plain shells. Only agents whose CLI is installed are listed. Turn on **Isolate features in git worktrees** for parallel work, then press `⌘/Ctrl + Enter`.
@@ -15,7 +26,7 @@ Agent detection re-runs every time the composer opens, so installing a CLI needs
 
 ### Defaults and templates
 
-The composer starts from your **workspace defaults**. Below the options, **Save as default** stores everything you've chosen (folder, terminal count, agents and their accounts, worktree isolation, *Split opens*) as the starting point for every new workspace. With no default folder the composer starts in your home directory.
+The composer starts from your **workspace defaults**. Below the options, **Save as default** stores everything you've chosen (folder, terminal count, agents and their accounts, worktree isolation, *Split opens*) as the starting point for every new workspace. With no default folder the composer starts in your most recent folder, or empty on a first start. It never suggests your home folder or a drive root, and picking one shows a warning: Swarmterm watches every file below a workspace folder, and agents ask you to trust all of it.
 
 **Save as template…** stores the current choices under a name. Saving under an existing name (case doesn't matter) offers to overwrite it. Once you have templates, a **Template** picker appears above *How many terminals?*; choosing one fills in all its choices, and *Defaults* goes back to your defaults. Agents whose CLI isn't installed are left out when a default or template is applied.
 
@@ -322,6 +333,7 @@ saved list by newer ones.
 Claude Code and Codex session hooks record each pane's exact conversation,
 including when several panes share a folder. For Codex, review and trust the
 Swarmterm hooks in **`/hooks`**, then send a message so its session is recorded.
+The composer reminds you of this while it is about to start Codex panes.
 The Stop and Interrupt hooks (Codex 0.163 and later) also tell Swarmterm
 exactly when a Codex turn ends; after an update that adds them, Codex asks
 once more in `/hooks`. Until they are trusted, a Codex pane's status comes
@@ -362,6 +374,8 @@ The **Preview** tab is a browser column docked beside the terminals, with a real
 
 Drag a pane by its header onto the right panel and the agent joins the room, receiving a short introduction to who else is there. The tab strip holds multiple rooms — `+` adds, double-click renames, `✕` deletes (two-step confirm; the last room stays) — each with its own transcript, members and moderator seat. **A pane belongs to at most one room**; dragging it onto another room's tab moves it.
 
+**Which pane is it?** Every member row, every message header, the composer's target list and the `@` list show a small tag with the pane's number as its header shows it — `Pane 2`, or `Pane 2 · Backend` when more than one workspace is open (`Drawer` for a parked pane). Several members with the same title (four "Claude Code" panes in one repo) stay apart that way, so you know which one you can close or move. The tag follows the layout live: reorder or park panes and it changes with them. Agents see the same text as `pane` in `war_room.list_peers`.
+
 Agents talk in two modes:
 
 - **Probe** — lands in the peer's inbox and nudges it to read: questions, debate, coordination.
@@ -382,6 +396,10 @@ No setup is needed: Claude Code, Codex, OpenCode and Qwen Code panes connect to 
 Drag a member chip out (or press its `✕`) and the agent instantly loses access. Closing a pane removes it automatically — and so does restarting one (switching its agent, shell or folder); just drag it back in.
 
 A full walkthrough — Claude Code and Codex negotiating an API contract — is in [`war-room-demo.md`](war-room-demo.md).
+
+## Prompts blocked by data-shield
+
+If you use data-shield's prompt guard with Claude Code, a prompt it blocks (because it contains personal data or a secret) comes back masked into the same pane: Swarmterm clears the original from Claude's input box, puts the masked version there (`[IBAN_…]`-style placeholders instead of the values) and sends it. You do nothing. **Settings → Terminal → Agent safety → Prompts blocked by data-shield** offers *put back and send* (default), *put back, I press Enter*, or *do nothing*. If you typed in the pane after pressing Enter (any key, also Esc, Ctrl+C or another Enter), or Claude asks for a permission meanwhile, nothing more is replaced: a pill in the pane offers **Copy masked prompt** instead. The same pill appears when the prompt was not sent with your own Enter key in that pane within the last 15 seconds (a line break with Shift+Enter or a paste does not count), when Claude shows no restored draft, or when a one-line draft does not match your blocked prompt; and a second automatic send in the same pane within 30 seconds is only put back, with a note in the bell. A blocked prompt is never announced as done. Administrators can switch it off or forbid the automatic send (`DisablePromptResubmit`, `DisablePromptResubmitSend`; Corp never sends).
 
 ## Status line in Claude Code panes
 
@@ -552,7 +570,15 @@ Changes apply to the next pane or routine that starts; running panes keep the en
 
 **Settings** (from the navbar) covers appearance, terminal font and default shell with a live preview, the status line toggle, and the full shortcut list — these preferences persist between launches.
 
+**Setup.** Settings → **Setup** lists what Swarmterm added to Claude Code and Codex so panes can report their state, show the status line and reach the War Room: the hooks, the Swarmterm MCP entry and the status line, each with its state. Swarmterm writes nothing for a CLI that is not installed; entries it added earlier are still kept up to date, even when it cannot find that CLI itself. Install one while Swarmterm runs and its entries are added the next time the composer opens, a pane of that agent starts, or you press **Check again**. Your own status line is kept, and an entry you switched off under Settings → MCP shows as switched off. Only a real failure, such as a configuration file that cannot be read, puts one *Agent setup needs attention* entry in the bell. It names the first problem; this page shows all of them.
+
+Claude Code on Windows runs the status line through **Git Bash**, and before version 2.1.139 also the hooks. Without it they would fail in every Claude Code session, also outside Swarmterm, so Swarmterm leaves them out (and takes out the ones it added before) until Git for Windows is installed. With Claude Code 2.1.139 or newer the hooks need no shell at all: Swarmterm writes them so that Claude Code starts `swarmterm.exe --hook` directly, and they work without Git Bash; only the status line still waits for it. Swarmterm asks `claude --version` once per installed Claude Code to decide, and switches the entries over by itself at the next pane start when Claude Code is updated or downgraded. It checks the `claude` it starts in panes; a `claude` you reach only through a shell alias or your own wrapper script is not checked. Setup then shows *Needs Git Bash* with a link and the install command to copy (`winget install --id Git.Git -e`); Swarmterm never installs anything itself. After installing, press **Check again** — no restart needed. When Git Bash is installed somewhere Claude Code does not look by itself, Claude panes get `CLAUDE_CODE_GIT_BASH_PATH` pointing to it; a value you set yourself is always kept. Below the integrations, **Prerequisites** lists Git, Git Bash, winget, Node.js, npm and Python with where each was found.
+
+Programs installed while Swarmterm runs are found without a restart: new panes, the agent list and Setup read the current Windows PATH (machine and user) and add its new folders after the ones Swarmterm started with, plus `%USERPROFILE%\.local\bin` where the Claude Code installer puts `claude.exe`.
+
 **Closing the window hides Swarmterm to the tray** and everything keeps running; tray → **Quit** is what actually exits. Launching a second copy just focuses the window you already have. On Windows, closing a pane kills the entire process tree it started — no orphaned build servers.
+
+**Diagnostics.** Settings → Terminal → Diagnostics has **Write a dump when the window stops responding** (off by default); its description shows the folder the files are written to. See *Swarmterm stopped responding* under Troubleshooting.
 
 **Terminal host.** Settings → Terminal → **Run new panes in the terminal host** starts new panes in a separate background process, `swarmterm-host.exe`, instead of inside Swarmterm. It is on by default; turn it off to run new panes inside Swarmterm again. Panes that are already open keep running where they started, so you can switch at any time. If the host cannot be started, new panes open inside Swarmterm as before and the setting shows why. The installer ships `swarmterm-host.exe` next to the app, but Swarmterm never runs it from there: it first copies it to a folder for that build under `%LOCALAPPDATA%\<app id>\host\` and starts it from the copy, so an update can always replace the installed file. After an update, panes that still run on the old build's host stay there until they are closed (you can reopen them as usual), new panes go to the new build's host, and the setting says so. Once the old host has no panes left it ends after ten minutes, and its folder is removed the next time Swarmterm starts. Source builds use `swarmterm-host.exe` from the build folder after `cargo build -p swarmterm-host`.
 
@@ -592,7 +618,7 @@ War Room abilities only work for panes you dragged into a room, worktree abiliti
 
 ## Swarmterm MCP
 
-The top of **Settings → MCP** has one switch per agent and account for Swarmterm's own server (War Room, browser and worktree tools). On is the default. Off removes only Swarmterm's entry from that profile's configuration and keeps it from being written again; restart running panes afterwards. A server of your own that happens to be called `swarmterm` is never changed. **Details** shows the configuration file and the server address.
+The top of **Settings → MCP** has one switch per agent and account for Swarmterm's own server (War Room, browser and worktree tools). On is the default. Off removes only Swarmterm's entry from that profile's configuration and keeps it from being written again; restart running panes afterwards. A server of your own that happens to be called `swarmterm` is never changed. **Details** shows the configuration file and the server address. For Claude Code and Codex the entry starts a small helper, `swarmterm.exe --mcp-stdio`, which forwards to the Swarmterm the pane runs in; in a terminal outside Swarmterm it offers no tools, so the agent shows no failed server there. An entry written by an older version is replaced at the next start.
 
 ## MCP catalogue
 
@@ -652,6 +678,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 
 ## Troubleshooting
 
+- **The bell says "Agent setup needs attention"** — Swarmterm could not add its hooks, MCP entry or status line to an agent's configuration, usually because `settings.json`, `.claude.json` or `config.toml` is not valid JSON or TOML, or because `CLAUDE_CONFIG_DIR` points to a folder that does not exist. Settings → Setup shows the reason. Fix the file or the variable, then press **Check again**.
 - **An agent is missing from the composer** — its CLI isn't on your `PATH`; install it and reopen the composer. A default or template that assigns it uses those slots for plain terminals meanwhile, and picks the agent up again once it's installed — unless you edit and save that default or template before then.
 - **A War Room message never arrived** — look for the pill in the pane or `⏸N` on the room tab: it's held behind an unsubmitted prompt line, or the agent is working / sitting on a prompt (the pill says which). Press Enter or click "Deliver now" for a typing hold; answer the prompt or wait for the agent to finish otherwise.
 - **An agent says its execute was refused** — the target pane is blocked on a permission or question; answer that prompt (or let the sending agent `wait_peer`) and the hand-off goes through on re-send.
@@ -661,6 +688,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **An agent says it isn't in the War Room** — its pane was removed or restarted; drag it back in.
 - **A relative path isn't clickable after `cd`** — a PowerShell quirk; absolute paths (everything agents print) still work.
 - **The app disappeared** — it's in the tray; click the icon to bring it back.
+- **Swarmterm stopped responding ("not responding" in the title bar)** — Swarmterm logs every freeze of 2 s or more as one line (time and duration, no content) in `%LOCALAPPDATA%\<app id>\diagnostics\ui-stalls.log`; that is always on and stays on your computer. For a freeze that keeps coming back, turn on Settings → Terminal → Diagnostics → **Write a dump when the window stops responding**. The next freeze of 4 s or more then saves a small dump (`ui-stall-1.dmp` to `ui-stall-3.dmp`, oldest replaced) in the same folder. A dump can contain terminal text, so attach it to a bug report only if you are comfortable with that; Swarmterm never sends it anywhere. Turn the switch off again afterwards. If it is greyed out, your organisation turned dumps off.
 
 ## Known limits
 
@@ -682,6 +710,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **What a taken-over pane loses** — its War Room membership (drag it in again) and a dictation that was in progress. If another program took Swarmterm's previous connection port in the meantime, the agent in it shows `mcp offline` until it restarts — and keeps sending its pane token to that program, which could use it to act as that pane toward Swarmterm. Only a program running under your own account can do this.
 - **Panes opened in the first seconds after a restart may start without MCP** — on startup Swarmterm waits up to 10 s for its previous connection port to become free (so agents in taken-over panes reconnect). A pane created during that wait starts without `SWARMTERM_MCP_URL`, so its agent has no Swarmterm tools (War Room, preview); restart that pane once Swarmterm is up.
 - **Claude Code's cursor can lag after a resize** — Claude draws its own cursor block and only redraws it on the next keystroke, so right after dragging a window or pane edge the old block may stay visible. Output and prompt are correct; press any key to refresh.
+- **Images and documents over 32 MB open outside Swarmterm** — the in-app viewer serves a file without range requests in one piece, and the webview copies that answer on the window's own thread, so a larger file would freeze the window while it loads. Such files show **Open in default app**; videos stream in parts and play at any size.
 
 ## Astera themes
 

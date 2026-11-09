@@ -306,7 +306,7 @@ pub fn response(
             request.headers().get("range").and_then(|v| v.to_str().ok()),
             len,
         )?;
-        if requested.is_none() && len > 256 * 1024 * 1024 {
+        if requested.is_none() && len > MAX_UNRANGED_BYTES {
             return Err("Large media requires range requests".into());
         }
         let (start, end) = requested.unwrap_or((0, len.saturating_sub(1)));
@@ -337,6 +337,14 @@ pub fn response(
     })();
     result.unwrap_or_else(denied)
 }
+
+/// Largest media answer without a Range header (user decision 2026-11-09,
+/// SWA-85). wry hands a scheme response to WebView2 on the UI thread and
+/// copies the whole body there (`SHCreateMemStream`), also for asynchronous
+/// handlers, so the window stalls in proportion to the size: a 250 MB image
+/// measured 0.6 s. Video uses ranges (8 MiB each, `range`) and is unaffected;
+/// a larger image gets the viewer's "Open in default app".
+pub const MAX_UNRANGED_BYTES: u64 = 32 * 1024 * 1024;
 
 fn denied(error: String) -> Response<Vec<u8>> {
     Response::builder()
@@ -375,6 +383,40 @@ mod tests {
         assert!(range(Some("bytes=1000-"), 1000).is_err());
         assert!(range(Some("bytes=1-2,3-4"), 1000).is_err());
     }
+    #[test]
+    fn unranged_media_is_capped_at_32_mb_ranged_is_not() {
+        // SWA-85: WebView2 copies a scheme response on the UI thread (wry),
+        // so a whole-file answer stalls the window in proportion to its size.
+        let t = tempfile::tempdir().unwrap();
+        let service = FileService::new(t.path().join("history"));
+        let c = service.open(t.path()).unwrap();
+        let request = |name: &str, range: Option<&str>| {
+            let mut url =
+                url::Url::parse(&format!("swarmterm-media://localhost/{}", c.id)).unwrap();
+            url.query_pairs_mut()
+                .append_pair("path", &t.path().join(name).to_string_lossy());
+            let mut b = Request::builder().uri(url.as_str());
+            if let Some(r) = range {
+                b = b.header("range", r);
+            }
+            response(&service, APP_WEBVIEW, b.body(vec![]).unwrap())
+        };
+        let at_cap = fs::File::create(t.path().join("at.png")).unwrap();
+        at_cap.set_len(MAX_UNRANGED_BYTES).unwrap();
+        let over = fs::File::create(t.path().join("over.png")).unwrap();
+        over.set_len(MAX_UNRANGED_BYTES + 1).unwrap();
+        assert_eq!(MAX_UNRANGED_BYTES, 32 * 1024 * 1024);
+        let r = request("at.png", None);
+        assert_eq!(r.status(), 200);
+        assert_eq!(r.body().len() as u64, MAX_UNRANGED_BYTES);
+        let r = request("over.png", None);
+        assert_eq!(r.status(), 403);
+        assert!(r.body().starts_with(b"Large media requires range requests"));
+        let r = request("over.png", Some("bytes=0-"));
+        assert_eq!(r.status(), 206);
+        assert_eq!(r.body().len(), 8 * 1024 * 1024);
+    }
+
     #[test]
     fn protocol_refuses_outside_media_and_unregistered_roots() {
         let t = tempfile::tempdir().unwrap();

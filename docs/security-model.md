@@ -72,6 +72,85 @@ Tools: open a web preview (http/https URLs only), list/spawn/remove worktrees
 changes and paths outside `<repo>.worktrees`), and the War Room tools.
 Settings → MCP removes the server entry from an agent profile's configuration.
 
+Claude Code and Codex reach the server through a local stdio proxy
+(`swarmterm.exe --mcp-stdio`, `src-tauri/src/mcp_stdio.rs`), which their
+configuration starts as an ordinary MCP server. It opens no port and holds no
+secret of its own: it reads `SWARMTERM_MCP_URL` and `SWARMTERM_SESSION` from the
+pane's environment, accepts only a loopback `http://127.0.0.1:<port>/mcp`
+address and sends the pane's bearer on every request, `initialize` included, so
+the server's checks above apply unchanged. Outside a pane it answers as a server
+without tools and contacts nothing.
+
+`POST /resubmit` (SWA-88) is the one route that carries prompt text: data-shield's
+UserPromptSubmit guard sends the masked form of a prompt it blocked, and Swarmterm
+types it back into the same pane (and, by default, sends it). It accepts a request only
+from the pane's own bearer, without browser headers (`Origin`, `Sec-Fetch-*`), for a
+Claude Code pane, as the answer to that pane's newest UserPromptSubmit edge of the same
+generation and session (`prompt_id`), naming the length and SHA-256 of the blocked prompt
+that Swarmterm's own hook reported with that edge, within 10 s, once per edge, never after a
+PostToolUse following that edge, and only for text that contains at least one mask
+placeholder and is at most 256 KiB (`src-tauri/src/resubmit.rs`). The text goes to the
+main window only and is never logged, announced, stored or put in the bell.
+The prompt fingerprint (length + SHA-256, never content, like the reply fingerprint of
+SWA-58) is derived from the plaintext prompt, which may contain personal data, so it is
+held only in memory, compared in constant time and never logged. A timer expires it
+10 s after the edge (or the block report) even when no further request arrives
+(`Gate::expire`); a matched one is dropped at once. The matched fingerprint travels once
+with the masked text to the main window (same rules as the text: never logged, stored or
+forwarded), which compares it with the draft Claude restored. `HookBody` carries it as an
+optional field (`turn.asked`), so older hook binaries still work (they just never match).
+
+**Remaining risk: self-injection.** This is protection against accidents and against a
+simply forged request to the endpoint — not isolation from processes of the same user.
+Everything the route checks can be produced by a process inside the pane: it holds the
+bearer and `SWARMTERM_PTY_GENERATION`, can post its own UserPromptSubmit edge to `/hook`
+with a fingerprint of any text it chooses (the edge checks only agent, generation and the
+form of the ids), and then a matching `/resubmit` with any text that contains a
+placeholder. It can also write whatever it likes to the console, including a fake input
+box. So a process in the pane can fake a block. The renderer makes that much harder
+(`src/lib/prompt-resubmit.ts`):
+
+- **Bound to a real keystroke.** The masked text is only written when the renderer itself
+  saw the user press a plain Enter key in that pane (the keydown xterm turned into a CR,
+  decided from the key event, not from the bytes — `createSubmitIntent`) at most 15 s
+  before the block arrived. A line break (LF: Shift+Enter in an agent pane, Ctrl+J), a
+  paste with line breaks, xterm's own answers to terminal queries, War Room, dictation and
+  the resubmit's own writes never count. That anchor is consumed by the first resubmit and
+  dropped on respawn, so one Enter allows at most one resubmit, and nothing posted to
+  `/hook` can create or renew it. A process in the pane cannot press keys in the
+  renderer — this is the actual hurdle; the rest narrows the window. With broadcast input
+  on, the Enter is written to every armed member and anchors each of them, by design:
+  the same line was really sent there.
+- **A restored draft must be visible.** Right before the first Esc, Claude's box must show
+  a non-empty draft; no draft (e.g. while a tool runs) is the fallback: nothing is cleared,
+  the pane offers the masked prompt to copy. Where the draft reads back exactly (one row,
+  no DIM cell, not at the row's edge) it must also match the fingerprint (UTF-8 length +
+  SHA-256), otherwise the fallback. A draft that cannot be read back exactly (several
+  rows, wrapped, a collapsed "[Pasted text …]") is not compared — the Enter binding and the
+  visible draft carry it (user decision 2026-11-09), so for such prompts a process that
+  can draw a fake box is stopped only by the Enter binding.
+- **At every step.** The anchor carries the pane's input revision, a counter every real
+  input moves on — any key, Esc, Ctrl+C, the clear-input shortcut, a new Enter — and that
+  a clear never resets. Before each Esc, after every wait, during the settle, before the
+  insert and before the Enter the revision must be unchanged, with no IME composition, the
+  agent not waiting on a permission prompt (`blocked`), the setting on and the pane alive;
+  anything else stops the sequence at once, with no further write, and the pane offers the
+  masked prompt to copy. A new Enter therefore ends an attempt still riding on the
+  previous one.
+- **Rate limit.** At most one attempt with Enter per pane every 30 s; failed attempts
+  count, and a new session or prompt id does not reset it. A further one is put back
+  without Enter and the bell says so.
+
+None of this is a trust boundary. A process in the pane can wait for the user's next real
+Enter and, within those 15 s, draw a fake multi-row input box (which is not compared with
+the fingerprint, see above) and post `/hook` and `/resubmit` itself: its own text is then
+written and sent once. The Enter binding only raises the bar — the attacker needs a real
+Enter in that pane and good timing — and the rate limit only stops repeats, not the first
+attempt. Choose "put back
+only" (or set `DisablePromptResubmitSend`, the Corp default) to keep the final Enter with
+the user, or turn it off in Settings → Terminal → Agent safety or with
+`DisablePromptResubmit`.
+
 ### War Room
 
 War Room tools work only for panes the user dragged into a room; removing a
@@ -179,6 +258,25 @@ in a pane anyway. It keeps secrets that were only exported into Swarmterm's own
 launch environment away from agents. For corporate use set `EnvPolicy=strict`
 (`docs/admin-policy.md`) and allow-list what the agents need.
 
+### UI hang diagnostics
+
+A watchdog thread logs every stall of the UI thread of 2 s or more as one line (time and
+duration, no content) to `%LOCALAPPDATA%\<app id>\diagnostics\ui-stalls.log`
+(`src-tauri/src/ui_watchdog.rs`). The opt-in minidump (Settings → Terminal → Diagnostics, off by
+default; locked by `DisableHangDumps` and in the Corp edition, enforced in Rust) is taken by a
+separate process, `swarmterm.exe --dump-ui <pid> <file>`, never in-process, so a stuck UI thread
+cannot deadlock the dump. That mode only dumps a process that runs the same executable, so it
+cannot be used to read another program's memory (`src-tauri/src/dump_ui.rs`). Any process can
+start that mode — a pane included — so it enforces the same gates itself before it creates a
+file: the admin policy and the Corp edition (`DisableHangDumps`, read from the registry at
+that moment) and the user's saved opt-in (`diagnostics.json` in the app data dir of the
+build's own identifier, never a path from the command line). A refusal exits non-zero and
+writes nothing. These gates stop a locked or opted-out install from being dumped through the
+CLI; they are no barrier against code of the same user, which could call
+`MiniDumpWriteDump` itself or edit the opt-in file. Dumps are thread
+lists and stacks without the full heap, but can still hold terminal text or session tokens; they
+stay in the user's profile and are never sent anywhere.
+
 ### Voice pipe
 
 The voice companion talks to the app over a named pipe restricted to the
@@ -210,7 +308,7 @@ wins per value. The policy is read once at start and cannot be changed while
 the app runs. Each lock is enforced in the backend at the point of action
 (`src-tauri/src/policy.rs`): bypass launch lines, War Room execute,
 `worktree.spawn`, the MCP server and its enrollment, companion install and
-updates, speech-model downloads, command routines, the web preview, and a
+updates, speech-model downloads, command routines, the web preview, hang dumps, and a
 forced environment filter with an admin allow list. The renderer only greys out
 locked controls. Details: [admin-policy.md](admin-policy.md).
 
@@ -218,8 +316,8 @@ locked controls. Details: [admin-policy.md](admin-policy.md).
 
 The Swarmterm GN Corp build (Cargo feature `corp`, own identifier
 `com.apooooh.swarmterm.gn.corp`) compiles the locks `DisableBypassModes`,
-`DisableWarRoomExecute`, `DisableCompanion`, `DisableModelDownload` and
-`EnvPolicy=default` into the binary (`policy::Edition::locks`). They are
+`DisableWarRoomExecute`, `DisableCompanion`, `DisableModelDownload`,
+`DisableHangDumps` and `EnvPolicy=default` into the binary (`policy::Edition::locks`). They are
 combined with the registry policy, which can add locks but not lift these. The
 buzzkey download/installer and the speech-model download are compiled out, not
 only locked; the release workflow fails if their endpoints appear in the Corp

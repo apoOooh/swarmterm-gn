@@ -77,6 +77,7 @@ import { resolveDragEnd, memberDisplayName, MEMBER_DRAG_PREFIX } from '@/lib/war
 import { buildIntroText } from '@/lib/war-room-nudge'
 import { startWarRoomDelivery } from '@/lib/war-room-delivery'
 import { resolvePaneTitle } from '@/lib/pane-title'
+import { paneLocationLabels } from '@/lib/pane-location'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { FileDropListener } from '@/components/FileDropListener'
 import { FileDialog } from '@/components/Files/FileDialog'
@@ -87,6 +88,9 @@ import { useExplorerStore } from '@/store/explorer-store'
 import { onFileChange } from '@/tauri/files'
 import { registerCloseGuard } from '@/lib/close-guard'
 import { confirmQuit, hostedPaneCount, onMcpServerExited, onQuitRequested, onVoicePipeError, onVoicePipeRecovered } from '@/tauri/app'
+import { onSetupChanged } from '@/tauri/setup'
+import { useSetupStatusStore } from '@/store/setup-status-store'
+import { SETUP_ALERT_ID, nextSetupBellAction } from '@/lib/setup-status'
 import { chooseQuit } from '@/lib/quit-flow'
 import { fileDialog } from '@/store/file-dialog-store'
 import { RightPanel, RightPanelPeek } from '@/components/RightPanel/RightPanel'
@@ -98,6 +102,8 @@ import { TitleBar } from '@/components/TitleBar/TitleBar'
 import { Workspace, PaneDragGhost } from '@/components/Workspace/Workspace'
 import { FLOATING_LAYER_ID } from '@/lib/floating-panes'
 import { Welcome } from '@/components/Welcome/Welcome'
+import { SetupWizard } from '@/components/SetupWizard/SetupWizard'
+import { useSetupWizardStore } from '@/store/setup-wizard-store'
 import { WorkspaceTabs } from '@/components/WorkspaceTabs/WorkspaceTabs'
 import { useBrowserStore } from '@/store/browser-store'
 import { showMessage } from '@/tauri/dialog'
@@ -121,6 +127,7 @@ import { useTerminalSearchStore } from '@/store/terminal-search-store'
 import { useWarRoomStore } from '@/store/war-room-store'
 import {
   warRoomJoin,
+  warRoomPaneLabelsSet,
   warRoomLeave,
   warRoomRooms,
   onWarRoomEvent,
@@ -139,6 +146,7 @@ import { showWindow } from '@/tauri/window'
 import { onAgentSession } from '@/tauri/sessions'
 import { wireSavedWorkspaces, flushSavedWorkspaces, useSavedWorkspacesStore } from '@/store/saved-workspaces-store'
 import { stopAnnouncements, toggleDictation, wireVoice } from '@/lib/voice-wiring'
+import { wirePromptResubmit } from '@/lib/prompt-resubmit-wiring'
 import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 import { builtinSwitchedOn } from '@/lib/voice-dictation'
 import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
@@ -405,6 +413,33 @@ export default function App(): ReactElement {
     void useAgentAvailabilityStore.getState().refresh()
     void useShellAvailabilityStore.getState().refresh()
     void useStatuslineStore.getState().sync()
+    // SWA-83: the setup assistant for a new install (Rust decides, the
+    // renderer adds localStorage from an older one).
+    void useSetupWizardStore.getState().boot()
+  }, [])
+
+  // The assistant replaces Settings when opened from it ("Run again").
+  const wizardOpen = useSetupWizardStore((s) => s.open)
+  useEffect(() => {
+    if (wizardOpen) setSettingsOpen(false)
+  }, [wizardOpen])
+
+  // SWA-90: agents see the same "Pane 2 · Backend" in list_peers as the user
+  // in the War Room. Pushed only when a label actually changes (the layout
+  // store changes on every resize/focus; the labels rarely do).
+  useEffect(() => {
+    let last = ''
+    const push = (workspaces: Parameters<typeof paneLocationLabels>[0]): void => {
+      const labels = paneLocationLabels(workspaces)
+      const key = JSON.stringify(labels)
+      if (key === last) return
+      last = key
+      void warRoomPaneLabelsSet(labels).catch((e) => console.warn('war_room_pane_labels_set failed', e))
+    }
+    push(useAppStore.getState().workspaces)
+    return useAppStore.subscribe((s, prev) => {
+      if (s.workspaces !== prev.workspaces) push(s.workspaces)
+    })
   }, [])
 
   // Esc closes the Welcome page when it's closeable and Settings isn't covering it.
@@ -663,6 +698,8 @@ export default function App(): ReactElement {
 
   // Voice dictation (SWA-12): answers Rust's focus/insert requests.
   useEffect(() => wireVoice(() => settingsOpenRef.current), [])
+  // SWA-88: prompts data-shield blocked come back masked into their pane.
+  useEffect(() => wirePromptResubmit(), [])
 
   /** Focus the active workspace's focused terminal, unless something is typing. */
   const returnFocusToTerminal = useCallback(() => {
@@ -906,6 +943,28 @@ export default function App(): ReactElement {
     return () => {
       setInputDroppedHandler(undefined)
       for (const c of cleanups) c()
+    }
+  }, [])
+
+  // Agent integration failures (SWA-83): Rust records what the hook, MCP and
+  // status-line writers did; a real error gets ONE bell entry. Re-added only
+  // when the problem changes, so a read entry does not come back on every
+  // pane spawn, and marked read once the problem is gone.
+  useEffect(() => {
+    const center = useNotificationCenterStore.getState
+    let lastDetail: string | null = null
+    const unsubscribe = useSetupStatusStore.subscribe((s, p) => {
+      if (s.status === p.status || s.status === null) return
+      const action = nextSetupBellAction(lastDetail, s.status, Date.now())
+      lastDetail = action.lastDetail
+      if (action.type === 'add') center().add(action.entry)
+      else if (action.type === 'markRead') center().markTerminalRead(SETUP_ALERT_ID, ['backend'])
+    })
+    void useSetupStatusStore.getState().load()
+    const cleanup = cleanupWhenResolved(onSetupChanged(() => { void useSetupStatusStore.getState().load() }), 'setup:changed')
+    return () => {
+      unsubscribe()
+      cleanup()
     }
   }, [])
 
@@ -1329,6 +1388,16 @@ export default function App(): ReactElement {
             key={settingsTab}
             onClose={() => setSettingsOpen(false)}
             initialCategory={settingsTab}
+          />
+        )}
+        {wizardOpen && (
+          <SetupWizard
+            onOpenSettings={(tab) => {
+              // Only offered on the last step: going to Settings ends it.
+              void useSetupWizardStore.getState().finish('done')
+              setSettingsTab(tab)
+              setSettingsOpen(true)
+            }}
           />
         )}
         <FolderPicker />

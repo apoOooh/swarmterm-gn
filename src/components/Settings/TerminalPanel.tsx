@@ -31,6 +31,7 @@ import { AgentIcon } from '@/components/AgentIcon'
 import { DangerousModeDialog, type PendingDangerousMode } from '@/components/DangerousModeDialog'
 import { isDangerousLaunchMode } from '@/lib/launch-mode-safety'
 import { useAgentPolicyStore } from '@/store/agent-policy-store'
+import { effectiveResubmitMode, parseResubmitMode } from '@/lib/prompt-resubmit'
 import { listAvailableShells, type AvailableShell } from '@/tauri/shell'
 import {
   getTerminalHostSettings,
@@ -46,6 +47,7 @@ import {
 } from '@/lib/host-status-store'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { getDiagnostics, setHangDumps, type DiagnosticsView } from '@/tauri/diagnostics'
 
 /** The "Terminal" settings category — pick the shell new panes spawn with. */
 export function TerminalPanel(): ReactElement {
@@ -142,7 +144,41 @@ export function TerminalPanel(): ReactElement {
       <EnvironmentSettings />
       <StatusLineSettings />
       <TerminalHostSettings />
+      <DiagnosticsSettings />
     </div>
+  )
+}
+
+/**
+ * Hang diagnostics (SWA-85). The stall log (time and duration only) is always
+ * written; the dump is opt-in because it holds process memory (stacks), which
+ * can include terminal text and session tokens. Enforced in Rust.
+ */
+function DiagnosticsSettings(): ReactElement {
+  const [view, setView] = useState<DiagnosticsView | null>(null)
+  useEffect(() => {
+    void getDiagnostics().then(setView, () => setView(null))
+  }, [])
+  return (
+    <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+      <h2 className="text-sm font-semibold text-foreground">Diagnostics</h2>
+      <div className="mt-4 grid gap-4">
+        <ToggleRow
+          label="Write a dump when the window stops responding"
+          description={
+            'When the window hangs for 4 seconds, Swarmterm saves a small dump (thread stacks) on this computer so the ' +
+            'cause can be found. Off by default: a dump can contain terminal text and session tokens. Nothing is sent ' +
+            'anywhere; every hang is also noted in ui-stalls.log (time and length only).' +
+            (view?.folder ? ` Folder: ${view.folder}` : '')
+          }
+          checked={view?.hangDumps ?? false}
+          managed={view?.locked ?? false}
+          onChange={(on) => {
+            void setHangDumps(on).then(setView, () => undefined)
+          }}
+        />
+      </div>
+    </section>
   )
 }
 
@@ -306,6 +342,7 @@ function AgentSafetySettings(): ReactElement {
   const policy = useAgentPolicyStore((s) => s.policy)
   const setPolicy = useAgentPolicyStore((s) => s.setPolicy)
   const admin = usePolicyStore((s) => s.policy)
+  const resubmit = effectiveResubmitMode(policy.promptResubmit, admin)
   return (
     <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
       <h2 className="text-sm font-semibold text-foreground">Agent safety</h2>
@@ -332,6 +369,31 @@ function AgentSafetySettings(): ReactElement {
           managed={admin.disableBypassModes}
           onChange={(on) => setPolicy({ workersInheritBypass: on })}
         />
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium text-foreground">
+            Prompts blocked by data-shield
+          </span>
+          <select
+            value={resubmit}
+            disabled={admin.disablePromptResubmit}
+            onChange={(e) => setPolicy({ promptResubmit: parseResubmitMode(e.target.value) })}
+            className="w-full rounded-md border border-pane-border bg-card px-2.5 py-1.5 text-sm text-foreground disabled:opacity-60"
+          >
+            <option value="send" disabled={admin.disablePromptResubmitSend}>
+              Put the masked prompt back and send it
+            </option>
+            <option value="insert">Put the masked prompt back, I press Enter</option>
+            <option value="off">Do nothing</option>
+          </select>
+          <span className="mt-1 block text-[11px] leading-snug text-muted-foreground/70">
+            When data-shield blocks a Claude Code prompt because it found personal data or a secret, Swarmterm clears
+            the original from the input box and puts the masked version there instead. If you typed in the pane since,
+            nothing is replaced and the pane offers the masked prompt to copy.
+          </span>
+          {(admin.disablePromptResubmit || admin.disablePromptResubmitSend) && (
+            <span className="mt-1 block text-xs font-medium text-amber-500">{MANAGED_LABEL}</span>
+          )}
+        </label>
       </div>
     </section>
   )
@@ -425,11 +487,12 @@ function TerminalHostSettings(): ReactElement | null {
   return (
     <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
       <div className="mb-4">
-        <h2 className="text-sm font-semibold text-foreground">Terminal host (preview)</h2>
+        <h2 className="text-sm font-semibold text-foreground">Terminal host</h2>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           Runs new panes in a separate background process instead of inside
-          Swarmterm. Groundwork for keeping terminals alive across a restart;
-          today it behaves like the built-in terminals.
+          Swarmterm, so they keep running if Swarmterm crashes or is ended.
+          Opening the saved workspace again takes them over where they are.
+          On by default.
         </p>
       </div>
 

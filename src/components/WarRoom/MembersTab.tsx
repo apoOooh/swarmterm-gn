@@ -15,6 +15,7 @@ import { ActivityDot } from '@/components/ActivityDot'
 import { StateDot } from '@/components/StateDot'
 import { useMemberConnection } from './useMemberConnection'
 import { Avatar, jumpToTerminal } from './Avatar'
+import { PaneTag } from './PaneTag'
 
 const HELD_BADGE_CLASS = 'shrink-0 rounded bg-[#f97316]/15 px-1 py-0.5 text-[10px] text-[#f97316]'
 
@@ -47,11 +48,14 @@ function MemberRow({ member }: { member: WarRoomMember }): ReactElement {
     >
       <Avatar terminalId={member.terminalId} agentId={member.agentId} />
       <div className="min-w-0 flex-1">
-        <div
-          className="truncate text-xs font-medium"
-          style={{ color: memberColor(member.terminalId) }}
-        >
-          {member.name}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <PaneTag terminalId={member.terminalId} />
+          <span
+            className="truncate text-xs font-medium"
+            style={{ color: memberColor(member.terminalId) }}
+          >
+            {member.name}
+          </span>
         </div>
         <div className="truncate text-[10px] text-muted-foreground">{member.cwd}</div>
       </div>

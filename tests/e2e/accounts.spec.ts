@@ -19,6 +19,8 @@ test('profile management drives account-aware composition and isolated login', a
   await page.getByRole('button', { name: '4', exact: true }).click()
   await page.getByRole('spinbutton', { name: 'Claude Code count', exact: true }).fill('4')
   await page.getByRole('combobox', { name: 'Claude Code account', exact: true }).selectOption('__round-robin__')
+  // Welcome no longer pre-fills the home folder (SWA-83): pick one first.
+  await page.getByPlaceholder('Choose a folder…').fill('/project')
   await page.getByRole('button', { name: /^Create workspace/ }).click()
   await expect.poll(() => page.evaluate(() => (window as any).fixture.counters.created)).toBe(5)
   expect(await page.evaluate(() => (window as any).fixture.counters.spawns.slice(1).map((spawn: any) => spawn.accountId))).toEqual([undefined, profile.id, undefined, profile.id])

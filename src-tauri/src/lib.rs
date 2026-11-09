@@ -7,22 +7,33 @@ mod child_priority;
 mod clipboard_media;
 mod commands;
 mod dev_defer;
+mod dev_window;
 mod devlog;
+mod diagnostics;
+pub mod dump_ui;
 mod files;
 mod folder_list;
 mod git;
+mod git_bash;
 mod host_client;
 mod json_style;
 mod links;
 mod marked_media;
 mod mcp;
+// Public so `main.rs` can reach `--mcp-stdio` without booting Tauri.
+mod first_run;
+pub mod mcp_stdio;
 mod paste_image;
 mod policy;
+mod prerequisites;
 mod preview;
 mod prof;
 mod pty;
+mod resubmit;
 mod routine_cmd;
+mod runtime_path;
 mod sessions;
+mod setup;
 mod shell;
 // Public so `main.rs` can reach `--statusline` without booting Tauri.
 pub mod statusline;
@@ -30,6 +41,7 @@ pub mod statusline;
 pub mod hook;
 mod terminal_env;
 mod tray;
+mod ui_watchdog;
 mod voice;
 mod warroom;
 mod window_fit;
@@ -41,6 +53,9 @@ use tauri::WindowEvent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before any thread can read the environment: decides (and removes)
+    // the debug-only SWARMTERM_DEV_HIDDEN switch.
+    let start_mode = dev_window::current();
     #[cfg(feature = "profiling")]
     install_named_runtime();
     tauri::Builder::default()
@@ -67,16 +82,51 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
-        .register_uri_scheme_protocol("swarmterm-media", |context, request| {
-            let service = context
-                .app_handle()
-                .state::<std::sync::Arc<files::FileService>>();
-            files::media_response(&service, context.webview_label(), request)
-        })
+        // Asynchronous on purpose (SWA-85): a synchronous scheme handler runs
+        // inside WebView2's WebResourceRequested callback on the UI thread,
+        // so every media read (up to 256 MB without a range, 8 MiB per range,
+        // 32 MB documents) would stall the window under disk load. The label
+        // is copied before the hop; the webview check stays in the handler.
+        .register_asynchronous_uri_scheme_protocol(
+            "swarmterm-media",
+            |context, request, responder| {
+                let app = context.app_handle().clone();
+                let label = context.webview_label().to_string();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let service = app.state::<std::sync::Arc<files::FileService>>();
+                    responder.respond(files::media_response(&service, &label, request));
+                });
+            },
+        )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
+        .setup(move |app| {
             crate::prof::start(app.handle());
+            // The main window is `create: false` in tauri.conf.json and built
+            // here from that same entry, because whether it may take focus is
+            // a build-type fact (SWA-84, `dev_window`), not config: a second
+            // copy of the whole `windows` array in a dev config would drift.
+            // Built first so every `get_webview_window("main")` below finds it.
+            {
+                let config = app
+                    .config()
+                    .app
+                    .windows
+                    .first()
+                    .cloned()
+                    .ok_or("tauri.conf.json defines no main window")?;
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+                    .focused(start_mode.focused())
+                    .build()?;
+            }
+            // UI-stall watchdog (SWA-85): stall log always, dumps opt-in.
+            crate::diagnostics::init(app.handle());
+            // New install or not (SWA-83): decided from the app data dir
+            // before anything below writes a marker file into it.
+            crate::first_run::init(app.handle());
+            // SWA-88: prompt fingerprints expire on a timer, not only when
+            // the next request happens to sweep them.
+            crate::resubmit::spawn_expiry(app.handle().clone());
             // Before any pane, routine or other child process spawns: the
             // user's env policy from the last run (admin policy applied), not
             // the built-in default.
@@ -144,18 +194,17 @@ pub fn run() {
                     crate::sessions::share::repair(&accounts);
                 }
             }
-            crate::mcp::config::register_user_scope(app.handle());
-            // Register `swarmterm --hook` under Claude Code's hook events in
-            // ~/.claude/settings.json so Claude Code panes report exact
-            // working/blocked/idle edges instead of relying on screen-scrape
-            // alone. Additive on `hooks` (the user's own groups survive),
-            // one-shot, idempotent, log-only. Must run BEFORE any pane launches
-            // `claude`: hooks are snapshotted at session start.
-            crate::hook::install::register(app.handle());
-            crate::hook::codex::register(app.handle());
-            // `codex --help` probe can take seconds on a cold start; pay it
-            // here, off-thread, instead of on the first Codex pane spawn.
-            crate::hook::codex::warm();
+            // Claude Code: the user-scope MCP entry (~/.claude.json) and
+            // `swarmterm --hook` under its hook events in settings.json, so
+            // panes report exact working/blocked/idle edges. Additive (the
+            // user's own groups survive), idempotent, never blocks boot, and
+            // only for a CLI that is installed (SWA-83). Synchronous because
+            // hooks are snapshotted at session start and restored panes spawn
+            // right after the renderer mounts. Codex's hooks need a
+            // `codex --help` probe of up to 3 s, so they go to a blocking
+            // worker; a Codex pane spawned meanwhile waits for it
+            // (`setup::ensure_for_agent`). Outcomes: Settings → Setup.
+            crate::setup::boot(app.handle());
             // Voice dictation endpoint (SWA-12): named pipe + discovery file
             // for buzzkey; follows Settings → Voice. Failure is logged only.
             crate::voice::init(app.handle());
@@ -192,8 +241,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             devlog::dev_log,
+            diagnostics::diagnostics_get,
+            diagnostics::diagnostics_set,
+            diagnostics::debug_ui_stall,
             commands::files_open_context,
             commands::confirm_quit,
+            commands::window_reveal,
             commands::quit_hosted_count,
             commands::run_routine_command,
             commands::save_clipboard_image,
@@ -205,6 +258,7 @@ pub fn run() {
             commands::child_priority_set,
             commands::env_policy_set,
             commands::agent_policy_set,
+            commands::war_room_pane_labels_set,
             commands::policy_get,
             commands::media_save_marked,
             commands::media_read_opened_image,
@@ -271,6 +325,11 @@ pub fn run() {
             commands::set_session_share,
             commands::inspect_saved_workspace,
             commands::set_claude_statusline,
+            commands::setup_status,
+            commands::setup_recheck,
+            first_run::setup_wizard_state,
+            first_run::setup_wizard_finish,
+            first_run::setup_api_key_vars,
             commands::resolve_path_link,
             commands::resolve_dir_link,
             commands::list_folders,

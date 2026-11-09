@@ -1,9 +1,10 @@
-//! Shell catalog + per-platform probing. Probes once per app start; later calls
-//! return the cached vector. App restart re-probes.
+//! Shell catalog + per-platform probing. Probes on first use; later calls
+//! return the cached vector until `recheck` (Settings → Setup) probes again,
+//! so a shell installed while the app runs shows up without a restart.
 
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 /// One entry in the shell catalog. `available == true` means the renderer can
 /// offer this shell as a selectable option. `id` matches the frontend ShellId
@@ -18,7 +19,7 @@ pub struct ShellEntry {
 }
 
 /// Cached probe result. Lazily populated on first call to `list_shells()`.
-static CACHE: OnceLock<Vec<ShellEntry>> = OnceLock::new();
+static CACHE: RwLock<Option<Vec<ShellEntry>>> = RwLock::new(None);
 
 /// Walk `$PATH` (split on the platform separator) looking for `exe_name`.
 /// Returns the first match, or `None`.
@@ -73,8 +74,19 @@ pub fn parse_wsl_distros(decoded: &str) -> Vec<String> {
 }
 
 /// Return the cached shell catalog, probing the first time it is called.
-pub fn list_shells() -> &'static [ShellEntry] {
-    CACHE.get_or_init(probe).as_slice()
+pub fn list_shells() -> Vec<ShellEntry> {
+    if let Some(list) = CACHE.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        return list.clone();
+    }
+    // Probe outside the lock: the WSL probe runs a process.
+    let list = probe();
+    *CACHE.write().unwrap_or_else(|e| e.into_inner()) = Some(list.clone());
+    list
+}
+
+/// Forget the cached catalog; the next `list_shells` probes again.
+pub fn recheck() {
+    *CACHE.write().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// Resolve a shell id to `(executable, args)`. Returns `None` for `default`,
@@ -85,12 +97,12 @@ pub fn resolve_shell(id: &str) -> Option<(String, Vec<String>)> {
     if id == "default" {
         return None;
     }
-    let entry = list_shells().iter().find(|s| s.id == id)?;
+    let entry = list_shells().into_iter().find(|s| s.id == id)?;
     if !entry.available {
         return None;
     }
-    let path = entry.detected_path.clone()?;
-    Some((path, entry.args.clone()))
+    let path = entry.detected_path?;
+    Some((path, entry.args))
 }
 
 #[cfg(windows)]
@@ -116,7 +128,7 @@ fn probe() -> Vec<ShellEntry> {
             args: vec![],
         },
         probe_pwsh(&path_var),
-        probe_git_bash(&path_var),
+        probe_git_bash(),
         probe_wsl(),
     ]
 }
@@ -212,14 +224,10 @@ fn probe_pwsh(path_var: &str) -> ShellEntry {
 }
 
 #[cfg(windows)]
-fn probe_git_bash(path_var: &str) -> ShellEntry {
-    // Preferred: GitForWindows registry InstallPath. Fallback: sibling of git.exe.
-    let from_reg = git_install_from_registry().map(|p| p.join("bin").join("bash.exe"));
-    let path = from_reg.filter(|p| p.is_file()).or_else(|| {
-        find_in_path(path_var, "git.exe")
-            .and_then(|git| git_bash_from_git_exe(&git))
-            .filter(|p| p.is_file())
-    });
+fn probe_git_bash() -> ShellEntry {
+    // Same search the setup uses to decide on hooks (SWA-83), so the shell
+    // list and Settings → Setup never disagree about Git Bash.
+    let path = crate::git_bash::find(None).map(|f| f.path);
 
     ShellEntry {
         id: "git-bash".into(),
@@ -273,75 +281,6 @@ fn decode_utf16_lossy(bytes: &[u8]) -> String {
         return String::from_utf16_lossy(&words);
     }
     String::from_utf8_lossy(bytes).into_owned()
-}
-
-/// Read `HKLM\SOFTWARE\GitForWindows\InstallPath` (then `HKCU\…`) and return
-/// the install directory, or `None` if neither key exists.
-#[cfg(windows)]
-fn git_install_from_registry() -> Option<PathBuf> {
-    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
-    use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
-        KEY_READ, REG_SZ,
-    };
-
-    fn read(root: HKEY) -> Option<PathBuf> {
-        unsafe {
-            let subkey: Vec<u16> = "SOFTWARE\\GitForWindows\\InstallPath\0"
-                .encode_utf16()
-                .collect();
-            let mut hkey: HKEY = std::ptr::null_mut();
-            if RegOpenKeyExW(root, subkey.as_ptr(), 0, KEY_READ, &mut hkey) != ERROR_SUCCESS {
-                return None;
-            }
-            // Two-step query: ask for the byte length, then read into a buffer.
-            // Passing NULL for the value name reads the *default* (unnamed) value
-            // of the InstallPath subkey — that is where the Git for Windows
-            // installer writes the install root, not as a named value.
-            let mut kind: u32 = 0;
-            let mut len: u32 = 0;
-            let rc = RegQueryValueExW(
-                hkey,
-                std::ptr::null(),
-                std::ptr::null_mut(),
-                &mut kind,
-                std::ptr::null_mut(),
-                &mut len,
-            );
-            if rc != ERROR_SUCCESS || kind != REG_SZ || len == 0 {
-                RegCloseKey(hkey);
-                return None;
-            }
-            let mut buf = vec![0u8; len as usize];
-            let rc = RegQueryValueExW(
-                hkey,
-                std::ptr::null(),
-                std::ptr::null_mut(),
-                &mut kind,
-                buf.as_mut_ptr(),
-                &mut len,
-            );
-            RegCloseKey(hkey);
-            if rc != ERROR_SUCCESS {
-                return None;
-            }
-            // The buffer is UTF-16 LE; convert pair-wise, dropping the trailing NUL.
-            // Clamp `len` to the allocated buffer in case the second call reports
-            // more bytes than were probed for — defense-in-depth, not expected in
-            // practice but cheap to enforce.
-            let pairs = (len as usize).min(buf.len()) / 2;
-            let words: Vec<u16> = (0..pairs)
-                .map(|i| u16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]))
-                .collect();
-            let trimmed: &[u16] = match words.iter().position(|&w| w == 0) {
-                Some(i) => &words[..i],
-                None => &words[..],
-            };
-            Some(PathBuf::from(String::from_utf16_lossy(trimmed)))
-        }
-    }
-
-    read(HKEY_LOCAL_MACHINE).or_else(|| read(HKEY_CURRENT_USER))
 }
 
 #[cfg(test)]
