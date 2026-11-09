@@ -44,10 +44,26 @@ pub const HOOK_EVENTS: [&str; 8] = [
 /// Code's 600 s default would freeze the session on every event.
 const HOOK_TIMEOUT_SECS: u64 = 5;
 
-/// Build the hook `command` string for an executable path. Own copy of the
-/// `statusline::install::format_command` rule (quote + Git Bash forward
-/// slashes) rather than a shared parameterised helper: S5 must stay revertable
-/// on its own, so it does not widen the status line's signature.
+/// Our hook entry for an executable path, in exec form (SWA-83 1c-ii):
+/// with `args`, Claude Code spawns `command` directly instead of handing a
+/// command line to a shell. The same entry therefore works under Git Bash
+/// and under the PowerShell that Claude Code falls back to without it,
+/// where the former `"<path>" --hook` line was a parse error on every
+/// event. Forward slashes only to match how the status line records paths;
+/// a direct spawn takes either.
+pub fn hook_entry(exe: &str, windows: bool) -> Value {
+    let path = if windows {
+        exe.replace('\\', "/")
+    } else {
+        exe.to_owned()
+    };
+    json!({ "type": "command", "command": path, "args": ["--hook"] })
+}
+
+/// The shell-form command line (`"<path>" --hook`): runs only under Git
+/// Bash. Kept for Claude Code before 2.1.139 (`claude_version`), where the
+/// 1c-i gate still applies; `is_ours_hook` recognises it either way, so a
+/// Claude Code update migrates it to `hook_entry`.
 pub fn format_command(exe: &str, windows: bool) -> String {
     let path = if windows {
         exe.replace('\\', "/")
@@ -57,37 +73,87 @@ pub fn format_command(exe: &str, windows: bool) -> String {
     format!("\"{path}\" --hook")
 }
 
-/// Does this hook `command` belong to us? Both halves must match, so our own
-/// `--statusline` entry, a bare `swarmterm`, and a stranger's `--hook` are all
-/// left alone.
+/// Our entry for the Claude Code on this machine: exec form when it takes
+/// one (`claude_version::exec_hooks`), else the shell form.
+pub fn claude_hook_entry(exe: &str, windows: bool, exec: bool) -> Value {
+    if exec {
+        hook_entry(exe, windows)
+    } else {
+        json!({ "type": "command", "command": format_command(exe, windows) })
+    }
+}
+
+/// One hook entry as a command line: `command` itself (shell form), or
+/// `"command" arg` (exec form). Every "is this ours" and "which binary"
+/// rule reads entries through this, so both shapes are recognised. An exec
+/// form we could not have written — more or fewer than one argument, a
+/// non-string argument, a quote inside `command` — has no line at all, so a
+/// stranger's `node ["…/swarmterm/notify.js", "--hook"]` is never flattened
+/// into something that looks like ours.
+pub fn entry_line(entry: &Value) -> Option<String> {
+    let command = entry.get("command")?.as_str()?;
+    let Some(args) = entry.get("args") else {
+        return Some(command.to_owned());
+    };
+    match args.as_array()?.as_slice() {
+        [arg] if !command.contains('"') => Some(format!("\"{command}\" {}", arg.as_str()?)),
+        _ => None,
+    }
+}
+
+/// The file name of our binary, in every edition and build.
+pub fn is_swarmterm_exe(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or("");
+    name.eq_ignore_ascii_case("swarmterm.exe") || name.eq_ignore_ascii_case("swarmterm")
+}
+
+/// The executable of `"<path>" <flag>` or `<path> <flag>`, exactly that
+/// shape; `None` for anything else.
+pub fn command_with_flag<'a>(line: &'a str, flag: &str) -> Option<&'a str> {
+    let line = line.trim();
+    let (path, rest) = match line.strip_prefix('"') {
+        Some(quoted) => {
+            let end = quoted.find('"')?;
+            (&quoted[..end], &quoted[end + 1..])
+        }
+        None => line.split_once(' ')?,
+    };
+    (!path.is_empty() && rest.trim() == flag).then_some(path)
+}
+
+/// Does this hook command line belong to us? Structurally: exactly our
+/// binary (`swarmterm.exe`, by file name — a folder called `swarmterm` or a
+/// `swarmterm-helper.exe` is not us) followed by exactly `--hook`. Our own
+/// `--statusline` entry, a bare `swarmterm` and a stranger's `--hook` are
+/// all left alone.
 pub fn is_ours_hook(command: &str) -> bool {
-    let c = command.trim().to_ascii_lowercase();
-    c.ends_with("--hook") && c.contains("swarmterm")
+    command_with_flag(command, "--hook").is_some_and(is_swarmterm_exe)
 }
 
 /// The one group we install per event. No `matcher`: it is ignored on most of
 /// these events anyway and the CLI filters `notification_type` itself. No
 /// `async`: a synchronous hook guarantees the signal lands before Claude
 /// proceeds, and the CLI returns in well under its 300 ms POST budget.
-fn our_group(command: &str, timeout_secs: u64) -> Value {
-    json!({
-        "hooks": [{ "type": "command", "command": command, "timeout": timeout_secs }]
-    })
+fn our_group(entry: &Value, timeout_secs: u64) -> Value {
+    let mut entry = entry.clone();
+    if let Some(obj) = entry.as_object_mut() {
+        obj.insert("timeout".into(), json!(timeout_secs));
+    }
+    json!({ "hooks": [entry] })
 }
 
 /// A group is ours iff it is an object whose `hooks` is a non-empty array and
-/// EVERY entry's command is ours. Anything mixed belongs to the user — they
-/// hand-copied our command into their own group and may edit it as they like.
+/// EVERY entry's command line is ours. Anything mixed belongs to the user —
+/// they hand-copied our command into their own group and may edit it as they
+/// like.
 pub(crate) fn group_is_ours(group: &Value, is_ours: fn(&str) -> bool) -> bool {
     let Some(entries) = group.get("hooks").and_then(Value::as_array) else {
         return false;
     };
     !entries.is_empty()
-        && entries.iter().all(|h| {
-            h.get("command")
-                .and_then(Value::as_str)
-                .is_some_and(is_ours)
-        })
+        && entries
+            .iter()
+            .all(|h| entry_line(h).is_some_and(|line| is_ours(&line)))
 }
 
 /// What `merge_hooks` decided. There is deliberately no `Foreign` variant:
@@ -100,32 +166,32 @@ pub enum HooksWrite {
     Write(String),
 }
 
-/// Compute the new `settings.json` contents. `command: Some(_)` installs,
-/// `None` removes (reachable from tests only today — there is no UI toggle).
+/// Compute the new `settings.json` contents. `entry: Some(_)` installs,
+/// `None` removes.
 ///
 /// Only the eight `HOOK_EVENTS` keys are ever rewritten; every other key under
 /// `hooks` (and every other top-level key) passes through untouched. An event
 /// array or the `hooks` object that ends up empty is dropped, so removal
 /// restores the file to "we were never here". A pre-existing empty
 /// `"hooks": {}` gets tidied once by the same rule — a harmless one-time write.
-pub fn merge_hooks(existing: Option<&str>, command: Option<&str>) -> Result<HooksWrite, String> {
-    merge_events(existing, command, &HOOK_EVENTS, is_ours_hook)
+pub fn merge_hooks(existing: Option<&str>, entry: Option<&Value>) -> Result<HooksWrite, String> {
+    merge_events(existing, entry, &HOOK_EVENTS, is_ours_hook)
 }
 
 pub fn merge_events(
     existing: Option<&str>,
-    command: Option<&str>,
+    entry: Option<&Value>,
     events: &[&str],
     is_ours: fn(&str) -> bool,
 ) -> Result<HooksWrite, String> {
-    merge_events_timed(existing, command, events, is_ours, |_| HOOK_TIMEOUT_SECS)
+    merge_events_timed(existing, entry, events, is_ours, |_| HOOK_TIMEOUT_SECS)
 }
 
 /// `merge_events` with a timeout per event: Codex clamps some events
 /// (`Interrupt` to 3 s) and warns on every start if we ask for more.
 pub fn merge_events_timed(
     existing: Option<&str>,
-    command: Option<&str>,
+    entry: Option<&Value>,
     events: &[&str],
     is_ours: fn(&str) -> bool,
     timeout_secs: fn(&str) -> u64,
@@ -151,10 +217,10 @@ pub fn merge_events_timed(
     };
     for &event in events {
         if !hooks.contains_key(event) {
-            if let Some(cmd) = command {
+            if let Some(entry) = entry {
                 hooks.insert(
                     event.to_owned(),
-                    Value::Array(vec![our_group(cmd, timeout_secs(event))]),
+                    Value::Array(vec![our_group(entry, timeout_secs(event))]),
                 );
             }
             continue;
@@ -166,8 +232,8 @@ pub fn merge_events_timed(
         // Dropping every all-ours group and re-adding one is what repairs a
         // stale exe path (dev build → release build, or a moved app).
         groups.retain(|g| !group_is_ours(g, is_ours));
-        if let Some(cmd) = command {
-            groups.push(our_group(cmd, timeout_secs(event)));
+        if let Some(entry) = entry {
+            groups.push(our_group(entry, timeout_secs(event)));
         }
         if groups.is_empty() {
             hooks.shift_remove(event);
@@ -191,7 +257,7 @@ pub fn merge_events_timed(
 /// mid-write can never leave a truncated settings file. The tmp name differs
 /// from the status line's `json.tmp` so the two writers can never collide on
 /// the same intermediate file.
-pub fn write_hooks_to_file(path: &Path, command: Option<&str>) -> Result<(), String> {
+pub fn write_hooks_to_file(path: &Path, entry: Option<&Value>) -> Result<(), String> {
     let existing = match fs::read_to_string(path) {
         Ok(s) => Some(s),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -202,7 +268,7 @@ pub fn write_hooks_to_file(path: &Path, command: Option<&str>) -> Result<(), Str
     if crate::dev_defer::defers(existing.as_deref(), is_ours_hook) {
         return Ok(());
     }
-    let merged = match merge_hooks(existing.as_deref(), command)? {
+    let merged = match merge_hooks(existing.as_deref(), entry)? {
         HooksWrite::Unchanged => return Ok(()),
         HooksWrite::Write(s) => s,
     };
@@ -229,11 +295,14 @@ pub fn write_hooks_to_file(path: &Path, command: Option<&str>) -> Result<(), Str
 /// `settings.json`: the rename is atomic (never corrupts) and steady state is
 /// zero writes, so any lost-update window is a single first-boot write.
 /// Called through `setup::ensure_claude`, which records the outcome.
-pub fn register(app: &AppHandle) -> Result<(), String> {
+///
+/// `exec` is the caller's `claude_version` verdict: the probe runs before
+/// any write lock is taken.
+pub fn register(app: &AppHandle, exec: bool) -> Result<(), String> {
     let path = default_settings_path(app)?;
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let command = format_command(&exe.to_string_lossy(), cfg!(windows));
-    write_hooks_to_file(&path, Some(&command)).map_err(|e| {
+    let entry = claude_hook_entry(&exe.to_string_lossy(), cfg!(windows), exec);
+    write_hooks_to_file(&path, Some(&entry)).map_err(|e| {
         format!(
             "failed to register Claude Code hooks at {}: {e}",
             path.display()
@@ -253,9 +322,10 @@ fn default_settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> 
     ))
 }
 
-/// Remove our hook entries from the default profile (Git Bash missing,
-/// SWA-83): without it Claude Code runs them through PowerShell, where they
-/// fail on every event, also in sessions outside Swarmterm. Foreign hooks
+/// Remove our hook entries from the default profile (Git Bash missing and a
+/// Claude Code before exec-form hooks, SWA-83): it would run the shell form
+/// through PowerShell, where it fails on every event, also in sessions
+/// outside Swarmterm. Foreign hooks
 /// stay; a dev build still defers to the installed app's live entries.
 pub fn unregister(app: &AppHandle) -> Result<(), String> {
     let path = default_settings_path(app)?;
@@ -276,12 +346,17 @@ mod tests {
     const STALE: &str = "\"/Users/me/dev/swarmterm/src-tauri/target/debug/swarmterm\" --hook";
     const FOREIGN: &str = "~/.claude/notify.sh";
 
+    /// A shell-form entry, as builds before 1c-ii wrote it.
+    fn shell(cmd: &str) -> Value {
+        json!({ "type": "command", "command": cmd })
+    }
+
     fn parse(s: &str) -> Value {
         serde_json::from_str(s).unwrap()
     }
 
     /// `merge_hooks` that must produce a write; returns the parsed result.
-    fn merged(existing: Option<&str>, command: Option<&str>) -> Value {
+    fn merged(existing: Option<&str>, command: Option<&Value>) -> Value {
         match merge_hooks(existing, command).unwrap() {
             HooksWrite::Write(s) => parse(&s),
             HooksWrite::Unchanged => panic!("expected a write"),
@@ -329,6 +404,79 @@ mod tests {
     }
 
     #[test]
+    fn exec_form_entry_needs_no_shell() {
+        let e = hook_entry(r"C:\Program Files\Swarmterm GN\swarmterm.exe", true);
+        assert_eq!(
+            e,
+            json!({
+                "type": "command",
+                "command": "C:/Program Files/Swarmterm GN/swarmterm.exe",
+                "args": ["--hook"]
+            })
+        );
+        assert_eq!(
+            entry_line(&e).as_deref(),
+            Some("\"C:/Program Files/Swarmterm GN/swarmterm.exe\" --hook")
+        );
+        assert!(entry_line(&e).is_some_and(|l| is_ours_hook(&l)));
+        // Older Claude Code: the shell form as before.
+        assert_eq!(
+            claude_hook_entry("C:/x/swarmterm.exe", true, false),
+            shell("\"C:/x/swarmterm.exe\" --hook")
+        );
+        assert_eq!(
+            claude_hook_entry("C:/x/swarmterm.exe", true, true)["args"],
+            json!(["--hook"])
+        );
+    }
+
+    #[test]
+    fn exec_form_lookalikes_stay_foreign() {
+        let foreign = [
+            json!({"type":"command","command":"node","args":["notify.js","--hook"]}),
+            json!({"type":"command","command":"C:/x/swarmterm.exe","args":["--statusline"]}),
+            json!({"type":"command","command":"C:/x/swarmterm.exe","args":[1]}),
+            // Found in review: a path through a folder named swarmterm, a
+            // helper with a similar name, and a flattened multi-arg command.
+            json!({"type":"command","command":"C:/work/swarmterm/custom.exe","args":["--hook"]}),
+            json!({"type":"command","command":"C:/x/swarmterm-helper.exe","args":["--hook"]}),
+            json!({"type":"command","command":"node","args":["C:/work/swarmterm/notify.js","--hook"]}),
+            json!({"type":"command","command":"C:/x/swarmterm.exe","args":["--hook","--verbose"]}),
+            json!({"type":"command","command":"C:/x/swarmterm.exe","args":[]}),
+            json!({"type":"command","command":"C:/x/swarmterm.exe\" --hook \"x","args":["y"]}),
+        ];
+        for entry in foreign {
+            let group = json!({ "hooks": [entry.clone()] });
+            assert!(!group_is_ours(&group, is_ours_hook), "{entry}");
+        }
+    }
+
+    #[test]
+    fn an_update_replaces_the_shell_form_and_then_settles() {
+        let exec = hook_entry("C:/Apps/swarmterm.exe", true);
+        let old = merged(None, Some(&shell("\"C:/Apps/swarmterm.exe\" --hook"))).to_string();
+        let v = merged(Some(&old), Some(&exec));
+        for event in HOOK_EVENTS {
+            let groups = v["hooks"][event].as_array().unwrap();
+            assert_eq!(groups.len(), 1, "{event}");
+            assert_eq!(groups[0]["hooks"][0]["args"], json!(["--hook"]));
+            assert_eq!(groups[0]["hooks"][0]["timeout"], 5);
+        }
+        assert!(matches!(
+            merge_hooks(Some(&v.to_string()), Some(&exec)).unwrap(),
+            HooksWrite::Unchanged
+        ));
+        // And back, should Claude Code be downgraded below 2.1.139.
+        let back = merged(
+            Some(&v.to_string()),
+            Some(&shell("\"C:/Apps/swarmterm.exe\" --hook")),
+        );
+        assert!(back["hooks"]["Stop"][0]["hooks"][0].get("args").is_none());
+        // Removal finds the exec form too.
+        assert!(merged(Some(&v.to_string()), None).get("hooks").is_none());
+    }
+
+    #[test]
     fn recognises_our_own_hook_command() {
         assert!(is_ours_hook(OURS));
         assert!(is_ours_hook(STALE));
@@ -345,6 +493,10 @@ mod tests {
         ));
         assert!(!is_ours_hook("swarmterm"));
         assert!(!is_ours_hook("some-other-tool --hook"));
+        assert!(!is_ours_hook("\"C:/work/swarmterm/custom.exe\" --hook"));
+        assert!(!is_ours_hook("C:/x/swarmterm-helper.exe --hook"));
+        assert!(!is_ours_hook("\"C:/x/swarmterm.exe\" --hook --verbose"));
+        assert!(!is_ours_hook("node C:/work/swarmterm/notify.js --hook"));
         assert!(!is_ours_hook(FOREIGN));
         assert!(!is_ours_hook(""));
     }
@@ -379,7 +531,7 @@ mod tests {
     #[test]
     fn installs_into_an_empty_file() {
         for existing in [None, Some(""), Some("   \n"), Some("{}")] {
-            let v = merged(existing, Some(OURS));
+            let v = merged(existing, Some(&shell(OURS)));
             for event in HOOK_EVENTS {
                 let groups = v["hooks"][event]
                     .as_array()
@@ -398,7 +550,7 @@ mod tests {
     #[test]
     fn appends_after_a_foreign_group() {
         let existing = json!({ "hooks": { "Notification": [foreign_group(FOREIGN)] } }).to_string();
-        let v = merged(Some(&existing), Some(OURS));
+        let v = merged(Some(&existing), Some(&shell(OURS)));
         let n = v["hooks"]["Notification"].as_array().unwrap();
         assert_eq!(n.len(), 2);
         assert_eq!(n[0], foreign_group(FOREIGN));
@@ -410,8 +562,8 @@ mod tests {
     fn replaces_a_stale_ours_group_in_place() {
         // A dev build registered target/debug; the release build must repair
         // the path, not add a second group beside it.
-        let existing = merged(None, Some(STALE)).to_string();
-        let v = merged(Some(&existing), Some(OURS));
+        let existing = merged(None, Some(&shell(STALE))).to_string();
+        let v = merged(Some(&existing), Some(&shell(OURS)));
         for event in HOOK_EVENTS {
             let groups = v["hooks"][event].as_array().unwrap();
             assert_eq!(groups.len(), 1, "{event}");
@@ -421,19 +573,19 @@ mod tests {
 
     #[test]
     fn is_unchanged_when_already_current() {
-        let pretty = match merge_hooks(None, Some(OURS)).unwrap() {
+        let pretty = match merge_hooks(None, Some(&shell(OURS))).unwrap() {
             HooksWrite::Write(s) => s,
             HooksWrite::Unchanged => panic!(),
         };
         assert!(matches!(
-            merge_hooks(Some(&pretty), Some(OURS)).unwrap(),
+            merge_hooks(Some(&pretty), Some(&shell(OURS))).unwrap(),
             HooksWrite::Unchanged
         ));
         // Different whitespace and key order are still "current" — Value
         // equality, not byte equality, or every boot would rewrite the file.
         let compact = parse(&pretty).to_string();
         assert!(matches!(
-            merge_hooks(Some(&compact), Some(OURS)).unwrap(),
+            merge_hooks(Some(&compact), Some(&shell(OURS))).unwrap(),
             HooksWrite::Unchanged
         ));
         let reordered = compact
@@ -444,7 +596,7 @@ mod tests {
             "the reorder must be real or this proves nothing"
         );
         assert!(matches!(
-            merge_hooks(Some(&reordered), Some(OURS)).unwrap(),
+            merge_hooks(Some(&reordered), Some(&shell(OURS))).unwrap(),
             HooksWrite::Unchanged
         ));
     }
@@ -458,7 +610,7 @@ mod tests {
             { "type": "command", "command": STALE },
         ] });
         let existing = json!({ "hooks": { "Stop": [mixed.clone()] } }).to_string();
-        let v = merged(Some(&existing), Some(OURS));
+        let v = merged(Some(&existing), Some(&shell(OURS)));
         let stop = v["hooks"]["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 2);
         assert_eq!(stop[0], mixed);
@@ -473,7 +625,7 @@ mod tests {
             "hooks": { "PreToolUse": [foreign_group("lint")], "Stop": ["weird"] }
         })
         .to_string();
-        let v = merged(Some(&existing), Some(OURS));
+        let v = merged(Some(&existing), Some(&shell(OURS)));
         assert_eq!(v["statusLine"]["command"], "x --statusline");
         assert_eq!(v["model"], "opus");
         assert_eq!(v["hooks"]["PreToolUse"], json!([foreign_group("lint")]));
@@ -495,7 +647,7 @@ mod tests {
         assert_eq!(v["theme"], "dark");
 
         // Nothing but ours → the whole `hooks` key goes, as if we were never there.
-        let only_ours = merged(Some(r#"{"theme":"dark"}"#), Some(OURS)).to_string();
+        let only_ours = merged(Some(r#"{"theme":"dark"}"#), Some(&shell(OURS))).to_string();
         let v = merged(Some(&only_ours), None);
         assert_eq!(v, json!({ "theme": "dark" }));
     }
@@ -522,7 +674,7 @@ mod tests {
             .unwrap_or_else(|| panic!("{key} missing in {text}"))
     }
 
-    fn written(existing: Option<&str>, command: Option<&str>) -> String {
+    fn written(existing: Option<&str>, command: Option<&Value>) -> String {
         match merge_hooks(existing, command).unwrap() {
             HooksWrite::Write(s) => s,
             HooksWrite::Unchanged => panic!("expected a write"),
@@ -536,7 +688,7 @@ mod tests {
             r#"{{"z":1,"hooks":{{"PreToolUse":[{}]}},"a":2}}"#,
             foreign_group("lint")
         );
-        let out = written(Some(&existing), Some(OURS));
+        let out = written(Some(&existing), Some(&shell(OURS)));
         assert!(
             pos(&out, "z") < pos(&out, "hooks") && pos(&out, "hooks") < pos(&out, "a"),
             "{out}"
@@ -560,7 +712,7 @@ mod tests {
             ours_group(STALE),
             foreign_group(FOREIGN)
         );
-        let out = written(Some(&existing), Some(OURS));
+        let out = written(Some(&existing), Some(&shell(OURS)));
         assert!(
             pos(&out, "PreToolUse") < pos(&out, "Stop")
                 && pos(&out, "Stop") < pos(&out, "Notification"),
@@ -600,19 +752,19 @@ mod tests {
 
     #[test]
     fn keeps_the_file_indent_and_trailing_newline() {
-        let four = written(Some("{\n    \"theme\": \"dark\"\n}\n"), Some(OURS));
+        let four = written(Some("{\n    \"theme\": \"dark\"\n}\n"), Some(&shell(OURS)));
         assert!(
             four.contains("\n    \"hooks\": {\n        \"UserPromptSubmit\": [\n            {"),
             "{four}"
         );
         assert!(four.ends_with("}\n"), "{four}");
-        let tab = written(Some("{\n\t\"theme\": \"dark\"\n}"), Some(OURS));
+        let tab = written(Some("{\n\t\"theme\": \"dark\"\n}"), Some(&shell(OURS)));
         assert!(
             tab.contains("\n\t\"hooks\": {\n\t\t\"UserPromptSubmit\": [\n\t\t\t{"),
             "{tab}"
         );
         assert!(tab.ends_with('}'), "{tab}");
-        let fresh = written(None, Some(OURS));
+        let fresh = written(None, Some(&shell(OURS)));
         assert_eq!(fresh, serde_json::to_string_pretty(&parse(&fresh)).unwrap());
     }
 
@@ -620,11 +772,11 @@ mod tests {
     fn refuses_shapes_it_does_not_understand() {
         // Never clobber a shape we can't reason about — an Err here is a
         // stderr line at boot, a wrong write is a broken Claude Code config.
-        assert!(merge_hooks(Some(r#"{"hooks":[]}"#), Some(OURS)).is_err());
-        assert!(merge_hooks(Some(r#"{"hooks":"nope"}"#), Some(OURS)).is_err());
-        assert!(merge_hooks(Some(r#"{"hooks":{"Stop":{}}}"#), Some(OURS)).is_err());
-        assert!(merge_hooks(Some("{ not json"), Some(OURS)).is_err());
-        assert!(merge_hooks(Some("[]"), Some(OURS)).is_err());
+        assert!(merge_hooks(Some(r#"{"hooks":[]}"#), Some(&shell(OURS))).is_err());
+        assert!(merge_hooks(Some(r#"{"hooks":"nope"}"#), Some(&shell(OURS))).is_err());
+        assert!(merge_hooks(Some(r#"{"hooks":{"Stop":{}}}"#), Some(&shell(OURS))).is_err());
+        assert!(merge_hooks(Some("{ not json"), Some(&shell(OURS))).is_err());
+        assert!(merge_hooks(Some("[]"), Some(&shell(OURS))).is_err());
         assert!(merge_hooks(Some("42"), None).is_err());
     }
 
@@ -632,7 +784,7 @@ mod tests {
     fn to_file_creates_parent_dirs() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".claude").join("settings.json");
-        write_hooks_to_file(&path, Some(OURS)).unwrap();
+        write_hooks_to_file(&path, Some(&shell(OURS))).unwrap();
         let v = parse(&fs::read_to_string(&path).unwrap());
         assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], OURS);
     }
@@ -642,7 +794,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(&path, r#"{"theme":"dark"}"#).unwrap();
-        write_hooks_to_file(&path, Some(OURS)).unwrap();
+        write_hooks_to_file(&path, Some(&shell(OURS))).unwrap();
         write_hooks_to_file(&path, None).unwrap();
         assert_eq!(
             parse(&fs::read_to_string(&path).unwrap()),
@@ -655,7 +807,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(&path, "{ not json").unwrap();
-        assert!(write_hooks_to_file(&path, Some(OURS)).is_err());
+        assert!(write_hooks_to_file(&path, Some(&shell(OURS))).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
         assert!(!path.with_extension("json.hooks.tmp").exists());
     }
@@ -666,10 +818,10 @@ mod tests {
         // identical bytes (that would still bump mtime and race Claude Code).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        write_hooks_to_file(&path, Some(OURS)).unwrap();
+        write_hooks_to_file(&path, Some(&shell(OURS))).unwrap();
         let first = fs::read(&path).unwrap();
         let mtime = fs::metadata(&path).unwrap().modified().unwrap();
-        write_hooks_to_file(&path, Some(OURS)).unwrap();
+        write_hooks_to_file(&path, Some(&shell(OURS))).unwrap();
         assert_eq!(fs::read(&path).unwrap(), first);
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), mtime);
         assert!(!path.with_extension("json.hooks.tmp").exists());

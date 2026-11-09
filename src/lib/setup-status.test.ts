@@ -80,6 +80,13 @@ describe('Git Bash missing', () => {
     expect(hint?.text).toMatch(/check again/i)
   })
 
+  it('names only what still needs it: with a current Claude Code that is the status line', () => {
+    const lineOnly = status({ claude: { gitBash: null, hooks: check('ok'), statusLine: check('needsGitBash') } })
+    expect(gitBashHint(lineOnly)?.text).toMatch(/status line through Git Bash/)
+    expect(gitBashHint(lineOnly)?.text).not.toMatch(/hooks/)
+    expect(gitBashHint(missing)?.text).toMatch(/hooks and status line/)
+  })
+
   it('stays quiet while Git Bash is there or nothing needs it', () => {
     expect(gitBashHint(status())).toBeNull()
     expect(gitBashHint(status({ claude: { gitBash: null, hooks: check('notInstalled') } }))).toBeNull()

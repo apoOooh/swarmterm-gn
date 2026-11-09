@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Claude Code hooks no longer need Git Bash with Claude Code 2.1.139 or
+  newer (SWA-83): Swarmterm now registers them so that Claude Code starts
+  `swarmterm.exe --hook` directly instead of through a shell, which also
+  works under the PowerShell that Claude Code falls back to. Older Claude
+  Code versions keep the previous entry and still need Git Bash; the entries
+  switch over by themselves when Claude Code is updated. The status line
+  still needs Git Bash.
+
 - Security: hardened putting back prompts blocked by data-shield (SWA-88
   review). The masked prompt is written only after a real Enter of yours in
   that pane (within 15 s, once per Enter; a line break with Shift+Enter or
