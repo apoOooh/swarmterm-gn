@@ -67,11 +67,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
-        .register_uri_scheme_protocol("swarmterm-media", |context, request| {
-            let service = context
-                .app_handle()
-                .state::<std::sync::Arc<files::FileService>>();
-            files::media_response(&service, context.webview_label(), request)
+        // Asynchronous on purpose (SWA-85): a synchronous scheme handler runs
+        // inside WebView2's WebResourceRequested callback on the UI thread,
+        // so every media read (up to 256 MB without a range, 8 MiB per range,
+        // 32 MB documents) would stall the window under disk load. The label
+        // is copied before the hop; the webview check stays in the handler.
+        .register_asynchronous_uri_scheme_protocol("swarmterm-media", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let label = context.webview_label().to_string();
+            tauri::async_runtime::spawn_blocking(move || {
+                let service = app.state::<std::sync::Arc<files::FileService>>();
+                responder.respond(files::media_response(&service, &label, request));
+            });
         })
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
