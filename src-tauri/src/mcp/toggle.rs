@@ -157,7 +157,10 @@ pub fn remove_codex_entry(text: &str) -> Result<Option<String>, String> {
     {
         t.remove("swarmterm");
     }
-    Ok(Some(doc.to_string()))
+    Ok(Some(crate::mcp::config::keep_line_endings(
+        Some(text),
+        doc.to_string(),
+    )))
 }
 
 pub fn entry_state_of_file(path: &Path, codex: bool) -> EntryState {

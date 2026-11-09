@@ -502,7 +502,17 @@ pub fn merge_codex_config(existing: Option<&str>, exe: &str) -> Result<String, S
         "env_vars",
         toml_edit::value(toml_edit::Array::from_iter(entry::ENV_VARS)),
     );
-    Ok(doc.to_string())
+    Ok(keep_line_endings(existing, doc.to_string()))
+}
+
+/// toml_edit renders new and edited lines with `\n`; a CRLF file (the
+/// user's, often saved by a Windows editor) keeps CRLF throughout.
+pub(crate) fn keep_line_endings(original: Option<&str>, rendered: String) -> String {
+    if original.is_some_and(|s| s.contains("\r\n")) {
+        rendered.replace("\r\n", "\n").replace('\n', "\r\n")
+    } else {
+        rendered
+    }
 }
 
 fn codex_entry_is_current(table: Option<&toml_edit::Item>, exe: &str) -> bool {
@@ -1148,6 +1158,21 @@ mod tests {
         let t = &doc["mcp_servers"]["swarmterm"];
         assert_eq!(t["enabled"].as_bool(), Some(false));
         assert!(codex_entry_is_current(Some(t), EXE), "{out}");
+    }
+
+    #[test]
+    fn codex_keeps_a_crlf_file_crlf() {
+        let existing = "# mine\r\nmodel = \"o4\"\r\n\r\n[mcp_servers.swarmterm]\r\nurl = \"http://127.0.0.1:9/mcp\"\r\nbearer_token_env_var = \"SWARMTERM_SESSION\"\r\n";
+        let out = merge_codex_config(Some(existing), EXE).unwrap();
+        assert!(out.contains("command"), "{out}");
+        assert_eq!(
+            out.matches('\n').count(),
+            out.matches("\r\n").count(),
+            "{out:?}"
+        );
+        // An LF file stays LF.
+        let out = merge_codex_config(Some("model = \"o4\"\n"), EXE).unwrap();
+        assert!(!out.contains('\r'));
     }
 
     #[test]
