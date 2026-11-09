@@ -363,6 +363,8 @@ The **Preview** tab is a browser column docked beside the terminals, with a real
 
 Drag a pane by its header onto the right panel and the agent joins the room, receiving a short introduction to who else is there. The tab strip holds multiple rooms — `+` adds, double-click renames, `✕` deletes (two-step confirm; the last room stays) — each with its own transcript, members and moderator seat. **A pane belongs to at most one room**; dragging it onto another room's tab moves it.
 
+**Which pane is it?** Every member row, every message header, the composer's target list and the `@` list show a small tag with the pane's number as its header shows it — `Pane 2`, or `Pane 2 · Backend` when more than one workspace is open (`Drawer` for a parked pane). Several members with the same title (four "Claude Code" panes in one repo) stay apart that way, so you know which one you can close or move. The tag follows the layout live: reorder or park panes and it changes with them. Agents see the same text as `pane` in `war_room.list_peers`.
+
 Agents talk in two modes:
 
 - **Probe** — lands in the peer's inbox and nudges it to read: questions, debate, coordination.

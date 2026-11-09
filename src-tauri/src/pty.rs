@@ -528,6 +528,11 @@ pub struct AppState {
     /// lock (never nested with `terminals`) so MCP tools keep the
     /// lock-read-drop-before-await rule.
     pub war_rooms: Mutex<crate::warroom::WarRooms>,
+    /// SWA-90: "Pane 2 · Backend" per terminal id, pushed by the renderer on
+    /// every layout change (only it knows pane order and workspaces) and read
+    /// by `list_peers` so agents can name the exact pane. Display only, never
+    /// an address. Its own lock, never nested with `war_rooms`.
+    pub war_room_pane_labels: Mutex<HashMap<String, String>>,
     /// Panes an MCP client has actually spoken to us from. Its own lock, never
     /// nested with `terminals` or `war_rooms`, because the `/mcp` middleware
     /// touches it on every inbound request and must not contend with pty I/O.
@@ -657,6 +662,7 @@ impl Default for AppState {
             quitting: AtomicBool::new(false),
             mcp_url: OnceLock::new(),
             war_rooms: Mutex::new(crate::warroom::WarRooms::default()),
+            war_room_pane_labels: Mutex::new(HashMap::new()),
             mcp_clients: Mutex::new(crate::mcp::clients::McpClients::default()),
             session_tokens: Mutex::new(Default::default()),
             context_usage: Mutex::new(Default::default()),

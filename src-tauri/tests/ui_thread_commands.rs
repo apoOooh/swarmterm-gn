@@ -14,6 +14,10 @@ use syn::visit::Visit;
 const ALLOWED_SYNC: &[(&str, &str)] = &[
     ("agent_policy_set", "short lock, in-memory policy"),
     (
+        "war_room_pane_labels_set",
+        "short lock, bounded in-memory map",
+    ),
+    (
         "child_priority_set",
         "short lock; host forward runs on its own thread",
     ),
