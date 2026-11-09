@@ -102,6 +102,8 @@ import { TitleBar } from '@/components/TitleBar/TitleBar'
 import { Workspace, PaneDragGhost } from '@/components/Workspace/Workspace'
 import { FLOATING_LAYER_ID } from '@/lib/floating-panes'
 import { Welcome } from '@/components/Welcome/Welcome'
+import { SetupWizard } from '@/components/SetupWizard/SetupWizard'
+import { useSetupWizardStore } from '@/store/setup-wizard-store'
 import { WorkspaceTabs } from '@/components/WorkspaceTabs/WorkspaceTabs'
 import { useBrowserStore } from '@/store/browser-store'
 import { showMessage } from '@/tauri/dialog'
@@ -411,7 +413,16 @@ export default function App(): ReactElement {
     void useAgentAvailabilityStore.getState().refresh()
     void useShellAvailabilityStore.getState().refresh()
     void useStatuslineStore.getState().sync()
+    // SWA-83: the setup assistant for a new install (Rust decides, the
+    // renderer adds localStorage from an older one).
+    void useSetupWizardStore.getState().boot()
   }, [])
+
+  // The assistant replaces Settings when opened from it ("Run again").
+  const wizardOpen = useSetupWizardStore((s) => s.open)
+  useEffect(() => {
+    if (wizardOpen) setSettingsOpen(false)
+  }, [wizardOpen])
 
   // SWA-90: agents see the same "Pane 2 · Backend" in list_peers as the user
   // in the War Room. Pushed only when a label actually changes (the layout
@@ -1377,6 +1388,16 @@ export default function App(): ReactElement {
             key={settingsTab}
             onClose={() => setSettingsOpen(false)}
             initialCategory={settingsTab}
+          />
+        )}
+        {wizardOpen && (
+          <SetupWizard
+            onOpenSettings={(tab) => {
+              // Only offered on the last step: going to Settings ends it.
+              void useSetupWizardStore.getState().finish('done')
+              setSettingsTab(tab)
+              setSettingsOpen(true)
+            }}
           />
         )}
         <FolderPicker />

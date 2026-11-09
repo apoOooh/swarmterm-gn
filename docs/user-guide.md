@@ -7,6 +7,17 @@ settings, keyboard shortcuts, troubleshooting and current limits.
 Swarmterm GN supports **Windows x64**. Use the Ctrl bindings where inherited
 shortcut labels show both Ctrl and Command. macOS and Linux are not supported.
 
+## First start
+
+On a new installation Swarmterm opens the **setup assistant** in four steps. You can skip it at any time, and run it again from Settings → Setup → **Run setup assistant again**.
+
+1. **Tools and agents** — whether Git (with Git Bash), Node.js with npm and, optionally, Python are installed, and which of Claude Code, Codex and OpenCode start on this PC, with the state of Swarmterm's hooks, MCP entry and status line for each. For anything missing you get one sentence on why it is needed, a link to the vendor's download page and the install command to copy (`winget` for Git, Node.js, Python and Claude Code, `npm install -g` for Codex and OpenCode; without winget only the link). Swarmterm never installs anything itself — run the command in a terminal of your choice, then press **Check again**; no restart is needed.
+2. **Sign-in** — every agent signs in on its first start in a pane with its own login, which is the recommended way. If you sign in with an API key variable instead (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), the assistant shows which ones are set — names only — and offers **Pass to panes**: Swarmterm holds secrets back from panes by default (see **What panes inherit**), so the name goes on the always-pass list. An administrator policy for the environment filter decides this instead.
+3. **Voice** — off (the default for a new installation), the buzzkey app, or built-in speech recognition. The last two are finished in Settings → Voice (installing buzzkey, downloading a model).
+4. **First workspace** — a project folder (with a warning for your user folder or a drive root), one, two or four panes, and the agent for them; only agents that start on this PC are offered. **Finish without workspace** leaves you on the usual composer.
+
+An existing installation never sees the assistant on its own, and keeps voice dictation as it was.
+
 ## Create a workspace
 
 Swarmterm opens on the **composer**: pick a folder (the working directory for every pane), choose how many terminals, and use the steppers to assign AI agents — **Claude Code**, **Codex**, **OpenCode**, **GitHub Copilot**, **Qwen Code**, **Amp**, **Gemini CLI**, **Cursor Agent**, **Antigravity** or **OMP (Oh My Pi)** — the rest stay plain shells. Only agents whose CLI is installed are listed. Turn on **Isolate features in git worktrees** for parallel work, then press `⌘/Ctrl + Enter`.

@@ -21,6 +21,7 @@ mod links;
 mod marked_media;
 mod mcp;
 // Public so `main.rs` can reach `--mcp-stdio` without booting Tauri.
+mod first_run;
 pub mod mcp_stdio;
 mod paste_image;
 mod policy;
@@ -120,6 +121,9 @@ pub fn run() {
             }
             // UI-stall watchdog (SWA-85): stall log always, dumps opt-in.
             crate::diagnostics::init(app.handle());
+            // New install or not (SWA-83): decided from the app data dir
+            // before anything below writes a marker file into it.
+            crate::first_run::init(app.handle());
             // SWA-88: prompt fingerprints expire on a timer, not only when
             // the next request happens to sweep them.
             crate::resubmit::spawn_expiry(app.handle().clone());
@@ -323,6 +327,9 @@ pub fn run() {
             commands::set_claude_statusline,
             commands::setup_status,
             commands::setup_recheck,
+            first_run::setup_wizard_state,
+            first_run::setup_wizard_finish,
+            first_run::setup_api_key_vars,
             commands::resolve_path_link,
             commands::resolve_dir_link,
             commands::list_folders,

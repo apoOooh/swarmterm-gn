@@ -23,9 +23,42 @@ fn body_of<'a>(src: &'a str, signature: &str) -> &'a str {
     panic!("unbalanced braces")
 }
 
-/// Byte ranges of every `spawn_blocking(...)` argument list in `body`,
-/// matched by parentheses — a call is on a worker only if it lies inside
-/// one of them, not merely somewhere after one.
+/// `src` with `//` and `/* */` comments blanked out (same length, so byte
+/// offsets stay valid): a commented-out `spawn_blocking(` must not count as
+/// a worker. Good enough for the boot function, which has no string
+/// literals containing comment markers.
+fn strip_comments(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = bytes.to_vec();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"//") {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                out[i] = b' ';
+                i += 1;
+            }
+        } else if bytes[i..].starts_with(b"/*") {
+            let end = src[i + 2..]
+                .find("*/")
+                .map_or(bytes.len(), |e| i + 2 + e + 2);
+            for b in &mut out[i..end] {
+                if *b != b'\n' {
+                    *b = b' ';
+                }
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8(out).expect("comments blanked on ASCII bytes only")
+}
+
+/// Byte ranges of the closure BODY in every `spawn_blocking(...)` argument
+/// list of `body`: from the first `||` inside the parentheses to the closing
+/// one. A call is on a worker only if it lies there — not merely after a
+/// `spawn_blocking`, and not in an argument block that runs before the
+/// closure is built (`spawn_blocking({ probe(); move || {} })`).
 fn worker_spans(body: &str) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     for (at, m) in body.match_indices("spawn_blocking(") {
@@ -37,7 +70,10 @@ fn worker_spans(body: &str) -> Vec<(usize, usize)> {
                 ')' => {
                     depth -= 1;
                     if depth == 0 {
-                        spans.push((open, open + i));
+                        let close = open + i;
+                        if let Some(bar) = body[open..close].find("||") {
+                            spans.push((open + bar, close));
+                        }
                         break;
                     }
                 }
@@ -49,8 +85,10 @@ fn worker_spans(body: &str) -> Vec<(usize, usize)> {
 }
 
 /// The calls in `body` that would block the UI thread: any probe-reaching
-/// call outside every worker closure.
+/// call outside every worker closure body.
 fn calls_off_worker(body: &str) -> Vec<String> {
+    let body = strip_comments(body);
+    let body = body.as_str();
     let spans = worker_spans(body);
     let mut bad = Vec::new();
     for call in [
@@ -96,6 +134,24 @@ fn the_checker_catches_calls_after_a_worker() {
     assert!(calls_off_worker(good).is_empty());
     let before = "{ ensure_claude(app); spawn_blocking(move || ensure_codex(&c)); }";
     assert_eq!(calls_off_worker(before), vec!["ensure_claude(".to_owned()]);
+}
+
+#[test]
+fn the_checker_ignores_comments_and_eager_argument_blocks() {
+    // Found in review: a worker that exists only in comments.
+    let commented = "{ /* spawn_blocking( */ ensure_codex(app); /* ) */ }";
+    assert_eq!(
+        calls_off_worker(commented),
+        vec!["ensure_codex(".to_owned()]
+    );
+    let line = "{ // spawn_blocking(move ||\n ensure_codex(app);\n // )\n }";
+    assert_eq!(calls_off_worker(line), vec!["ensure_codex(".to_owned()]);
+    // An argument block runs on the caller's thread, before the closure.
+    let eager = "{ spawn_blocking({ ensure_codex(app); move || {} }); }";
+    assert_eq!(calls_off_worker(eager), vec!["ensure_codex(".to_owned()]);
+    // A comment inside a real closure does not hide it.
+    let real = "{ spawn_blocking(move || { /* ) */ ensure_codex(&c); }); }";
+    assert!(calls_off_worker(real).is_empty());
 }
 
 #[test]

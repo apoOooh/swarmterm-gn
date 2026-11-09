@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Setup assistant on a new installation (SWA-83): four steps for tools and
+  agents (what is missing, why, the vendor link and an install command to
+  copy — Swarmterm installs nothing itself), sign-in (passing an API key
+  variable to panes by name), voice and a first workspace. Skippable, and
+  available again under Settings → Setup. Voice dictation is now off by
+  default on a new installation; existing installations keep it as it was.
+
 - Claude Code hooks no longer need Git Bash with Claude Code 2.1.139 or
   newer (SWA-83): Swarmterm now registers them so that Claude Code starts
   `swarmterm.exe --hook` directly instead of through a shell, which also

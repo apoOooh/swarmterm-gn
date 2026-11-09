@@ -5,6 +5,7 @@ import { gitBashHint, prerequisiteRows, setupRows, type GitBashHint, type SetupT
 import { writeClipboard } from '@/tauri/clipboard'
 import { openUrl } from '@/tauri/opener'
 import { useSetupStatusStore } from '@/store/setup-status-store'
+import { useSetupWizardStore } from '@/store/setup-wizard-store'
 import { cn } from '@/lib/utils'
 
 const TONE_ICON: Record<SetupTone, typeof CheckCircle2> = {
@@ -72,6 +73,9 @@ export function SetupPanel(): ReactElement {
           line and reach the War Room. Nothing is written for a CLI that is not installed; your own entries
           are kept.
         </p>
+        <Button variant="outline" size="sm" className="mt-3" onClick={() => useSetupWizardStore.getState().openAgain()} data-setup-action="wizard">
+          Run setup assistant again
+        </Button>
       </section>
 
       <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">

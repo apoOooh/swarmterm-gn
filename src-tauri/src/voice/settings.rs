@@ -61,6 +61,49 @@ pub fn load(path: &Path) -> VoiceSettings {
         .unwrap_or_default()
 }
 
+/// Boot read (SWA-83, D3): `(settings, write_now)`. A missing file means the
+/// old default, voice on, ONLY on an install from before the assistant
+/// (`Existing`), which the caller writes once. A new install means voice
+/// off: in memory only while the assistant is pending, written once when it
+/// already ended — `setup_wizard_finish` stores the outcome before voice is
+/// settled, so a crash or a failed save in between must not turn voice on.
+pub fn load_for_boot(path: &Path, wizard: crate::first_run::Wizard) -> (VoiceSettings, bool) {
+    use crate::first_run::Wizard;
+    if path.exists() {
+        return (load(path), false);
+    }
+    match wizard {
+        Wizard::Existing => (VoiceSettings::default(), true),
+        Wizard::Pending | Wizard::Done | Wizard::Skipped => {
+            let settings = VoiceSettings {
+                enabled: false,
+                ..VoiceSettings::default()
+            };
+            (settings, wizard != Wizard::Pending)
+        }
+    }
+}
+
+/// The assistant ended without a voice file: write `current` with voice on
+/// for an `existing` install, off otherwise. `Ok(None)` when a file is there
+/// already (the Voice step wrote it), `Ok(Some(written))` after a write.
+/// A failed write is an error, so the caller does not store the outcome.
+pub fn settle_first_run(
+    path: &Path,
+    current: &VoiceSettings,
+    existing: bool,
+) -> Result<Option<VoiceSettings>, String> {
+    if path.exists() {
+        return Ok(None);
+    }
+    let next = VoiceSettings {
+        enabled: existing,
+        ..current.clone()
+    };
+    save(path, &next)?;
+    Ok(Some(next))
+}
+
 pub fn save(path: &Path, settings: &VoiceSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
@@ -106,6 +149,48 @@ mod tests {
         assert_eq!(load(&path), s);
         fs::write(&path, "garbage").unwrap();
         assert_eq!(load(&path), VoiceSettings::default());
+    }
+
+    #[test]
+    fn a_new_install_starts_without_voice_and_an_older_one_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("voice-settings.json");
+        use crate::first_run::Wizard;
+        let (fresh, write) = load_for_boot(&path, Wizard::Pending);
+        assert!(!fresh.enabled && !write);
+        let (older, write) = load_for_boot(&path, Wizard::Existing);
+        assert!(older.enabled && write);
+        // Found in review: the outcome is stored before voice is settled,
+        // so a finished assistant without a voice file stays off (pinned).
+        for ended in [Wizard::Done, Wizard::Skipped] {
+            let (after, write) = load_for_boot(&path, ended);
+            assert!(!after.enabled && write, "{ended:?}");
+        }
+        // A file always wins, also during a pending assistant.
+        save(&path, &VoiceSettings::default()).unwrap();
+        assert_eq!(
+            load_for_boot(&path, Wizard::Pending),
+            (VoiceSettings::default(), false)
+        );
+    }
+
+    #[test]
+    fn settling_writes_the_choice_once_and_reports_a_failed_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("voice-settings.json");
+        let on = VoiceSettings::default();
+        let off = settle_first_run(&path, &on, false).unwrap().unwrap();
+        assert!(!off.enabled && !load(&path).enabled);
+        // The Voice step's file (or the first settle) is never overwritten.
+        assert_eq!(settle_first_run(&path, &on, true), Ok(None));
+        assert!(!load(&path).enabled);
+        // Found in review: a save that fails must reach the caller, which
+        // then leaves the assistant pending instead of storing the outcome.
+        let blocked = dir.path().join("not-a-dir");
+        fs::write(&blocked, "").unwrap();
+        let path = blocked.join("voice-settings.json");
+        assert!(settle_first_run(&path, &on, false).is_err());
+        assert!(!path.exists());
     }
 
     #[test]

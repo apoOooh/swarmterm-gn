@@ -52,7 +52,7 @@ pub mod pins;
 #[cfg(windows)]
 mod pipe;
 pub mod protocol;
-mod settings;
+pub(crate) mod settings;
 #[cfg(windows)]
 pub mod speech;
 pub mod tts;
@@ -1353,10 +1353,44 @@ fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 pub fn init(app: &AppHandle) {
     let hub = app.state::<VoiceHub>();
     if let Ok(path) = settings_path(app) {
-        *hub.settings.lock().unwrap() = settings::load(&path);
+        let wizard = crate::first_run::wizard(app);
+        let (loaded, write) = settings::load_for_boot(&path, wizard);
+        if write {
+            // Pin the answer once: "voice on" for an install from before
+            // SWA-83, "off" for a new one whose assistant ended before its
+            // own voice write landed (crash, failed save) — D3.
+            if let Err(e) = settings::save(&path, &loaded) {
+                eprintln!("voice settings: {e}");
+            }
+        }
+        *hub.settings.lock().unwrap() = loaded;
     }
     tts::start(app);
     apply(app);
+}
+
+/// The setup assistant ends (`first_run::setup_wizard_finish`), BEFORE its
+/// outcome is stored. A file written by the Voice step stays as it is.
+/// Without one, a new install keeps voice off on disk (it was only off in
+/// memory so far), and a renderer that reported an older install gets voice
+/// back on. A failed save is returned, so the outcome is not stored and the
+/// assistant stays pending.
+pub fn settle_first_run(app: &AppHandle, existing: bool) -> Result<(), String> {
+    let Ok(path) = settings_path(app) else {
+        // No app data dir: nothing is persisted, the outcome neither.
+        return Ok(());
+    };
+    let hub = app.state::<VoiceHub>();
+    let Some(next) = settings::settle_first_run(&path, &hub.settings(), existing)
+        .map_err(|e| format!("voice settings: {e}"))?
+    else {
+        return Ok(());
+    };
+    let previous = std::mem::replace(&mut *hub.settings.lock().unwrap(), next.clone());
+    if previous.enabled != next.enabled {
+        apply(app);
+    }
+    Ok(())
 }
 
 /// Bring the endpoint in line with the settings. Switching off revokes every
