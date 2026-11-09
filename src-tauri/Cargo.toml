@@ -62,7 +62,7 @@ percent-encoding = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
-rmcp = { version = "2.1", features = ["server", "transport-streamable-http-server"] }
+rmcp = { version = "3.9", features = ["server", "transport-streamable-http-server"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 uuid = { version = "1", features = ["v4"] }
 axum = "0.8"
