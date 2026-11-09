@@ -44,11 +44,18 @@ const RETRY_AFTER: Duration = Duration::from_secs(60);
 const PROBE_WAIT: Duration = Duration::from_millis(3_500);
 
 /// Whether the installed Codex supports hook isolation. Warmed off-thread at
-/// startup (`warm`), so pane spawns normally hit the cache. The lock is never
+/// startup (`setup::boot`), so pane spawns normally hit the cache. The lock is never
 /// held across the probe: a caller arriving while another probe runs waits up
 /// to `PROBE_WAIT` for its answer (then `false`); within `RETRY_AFTER` of a
 /// timeout it gets `false` without probing again.
 pub fn supported() -> bool {
+    probe_supported().unwrap_or(false)
+}
+
+/// `supported`, but `None` while undecided (probe timed out or still running
+/// after `PROBE_WAIT`): Settings must not tell the user to update a Codex
+/// that merely started slowly.
+pub fn probe_supported() -> Option<bool> {
     static STATE: Mutex<ProbeState> = Mutex::new(ProbeState::Unknown);
     static DONE: Condvar = Condvar::new();
     supported_with(&STATE, &DONE, PROBE_WAIT, Instant::now, probe)
@@ -60,7 +67,7 @@ fn supported_with(
     wait: Duration,
     now: impl Fn() -> Instant,
     probe: impl FnOnce() -> Option<bool>,
-) -> bool {
+) -> Option<bool> {
     {
         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
         if *s == ProbeState::Probing {
@@ -73,10 +80,10 @@ fn supported_with(
                 .0;
         }
         match *s {
-            ProbeState::Known(known) => return known,
-            ProbeState::Probing => return false,
+            ProbeState::Known(known) => return Some(known),
+            ProbeState::Probing => return None,
             ProbeState::TimedOut(at) if now().saturating_duration_since(at) < RETRY_AFTER => {
-                return false
+                return None
             }
             ProbeState::Unknown | ProbeState::TimedOut(_) => *s = ProbeState::Probing,
         }
@@ -89,14 +96,7 @@ fn supported_with(
         None => ProbeState::TimedOut(now()),
     };
     done.notify_all();
-    result.unwrap_or(false)
-}
-
-/// Run the first probe on a blocking worker so no IPC/async thread pays it.
-pub fn warm() {
-    tauri::async_runtime::spawn_blocking(|| {
-        supported();
-    });
+    result
 }
 
 /// `None` = undecided (timed out); retried after `RETRY_AFTER`.
@@ -316,6 +316,13 @@ pub fn has_ours(home: &Path) -> bool {
     })
 }
 
+/// Does `config.toml` or `hooks.json` already carry exactly `command`?
+fn has_command(home: &Path, command: &str) -> bool {
+    ["config.toml", "hooks.json"]
+        .iter()
+        .any(|f| fs::read_to_string(home.join(f)).is_ok_and(|s| s.contains(command)))
+}
+
 fn remove_ours_from_json(json_path: &Path) -> Result<(), String> {
     let existing = match fs::read_to_string(json_path) {
         Ok(s) => s,
@@ -333,28 +340,40 @@ fn remove_ours_from_json(json_path: &Path) -> Result<(), String> {
     })
 }
 
-pub fn register(app: &AppHandle) {
-    if !supported() {
-        return;
+/// What `register` did; `setup::ensure_codex` records it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Registered {
+    Written,
+    /// No hook isolation in this Codex.
+    Unsupported,
+    /// The probe did not answer in time; retried by a later call.
+    Undecided,
+    /// Dev build next to an existing entry of ours.
+    Deferred,
+}
+
+pub fn register(app: &AppHandle) -> Result<Registered, String> {
+    match probe_supported() {
+        Some(true) => {}
+        Some(false) => return Ok(Registered::Unsupported),
+        None => return Ok(Registered::Undecided),
     }
     let home = std::env::var("CODEX_HOME")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .map(std::path::PathBuf::from)
         .or_else(|| app.path().home_dir().ok().map(|p| p.join(".codex")));
-    let (Some(home), Ok(exe)) = (home, std::env::current_exe()) else {
-        return;
-    };
+    let home = home.ok_or("cannot resolve the Codex home directory")?;
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     // A dev build next to the installed app would swap the exe path on every
     // boot, and Codex re-asks for hook trust each time the command changes.
     // The hook only reads env, so the installed app's entry serves dev panes.
-    if cfg!(debug_assertions) && has_ours(&home) {
-        return;
-    }
     let command = format_command(&exe.to_string_lossy(), cfg!(windows));
-    if let Err(e) = install(&home, &command) {
-        eprintln!("Codex session hook registration failed: {e}");
+    // Our own earlier write (same exe, e.g. "Check again") is not deferred.
+    if cfg!(debug_assertions) && has_ours(&home) && !has_command(&home, &command) {
+        return Ok(Registered::Deferred);
     }
+    install(&home, &command).map(|()| Registered::Written)
 }
 
 #[cfg(test)]
@@ -374,39 +393,45 @@ mod tests {
                 r
             }
         };
-        assert!(!supported_with(
-            &state,
-            &Condvar::new(),
-            Duration::ZERO,
-            || t0,
-            probe(None)
-        ));
+        assert_eq!(
+            supported_with(&state, &Condvar::new(), Duration::ZERO, || t0, probe(None)),
+            None
+        );
         assert_eq!(*state.lock().unwrap(), ProbeState::TimedOut(t0));
         // Within the retry interval: no new probe.
-        assert!(!supported_with(
-            &state,
-            &Condvar::new(),
-            Duration::ZERO,
-            || t0 + Duration::from_secs(30),
-            probe(Some(true))
-        ));
+        assert_eq!(
+            supported_with(
+                &state,
+                &Condvar::new(),
+                Duration::ZERO,
+                || t0 + Duration::from_secs(30),
+                probe(Some(true))
+            ),
+            None
+        );
         assert_eq!(calls.get(), 1);
         // After it: probe again, and a definite answer is cached.
-        assert!(supported_with(
-            &state,
-            &Condvar::new(),
-            Duration::ZERO,
-            || t0 + RETRY_AFTER,
-            probe(Some(true))
-        ));
+        assert_eq!(
+            supported_with(
+                &state,
+                &Condvar::new(),
+                Duration::ZERO,
+                || t0 + RETRY_AFTER,
+                probe(Some(true))
+            ),
+            Some(true)
+        );
         assert_eq!(calls.get(), 2);
-        assert!(supported_with(
-            &state,
-            &Condvar::new(),
-            Duration::ZERO,
-            || t0 + RETRY_AFTER * 10,
-            probe(Some(false))
-        ));
+        assert_eq!(
+            supported_with(
+                &state,
+                &Condvar::new(),
+                Duration::ZERO,
+                || t0 + RETRY_AFTER * 10,
+                probe(Some(false))
+            ),
+            Some(true)
+        );
         assert_eq!(calls.get(), 2);
     }
 
@@ -427,7 +452,7 @@ mod tests {
             || panic!("must not probe while another probe runs"),
         );
         t.join().unwrap();
-        assert!(got);
+        assert_eq!(got, Some(true));
     }
 
     #[test]
@@ -441,7 +466,7 @@ mod tests {
             Instant::now,
             || panic!("must not probe"),
         );
-        assert!(!got);
+        assert_eq!(got, None);
         assert!(start.elapsed() < Duration::from_secs(2));
     }
 
@@ -455,7 +480,7 @@ mod tests {
             Instant::now,
             || panic!("probe blew up"),
         );
-        assert!(!got);
+        assert_eq!(got, None);
         assert!(matches!(*state.lock().unwrap(), ProbeState::TimedOut(_)));
     }
 

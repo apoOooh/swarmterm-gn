@@ -23,6 +23,7 @@ mod prof;
 mod pty;
 mod routine_cmd;
 mod sessions;
+mod setup;
 mod shell;
 // Public so `main.rs` can reach `--statusline` without booting Tauri.
 pub mod statusline;
@@ -144,18 +145,17 @@ pub fn run() {
                     crate::sessions::share::repair(&accounts);
                 }
             }
-            crate::mcp::config::register_user_scope(app.handle());
-            // Register `swarmterm --hook` under Claude Code's hook events in
-            // ~/.claude/settings.json so Claude Code panes report exact
-            // working/blocked/idle edges instead of relying on screen-scrape
-            // alone. Additive on `hooks` (the user's own groups survive),
-            // one-shot, idempotent, log-only. Must run BEFORE any pane launches
-            // `claude`: hooks are snapshotted at session start.
-            crate::hook::install::register(app.handle());
-            crate::hook::codex::register(app.handle());
-            // `codex --help` probe can take seconds on a cold start; pay it
-            // here, off-thread, instead of on the first Codex pane spawn.
-            crate::hook::codex::warm();
+            // Claude Code: the user-scope MCP entry (~/.claude.json) and
+            // `swarmterm --hook` under its hook events in settings.json, so
+            // panes report exact working/blocked/idle edges. Additive (the
+            // user's own groups survive), idempotent, never blocks boot, and
+            // only for a CLI that is installed (SWA-83). Synchronous because
+            // hooks are snapshotted at session start and restored panes spawn
+            // right after the renderer mounts. Codex's hooks need a
+            // `codex --help` probe of up to 3 s, so they go to a blocking
+            // worker; a Codex pane spawned meanwhile waits for it
+            // (`setup::ensure_for_agent`). Outcomes: Settings → Setup.
+            crate::setup::boot(app.handle());
             // Voice dictation endpoint (SWA-12): named pipe + discovery file
             // for buzzkey; follows Settings → Voice. Failure is logged only.
             crate::voice::init(app.handle());
@@ -271,6 +271,8 @@ pub fn run() {
             commands::set_session_share,
             commands::inspect_saved_workspace,
             commands::set_claude_statusline,
+            commands::setup_status,
+            commands::setup_recheck,
             commands::resolve_path_link,
             commands::resolve_dir_link,
             commands::list_folders,

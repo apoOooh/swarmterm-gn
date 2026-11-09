@@ -308,29 +308,29 @@ pub fn write_qwen_settings_to_file(path: &Path) -> Result<(), String> {
 /// entry is placeholder-only, so re-running on an already-registered config
 /// writes identical bytes. Log-only: a failure here must never block boot, and
 /// leaves Swarmterm fully usable minus the agent-facing MCP tools.
-pub fn register_user_scope(app: &AppHandle) {
+///
+/// `Ok(false)` = switched off (Settings → MCP or DisableMcp); the outcome is
+/// recorded by `setup::ensure_claude`.
+pub fn register_user_scope(app: &AppHandle) -> Result<bool, String> {
     if !crate::mcp::toggle::is_enabled("claude-code", None) {
-        return;
+        return Ok(false);
     }
-    let home = match app.path().home_dir() {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("mcp: cannot resolve home dir for global MCP config: {e}");
-            return;
-        }
-    };
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("cannot resolve home dir for global MCP config: {e}"))?;
     let cfg_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
     let path = resolve_global_config_path(&home, cfg_dir.as_deref());
     // Note: read-merge-rename is not locked against a concurrently running
     // Claude Code writing ~/.claude.json; the rename is atomic (never corrupts),
     // and the skip-if-present check keeps this to at most a first-run write, so
     // any lost-update window is a single boot-time write, not steady-state.
-    if let Err(e) = write_mcp_config_to_file(&path) {
-        eprintln!(
-            "mcp: failed to register global MCP config at {}: {e}",
+    write_mcp_config_to_file(&path).map(|()| true).map_err(|e| {
+        format!(
+            "failed to register global MCP config at {}: {e}",
             path.display()
-        );
-    }
+        )
+    })
 }
 
 /// Resolve Claude Code's user-scope config file (`.claude.json`). Honors
@@ -451,23 +451,21 @@ pub fn resolve_codex_config_path(home: &Path, codex_home: Option<&str>) -> PathB
     }
 }
 
-/// Register the just-bound MCP URL for Codex. Log-only, like register_user_scope.
-pub fn register_codex(app: &AppHandle, url: &str) {
-    let home = match app.path().home_dir() {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("mcp: cannot resolve home dir for codex config: {e}");
-            return;
-        }
-    };
+/// Register the just-bound MCP URL for Codex. The caller (`mcp::start`)
+/// records the outcome in `setup`.
+pub fn register_codex(app: &AppHandle, url: &str) -> Result<(), String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("cannot resolve home dir for codex config: {e}"))?;
     let codex_home = std::env::var("CODEX_HOME").ok();
     let path = resolve_codex_config_path(&home, codex_home.as_deref());
-    if let Err(e) = write_codex_config_to_file(&path, url) {
-        eprintln!(
-            "mcp: failed to register codex MCP config at {}: {e}",
+    write_codex_config_to_file(&path, url).map_err(|e| {
+        format!(
+            "failed to register codex MCP config at {}: {e}",
             path.display()
-        );
-    }
+        )
+    })
 }
 
 #[cfg(test)]
