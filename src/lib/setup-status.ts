@@ -10,7 +10,7 @@ import type { NewCenterEntry } from '@/lib/notification-center'
  * are facts the user may want to read in Settings, not alarms — the first
  * start of a fresh machine must not light up the bell.
  */
-export type SetupState = 'unknown' | 'ok' | 'off' | 'notInstalled' | 'outdated' | 'foreign' | 'deferred' | 'error'
+export type SetupState = 'unknown' | 'ok' | 'off' | 'notInstalled' | 'outdated' | 'foreign' | 'deferred' | 'needsGitBash' | 'error'
 
 export interface SetupCheck {
   state: SetupState
@@ -18,8 +18,51 @@ export interface SetupCheck {
 }
 
 export interface SetupStatus {
-  claude: { installed: boolean | null; hooks: SetupCheck; mcp: SetupCheck; statusLine: SetupCheck }
+  claude: { installed: boolean | null; gitBash: string | null; hooks: SetupCheck; mcp: SetupCheck; statusLine: SetupCheck }
   codex: { installed: boolean | null; hooks: SetupCheck; mcp: SetupCheck }
+  prerequisites: Prerequisite[]
+}
+
+export interface Prerequisite {
+  id: 'git' | 'gitBash' | 'winget' | 'node' | 'npm' | 'python'
+  path: string | null
+}
+
+const PREREQUISITE_LABEL: Record<Prerequisite['id'], { name: string; missing: string }> = {
+  git: { name: 'Git', missing: 'Not found — needed for worktrees and Git Bash' },
+  gitBash: { name: 'Git Bash', missing: 'Not found — Claude Code needs it for hooks' },
+  winget: { name: 'winget', missing: 'Not found — the install commands to copy use it' },
+  node: { name: 'Node.js', missing: 'Not found — only needed for npm-installed CLIs' },
+  npm: { name: 'npm', missing: 'Not found — only needed for npm-installed CLIs' },
+  python: { name: 'Python', missing: 'Not found — optional' }
+}
+
+export interface PrerequisiteRow {
+  id: Prerequisite['id']
+  name: string
+  found: boolean
+  text: string
+}
+
+/** `null` until the prerequisites were scanned (or off Windows). */
+export function gitInstalled(status: SetupStatus | null): boolean | null {
+  const git = status?.prerequisites.find(t => t.id === 'git')
+  return git === undefined ? null : git.path !== null
+}
+
+/** Welcome's note on "Isolate features in git worktrees"; `null` = nothing to say. */
+export function worktreeOptionNote(input: { git: boolean | null; isGitRepo: boolean }): string | null {
+  if (input.git === false) return 'Git is not installed — see Settings → Setup'
+  if (!input.isGitRepo) return 'Will initialize git in this folder when you create'
+  return null
+}
+
+/** Settings → Setup's prerequisite list: found location, or why it matters. */
+export function prerequisiteRows(status: SetupStatus): PrerequisiteRow[] {
+  return status.prerequisites.map(({ id, path }) => {
+    const label = PREREQUISITE_LABEL[id]
+    return { id, name: label.name, found: path !== null, text: path ?? label.missing }
+  })
 }
 
 export type SetupTone = 'ok' | 'muted' | 'warn' | 'error'
@@ -52,6 +95,7 @@ function describe(id: string, state: SetupState): { tone: SetupTone; text: strin
     }
     case 'foreign': return { tone: 'muted', text: 'Your own status line is kept' }
     case 'deferred': return { tone: 'muted', text: 'Left to the installed Swarmterm (development build)' }
+    case 'needsGitBash': return { tone: 'warn', text: 'Needs Git Bash — left out until it is installed' }
     case 'unknown': return { tone: 'muted', text: 'Checking…' }
     case 'error': return { tone: 'error', text: 'Could not be set up' }
   }
@@ -83,6 +127,31 @@ export function setupBellEntry(status: SetupStatus, at: number): NewCenterEntry 
     title: 'Agent setup needs attention',
     detail: `${first.agent} ${first.item}: ${first.detail ?? first.text} (${more}see Settings → Setup)`,
     at
+  }
+}
+
+/** Shown to copy, never run: Swarmterm installs nothing itself (decision 2026-11-09). */
+export const GIT_INSTALL_COMMAND = 'winget install --id Git.Git -e'
+
+export interface GitBashHint {
+  text: string
+  link: string
+  command: string
+}
+
+/**
+ * Claude Code on Windows runs hooks and the status line through Git Bash;
+ * without it they would fail in every Claude session, so Rust leaves them out
+ * (`needsGitBash`). The hint says why and how to get it.
+ */
+export function gitBashHint(status: SetupStatus): GitBashHint | null {
+  const c = status.claude
+  if (![c.hooks, c.statusLine].some(check => check.state === 'needsGitBash')) return null
+  return {
+    text: "Claude Code runs Swarmterm's hooks and status line through Git Bash, which is not installed. " +
+      'Install Git for Windows, then press Check again — no restart needed.',
+    link: 'https://git-scm.com/downloads/win',
+    command: GIT_INSTALL_COMMAND
   }
 }
 

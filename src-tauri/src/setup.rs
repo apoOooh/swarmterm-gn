@@ -51,6 +51,8 @@ pub enum State {
     Foreign,
     /// Left to another Swarmterm (dev build next to the installed app).
     Deferred,
+    /// Needs Git Bash, which is missing; our entries were taken out.
+    NeedsGitBash,
     /// Writing failed; `detail` says why.
     Error,
 }
@@ -87,6 +89,8 @@ impl Check {
 pub struct ClaudeStatus {
     /// `None` until the first check ran.
     pub installed: Option<bool>,
+    /// Where Git Bash was found; `None` when missing or not checked yet.
+    pub git_bash: Option<String>,
     pub hooks: Check,
     pub mcp: Check,
     pub status_line: Check,
@@ -105,6 +109,8 @@ pub struct CodexStatus {
 pub struct SetupStatus {
     pub claude: ClaudeStatus,
     pub codex: CodexStatus,
+    /// git, Git Bash, winget, node, npm, python; empty until the first scan.
+    pub prerequisites: Vec<crate::prerequisites::Tool>,
 }
 
 impl SetupStatus {
@@ -112,6 +118,7 @@ impl SetupStatus {
         Self {
             claude: ClaudeStatus {
                 installed: None,
+                git_bash: None,
                 hooks: Check::unknown(),
                 mcp: Check::unknown(),
                 status_line: Check::unknown(),
@@ -121,6 +128,7 @@ impl SetupStatus {
                 hooks: Check::unknown(),
                 mcp: Check::unknown(),
             },
+            prerequisites: Vec::new(),
         }
     }
 }
@@ -214,15 +222,20 @@ fn claude_installed(app: &AppHandle) -> bool {
 enum ClaudePlan {
     NotInstalled,
     MissingConfigDir(String),
+    NeedsGitBash,
     AlreadyDone,
     Write,
 }
 
-fn plan_claude(installed: bool, missing_dir: Option<&str>, done: bool) -> ClaudePlan {
+fn plan_claude(installed: bool, missing_dir: Option<&str>, bash: bool, done: bool) -> ClaudePlan {
     if !installed {
         ClaudePlan::NotInstalled
     } else if let Some(dir) = missing_dir {
         ClaudePlan::MissingConfigDir(dir.to_owned())
+    } else if !bash {
+        // Checked before `done`: Git uninstalled since the entries were
+        // written must take them out again.
+        ClaudePlan::NeedsGitBash
     } else if done {
         ClaudePlan::AlreadyDone
     } else {
@@ -236,11 +249,15 @@ pub fn ensure_claude(app: &AppHandle) {
     let _guard = CLAUDE_ENSURE.lock().unwrap_or_else(|e| e.into_inner());
     let installed = claude_installed(app);
     let cfg = std::env::var("CLAUDE_CONFIG_DIR").ok();
+    let bash = default_profile_git_bash(app);
+    let bash_ok = git_bash_present(bash.as_deref());
     let plan = plan_claude(
         installed,
         missing_config_dir(cfg.as_deref()),
+        bash_ok,
         CLAUDE_DONE.load(Ordering::Acquire),
     );
+    update(None, |s| s.claude.git_bash = bash.clone());
     match plan {
         ClaudePlan::AlreadyDone => {}
         ClaudePlan::NotInstalled => {
@@ -282,6 +299,37 @@ pub fn ensure_claude(app: &AppHandle) {
                 };
             });
         }
+        ClaudePlan::NeedsGitBash => {
+            CLAUDE_DONE.store(false, Ordering::Release);
+            let (hooks, mcp, status_line) = {
+                let _lock = crate::accounts::CONFIG_WRITE
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let hooks = match crate::hook::install::unregister(app) {
+                    Ok(()) => Check::of(State::NeedsGitBash),
+                    Err(e) => {
+                        eprintln!("hook: {e}");
+                        Check::error(e)
+                    }
+                };
+                // MCP is an HTTP entry and needs no shell.
+                let mcp = mcp_check(crate::mcp::config::register_user_scope(app));
+                let wanted = STATUSLINE_REQUESTED.load(Ordering::Acquire)
+                    && crate::accounts::STATUSLINE_ENABLED.load(Ordering::Relaxed);
+                let removed = crate::statusline::install::apply(app, false);
+                let status_line = match status_line_check(false, removed) {
+                    c if c.state == State::Off && wanted => Check::of(State::NeedsGitBash),
+                    c => c,
+                };
+                (hooks, mcp, status_line)
+            };
+            update(Some(app), |s| {
+                s.claude.installed = Some(true);
+                s.claude.hooks = hooks;
+                s.claude.mcp = mcp;
+                s.claude.status_line = status_line;
+            });
+        }
         ClaudePlan::Write => {
             let (hooks, mcp, status_line) = {
                 let _lock = crate::accounts::CONFIG_WRITE
@@ -294,14 +342,7 @@ pub fn ensure_claude(app: &AppHandle) {
                         Check::error(e)
                     }
                 };
-                let mcp = match crate::mcp::config::register_user_scope(app) {
-                    Ok(true) => Check::of(State::Ok),
-                    Ok(false) => Check::of(State::Off),
-                    Err(e) => {
-                        eprintln!("mcp: {e}");
-                        Check::error(e)
-                    }
-                };
+                let mcp = mcp_check(crate::mcp::config::register_user_scope(app));
                 // Same lock as `set_claude_statusline`'s write, and the value
                 // is read under it: whichever runs last applies the latest
                 // preference.
@@ -327,6 +368,36 @@ pub fn ensure_claude(app: &AppHandle) {
     }
 }
 
+fn mcp_check(result: Result<bool, String>) -> Check {
+    match result {
+        Ok(true) => Check::of(State::Ok),
+        Ok(false) => Check::of(State::Off),
+        Err(e) => {
+            eprintln!("mcp: {e}");
+            Check::error(e)
+        }
+    }
+}
+
+/// Git Bash as Claude Code in the default profile would need it (that
+/// profile's `env` may point to it).
+fn default_profile_git_bash(app: &AppHandle) -> Option<String> {
+    use tauri::Manager;
+    let home = app.path().home_dir().unwrap_or_default();
+    let config = crate::voice::completion::reader::claude_config_dir(None, &home);
+    crate::git_bash::find(Some(&config)).map(|f| f.path.to_string_lossy().into_owned())
+}
+
+fn git_bash_present(found: Option<&str>) -> bool {
+    !crate::git_bash::REQUIRED || found.is_some()
+}
+
+/// Whether our hook and status-line commands can run for the default
+/// profile (`set_claude_statusline` writes the status line only then).
+pub fn git_bash_ok(app: &AppHandle) -> bool {
+    git_bash_present(default_profile_git_bash(app).as_deref())
+}
+
 fn status_line_check(enabled: bool, result: Result<(), String>) -> Check {
     match result {
         Ok(()) if enabled => Check::of(State::Ok),
@@ -350,8 +421,13 @@ pub fn status_line_requested(app: &AppHandle) -> bool {
     installed
 }
 
-pub fn record_status_line(app: &AppHandle, enabled: bool, result: &Result<(), String>) {
-    let check = status_line_check(enabled, result.clone());
+/// `enabled` is what the user asked for; `bash` whether it could be applied
+/// (the entry was removed instead when not).
+pub fn record_status_line(app: &AppHandle, enabled: bool, bash: bool, result: &Result<(), String>) {
+    let check = match status_line_check(enabled && bash, result.clone()) {
+        c if c.state == State::Off && enabled => Check::of(State::NeedsGitBash),
+        c => c,
+    };
     if check.state == State::Error {
         // Let the next ensure (pane spawn, "Check again") retry it.
         CLAUDE_DONE.store(false, Ordering::Release);
@@ -481,8 +557,15 @@ fn codex_mcp_check(result: Option<Result<bool, String>>) -> Check {
 /// Boot: Claude synchronously (hooks are snapshotted when a session starts,
 /// and restored panes spawn right after the renderer mounts), Codex on a
 /// blocking worker so its probe never delays the window.
+/// Re-scan the prerequisites (PATH scan, no process started).
+fn refresh_prerequisites(app: &AppHandle) {
+    let tools = crate::prerequisites::current(default_profile_git_bash(app));
+    update(Some(app), |s| s.prerequisites = tools);
+}
+
 pub fn boot(app: &AppHandle) {
     ensure_claude(app);
+    refresh_prerequisites(app);
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || ensure_codex(&app));
 }
@@ -503,8 +586,11 @@ pub fn ensure_for_agent(app: &AppHandle, agent_id: Option<&str>) {
 pub fn recheck(app: &AppHandle) -> SetupStatus {
     CLAUDE_DONE.store(false, Ordering::Release);
     CODEX_DONE.store(false, Ordering::Release);
+    // Git installed meanwhile: the shell list offers Git Bash again.
+    crate::shell::recheck();
     ensure_claude(app);
     ensure_codex(app);
+    refresh_prerequisites(app);
     status()
 }
 
@@ -514,23 +600,46 @@ mod tests {
 
     #[test]
     fn nothing_is_written_for_a_missing_cli() {
-        assert_eq!(plan_claude(false, None, false), ClaudePlan::NotInstalled);
+        assert_eq!(
+            plan_claude(false, None, true, false),
+            ClaudePlan::NotInstalled
+        );
         // Even when it was done before (uninstalled since).
-        assert_eq!(plan_claude(false, None, true), ClaudePlan::NotInstalled);
+        assert_eq!(
+            plan_claude(false, None, true, true),
+            ClaudePlan::NotInstalled
+        );
     }
 
     #[test]
     fn a_missing_config_dir_is_reported_not_fabricated() {
         assert_eq!(
-            plan_claude(true, Some("D:/nope"), false),
+            plan_claude(true, Some("D:/nope"), false, false),
             ClaudePlan::MissingConfigDir("D:/nope".into())
         );
     }
 
     #[test]
     fn done_skips_the_write_until_the_cli_goes_away() {
-        assert_eq!(plan_claude(true, None, true), ClaudePlan::AlreadyDone);
-        assert_eq!(plan_claude(true, None, false), ClaudePlan::Write);
+        assert_eq!(plan_claude(true, None, true, true), ClaudePlan::AlreadyDone);
+        assert_eq!(plan_claude(true, None, true, false), ClaudePlan::Write);
+    }
+
+    #[test]
+    fn missing_git_bash_takes_the_entries_out_even_when_done() {
+        assert_eq!(
+            plan_claude(true, None, false, false),
+            ClaudePlan::NeedsGitBash
+        );
+        assert_eq!(
+            plan_claude(true, None, false, true),
+            ClaudePlan::NeedsGitBash
+        );
+        // Not installed still wins: nothing to take out of a profile we never wrote.
+        assert_eq!(
+            plan_claude(false, None, false, true),
+            ClaudePlan::NotInstalled
+        );
     }
 
     #[test]

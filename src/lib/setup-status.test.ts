@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   SETUP_ALERT_ID,
   codexHookHint,
+  gitBashHint,
+  prerequisiteRows,
+  worktreeOptionNote,
+  gitInstalled,
+  GIT_INSTALL_COMMAND,
   defaultWelcomeFolder,
   isBroadFolder,
   nextSetupBellAction,
@@ -17,8 +22,9 @@ const check = (state: SetupCheck['state'], detail: string | null = null): SetupC
 
 function status(over: Partial<{ claude: Partial<SetupStatus['claude']>; codex: Partial<SetupStatus['codex']> }> = {}): SetupStatus {
   return {
-    claude: { installed: true, hooks: ok, mcp: ok, statusLine: ok, ...over.claude },
-    codex: { installed: true, hooks: ok, mcp: ok, ...over.codex }
+    claude: { installed: true, gitBash: 'C:/Program Files/Git/bin/bash.exe', hooks: ok, mcp: ok, statusLine: ok, ...over.claude },
+    codex: { installed: true, hooks: ok, mcp: ok, ...over.codex },
+    prerequisites: []
   }
 }
 
@@ -44,13 +50,73 @@ describe('setupRows', () => {
   })
 
   it('never shows a raw state name', () => {
-    const states: SetupCheck['state'][] = ['unknown', 'ok', 'off', 'notInstalled', 'outdated', 'foreign', 'deferred', 'error']
+    const states: SetupCheck['state'][] = ['unknown', 'ok', 'off', 'notInstalled', 'outdated', 'foreign', 'deferred', 'needsGitBash', 'error']
     for (const s of states) {
       for (const row of setupRows(status({ claude: { hooks: check(s) } }))) {
         expect(row.text).not.toMatch(/^(unknown|notInstalled|deferred)$/)
         expect(row.text.length).toBeGreaterThan(0)
       }
     }
+  })
+})
+
+describe('Git Bash missing', () => {
+  const missing = status({ claude: { gitBash: null, hooks: check('needsGitBash'), statusLine: check('needsGitBash') } })
+
+  it('is a warning in Settings, not a bell problem', () => {
+    const by = Object.fromEntries(setupRows(missing).map(r => [r.id, r]))
+    expect(by['claude.hooks']).toMatchObject({ tone: 'warn' })
+    expect(by['claude.hooks'].text).toMatch(/git bash/i)
+    expect(by['claude.mcp']).toMatchObject({ tone: 'ok' })
+    expect(setupBellEntry(missing, 1)).toBeNull()
+  })
+
+  it('explains what to do with a link and a command to copy, never runs it', () => {
+    const hint = gitBashHint(missing)
+    expect(hint).not.toBeNull()
+    expect(hint?.command).toBe(GIT_INSTALL_COMMAND)
+    expect(GIT_INSTALL_COMMAND).toMatch(/^winget install .*Git\.Git/)
+    expect(hint?.link).toMatch(/^https:\/\/git-scm\.com\//)
+    expect(hint?.text).toMatch(/check again/i)
+  })
+
+  it('stays quiet while Git Bash is there or nothing needs it', () => {
+    expect(gitBashHint(status())).toBeNull()
+    expect(gitBashHint(status({ claude: { gitBash: null, hooks: check('notInstalled') } }))).toBeNull()
+  })
+})
+
+describe('prerequisiteRows', () => {
+  it('shows where a tool was found, or why a missing one matters', () => {
+    const rows = prerequisiteRows({
+      ...status(),
+      prerequisites: [
+        { id: 'git', path: 'C:/Program Files/Git/cmd/git.exe' },
+        { id: 'gitBash', path: null },
+        { id: 'python', path: null }
+      ]
+    })
+    expect(rows.map(r => [r.name, r.found])).toEqual([['Git', true], ['Git Bash', false], ['Python', false]])
+    expect(rows[0].text).toBe('C:/Program Files/Git/cmd/git.exe')
+    expect(rows[1].text).toMatch(/claude code needs it/i)
+    expect(rows[2].text).toMatch(/optional/i)
+  })
+})
+
+describe('worktree option in Welcome', () => {
+  const withGit = (path: string | null): SetupStatus => ({ ...status(), prerequisites: [{ id: 'git', path }] })
+
+  it('knows whether git is installed once the prerequisites were scanned', () => {
+    expect(gitInstalled(null)).toBeNull()
+    expect(gitInstalled(status())).toBeNull()
+    expect(gitInstalled(withGit('C:/Git/cmd/git.exe'))).toBe(true)
+    expect(gitInstalled(withGit(null))).toBe(false)
+  })
+
+  it('says why the option is unavailable or what Create will do', () => {
+    expect(worktreeOptionNote({ git: false, isGitRepo: false })).toMatch(/git is not installed/i)
+    expect(worktreeOptionNote({ git: null, isGitRepo: false })).toMatch(/initialize git/i)
+    expect(worktreeOptionNote({ git: true, isGitRepo: true })).toBeNull()
   })
 })
 

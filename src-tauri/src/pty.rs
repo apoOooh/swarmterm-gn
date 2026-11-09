@@ -1002,6 +1002,25 @@ fn plan_spawn(
     let profile_dir = account
         .as_ref()
         .map(|a| std::path::PathBuf::from(&a.config_dir));
+    // The registry PATH as of now (SWA-83 V3): a CLI or Git installed while
+    // Swarmterm runs is found in a new pane without an app restart. Only
+    // appended, so whatever order the app's own PATH has keeps winning.
+    let path_now = crate::runtime_path::refreshed(env.get("PATH").unwrap_or_default());
+    env.set("PATH", path_now);
+    // Claude Code runs hooks through Git Bash and finds it only via `git` on
+    // PATH or the standard folders; tell it where ours is when it would not
+    // (registry install root, SWA-83). A value the user set always wins.
+    if options.agent_id.as_deref() == Some("claude-code") {
+        let home = app.path().home_dir().unwrap_or_default();
+        let config =
+            crate::voice::completion::reader::claude_config_dir(profile_dir.as_deref(), &home);
+        let found = crate::git_bash::find(Some(&config));
+        if let Some(value) =
+            crate::git_bash::pane_value(found.as_ref(), env.get("CLAUDE_CODE_GIT_BASH_PATH"))
+        {
+            env.set("CLAUDE_CODE_GIT_BASH_PATH", value);
+        }
+    }
     env.set("COLORTERM", "truecolor");
     env.set("TERM", "xterm-256color");
     // GUI launches arrive with no locale vars; fill in a UTF-8 LANG so CLIs
