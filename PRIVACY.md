@@ -66,6 +66,15 @@ line and lifecycle hooks (for example `~/.claude.json`,
 `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json`).
 Settings → MCP switches the MCP entry off per agent and profile.
 
+The status line template, colour scheme and vibrance are kept in
+`statusline.json` in the app data folder. For Codex, Swarmterm remembers which
+`[tui] status_line` values it wrote and what was there before, per Codex
+profile folder, in `codex-statusline-ownership.json` (profile paths and those
+settings only), so it can leave your own changes alone and restore them. With
+the Detailed template the status line command reads the session transcript
+to count tokens and keeps running totals (numbers only, no text) in a small
+file in the temp folder (`swarmterm-statusline-<session>.json`).
+
 Uninstalling the app does not remove these files; delete the folders above to
 remove them.
 

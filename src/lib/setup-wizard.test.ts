@@ -31,7 +31,7 @@ function status(found: Partial<Record<'git' | 'gitBash' | 'winget' | 'node' | 'n
 
 describe('steps', () => {
   it('has four steps in order', () => {
-    expect(WIZARD_STEPS).toEqual(['prerequisites', 'signin', 'voice', 'workspace'])
+    expect(WIZARD_STEPS).toEqual(['prerequisites', 'signin', 'statusline', 'voice', 'workspace'])
     expect(WIZARD_LAYOUTS).toEqual([1, 2, 4])
   })
 })
