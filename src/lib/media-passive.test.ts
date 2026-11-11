@@ -69,19 +69,23 @@ describe('noteHookMedia', () => {
   })
 
   it('detects and announces a hook-reported file once, also against the screen scan', async () => {
-    noteHookMedia('t1', 'C:\scratch\w1.jpg')
-    noteHookMedia('t1', 'c:\SCRATCH\w1.jpg')
+    noteHookMedia('t1', 'C:\\scratch\\w1.jpg')
+    noteHookMedia('t1', 'c:\\SCRATCH\\w1.jpg')
     expect(media.detect).toHaveBeenCalledTimes(1)
     expect(media.announce).toHaveBeenCalledTimes(1)
-    expect(media.detect.mock.calls[0][0]).toMatchObject({ path: 'C:\scratch\w1.jpg', kind: 'image', terminalId: 't1', opened: false })
+    expect(media.detect.mock.calls[0][0]).toMatchObject({ path: 'C:\\scratch\\w1.jpg', kind: 'image', terminalId: 't1', opened: false })
     // The agent's reply names the same file: no second announcement.
-    noteMediaOutput('t1', 'Looked at C:\scratch\w1.jpg\r\n')
-    expect(await detectedAfterScan()).toEqual(['C:\scratch\w1.jpg'])
+    noteMediaOutput('t1', 'Looked at C:\\scratch\\w1.jpg\r\n')
+    expect(await detectedAfterScan()).toEqual(['C:\\scratch\\w1.jpg'])
     expect(media.announce).toHaveBeenCalledTimes(1)
+    // Control: on its own, the screen scan does announce that line.
+    noteMediaOutput('t1', 'Looked at C:\\scratch\\w2.jpg\r\n')
+    expect(await detectedAfterScan()).toEqual(['C:\\scratch\\w1.jpg', 'C:\\scratch\\w2.jpg'])
+    expect(media.announce).toHaveBeenCalledTimes(2)
   })
 
   it('ignores non-media paths', () => {
-    noteHookMedia('t1', 'C:\scratch\notes.txt')
+    noteHookMedia('t1', 'C:\\scratch\\notes.txt')
     expect(media.detect).not.toHaveBeenCalled()
   })
 })

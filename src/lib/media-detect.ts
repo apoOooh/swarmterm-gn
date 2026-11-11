@@ -157,9 +157,17 @@ const WRAP_HEAD_RE = /(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"<>|?*:&;]*$/
 /** An indented continuation line: leading spaces, then a path-character token. */
 const WRAP_TAIL_RE = /^ +([^\s"<>|?*:&;]+)/
 
+/**
+ * Narrowest line taken as cut at the pane edge: a short line such as a
+ * prompt's `cd C:\proj` followed by an indented relative path is no wrap.
+ */
+export const MIN_WRAP_COLUMNS = 40
+
 /** The drive-absolute token a line ends in while it has no media extension yet (a path cut at the pane edge). */
 function cutPathHead(line: string): string | null {
-  const head = WRAP_HEAD_RE.exec(line.trimEnd())?.[0]
+  const trimmed = line.trimEnd()
+  if (trimmed.length < MIN_WRAP_COLUMNS) return null
+  const head = WRAP_HEAD_RE.exec(trimmed)?.[0]
   return head && !EXT_PREFILTER.test(head) ? head : null
 }
 

@@ -441,10 +441,11 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   and `tool_input.file_path` (hand-written visitor, other keys skipped as
   `IgnoredAny`, odd shapes degrade to "none" so the status signal never
   breaks) and sends `media` (Read/Write, absolute, media extension, ≤ 1024)
-  and `cwd` in `HookBody`. `/hook` re-validates both (400 otherwise), stores
+  and `cwd` in `HookBody`. `/hook` re-validates both (`files::media::is_network_path` refuses UNC,
+  also `\\?\UNC\`; an invalid field is dropped, the signal still lands), stores
   the cwd as `ManagedTerminal::agent_cwd` (memory only; the relative-name
   fallback in `media_check_detected`) and emits `media:detected` after
-  `check_detected_media` off the executor, never allow-listing. The renderer's
+  `check_detected_media` off the executor (at most 8 in flight), never allow-listing. The renderer's
   `noteHookMedia` shares the pane's `SeenPaths` with the screen scan.
   `files::media::MEDIA_EXTENSIONS` mirrors `media-detect.ts` (test). Subagent
   tool calls fire the same hook in the same pane, so they need nothing extra.

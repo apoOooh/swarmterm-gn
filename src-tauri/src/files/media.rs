@@ -61,6 +61,22 @@ pub(crate) fn is_media(path: &Path) -> bool {
 /// Must stay in lockstep with `UNROOTED_MEDIA` in `src/tauri/files.ts`.
 pub(super) const UNROOTED_ID: &str = "unrooted";
 
+/// Whether `raw` names a network share or a device: `\\server\share`,
+/// `//server/share`, the verbatim `\\?\UNC\server\share` and device
+/// namespace `\\.\` forms. Only `\\?\C:\...` (a local verbatim path) is
+/// allowed among the `\\` prefixes.
+pub(crate) fn is_network_path(raw: &str) -> bool {
+    let norm = raw.replace('/', "\\");
+    if !norm.starts_with(r"\\") {
+        return false;
+    }
+    let Some(rest) = norm.strip_prefix(r"\\?\") else {
+        return true;
+    };
+    let b = rest.as_bytes();
+    !(b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':')
+}
+
 /// Resolve a path a pane printed or the user opened (absolute, or relative to
 /// the terminal cwd) to a canonical regular media file. Deliberately NO root
 /// check (screenshots land in scratch/temp dirs); the safety net is instead the
@@ -73,7 +89,7 @@ pub(super) fn resolve_media(raw: &str, cwd: &Path) -> Result<std::path::PathBuf,
     }
     // UNC shares would make the app open an SMB connection because of
     // printed text; screenshots are local files, so refuse network paths.
-    if (raw.starts_with(r"\\") || raw.starts_with("//")) && !raw.starts_with(r"\\?\") {
+    if is_network_path(raw) {
         return Err("network (UNC) paths are not supported".into());
     }
     let given = Path::new(raw);
@@ -666,6 +682,24 @@ mod tests {
         assert!(service.register_user_media("a.webp").is_err());
         assert!(service.register_user_media(&abs("a.html")).is_err());
         assert!(service.register_user_media(&abs("nope.png")).is_err());
+    }
+
+    #[test]
+    fn network_and_device_paths_are_refused() {
+        for p in [
+            r"\\srv\share\a.png",
+            "//srv/share/a.png",
+            r"\\?\UNC\srv\share\a.png",
+            r"\\?\unc\srv\share\a.png",
+            "//?/UNC/srv/share/a.png",
+            r"\\.\pipe\x.png",
+        ] {
+            assert!(is_network_path(p), "{p}");
+            assert!(resolve_media(p, Path::new("")).unwrap_err().contains("UNC"), "{p}");
+        }
+        for p in [r"\\?\C:\a\b.png", r"C:\a\b.png", "C:/a/b.png", "rel.png"] {
+            assert!(!is_network_path(p), "{p}");
+        }
     }
 
     #[test]

@@ -220,12 +220,11 @@ pub const MAX_MEDIA_PATH: usize = 1024;
 /// surrounding whitespace). UNC/network paths are refused: the app never
 /// opens an SMB connection because of hook input.
 fn absolute_bounded(p: &str) -> bool {
-    let unc = (p.starts_with(r"\\") || p.starts_with("//")) && !p.starts_with(r"\\?\");
     !p.is_empty()
         && p.len() <= MAX_MEDIA_PATH
         && p.trim() == p
         && !p.contains(['\0', '\r', '\n'])
-        && !unc
+        && !crate::files::media::is_network_path(p)
         && std::path::Path::new(p).is_absolute()
 }
 
@@ -870,5 +869,7 @@ mod tests {
         assert!(valid_cwd(r"C:\a"));
         assert!(!valid_cwd("a"));
         assert!(!valid_cwd(r"\\srv\x"));
+        assert!(!valid_media_path(r"\\?\UNC\srv\share\a.png"));
+        assert!(valid_media_path(r"\\?\C:\a\b.png"));
     }
 }

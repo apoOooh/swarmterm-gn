@@ -158,7 +158,9 @@ describe('wrapped absolute paths', () => {
     expect(stitchWrappedPaths('C:\\long\\pa\nth\\x.png')).toBe('C:\\long\\pa\nth\\x.png')
     expect(stitchWrappedPaths('cd C:\\proj\n  ls')).toBe('cd C:\\proj\n  ls') // harmless: no media either way
     expect(detectMediaPaths('cd C:\\proj\n  ls')).toEqual([])
-    expect(stitchWrappedPaths('C:\\a\\dir\n  - next item.png')).toBe('C:\\a\\dir\n  - next item.png')
+    const dir = `${SCRATCH}\\dir`
+    expect(stitchWrappedPaths(`${dir}\n  - next item.png`)).toBe(`${dir}\n  - next item.png`)
+    expect(stitchWrappedPaths(`${dir}\nth\\x.png`)).toBe(`${dir}\nth\\x.png`)
   })
 
   it('holds a cut line back until its continuation arrives', () => {
@@ -170,11 +172,16 @@ describe('wrapped absolute paths', () => {
     expect(detectMediaPaths(b.take())).toEqual([shot])
   })
 
+  it('does not take a short line ending in a folder for a wrap', () => {
+    expect(detectMediaPaths('cd C:\\proj\n  src\\x.png')).toEqual(['src\\x.png'])
+  })
+
   it('drains a held cut line when the pane goes quiet', () => {
     const b = new MediaOutputBuffer()
-    b.append('C:\\tmp\\out\n')
+    const line = `${SCRATCH}\n`
+    b.append(line)
     expect(b.take()).toBe('')
-    expect(b.drain()).toBe('C:\\tmp\\out\n')
+    expect(b.drain()).toBe(line)
   })
 })
 
