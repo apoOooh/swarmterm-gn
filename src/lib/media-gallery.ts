@@ -16,6 +16,8 @@ export interface MediaItem {
   opened: boolean
   /** Display name when the file name on disk is not meaningful (marked copies). */
   label?: string
+  /** Content stamp (mtime:size) of a detected file; a change means it was overwritten. */
+  version?: string
 }
 
 /** Agents re-show the same file while iterating; keep the strip bounded. */
@@ -50,3 +52,15 @@ export function fileName(path: string): string {
 
 /** Name shown for an item: its label (marked copies), else the file name. */
 export const itemName = (item: Pick<MediaItem, 'path' | 'label'>): string => item.label ?? fileName(item.path)
+
+/**
+ * Whether stamp `next` (`"<mtimeMs>:<size>"`) is OLDER than `prev`: a lookup
+ * that started before an overwrite may answer after a newer version was
+ * already recorded (screen scan vs hook event), and must not roll it back.
+ * Equal mtime with another size still counts as a change.
+ */
+export function isOlderStamp(prev: string, next: string): boolean {
+  const p = Number(prev.split(':')[0])
+  const n = Number(next.split(':')[0])
+  return Number.isFinite(p) && Number.isFinite(n) && n < p
+}

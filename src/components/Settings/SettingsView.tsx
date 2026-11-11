@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from 'react'
 import { AdminPolicySection } from '@/components/Settings/AdminPolicySection'
-import { Bell, FileText, Images, Keyboard, LayoutGrid, ListChecks, Mic, Palette, PanelTop, Terminal, Users, Plug, X } from 'lucide-react'
+import { Bell, FileText, Images, Keyboard, LayoutGrid, ListChecks, Mic, Palette, PanelTop, PanelBottom, Terminal, Users, Plug, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { AppearancePanel } from './AppearancePanel'
@@ -15,8 +15,9 @@ import { TitleBarPanel } from './TitleBarPanel'
 import { WorkspacesPanel } from './WorkspacesPanel'
 import { MediaSettingsPanel } from './MediaPanel'
 import { SetupPanel } from './SetupPanel'
+import { StatuslinePanel } from './StatuslinePanel'
 
-export type CategoryId = 'setup' | 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts' | 'accounts' | 'mcp' | 'voice' | 'title-bar' | 'workspaces' | 'media'
+export type CategoryId = 'setup' | 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts' | 'accounts' | 'mcp' | 'voice' | 'title-bar' | 'workspaces' | 'media' | 'statusline'
 
 interface Category {
   id: CategoryId
@@ -31,6 +32,7 @@ const CATEGORIES: Category[] = [
   { id: 'mcp', label: 'MCP', Icon: Plug },
   { id: 'workspaces', label: 'Workspaces', Icon: LayoutGrid },
   { id: 'terminal', label: 'Terminal', Icon: Terminal },
+  { id: 'statusline', label: 'Status line', Icon: PanelBottom },
   { id: 'title-bar', label: 'Title bar', Icon: PanelTop },
   { id: 'files', label: 'Files', Icon: FileText },
   { id: 'notifications', label: 'Notifications', Icon: Bell },
@@ -121,6 +123,7 @@ export function SettingsView({ onClose, initialCategory }: SettingsViewProps): R
               {activeCategory === 'appearance' && <AppearancePanel />}
               {activeCategory === 'setup' && <SetupPanel />}
               {activeCategory === 'terminal' && <TerminalPanel />}
+              {activeCategory === 'statusline' && <StatuslinePanel />}
               {activeCategory === 'files' && <FilesPanel />}
               {activeCategory === 'notifications' && <NotificationsPanel />}
               {activeCategory === 'media' && <MediaSettingsPanel />}

@@ -86,9 +86,10 @@ pub async fn files_request(
 }
 
 /// Passive media detection: the renderer found image/video paths in a pane's
-/// output. Relative paths resolve against that terminal's cwd; the answer has
-/// one entry per input (canonical display path of an existing media file, or
-/// null). Validation only, nothing is allow-listed here (see
+/// output. Relative paths resolve against that terminal's spawn cwd, then the
+/// agent's last hook-reported cwd (agents `cd` away from it); the answer has
+/// one entry per input (canonical display path of an existing media file with
+/// its mtime and size, or null). Validation only, nothing is allow-listed here (see
 /// `FileService::check_detected_media`). Disk work runs off the async executor.
 #[tauri::command]
 pub async fn media_check_detected(
@@ -97,21 +98,29 @@ pub async fn media_check_detected(
     service: State<'_, std::sync::Arc<crate::files::FileService>>,
     terminal_id: String,
     paths: Vec<String>,
-) -> Result<Vec<Option<String>>, String> {
+) -> Result<Vec<Option<serde_json::Value>>, String> {
     files_main_only(&window)?;
-    let cwd = state
+    let (cwd, agent_cwd) = state
         .terminals
         .lock()
         .map_err(|e| e.to_string())?
         .get(&terminal_id)
-        .map(|t| t.cwd.clone())
+        .map(|t| (t.cwd.clone(), t.agent_cwd.clone()))
         .ok_or("unknown terminal")?;
     let service = service.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         service
-            .check_detected_media(&paths, std::path::Path::new(&cwd))
+            .check_detected_media_in(&paths, &cwd, agent_cwd.as_deref())
             .iter()
-            .map(|p| p.as_deref().map(crate::files::path::display))
+            .map(|hit| {
+                hit.as_ref().map(|d| {
+                    serde_json::json!({
+                        "path": crate::files::path::display(&d.path),
+                        "mtimeMs": d.mtime_ms,
+                        "size": d.size,
+                    })
+                })
+            })
             .collect()
     })
     .await
@@ -1681,4 +1690,112 @@ pub async fn run_routine_command(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// `statusline.json` of this app instance (SWA-92). The `--statusline`
+/// process of the same build reads it from the same place
+/// (`statusline::settings::path`, identifier compiled in by `build.rs`).
+fn statusline_settings_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join(crate::statusline::settings::FILE))
+        .map_err(|e| e.to_string())
+}
+
+static STATUSLINE_SETTINGS_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[tauri::command]
+pub async fn codex_statusline_apply(
+    app: AppHandle,
+    preset: crate::statusline::settings::Preset,
+    use_colors: bool,
+    enabled: bool,
+) -> Result<Vec<crate::hook::codex_statusline::Status>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = STATUSLINE_SETTINGS_WRITE
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let file = statusline_settings_file(&app)?;
+        let mut settings = crate::statusline::settings::load(&file);
+        settings.codex = Some(preset);
+        settings.codex_use_colors = use_colors;
+        settings.codex_enabled = enabled;
+        crate::statusline::settings::save(&file, &settings).map_err(|e| e.to_string())?;
+        crate::hook::codex_statusline::update(&app, Some((preset, use_colors, enabled)), true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn codex_statusline_status(
+    app: AppHandle,
+) -> Result<Vec<crate::hook::codex_statusline::Status>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::hook::codex_statusline::update(&app, None, false)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn codex_statusline_release(
+    app: AppHandle,
+) -> Result<Vec<crate::hook::codex_statusline::Status>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = STATUSLINE_SETTINGS_WRITE
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let file = statusline_settings_file(&app)?;
+        let mut settings = crate::statusline::settings::load(&file);
+        settings.codex = None;
+        crate::statusline::settings::save(&file, &settings).map_err(|e| e.to_string())?;
+        crate::hook::codex_statusline::update(&app, None, true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The saved status line template, scheme, vibrance and animation.
+#[tauri::command]
+pub async fn statusline_settings_get(
+    app: AppHandle,
+) -> Result<crate::statusline::settings::StatuslineSettings, String> {
+    let file = statusline_settings_file(&app)?;
+    tauri::async_runtime::spawn_blocking(move || crate::statusline::settings::load(&file))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Store the status line settings. Applies on the next render of every
+/// Claude pane; `settings.json` is not touched (its entry stays
+/// `<exe> --statusline`).
+#[tauri::command]
+pub async fn statusline_settings_set(
+    app: AppHandle,
+    settings: crate::statusline::settings::StatuslineSettings,
+) -> Result<(), String> {
+    let file = statusline_settings_file(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = STATUSLINE_SETTINGS_WRITE
+            .lock()
+            .map_err(|e| e.to_string())?;
+        crate::statusline::settings::save(&file, &settings).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Example rows (ANSI) for the template picker, rendered by the real
+/// renderer at `columns` terminal columns.
+#[tauri::command]
+pub async fn statusline_preview(
+    settings: crate::statusline::settings::StatuslineSettings,
+    columns: usize,
+) -> Result<Vec<String>, String> {
+    Ok(crate::statusline::preview::rows(
+        &settings,
+        columns.clamp(20, 400),
+    ))
 }

@@ -20,7 +20,7 @@ An existing installation never sees the assistant on its own, and keeps voice di
 
 ## Create a workspace
 
-Swarmterm opens on the **composer**: pick a folder (the working directory for every pane), choose how many terminals, and use the steppers to assign AI agents — **Claude Code**, **Codex**, **OpenCode**, **GitHub Copilot**, **Qwen Code**, **Amp**, **Gemini CLI**, **Cursor Agent**, **Antigravity** or **OMP (Oh My Pi)** — the rest stay plain shells. Only agents whose CLI is installed are listed. Turn on **Isolate features in git worktrees** for parallel work, then press `⌘/Ctrl + Enter`.
+Swarmterm opens on the **composer**: pick a folder (the working directory for every pane), choose how many terminals, and use the steppers to assign AI agents — **Claude Code**, **Codex**, **OpenCode**, **GitHub Copilot**, **Qwen Code**, **Amp**, **Gemini CLI**, **Cursor Agent**, **Antigravity** or **OMP (Oh My Pi)** — the rest stay plain shells. Only agents whose CLI is installed are listed. Turn on **Isolate features in git worktrees** for parallel work, then press `⌘/Ctrl + Enter`. The option is off for a folder that is only a subfolder of a larger repository: a worktree always copies the whole repository, so the panes would not start in your folder.
 
 Agent detection re-runs every time the composer opens, so installing a CLI needs no restart. Workspace layouts and known agent conversations can be reopened from **Saved workspaces** on Welcome. Settings persist too; terminal output and unsaved editor buffers do not.
 
@@ -159,7 +159,11 @@ closes.
 Swarmterm notices media paths a pane prints: absolute paths
 (`C:\...\shot.png`, spaces included), quoted paths and paths relative to the
 pane's starting folder, also inside tables whose cells the agent wrapped over
-several lines (such as Claude Code's bordered tables). If such a file exists,
+several lines (such as Claude Code's bordered tables) and long absolute paths
+Claude Code wraps at the pane edge. Images and videos a Claude Code agent or
+any of its subagents opens or writes with its Read/Write tools are detected
+too, even when the pane never shows the path (collapsed tool lines, subagent
+work). If such a file exists,
 it joins the Media strip with its thumbnail (videos show a film icon), and the
 pane shows a **N new images/videos** pill
 in its top-right corner. To view it large, click the pill (opens the newest),
@@ -168,9 +172,16 @@ on a media path outside the project opens it straight in the Media tab. The pane
 never opens by itself, and your keyboard stays in the terminal. Only
 PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local drives are
 accepted. A path printed just before the file is written is retried a few times
-when printed again within seconds. Not detected: newly created files that are
-never printed, POSIX-style paths (`/c/...`, `~/...`), and relative paths after a
-`cd` (they resolve against the folder the pane started in).
+when printed again within seconds. A file overwritten in place (an agent saving a
+new screenshot under the same name) moves back to the front of the strip with its
+new content once it is printed again or opened/written by Claude's Read/Write
+tools; printing or reading an unchanged file again adds nothing. Not detected: newly created files that are
+never printed or opened by Claude's Read/Write tools (for example screenshots
+an agent only creates through shell commands), paths built from shell
+variables (`$DIR/shot.png`), POSIX-style paths (`/c/...`, `~/...`), and a file
+replaced by a copy with an older modification time (for example a restored backup).
+Relative paths resolve against the folder the pane started in and, in Claude
+Code panes, the agent's current folder.
 
 **New-media popup.** Settings → Media → **Show popup** (off by default) shows a
 small list in the bottom-right corner whenever new media arrives: thumbnail,
@@ -403,15 +414,25 @@ If you use data-shield's prompt guard with Claude Code, a prompt it blocks (beca
 
 ## Status line in Claude Code panes
 
-Every Claude Code pane gets a one-line readout under its prompt:
+Every Claude Code pane gets a readout under its prompt. Pick how much it shows in **Settings → Status line** (the setup assistant asks once, too):
 
-```
-mcp ✓  ·  ctx 84k/200k 42%
-```
+- **Compact** — the MCP link, the model and the context window:
 
-The left half tells you whether Claude actually connected to Swarmterm — and therefore has the War Room and worktree tools: `✓` connected, `…` never reached Swarmterm (tools missing), `✗` Swarmterm no longer answering. The right half is the session's context window — tokens used, limit, percentage — amber past 70 %, red past 90 %.
+  ```
+  mcp ✓ | Opus 5.5 ctx 84k/200k 42%
+  ```
 
-Toggle it in **Settings → Terminal**. Swarmterm merge-writes the entry into `~/.claude/settings.json` and never touches a status line you already have.
+- **Extended** — adds the effort level, a context bar, the git branch and your 5-hour and 7-day limits with the time until they reset.
+- **Detailed** — adds the session cost, the prompt cache, subagents, and bars for input, output and tool tokens. Values marked `≈` are estimates (subagent cost from a fixed price table, token shares from text length).
+- **Off** — no status line from Swarmterm.
+
+`mcp ✓` means Claude actually connected to Swarmterm — and therefore has the War Room and worktree tools; `…` never reached Swarmterm (tools missing), `✗` Swarmterm no longer answering. Context turns amber past 70 % and red past 90 %.
+
+The line follows the pane width: when it does not fit, bars get shorter and the "left" texts go, then segments move to a second row. Below about 50 columns the branch, cache and subagents are left out; model, context, limits and the MCP link always stay.
+
+**Colours.** *Subtle* is near-monochrome with only warnings tinted. *App theme* takes text and accent from the active Swarmterm theme (and follows a theme switch); its **Vibrance** slider makes the colours stronger or calmer, warnings stay coloured at 0 %. *High contrast* uses the terminal's 16 basic colours. The preview above the settings is drawn by the same code as the real line; drag its width slider to see how it wraps.
+
+Changes apply at the next refresh of each pane. Swarmterm merge-writes one entry into `~/.claude/settings.json` and never touches a status line you already have; the template and colours are kept in `statusline.json` in Swarmterm's app data folder.
 
 The pane header mirrors the percentage as a small `ctx 63%` chip (same amber / red bands) once the first reply lands, so you can compare panes without reading each status line. It needs the status line enabled — that is where the number comes from — and disappears on `/clear` and when `claude` exits; on very narrow panes it moves into the header's `⋯` row.
 
@@ -568,7 +589,7 @@ Changes apply to the next pane or routine that starts; running panes keep the en
 
 ## Settings, tray and quitting
 
-**Settings** (from the navbar) covers appearance, terminal font and default shell with a live preview, the status line toggle, and the full shortcut list — these preferences persist between launches.
+**Settings** (from the navbar) covers appearance, terminal font and default shell with a live preview, the status line templates, and the full shortcut list — these preferences persist between launches.
 
 **Setup.** Settings → **Setup** lists what Swarmterm added to Claude Code and Codex so panes can report their state, show the status line and reach the War Room: the hooks, the Swarmterm MCP entry and the status line, each with its state. Swarmterm writes nothing for a CLI that is not installed; entries it added earlier are still kept up to date, even when it cannot find that CLI itself. Install one while Swarmterm runs and its entries are added the next time the composer opens, a pane of that agent starts, or you press **Check again**. Your own status line is kept, and an entry you switched off under Settings → MCP shows as switched off. Only a real failure, such as a configuration file that cannot be read, puts one *Agent setup needs attention* entry in the bell. It names the first problem; this page shows all of them.
 

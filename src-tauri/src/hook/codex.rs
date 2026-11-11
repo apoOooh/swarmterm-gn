@@ -318,7 +318,7 @@ pub fn has_ours(home: &Path) -> bool {
 }
 
 /// Does `config.toml` or `hooks.json` already carry exactly `command`?
-fn has_command(home: &Path, command: &str) -> bool {
+pub(crate) fn has_command(home: &Path, command: &str) -> bool {
     ["config.toml", "hooks.json"]
         .iter()
         .any(|f| fs::read_to_string(home.join(f)).is_ok_and(|s| s.contains(command)))

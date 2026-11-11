@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { detectMediaPaths, stitchTableRows, MAX_CARRY, MediaOutputBuffer, MISS_MAX_TRIES, MISS_RETRY_MS, OVERLAP, SeenPaths } from './media-detect'
+import { detectMediaPaths, stitchTableRows, stitchWrappedPaths, MAX_CARRY, MediaOutputBuffer, FOUND_RECHECK_MS, MISS_MAX_TRIES, MISS_RETRY_MS, OVERLAP, SeenPaths } from './media-detect'
+import { isOlderStamp } from './media-gallery'
 
 describe('detectMediaPaths', () => {
   it('ignores output without a media extension', () => {
@@ -132,6 +133,59 @@ describe('wrapped table cells', () => {
   })
 })
 
+// Claude Code (Ink) hard-wraps a token longer than the free width at the pane
+// edge and indents the continuation like the text it belongs to. Fixtures
+// follow that shape: tool header and reply text, CRLF, colour and cursor moves.
+const SCRATCH = 'C:\\Users\\me\\AppData\\Local\\Temp\\claude\\4d903d1f1bd5c89b\\9c8f35f2-06c1-43ca-89fd-2e9c729ae425\\scratchpad'
+
+describe('wrapped absolute paths', () => {
+  it('joins a Read header path cut at the pane edge', () => {
+    const shot = `${SCRATCH}\\w1.jpg`
+    const cut = 70
+    const text = `\x1b[1m⏺ Read\x1b[22m(${shot.slice(0, cut)}\x1b[K\r\n     ${shot.slice(cut)})\r\n`
+    expect(detectMediaPaths(text)).toEqual([shot])
+  })
+
+  it('joins a reply path wrapped over three lines with colour and cursor-move indents', () => {
+    const shot = `${SCRATCH}\\shots\\8-detail-960.png`
+    const text = `  Saved it to \x1b[36m${shot.slice(0, 50)}\x1b[39m\n\x1b[2C\x1b[36m${shot.slice(50, 110)}\n  ${shot.slice(110)}\x1b[39m and compared it.\n`
+    expect(detectMediaPaths(text)).toEqual([shot])
+  })
+
+  it('stays conservative: complete paths, prose ends and unindented lines are not joined', () => {
+    expect(stitchWrappedPaths('C:\\a\\b.png\n  c.png')).toBe('C:\\a\\b.png\n  c.png')
+    expect(detectMediaPaths('C:\\a\\b.png\n  c.png')).toEqual(['C:\\a\\b.png', 'c.png'])
+    expect(stitchWrappedPaths('see the folder\n  shot.png')).toBe('see the folder\n  shot.png')
+    expect(stitchWrappedPaths('C:\\long\\pa\nth\\x.png')).toBe('C:\\long\\pa\nth\\x.png')
+    expect(stitchWrappedPaths('cd C:\\proj\n  ls')).toBe('cd C:\\proj\n  ls') // harmless: no media either way
+    expect(detectMediaPaths('cd C:\\proj\n  ls')).toEqual([])
+    const dir = `${SCRATCH}\\dir`
+    expect(stitchWrappedPaths(`${dir}\n  - next item.png`)).toBe(`${dir}\n  - next item.png`)
+    expect(stitchWrappedPaths(`${dir}\nth\\x.png`)).toBe(`${dir}\nth\\x.png`)
+  })
+
+  it('holds a cut line back until its continuation arrives', () => {
+    const shot = `${SCRATCH}\\w2.png`
+    const b = new MediaOutputBuffer()
+    b.append(`done\n  ${shot.slice(0, 60)}\n`)
+    expect(detectMediaPaths(b.take())).toEqual([])
+    b.append(`  ${shot.slice(60)}\nnext\n`)
+    expect(detectMediaPaths(b.take())).toEqual([shot])
+  })
+
+  it('does not take a short line ending in a folder for a wrap', () => {
+    expect(detectMediaPaths('cd C:\\proj\n  src\\x.png')).toEqual(['src\\x.png'])
+  })
+
+  it('drains a held cut line when the pane goes quiet', () => {
+    const b = new MediaOutputBuffer()
+    const line = `${SCRATCH}\n`
+    b.append(line)
+    expect(b.take()).toBe('')
+    expect(b.drain()).toBe(line)
+  })
+})
+
 describe('MediaOutputBuffer', () => {
   it('reassembles a path split across chunks before scanning', () => {
     const b = new MediaOutputBuffer()
@@ -177,12 +231,40 @@ describe('MediaOutputBuffer', () => {
   })
 })
 
+describe('isOlderStamp', () => {
+  it('compares mtimes only', () => {
+    expect(isOlderStamp('2:10', '1:99')).toBe(true)
+    expect(isOlderStamp('2:10', '2:11')).toBe(false)
+    expect(isOlderStamp('2:10', '3:1')).toBe(false)
+    expect(isOlderStamp('x', '1:1')).toBe(false)
+  })
+})
+
 describe('SeenPaths', () => {
-  it('never re-offers a confirmed path, case-insensitively', () => {
+  it('never lets an older stamp replace a newer one; same mtime, other size is a change', () => {
     const s = new SeenPaths()
-    expect(s.offer('C:\A.png', 0)).toBe(true)
-    s.confirm('C:\A.png')
-    expect(s.offer('c:\a.PNG', 1e9)).toBe(false)
+    expect(s.confirm('C:/A.png', '2:10', 0)).toBe(true)
+    expect(s.confirm('C:/A.png', '1:10', 1)).toBe(false)
+    expect(s.confirm('C:/A.png', '2:10', 2)).toBe(false)
+    expect(s.confirm('C:/A.png', '2:11', 3)).toBe(true)
+    expect(s.confirm('C:/A.png', '3:11', 4)).toBe(true)
+  })
+
+  it('re-offers a confirmed path at most once per recheck interval, case-insensitively', () => {
+    const s = new SeenPaths()
+    expect(s.offer('C:/A.png', 0)).toBe(true)
+    expect(s.confirm('C:/A.png', '1:1', 0)).toBe(true)
+    expect(s.offer('c:/a.PNG', FOUND_RECHECK_MS - 1)).toBe(false)
+    expect(s.offer('c:/a.PNG', FOUND_RECHECK_MS)).toBe(true)
+    expect(s.offer('c:/a.PNG', FOUND_RECHECK_MS + 1)).toBe(false)
+  })
+
+  it('confirm reports news only for a first find or a changed stamp', () => {
+    const s = new SeenPaths()
+    expect(s.confirm('xs.png', '1:10', 0)).toBe(true)
+    expect(s.confirm('XS.png', '1:10', 1)).toBe(false)
+    expect(s.confirm('xs.png', '2:10', 2)).toBe(true)
+    expect(s.confirm('xs.png', '2:10', 3)).toBe(false)
   })
 
   it('retries a miss after a delay, a bounded number of times', () => {
@@ -199,9 +281,9 @@ describe('SeenPaths', () => {
 
   it('stays bounded', () => {
     const s = new SeenPaths(2)
-    s.offer('a.png', 0); s.confirm('a.png')
-    s.offer('b.png', 0); s.confirm('b.png')
-    s.offer('c.png', 0); s.confirm('c.png')
+    s.offer('a.png', 0); s.confirm('a.png', 'v', 0)
+    s.offer('b.png', 0); s.confirm('b.png', 'v', 0)
+    s.offer('c.png', 0); s.confirm('c.png', 'v', 0)
     expect(s.offer('a.png', 0)).toBe(true)
   })
 })

@@ -32,12 +32,27 @@
 //! id, and (SWA-58) Claude's `prompt_id` or Codex's `turn_id`. `last_assistant_message` is read
 //! into this process for one reason — to send its length and SHA-256
 //! (`Fingerprint`), never the text — so the app can tell whether the row it
-//! reads from the transcript is the one this Stop saw. Prompt text, tool
-//! input, cwd and `transcript_path` are never read into a struct.
+//! reads from the transcript is the one this Stop saw. Prompt text and
+//! `transcript_path` are never read into a struct.
+//!
+//! Media paths (user decision 2026-11-11, `docs/decisions.md`): on
+//! `PostToolUse` of `Read`/`Write` the CLI reads ONE field of the tool input,
+//! `file_path`, and forwards it only when it is an absolute local path
+//! (at most `MAX_MEDIA_PATH` chars) with an image/video extension
+//! (`files::media::MEDIA_EXTENSIONS`), so images an agent or its subagents
+//! open reach the Media gallery although the screen never shows them. With
+//! every PostToolUse goes the agent's current `cwd` (same bounds), kept in
+//! memory per pane so relative names printed on screen resolve where the
+//! agent works. Every other tool-input field (file content, commands) and
+//! `tool_response` are skipped by the deserialiser without being stored; no
+//! other tool's input is used. File content never crosses the port. A nested
+//! `claude` inside the pane posts with the pane's bearer; its media and cwd
+//! count for the pane too (decision 2026-11-11).
 
 pub mod adopt;
 pub mod claude_version;
 pub mod codex;
+pub mod codex_statusline;
 pub mod install;
 pub mod post;
 
@@ -78,10 +93,186 @@ pub struct HookInput {
     /// Only ever fingerprinted, see the module doc. Never sent, never logged.
     #[serde(default)]
     pub last_assistant_message: Option<String>,
+    /// PostToolUse: which tool ran (only `Read`/`Write` are acted on).
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub tool_name: Option<String>,
+    /// PostToolUse: `file_path` only, see [`ToolInput`].
+    #[serde(default)]
+    pub tool_input: ToolInput,
+    /// The agent's current directory (not the pane's spawn cwd).
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub cwd: Option<String>,
     /// SWA-88: UserPromptSubmit's prompt. Only ever fingerprinted, like
     /// `last_assistant_message`: never sent, never logged.
     #[serde(default)]
     pub prompt: Option<String>,
+}
+
+/// The one tool-input field we look at. Deserialised by hand so every other
+/// key (a Write's `content`, a Bash `command`) is skipped as `IgnoredAny`
+/// and never buffered, and so a non-object or a non-string `file_path` (an
+/// MCP tool's own shape) degrades to "no path" instead of failing the parse
+/// that the status signal depends on.
+#[derive(Debug, Default)]
+pub struct ToolInput {
+    pub file_path: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for ToolInput {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = ToolInput;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("any value")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<ToolInput, A::Error> {
+                let mut out = ToolInput::default();
+                while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                    if key == "file_path" && out.file_path.is_none() {
+                        out.file_path = map.next_value::<MaybeString>()?.0;
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(out)
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<ToolInput, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(ToolInput::default())
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<ToolInput, E> {
+                Ok(ToolInput::default())
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<ToolInput, E> {
+                Ok(ToolInput::default())
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<ToolInput, E> {
+                Ok(ToolInput::default())
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<ToolInput, E> {
+                Ok(ToolInput::default())
+            }
+            fn visit_str<E>(self, _: &str) -> Result<ToolInput, E> {
+                Ok(ToolInput::default())
+            }
+            fn visit_unit<E>(self) -> Result<ToolInput, E> {
+                Ok(ToolInput::default())
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// A string, or `None` for any other JSON value (skipped, not buffered).
+struct MaybeString(Option<String>);
+
+impl<'de> serde::Deserialize<'de> for MaybeString {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = MaybeString;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("any value")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<MaybeString, E> {
+                Ok(MaybeString(Some(v.to_owned())))
+            }
+            fn visit_string<E>(self, v: String) -> Result<MaybeString, E> {
+                Ok(MaybeString(Some(v)))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<MaybeString, A::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(MaybeString(None))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<MaybeString, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(MaybeString(None))
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<MaybeString, E> {
+                Ok(MaybeString(None))
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<MaybeString, E> {
+                Ok(MaybeString(None))
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<MaybeString, E> {
+                Ok(MaybeString(None))
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<MaybeString, E> {
+                Ok(MaybeString(None))
+            }
+            fn visit_unit<E>(self) -> Result<MaybeString, E> {
+                Ok(MaybeString(None))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+fn lenient_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    <MaybeString as serde::Deserialize>::deserialize(d).map(|m| m.0)
+}
+
+/// Longest media path or cwd the CLI forwards (and `/hook` accepts).
+pub const MAX_MEDIA_PATH: usize = 1024;
+
+/// Whether `p` is an absolute, bounded, local path, exactly as given (no
+/// surrounding whitespace). UNC/network paths are refused: the app never
+/// opens an SMB connection because of hook input.
+fn absolute_bounded(p: &str) -> bool {
+    !p.is_empty()
+        && p.len() <= MAX_MEDIA_PATH
+        && p.trim() == p
+        && !p.contains(['\0', '\r', '\n'])
+        && !crate::files::media::is_network_path(p)
+        && std::path::Path::new(p).is_absolute()
+}
+
+/// Whether `path` passes the `/hook` media rule (shared by CLI and server).
+pub fn valid_media_path(path: &str) -> bool {
+    absolute_bounded(path) && crate::files::FileService::is_media_path(std::path::Path::new(path))
+}
+
+/// Whether `cwd` passes the `/hook` cwd rule (shared by CLI and server).
+pub fn valid_cwd(cwd: &str) -> bool {
+    absolute_bounded(cwd)
+}
+
+/// The media file a `Read`/`Write` tool call touched, if any (module doc).
+pub fn media_from_input(input: &HookInput) -> Option<String> {
+    if input.hook_event_name != "PostToolUse"
+        || !matches!(input.tool_name.as_deref(), Some("Read" | "Write"))
+    {
+        return None;
+    }
+    input
+        .tool_input
+        .file_path
+        .clone()
+        .filter(|p| valid_media_path(p))
+}
+
+/// The agent's current directory, PostToolUse only (module doc).
+pub fn cwd_from_input(input: &HookInput) -> Option<String> {
+    if input.hook_event_name != "PostToolUse" {
+        return None;
+    }
+    input.cwd.clone().filter(|c| valid_cwd(c))
 }
 
 /// Which edge of a turn a hook event is (SWA-58).
@@ -194,6 +385,12 @@ pub struct HookBody {
     pub session: Option<SessionMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<TurnMark>,
+    /// One absolute media file a Read/Write touched (`valid_media_path`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
+    /// The agent's current directory (`valid_cwd`), PostToolUse only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -300,6 +497,30 @@ pub fn run_agent_cli(agent_id: &str) {
     let Ok(input) = serde_json::from_str::<HookInput>(&raw) else {
         return;
     };
+    let generation = std::env::var("SWARMTERM_PTY_GENERATION").ok();
+    let Some(body) = hook_body(agent_id, &input, generation) else {
+        return;
+    };
+    let is_prompt = body
+        .turn
+        .as_ref()
+        .is_some_and(|t| t.edge == TurnEdge::Prompt);
+    let answer = post::post_body_answer(url.trim(), token.trim(), &body, POST_TIMEOUT);
+    if is_prompt && answer.as_deref().is_some_and(wants_voice) {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(voice_context().as_bytes());
+        let _ = out.flush();
+    }
+}
+
+/// The `/hook` body for one parsed hook event, or `None` when the event
+/// posts nothing. `generation` is `SWARMTERM_PTY_GENERATION`.
+pub fn hook_body(
+    agent_id: &str,
+    input: &HookInput,
+    generation: Option<String>,
+) -> Option<HookBody> {
     // Stop carries the session too (SWA-58): the app closes a turn only for
     // the generation and session it was opened in.
     let session = if matches!(
@@ -311,57 +532,41 @@ pub fn run_agent_cli(agent_id: &str) {
             .clone()
             .filter(|id| crate::sessions::is_uuid(id))
             .and_then(|session_id| {
-                std::env::var("SWARMTERM_PTY_GENERATION")
-                    .ok()
-                    .map(|spawn_id| SessionMetadata {
-                        agent_id: agent_id.into(),
-                        session_id,
-                        spawn_id,
-                    })
+                generation.map(|spawn_id| SessionMetadata {
+                    agent_id: agent_id.into(),
+                    session_id,
+                    spawn_id,
+                })
             })
     } else {
         None
     };
     let turn = match agent_id {
         _ if session.is_none() => None,
-        "claude-code" => TurnMark::from_input(&input),
-        "codex" => TurnMark::from_codex_input(&input),
+        "claude-code" => TurnMark::from_input(input),
+        "codex" => TurnMark::from_codex_input(input),
         _ => None,
     };
     let signal = if agent_id == "codex" {
         // No identity, no authority: the app could not tell this pane's
         // Codex from a nested one, so it would not act on it anyway.
-        if session.is_none() {
-            return;
-        };
-        let Some(signal) = codex_signal_for(&input.hook_event_name) else {
-            return;
-        };
-        signal
+        session.as_ref()?;
+        codex_signal_for(&input.hook_event_name)?
     } else {
-        let Some(signal) = signal_for(&input.hook_event_name, input.notification_type.as_deref())
-        else {
-            return;
-        };
-        signal
+        signal_for(&input.hook_event_name, input.notification_type.as_deref())?
     };
-    let is_prompt = turn.as_ref().is_some_and(|t| t.edge == TurnEdge::Prompt);
-    let answer = post::post_body_answer(
-        url.trim(),
-        token.trim(),
-        &HookBody {
-            signal,
-            session,
-            turn,
-        },
-        POST_TIMEOUT,
-    );
-    if is_prompt && answer.as_deref().is_some_and(wants_voice) {
-        use std::io::Write;
-        let mut out = std::io::stdout().lock();
-        let _ = out.write_all(voice_context().as_bytes());
-        let _ = out.flush();
-    }
+    let (media, cwd) = if agent_id == "claude-code" {
+        (media_from_input(input), cwd_from_input(input))
+    } else {
+        (None, None)
+    };
+    Some(HookBody {
+        signal,
+        session,
+        turn,
+        media,
+        cwd,
+    })
 }
 
 /// The app's answer to a prompt edge: `{"voice":true}` and nothing else
@@ -586,6 +791,8 @@ mod tests {
             signal: Signal::Idle,
             session: None,
             turn: Some(mark),
+            media: None,
+            cwd: None,
         };
         let wire = serde_json::to_string(&body).unwrap();
         assert!(!wire.contains("Geheimer"));
@@ -639,6 +846,104 @@ mod tests {
         assert_eq!((f.edge, f.answer), (TurnEdge::StopFailure, None));
     }
 
+    fn post_tool(tool: &str, tool_input: serde_json::Value) -> HookInput {
+        input(serde_json::json!({
+            "hook_event_name": "PostToolUse", "session_id": "s", "cwd": r"C:\proj\sub",
+            "tool_name": tool, "tool_input": tool_input,
+            "tool_response": {"file": {"content": "SECRET-RESPONSE"}}
+        }))
+    }
+
+    #[test]
+    fn read_and_write_of_an_absolute_media_file_forward_only_its_path() {
+        let shot = r"C:\Users\me\Temp\claude\scratchpad\w1.jpg";
+        for tool in ["Read", "Write"] {
+            let i = post_tool(
+                tool,
+                serde_json::json!({"file_path": shot, "content": "SECRET-CONTENT", "offset": 3}),
+            );
+            assert_eq!(media_from_input(&i).as_deref(), Some(shot));
+            let body = HookBody {
+                signal: Signal::Working,
+                session: None,
+                turn: None,
+                media: media_from_input(&i),
+                cwd: cwd_from_input(&i),
+            };
+            let wire = serde_json::to_string(&body).unwrap();
+            assert!(!wire.contains("SECRET"), "{wire}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&wire).unwrap(),
+                serde_json::json!({"signal": "working", "media": shot, "cwd": r"C:\proj\sub"})
+            );
+        }
+    }
+
+    #[test]
+    fn other_tools_relative_non_media_and_odd_shapes_forward_no_media() {
+        let media = |tool: &str, ti: serde_json::Value| media_from_input(&post_tool(tool, ti));
+        let j = |p: &str| serde_json::json!({ "file_path": p });
+        assert_eq!(media("Read", j(r"C:\a\notes.txt")), None);
+        assert_eq!(media("Read", j(r"C:\a\page.svg")), None);
+        assert_eq!(media("Read", j("shot.png")), None);
+        assert_eq!(media("Read", j(r"sub\shot.png")), None);
+        assert_eq!(media("Read", j(r"\\server\share\a.png")), None);
+        assert_eq!(media("Read", j(" C:\\a\\b.png")), None);
+        assert_eq!(media("Edit", j(r"C:\a\b.png")), None);
+        assert_eq!(media("NotebookEdit", j(r"C:\a\b.png")), None);
+        assert_eq!(
+            media("Bash", serde_json::json!({"command": r"cat C:\a\b.png"})),
+            None
+        );
+        let long = format!(r"C:\{}.png", "a".repeat(MAX_MEDIA_PATH));
+        assert_eq!(media("Read", j(&long)), None);
+        // Odd shapes never break the status signal.
+        for ti in [
+            serde_json::json!({"file_path": 5}),
+            serde_json::json!({"file_path": {"a": [1]}}),
+            serde_json::json!([1, {"file_path": r"C:\a\b.png"}]),
+            serde_json::json!("C:\\a\\b.png"),
+            serde_json::json!(null),
+            serde_json::json!(true),
+        ] {
+            let i = post_tool("Read", ti);
+            assert_eq!(media_from_input(&i), None);
+            assert_eq!(signal_for(&i.hook_event_name, None), Some(Signal::Working));
+        }
+        // Another event with a media Read shape: nothing at all.
+        let mut i = post_tool("Read", j(r"C:\a\b.png"));
+        i.hook_event_name = "PreToolUse".into();
+        assert_eq!((media_from_input(&i), cwd_from_input(&i)), (None, None));
+        // A relative or odd cwd / tool_name is not forwarded and not an error.
+        let i = input(serde_json::json!({"hook_event_name": "PostToolUse", "cwd": "rel"}));
+        assert_eq!(cwd_from_input(&i), None);
+        let i = input(
+            serde_json::json!({"hook_event_name": "PostToolUse", "cwd": 7, "tool_name": false}),
+        );
+        assert_eq!((cwd_from_input(&i), i.tool_name), (None, None));
+    }
+
+    #[test]
+    fn hook_body_media_and_cwd_round_trip_and_stay_strict() {
+        let body: HookBody =
+            serde_json::from_str(r#"{"signal":"working","media":"C:\\a\\b.png","cwd":"C:\\a"}"#)
+                .unwrap();
+        assert_eq!(
+            (body.media.as_deref(), body.cwd.as_deref()),
+            (Some(r"C:\a\b.png"), Some(r"C:\a"))
+        );
+        assert!(serde_json::from_str::<HookBody>(r#"{"signal":"working","content":"x"}"#).is_err());
+        assert!(valid_media_path(r"C:\a\b.PNG"));
+        assert!(valid_media_path("C:/a/b.webm"));
+        assert!(!valid_media_path(r"C:\a\b.svg"));
+        assert!(!valid_media_path("C:\\a\\b.png\n"));
+        assert!(valid_cwd(r"C:\a"));
+        assert!(!valid_cwd("a"));
+        assert!(!valid_cwd(r"\\srv\x"));
+        assert!(!valid_media_path(r"\\?\UNC\srv\share\a.png"));
+        assert!(valid_media_path(r"\\?\C:\a\b.png"));
+    }
+
     // Real Codex 0.163 ids are UUIDv7.
     const TURN: &str = "01a14f4f-9954-7f81-83d0-1c6c6065dd0b";
 
@@ -660,6 +965,8 @@ mod tests {
             signal: Signal::Idle,
             session: None,
             turn: Some(s),
+            media: None,
+            cwd: None,
         })
         .unwrap();
         assert!(!wire.contains("Geheim"));

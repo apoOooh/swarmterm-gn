@@ -45,13 +45,14 @@ Real split terminals, one git worktree per agent, and an app your agents can dri
 - War Room: panes you drag in can message each other or hand over prompts, with you as moderator; every member and message is tagged with its pane number.
 - data-shield companion: a Claude Code prompt the guard blocks comes back masked into the same pane and is sent, no clipboard detour.
 - MCP catalogue: add Playwright, GitHub, Context7 and other servers to an agent profile.
+- Agent status line in three templates (Compact, Extended, Detailed) with live preview, colour schemes and vibrance; wraps to the pane width.
 - Settings → Setup shows the hooks, MCP entry and status line Swarmterm added to each agent CLI. Nothing is written for a CLI that is not installed.
 
 **Right panel and files**
 - Web preview column per terminal, with address bar and history.
 - Git panel: worktree, branch, changes, inline diff and merge check for the focused pane.
 - File explorer and editor that follow the focused terminal, Markdown/SVG/HTML previews, local deletion history.
-- Media panel: images from pane output as thumbnails, large viewer, annotation, drag into panes.
+- Media panel: images from pane output and from what agents and subagents open, as thumbnails, large viewer, annotation, drag into panes.
 - Seven dark themes from Astera.
 
 **Voice and system**

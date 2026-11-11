@@ -66,6 +66,15 @@ line and lifecycle hooks (for example `~/.claude.json`,
 `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json`).
 Settings → MCP switches the MCP entry off per agent and profile.
 
+The status line template, colour scheme and vibrance are kept in
+`statusline.json` in the app data folder. For Codex, Swarmterm remembers which
+`[tui] status_line` values it wrote and what was there before, per Codex
+profile folder, in `codex-statusline-ownership.json` (profile paths and those
+settings only), so it can leave your own changes alone and restore them. With
+the Detailed template the status line command reads the session transcript
+to count tokens and keeps running totals (numbers only, no text) in a small
+file in the temp folder (`swarmterm-statusline-<session>.json`).
+
 Uninstalling the app does not remove these files; delete the folders above to
 remove them.
 
@@ -78,7 +87,7 @@ contains telemetry or personal data beyond what any HTTPS request carries
 | Connection | When | Default |
 |---|---|---|
 | Local MCP server on `127.0.0.1` (random port). Panes and their agents connect to it with a per-pane token. It is not reachable from other computers. | Always, while the app runs | On (`src-tauri/src/mcp/mod.rs`) |
-| Status line and hook commands call the same local server on `127.0.0.1` | When an agent CLI runs them | On (`src-tauri/src/statusline/probe.rs`, `src-tauri/src/hook/post.rs`) |
+| Status line and hook commands call the same local server on `127.0.0.1`. The Claude hook sends lifecycle names and ids, a length + hash of each prompt and of the last reply, and, after a tool call, the agent's working folder plus the path of an image or video it read or wrote (never file content, commands or prompt text). The app keeps the folder in memory only. | When an agent CLI runs them | On (`src-tauri/src/statusline/probe.rs`, `src-tauri/src/hook/post.rs`, `src-tauri/src/hook/mod.rs`) |
 | data-shield's prompt guard, if you use it, sends the masked version of a prompt it blocked to the same local server (`POST /resubmit`); Swarmterm types it back into that pane. The text stays in memory, is not logged or stored, and never leaves the computer. To tie the two together, Swarmterm's own hook reports the length and SHA-256 of each Claude prompt (never its content) and the guard reports the same for the blocked one; these fingerprints are kept only in memory, for at most 10 seconds, are dropped once compared, and are never logged or passed on. | When the guard blocks a Claude Code prompt | On; Settings → Terminal → Agent safety (`src-tauri/src/mcp/server.rs`, `src/lib/prompt-resubmit.ts`) |
 | `api.github.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`: lists and downloads releases of the buzzkey voice companion (`apoOooh/buzzkey`) | When you click Check or Install in Settings → Voice; and, only if buzzkey is installed and connected, one release check 20 seconds after start and then every 24 hours | Install: off until you click. Update check: only with buzzkey connected. Automatic install: off (`src-tauri/src/voice/companion/`, `src/lib/buzzkey-update.ts`) |
 | `huggingface.co` (`ggerganov/whisper.cpp`) and the Hugging Face download hosts it redirects to (for example `cdn-lfs.hf.co`, `*.xethub.hf.co`): downloads a speech recognition model | When you click to download a model in Settings → Voice | Off (`src-tauri/src/voice/speech/model.rs`) |
