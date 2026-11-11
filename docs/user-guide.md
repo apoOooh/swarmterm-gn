@@ -20,7 +20,7 @@ An existing installation never sees the assistant on its own, and keeps voice di
 
 ## Create a workspace
 
-Swarmterm opens on the **composer**: pick a folder (the working directory for every pane), choose how many terminals, and use the steppers to assign AI agents — **Claude Code**, **Codex**, **OpenCode**, **GitHub Copilot**, **Qwen Code**, **Amp**, **Gemini CLI**, **Cursor Agent**, **Antigravity** or **OMP (Oh My Pi)** — the rest stay plain shells. Only agents whose CLI is installed are listed. Turn on **Isolate features in git worktrees** for parallel work, then press `⌘/Ctrl + Enter`.
+Swarmterm opens on the **composer**: pick a folder (the working directory for every pane), choose how many terminals, and use the steppers to assign AI agents — **Claude Code**, **Codex**, **OpenCode**, **GitHub Copilot**, **Qwen Code**, **Amp**, **Gemini CLI**, **Cursor Agent**, **Antigravity** or **OMP (Oh My Pi)** — the rest stay plain shells. Only agents whose CLI is installed are listed. Turn on **Isolate features in git worktrees** for parallel work, then press `⌘/Ctrl + Enter`. The option is off for a folder that is only a subfolder of a larger repository: a worktree always copies the whole repository, so the panes would not start in your folder.
 
 Agent detection re-runs every time the composer opens, so installing a CLI needs no restart. Workspace layouts and known agent conversations can be reopened from **Saved workspaces** on Welcome. Settings persist too; terminal output and unsaved editor buffers do not.
 

@@ -1,3 +1,4 @@
+import { samePath } from '@/lib/folder-picker'
 import type { NewCenterEntry } from '@/lib/notification-center'
 
 /**
@@ -51,8 +52,9 @@ export function gitInstalled(status: SetupStatus | null): boolean | null {
 }
 
 /** Welcome's note on "Isolate features in git worktrees"; `null` = nothing to say. */
-export function worktreeOptionNote(input: { git: boolean | null; isGitRepo: boolean }): string | null {
+export function worktreeOptionNote(input: { git: boolean | null; isGitRepo: boolean; subfolder?: boolean }): string | null {
   if (input.git === false) return 'Git is not installed — see Settings → Setup'
+  if (input.subfolder === true) return 'This folder is a subfolder of a larger repository — panes start here, without worktrees'
   if (!input.isGitRepo) return 'Will initialize git in this folder when you create'
   return null
 }
@@ -211,4 +213,14 @@ export function nextSetupBellAction(lastDetail: string | null, status: SetupStat
   if (entry === null) return lastDetail === null ? { type: 'none', lastDetail: null } : { type: 'markRead', lastDetail: null }
   if (entry.detail === lastDetail) return { type: 'none', lastDetail }
   return { type: 'add', entry, lastDetail: entry.detail }
+}
+
+/**
+ * SWA-94: a folder inside a repo that is not one of its worktree roots (e.g. a
+ * project folder in a monorepo/workspace). A worktree is always of the WHOLE
+ * repo, so panes would start at its root — and an uncommitted subfolder would
+ * not exist there at all. Such folders get no worktree isolation.
+ */
+export function isRepoSubfolder(trees: readonly { path: string }[], folder: string): boolean {
+  return trees.length > 0 && !trees.some((t) => samePath(t.path, folder))
 }

@@ -5,6 +5,7 @@ import {
   gitBashHint,
   prerequisiteRows,
   worktreeOptionNote,
+  isRepoSubfolder,
   gitInstalled,
   GIT_INSTALL_COMMAND,
   defaultWelcomeFolder,
@@ -124,6 +125,21 @@ describe('worktree option in Welcome', () => {
     expect(worktreeOptionNote({ git: false, isGitRepo: false })).toMatch(/git is not installed/i)
     expect(worktreeOptionNote({ git: null, isGitRepo: false })).toMatch(/initialize git/i)
     expect(worktreeOptionNote({ git: true, isGitRepo: true })).toBeNull()
+    expect(worktreeOptionNote({ git: true, isGitRepo: true, subfolder: true })).toMatch(/subfolder/i)
+  })
+})
+
+describe('isRepoSubfolder (SWA-94)', () => {
+  const trees = [{ path: 'D:/GN_AI', isMain: true }, { path: 'D:/GN_AI.worktrees/x', isMain: false }]
+  it('is true for a folder inside a repo that is no worktree root', () => {
+    expect(isRepoSubfolder(trees, String.raw`D:\GN_AI\Optimizer`)).toBe(true)
+  })
+  it('is false for a repo or worktree root, any slash or case', () => {
+    expect(isRepoSubfolder(trees, String.raw`d:\gn_ai\ `.trim())).toBe(false)
+    expect(isRepoSubfolder(trees, String.raw`D:\GN_AI.worktrees\x`)).toBe(false)
+  })
+  it('is false outside any repo', () => {
+    expect(isRepoSubfolder([], String.raw`D:\Optimizer`)).toBe(false)
   })
 })
 
