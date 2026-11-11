@@ -271,9 +271,14 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   absolute path).
 - **Claude Code status line.** `swarmterm --statusline` is a second entry point
   into the same binary, short-circuited in `main.rs` *before* the Tauri builder
-  so no window/tray/single-instance/AppKit is touched. It prints one line: an
-  `mcp` segment and a `ctx` segment (`statusline/render.rs` is pure and holds
-  every state). "Connected" is proved by an axum middleware on `/mcp` that
+  so no window/tray/single-instance/AppKit is touched. It prints the rows of
+  the template in `statusline.json` (SWA-92: `settings.rs`; `preset.rs`,
+  `style.rs`, `layout.rs` are pure — packed by segment to `COLUMNS`, never
+  split; only Detailed reads the transcript, `breakdown.rs`). The picker's
+  preview uses the same renderer (`preview.rs`). Codex gets item lists in
+  `[tui] status_line` (`hook/codex_statusline.rs`, per-version whitelist,
+  previous values kept per CODEX_HOME, a user-changed list is never
+  overwritten). "Connected" is proved by an axum middleware on `/mcp` that
   records each inbound bearer token (`mcp/clients.rs`) — `initialize` never
   reaches `SwarmtermMcpServer::caller`, so hooking the tool layer would miss the
   one request that matters; `/status` is registered *after* `.layer(...)` so the
