@@ -275,10 +275,7 @@ mod tests {
             assert!(post_body_answer(&url, "tok", &body, Duration::from_millis(500)).is_some());
             let req = server.join().unwrap();
             let wire = req.split("\r\n\r\n").nth(1).unwrap();
-            assert!(
-                !wire.contains("SECRET") && !wire.contains("content"),
-                "{wire}"
-            );
+            assert!(!wire.contains("SECRET"), "{wire}");
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(wire).unwrap(),
                 serde_json::json!({"signal": "working", "media": file, "cwd": cwd})
