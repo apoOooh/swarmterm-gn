@@ -8,6 +8,7 @@
  * (the overwhelming majority) costs one regex pass and nothing else.
  * Existence is NOT checked here; the backend resolves and allow-lists.
  */
+import { isOlderStamp } from '@/lib/media-gallery'
 
 export const MEDIA_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'm4v', 'mov', 'webm'] as const
 
@@ -342,6 +343,10 @@ export class SeenPaths {
     const key = path.toLowerCase()
     this.misses.delete(key)
     const prev = this.found.get(key)
+    if (prev && isOlderStamp(prev.stamp, stamp)) {
+      prev.at = now
+      return false
+    }
     // Re-insert so the bound evicts the least recently confirmed path.
     this.found.delete(key)
     this.found.set(key, { at: now, stamp })

@@ -146,6 +146,21 @@ describe('noteHookMedia', () => {
     expect(media.announce).toHaveBeenCalledTimes(2)
   })
 
+  it('a late screen answer with an older version after the hook is silent; a newer one still announces', async () => {
+    noteMediaOutput('t1', 'saved C:/scratch/w4.png\r\n')
+    // The screen lookup is in flight (answers v1) when the hook reports v2.
+    disk.mtimeMs = 1
+    noteHookMedia('t1', 'C:/scratch/w4.png', 2, 10)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(SCAN_INTERVAL_MS * 3)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    expect(media.detect.mock.calls.map(([i]) => (i as { version: string }).version)).toEqual(['2:10'])
+    noteHookMedia('t1', 'C:/scratch/w4.png', 2, 10)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    noteHookMedia('t1', 'C:/scratch/w4.png', 3, 10)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+  })
+
   it('ignores non-media paths', () => {
     noteHookMedia('t1', 'C:\\scratch\\notes.txt', 1, 10)
     expect(media.detect).not.toHaveBeenCalled()

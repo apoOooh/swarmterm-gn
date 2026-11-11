@@ -92,6 +92,8 @@ describe('media gallery store', () => {
     expect(m.detect({ ...item('c:/S/XS.png'), terminalId: 't1', shownAt: 3, version: '1:10' })).toBe(false)
     expect(useMediaStore.getState().items.map((i) => i.shownAt)).toEqual([2, 1])
     expect(m.detect({ ...item('C:/s/xs.png'), terminalId: 't1', shownAt: 4, version: '2:12' })).toBe(true)
+    // A late answer for the older version (another spelling) never rolls it back.
+    expect(m.detect({ ...item('c:/S/XS.png'), terminalId: 't1', shownAt: 5, version: '1:10' })).toBe(false)
     const s = useMediaStore.getState()
     // One updated entry, moved to the front with the fresh shownAt (cache-busting revision).
     expect(s.items.map((i) => [i.path, i.shownAt, i.version])).toEqual([['C:/s/xs.png', 4, '2:12'], ['C:/s/other.png', 2, '1:1']])

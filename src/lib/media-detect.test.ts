@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { detectMediaPaths, stitchTableRows, stitchWrappedPaths, MAX_CARRY, MediaOutputBuffer, FOUND_RECHECK_MS, MISS_MAX_TRIES, MISS_RETRY_MS, OVERLAP, SeenPaths } from './media-detect'
+import { isOlderStamp } from './media-gallery'
 
 describe('detectMediaPaths', () => {
   it('ignores output without a media extension', () => {
@@ -230,7 +231,25 @@ describe('MediaOutputBuffer', () => {
   })
 })
 
+describe('isOlderStamp', () => {
+  it('compares mtimes only', () => {
+    expect(isOlderStamp('2:10', '1:99')).toBe(true)
+    expect(isOlderStamp('2:10', '2:11')).toBe(false)
+    expect(isOlderStamp('2:10', '3:1')).toBe(false)
+    expect(isOlderStamp('x', '1:1')).toBe(false)
+  })
+})
+
 describe('SeenPaths', () => {
+  it('never lets an older stamp replace a newer one; same mtime, other size is a change', () => {
+    const s = new SeenPaths()
+    expect(s.confirm('C:/A.png', '2:10', 0)).toBe(true)
+    expect(s.confirm('C:/A.png', '1:10', 1)).toBe(false)
+    expect(s.confirm('C:/A.png', '2:10', 2)).toBe(false)
+    expect(s.confirm('C:/A.png', '2:11', 3)).toBe(true)
+    expect(s.confirm('C:/A.png', '3:11', 4)).toBe(true)
+  })
+
   it('re-offers a confirmed path at most once per recheck interval, case-insensitively', () => {
     const s = new SeenPaths()
     expect(s.offer('C:/A.png', 0)).toBe(true)

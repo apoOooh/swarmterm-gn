@@ -79,6 +79,9 @@ function scan(terminalId: string, state: ScanState): void {
         // one is: it moves up with a fresh shownAt, which also cache-busts
         // the thumbnail, overlay and viewer URLs.
         const version = `${hit.mtimeMs}:${hit.size}`
+        // Keyed on the printed spelling, while the hook keys on the canonical
+        // path: one file may thus be looked up under two keys. Harmless, since
+        // the store dedupes by path and version (and ignores older versions).
         if (!state.seen.confirm(offered[i], version, at)) return
         const kind = mediaKind(hit.path)
         if (!kind) return
