@@ -1682,3 +1682,54 @@ pub async fn run_routine_command(
     .await
     .map_err(|e| e.to_string())?
 }
+
+/// `statusline.json` of this app instance (SWA-92). The `--statusline`
+/// process of the same build reads it from the same place
+/// (`statusline::settings::path`, identifier compiled in by `build.rs`).
+fn statusline_settings_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join(crate::statusline::settings::FILE))
+        .map_err(|e| e.to_string())
+}
+
+/// The saved status line template, scheme, vibrance and animation.
+#[tauri::command]
+pub async fn statusline_settings_get(
+    app: AppHandle,
+) -> Result<crate::statusline::settings::StatuslineSettings, String> {
+    let file = statusline_settings_file(&app)?;
+    tauri::async_runtime::spawn_blocking(move || crate::statusline::settings::load(&file))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Store the status line settings. Applies on the next render of every
+/// Claude pane; `settings.json` is not touched (its entry stays
+/// `<exe> --statusline`).
+#[tauri::command]
+pub async fn statusline_settings_set(
+    app: AppHandle,
+    settings: crate::statusline::settings::StatuslineSettings,
+) -> Result<(), String> {
+    let file = statusline_settings_file(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::statusline::settings::save(&file, &settings).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Example rows (ANSI) for the template picker, rendered by the real
+/// renderer at `columns` terminal columns.
+#[tauri::command]
+pub async fn statusline_preview(
+    settings: crate::statusline::settings::StatuslineSettings,
+    columns: usize,
+) -> Result<Vec<String>, String> {
+    Ok(crate::statusline::preview::rows(
+        &settings,
+        columns.clamp(20, 400),
+    ))
+}

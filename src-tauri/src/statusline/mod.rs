@@ -6,6 +6,7 @@ pub mod breakdown;
 pub mod install;
 pub mod layout;
 pub mod preset;
+pub mod preview;
 pub mod probe;
 pub mod render;
 pub mod settings;
