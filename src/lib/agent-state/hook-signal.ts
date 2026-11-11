@@ -28,6 +28,17 @@ export const TTL_IDLE_MS = 5_000
 
 export type HookSignal = 'working' | 'blocked' | 'idle'
 
+/**
+ * Detectors whose agent sends its own hooks and whose manifest was tuned
+ * against them (the visibleIdle/visibleBlocker flags `resolveHookState`
+ * arbitrates on). Codex joined with SWA-71: its UserPromptSubmit/Stop/
+ * Interrupt hooks. Rust only forwards a Codex pane's edges that name the
+ * pane's own Codex session, so a nested `claude` cannot drive it.
+ */
+export function acceptsAgentHooks(manifestId: string | null | undefined): boolean {
+  return manifestId === 'claude-code' || manifestId === 'codex'
+}
+
 export interface HookMark {
   signal: HookSignal
   /** Detector clock (`deps.now()`) at arrival — NOT the event's own `atMs`,

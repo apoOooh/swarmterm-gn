@@ -125,3 +125,83 @@ export function listingDirAbove(linesAbove: string[], maxLines = 300): string | 
   }
   return null
 }
+
+/** No drive, no leading separator: resolved against some base folder. */
+export function isRelativePath(path: string): boolean {
+  return !/^(?:[A-Za-z]:|[\\/])/.test(path)
+}
+
+/**
+ * `path` as an absolute Windows path, or null. Drive paths are kept as they
+ * are; Git Bash's `/d/lab` (what agents print after a `cd` in their Bash tool)
+ * becomes `D:\lab`. Any other posix path names nothing on this platform.
+ */
+export function absoluteWindowsPath(path: string): string | null {
+  if (/^[A-Za-z]:[\\/]/.test(path)) return path
+  const m = /^\/([A-Za-z])(\/.*)?$/.exec(path)
+  return m ? `${m[1].toUpperCase()}:${(m[2] ?? '/').replace(/\//g, '\\')}` : null
+}
+
+/** Folder of an absolute path; null at a drive root, which is too broad to be a base. */
+function parentDir(path: string): string | null {
+  const trimmed = path.replace(/[\\/]+$/, '')
+  const i = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'))
+  return i <= 2 ? null : trimmed.slice(0, i)
+}
+
+/**
+ * Absolute paths only, single segment included: CANDIDATE_RE needs two
+ * segments, so `cd D:\swarmterm-testlab` — the most useful base of all — is
+ * no candidate there. Drive form or Git Bash `/d/…`; the lookbehind keeps the
+ * `/a/b` of a URL or a relative path out.
+ */
+const ABSOLUTE_RE = new RegExp(`(?<![\\w:\\\\/.-])(?:[A-Za-z]:${SEP}(?:${SEG}(?:${SEP}${SEG})*)?|/[A-Za-z](?:/${SEG})+)`, 'g')
+
+function absolutePathsIn(line: string): string[] {
+  if (line.length > MAX_LINE_LENGTH) return []
+  const masked = line.replace(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/\S+/g, (m) => ' '.repeat(m.length))
+  return Array.from(masked.matchAll(ABSOLUTE_RE), (m) => m[0].replace(TRAILING_PUNCTUATION, ''))
+    .filter((p) => p.length > 0 && p.length <= MAX_CANDIDATE_LENGTH)
+    .slice(0, MAX_LINKS_PER_LINE)
+}
+
+const baseKey = (p: string): string => p.toLowerCase().replace(/\//g, '\\').replace(/\\+$/, '')
+
+export interface RelativeBaseOptions {
+  /** Absolute paths read, in line order; each yields itself and its folder. */
+  maxSources?: number
+  /** Bases already tried (the pane's cwd), compared case-insensitively. */
+  exclude?: readonly string[]
+}
+
+/**
+ * Further base folders for a relative path that did not resolve against the
+ * pane's cwd (SWA-62): an agent or tool often prints paths relative to ITS
+ * folder (`out/shot.png` after working in `D:\lab`), so the link never
+ * appeared and a Ctrl+click did nothing. Candidates are the absolute paths on
+ * the same line, then on the lines above (`linesAbove` ordered nearest line
+ * leading), each as itself (a folder) and as its parent (a file in it). The
+ * caller only asks Rust whether `base/path` is an existing file, and the cwd
+ * stays the leading try — nothing here widens what can be opened.
+ */
+export function relativeBases(lineText: string, linesAbove: readonly string[], options: RelativeBaseOptions = {}): string[] {
+  const maxSources = options.maxSources ?? 3
+  const seen = new Set((options.exclude ?? []).map(baseKey))
+  const out: string[] = []
+  const add = (p: string | null): void => {
+    if (!p || seen.has(baseKey(p))) return
+    seen.add(baseKey(p))
+    out.push(p)
+  }
+  let sources = 0
+  for (const line of [lineText, ...linesAbove]) {
+    for (const found of absolutePathsIn(line)) {
+      const abs = absoluteWindowsPath(found)
+      if (!abs) continue
+      add(abs)
+      add(parentDir(abs))
+      if (++sources >= maxSources) return out
+    }
+  }
+  return out
+}

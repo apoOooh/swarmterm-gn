@@ -39,7 +39,7 @@ import { parseOsc52 } from '@/lib/osc52'
 import { parseShellMark } from '@/lib/shell-marks'
 import { isPlainShellPane, templateById } from '@/lib/templates'
 import { sanitizePromptText } from '@/lib/prompt-sanitize'
-import { detectPathCandidates, listingDirAbove, listingEntry, parsePathSuffix } from '@/lib/path-link-parse'
+import { detectPathCandidates, isRelativePath, listingDirAbove, listingEntry, parsePathSuffix, relativeBases } from '@/lib/path-link-parse'
 import { classifyOscLink, openPathLocation } from '@/lib/terminal-link-actions'
 import { openUrl } from '@/tauri/opener'
 import {
@@ -74,13 +74,15 @@ import {
   type SuppressState
 } from '@/lib/terminal-input-client'
 import { AgentStateDetector, type DetectorDeps } from '@/lib/agent-state/detector'
-import { promptBoxHasDraft } from '@/lib/prompt-draft'
+import { promptBoxDraftText, promptBoxHasDraft, type DraftRow } from '@/lib/prompt-draft'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
+import { acceptsAgentHooks } from '@/lib/agent-state/hook-signal'
 import { useAgentStateStore } from '@/store/agent-state-store'
 import type { BufferView } from '@/lib/agent-state/snapshot'
 import type { AgentHookSignal } from '@/tauri/agent-state'
 import { createFrameBatch } from '@/lib/frame-batch'
 import { agentNewlineFor } from '@/lib/agent-newline'
+import { createSubmitIntent } from '@/lib/terminal-typing'
 
 export type { TerminalStatus }
 
@@ -530,7 +532,16 @@ export function openPathLink(id: string, event: MouseEvent, text: string): void 
   // stale point would make followLink's drag-vs-click check drop this click.
   const entry = entries.get(id)
   if (entry) entry.lastMouseDown = { clientX: event.clientX, clientY: event.clientY }
-  pathFollowers.get(id)?.(event, text)
+  // Follow the path the provider resolved, not the raw text: a relative path
+  // may have resolved against a base other than the cwd (listing header,
+  // SWA-62 bases), and followLink alone would only retry the cwd.
+  pathFollowers.get(id)?.(event, hovered && hovered.text === text ? withSuffixOf(text, hovered.resolved) : text)
+}
+
+/** `resolved` with the `:line:col` that `text` carried, in a form parsePathSuffix reads back. */
+function withSuffixOf(text: string, resolved: string): string {
+  const { line, col } = parsePathSuffix(text)
+  return line === undefined ? resolved : col === undefined ? `${resolved}:${line}` : `${resolved}:${line}:${col}`
 }
 
 function getOrCreate(id: string): Entry {
@@ -673,8 +684,12 @@ function getOrCreate(id: string): Entry {
   // in the running program as typed input. Keys typed in that window are
   // dropped too; accepted, since parsing the replay takes a frame or two.
   let replaying = 0
+  const submitIntent = createSubmitIntent()
   const sendInput = (data: string): void => {
-    if (replaying > 0) return
+    if (replaying > 0) {
+      submitIntent.take(data)
+      return
+    }
     // A focus report belongs to the pane that changed focus only: fanned out
     // it would type `ESC[I` into every broadcast member, and recorded as
     // typing it would hold that pane's War Room deliveries for a line the
@@ -692,8 +707,12 @@ function getOrCreate(id: string): Entry {
     const targets = ws
       ? resolveBroadcastTargets(ws.layout, ws.broadcastActive, ws.broadcastLeafIds, id)
       : [id]
+    // SWA-88: a real Enter is decided from the key event, not the bytes
+    // (`createSubmitIntent`). Broadcast hands the source's intent to every
+    // target on purpose: the same CR was written there and sent that line.
+    const keyboardEnter = submitIntent.take(data)
     for (const target of targets) {
-      useTerminalTypingStore.getState().noteInput(target, data)
+      useTerminalTypingStore.getState().noteInput(target, data, keyboardEnter)
       void writeTerminal(target, data)
     }
     userInput?.()
@@ -1056,14 +1075,20 @@ function getOrCreate(id: string): Entry {
       const cwd = getTerminalCwd(id) ?? ''
       // Bare names in a `dir` / Get-ChildItem listing are relative to its
       // "Directory:" header, not to the shell's cwd. Looked up lazily, once.
-      let listing: string | null | undefined
-      const listingDir = (): string | null => {
-        if (listing !== undefined) return listing
+      let above: string[] | undefined
+      const linesAbove = (): string[] => {
+        if (above) return above
         const buffer = term.buffer.active
-        const above: string[] = []
+        above = []
         for (let i = y - 2; i >= Math.max(0, y - 302); i--) above.push(buffer.getLine(i)?.translateToString(true) ?? '')
-        return (listing = listingDirAbove(above))
+        return above
       }
+      let listing: string | null | undefined
+      const listingDir = (): string | null => (listing !== undefined ? listing : (listing = listingDirAbove(linesAbove())))
+      // SWA-62: a relative path printed by a tool with its own folder. Only
+      // the newest 100 lines, so an old command's folder rarely wins.
+      let bases: string[] | undefined
+      const otherBases = (): string[] => (bases ??= relativeBases(lineText, linesAbove().slice(0, 100), { exclude: [cwd] }))
       void Promise.all(
         candidates.map(async (c) => {
           const { path } = parsePathSuffix(c.text)
@@ -1072,6 +1097,14 @@ function getOrCreate(id: string): Entry {
           // is no file may still be a folder — the `d-----` rows and the header path.
           let resolved = await resolvePathLink(cwd, path).catch(() => null)
           if (!resolved && bare && listingDir()) resolved = await resolvePathLink(listingDir()!, path).catch(() => null)
+          // Files only, one probe at a time in base order: bare names stay
+          // listing-only (prose words would otherwise light up).
+          if (!resolved && !bare && isRelativePath(path)) {
+            for (const base of otherBases()) {
+              resolved = await resolvePathLink(base, path).catch(() => null)
+              if (resolved) break
+            }
+          }
           let isDir = false
           if (!resolved) {
             resolved = await resolveDirLink(cwd, path).catch(() => null)
@@ -1086,7 +1119,7 @@ function getOrCreate(id: string): Entry {
             range: { start: { x: c.start + 1, y }, end: { x: c.end, y } },
             text: c.text,
             // A folder never goes to an editor or the OS opener: Ctrl+click shows it in Files.
-            activate: (event, text) => { if (isDir) { if (shouldFollowLink(event, isMac, 'path')) revealDirInFiles(id, shown) } else followLink(event, 'path', text) },
+            activate: (event, text) => { if (isDir) { if (shouldFollowLink(event, isMac, 'path')) revealDirInFiles(id, shown) } else followLink(event, 'path', withSuffixOf(text, shown)) },
             hover: () => { hoveredPaths.set(id, { text: c.text, resolved: shown, isDir }) },
             leave: () => { if (hoveredPaths.get(id)?.text === c.text) hoveredPaths.delete(id) }
           }
@@ -1097,7 +1130,14 @@ function getOrCreate(id: string): Entry {
         .catch(() => callback(undefined))
     }
   })
+  // Wrapped so every verdict reaches `submitIntent` (SWA-88): only a plain
+  // Enter that xterm goes on to handle may arm it.
   term.attachCustomKeyEventHandler((event) => {
+    const passed = decideKey(event)
+    submitIntent.key(event, passed)
+    return passed
+  })
+  function decideKey(event: KeyboardEvent): boolean {
     // App.tsx's window-capture listener calls `event.preventDefault()` for a
     // claimed app shortcut (Cmd/Ctrl+B, +Shift+B, +F — see keybindings.ts),
     // but that only suppresses the BROWSER's default action; it does nothing
@@ -1171,7 +1211,7 @@ function getOrCreate(id: string): Entry {
       return false
     }
     return true
-  })
+  }
 
   const session = new TerminalSession(
     id,
@@ -1539,6 +1579,37 @@ export function paneHasPromptDraft(id: string): boolean {
 }
 
 /**
+ * SWA-88: the draft in a Claude pane's input box as exact text, or
+ * `undefined` when it cannot be read back unambiguously
+ * (`promptBoxDraftText`). Read only to compare with the blocked prompt's
+ * fingerprint; never stored or logged.
+ */
+export function paneDraftText(id: string): string | undefined {
+  const entry = entries.get(id)
+  if (!entry || !entry.opened || entry.config.agentId !== 'claude-code') return undefined
+  const buffer = entry.term.buffer.active
+  const end = buffer.length
+  const start = Math.max(0, end - entry.term.rows)
+  const rows: DraftRow[] = []
+  const cell = buffer.getNullCell()
+  for (let y = start; y < end; y++) {
+    const line = buffer.getLine(y)
+    if (!line) continue
+    let text = ''
+    let dim = false
+    for (let x = 0; x < line.length; x++) {
+      line.getCell(x, cell)
+      const ch = cell.getChars()
+      if (cell.getWidth() === 0) continue
+      if (cell.isDim() && ch !== '' && ch !== ' ') dim = true
+      text += ch === '' || cell.isDim() ? ' ' : ch
+    }
+    rows.push({ text: text.trimEnd(), dim })
+  }
+  return promptBoxDraftText(rows, entry.term.cols)
+}
+
+/**
  * Submit a War Room prompt previously written by `deliverPromptToTerminal`:
  * writes just Enter, as its own stdin flush arriving later so the TUI treats
  * it as a real keypress rather than part of the paste (see that function's
@@ -1739,17 +1810,17 @@ export function getTerminalAgentId(id: string): string | undefined {
 
 /**
  * Route one `agent:hook` event (App.tsx subscription) into the pane's detector.
- * Gated on the Claude Code manifest, NOT on "has a detector": a `claude`
- * launched by hand inside a Codex/Gemini/other agent pane inherits that pane's
- * `SWARMTERM_SESSION` and would otherwise drive the wrong detector with edges
- * the Codex screen never shows. Only the Claude Code manifest was tuned
- * against these hooks (its visibleIdle/visibleBlocker flags are what
- * `resolveHookState` arbitrates on), so every other pane keeps following its
- * screen alone. Plain Terminal panes have no detector and fall through too.
+ * Gated on the manifests tuned against hooks (`acceptsAgentHooks`: Claude
+ * Code, and Codex since SWA-71), NOT on "has a detector": a `claude` launched
+ * by hand inside a Gemini/other agent pane inherits that pane's
+ * `SWARMTERM_SESSION` and would otherwise drive the wrong detector. Inside a
+ * Codex pane Rust drops such edges (they name no Codex session). Every other
+ * pane keeps following its screen alone; plain Terminal panes have no
+ * detector and fall through too.
  */
 export function noteAgentHook(id: string, signal: AgentHookSignal): void {
   const e = entries.get(id)
-  if (e?.detectorManifestId !== 'claude-code') return
+  if (!e || !acceptsAgentHooks(e.detectorManifestId)) return
   e.detector?.noteHook(signal)
 }
 

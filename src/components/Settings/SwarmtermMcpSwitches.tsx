@@ -38,7 +38,7 @@ export function SwarmtermMcpSwitches(): React.ReactElement {
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm">{AGENT_NAMES[p.agentId] ?? p.agentId} · {p.accountName ?? 'Default'}</span>
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              {p.entry === 'foreign' ? 'Own entry kept' : p.enabled ? 'On' : 'Off'}
+              {p.entry === 'foreign' ? 'Own entry kept' : !p.installed ? (p.enabled ? 'Not installed' : 'Off · not installed') : p.enabled ? 'On' : 'Off'}
               <input type="checkbox" role="switch" aria-label={`Swarmterm MCP for ${AGENT_NAMES[p.agentId] ?? p.agentId} ${p.accountName ?? 'Default'}`} checked={p.enabled} disabled={busy !== null || mcpLocked} onChange={() => void toggle(p)} />
             </label>
           </div>

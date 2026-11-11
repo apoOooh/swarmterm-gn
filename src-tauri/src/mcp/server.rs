@@ -40,14 +40,14 @@
 //!   are the constructors used to map auth/validation failures to
 //!   JSON-RPC-shaped protocol errors (the MCP client renders these as 4xx-ish
 //!   failures, distinct from a tool-level `CallToolResult::error`).
-//! - `ServerInfo` (`= InitializeResult`) and `Implementation` are both
+//! - `ServerConfig` (formerly `ServerInfo`, `= InitializeResult`) and `Implementation` are both
 //!   `#[non_exhaustive]`, so `get_info` below builds them via their `new`/
 //!   `with_*` builder methods rather than a struct literal.
 
 use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo};
+use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerConfig};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::{
     StreamableHttpServerConfig, StreamableHttpService,
@@ -149,11 +149,11 @@ impl SwarmtermMcpServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SwarmtermMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        // `ServerInfo` (aka `InitializeResult`) is `#[non_exhaustive]`, so a
+    fn get_info(&self) -> ServerConfig {
+        // `ServerConfig` (formerly `ServerInfo`, aka `InitializeResult`) is `#[non_exhaustive]`, so a
         // field literal is rejected even naming every field — use its builder
         // methods instead.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::LATEST)
             .with_server_info(
                 Implementation::new("swarmterm", env!("CARGO_PKG_VERSION")).with_title("Swarmterm"),
@@ -235,6 +235,14 @@ pub fn axum_router(app: AppHandle) -> axum::Router {
         ))
         .route("/status", get(status_handler))
         .route("/hook", post(hook_handler))
+        // SWA-88: below the layer like `/hook` (data-shield's guard, not an
+        // MCP client). JSON escapes may double the text, hence 2x.
+        .route(
+            "/resubmit",
+            post(resubmit_handler).layer(axum::extract::DefaultBodyLimit::max(
+                2 * crate::resubmit::MAX_TEXT + 1024,
+            )),
+        )
         .with_state(app)
 }
 
@@ -288,6 +296,157 @@ fn bearer_header(headers: &HeaderMap) -> &str {
         .get(AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("")
+}
+
+/// SWA-88 `POST /resubmit` body, sent by data-shield's UserPromptSubmit guard
+/// after it blocked a prompt. `text` is the masked prompt; without it the
+/// POST only reports the block (masking failed, or the masked form still
+/// had a finding).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResubmitBody {
+    session_id: String,
+    prompt_id: String,
+    /// Length + SHA-256 of the ORIGINAL (blocked) prompt, matched against
+    /// the one our `--hook` sent with the edge.
+    fingerprint: crate::voice::completion::Fingerprint,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+/// To the main webview only (`src/tauri/prompt-resubmit.ts`). The one event
+/// that carries prompt text: masked, and never logged or forwarded.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResubmitEvent {
+    terminal_id: String,
+    spawn_id: String,
+    text: String,
+    send: bool,
+    /// The blocked prompt's fingerprint, matched above: the renderer
+    /// compares it with the draft Claude restored before it touches the box
+    /// (SWA-88 hardening). Same rules as the text: main webview only, never
+    /// logged.
+    asked: crate::voice::completion::Fingerprint,
+}
+
+/// A browser can reach loopback too. Every browser request carries Origin or
+/// Fetch Metadata; the guard (node:http) sends neither.
+fn from_browser(headers: &HeaderMap) -> bool {
+    ["origin", "sec-fetch-site", "sec-fetch-mode"]
+        .iter()
+        .any(|h| headers.contains_key(*h))
+}
+
+/// The guard waits for this answer (≈1 s budget): `accepted` = the masked
+/// prompt goes back into the pane, so the guard skips its clipboard copy.
+fn resubmit_answer(accepted: bool) -> Response {
+    (
+        StatusCode::ACCEPTED,
+        [(axum::http::header::CONNECTION, "close")],
+        Json(serde_json::json!({ "accepted": accepted })),
+    )
+        .into_response()
+}
+
+async fn resubmit_handler(
+    AxumState(app): AxumState<AppHandle>,
+    headers: HeaderMap,
+    Json(body): Json<ResubmitBody>,
+) -> Response {
+    use std::time::{Duration, Instant};
+    use tauri::Emitter;
+    if from_browser(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(terminal_id) = live_caller(&app, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !crate::sessions::is_uuid(&body.session_id)
+        || !crate::sessions::is_uuid(&body.prompt_id)
+        || !body.fingerprint.is_valid()
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let state = app.state::<crate::pty::AppState>();
+    let spawn_id = {
+        let terminals = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        terminals
+            .get(&terminal_id)
+            .filter(|t| t.agent_id.as_deref() == Some("claude-code"))
+            .map(|t| t.spawn_id.clone())
+    };
+    let Some(spawn_id) = spawn_id else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    // The block is reported whatever the setting: a prompt that never ran
+    // must not be announced as done.
+    let edge_here = state
+        .resubmit
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .block(
+            &terminal_id,
+            &spawn_id,
+            &body.prompt_id,
+            &body.fingerprint,
+            Instant::now(),
+        );
+    if edge_here {
+        crate::voice::blocked_turn(&app, &terminal_id, &spawn_id, &body.prompt_id);
+        let _ = app.emit(
+            "agent:prompt-blocked",
+            &serde_json::json!({ "terminalId": terminal_id, "atMs": crate::warroom::now_ms() }),
+        );
+    }
+    let mode = state.agent_policy_snapshot().prompt_resubmit;
+    let Some(text) = body.text.filter(|t| {
+        mode != crate::resubmit::ResubmitMode::Off && crate::resubmit::is_masked_prompt(t)
+    }) else {
+        return resubmit_answer(false);
+    };
+    // Both hooks run in parallel; ours is usually first, but a slow
+    // `--hook` start can let the guard overtake it.
+    let deadline = Instant::now() + crate::resubmit::EDGE_WAIT;
+    loop {
+        let verdict = state
+            .resubmit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .check(
+                &terminal_id,
+                &spawn_id,
+                &body.session_id,
+                &body.prompt_id,
+                &body.fingerprint,
+                Instant::now(),
+            );
+        use crate::resubmit::Refusal;
+        match verdict {
+            Ok(()) => break,
+            Err(Refusal::NoEdge | Refusal::NotTheEdge) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(_) => return resubmit_answer(false),
+        }
+    }
+    let delivered = app
+        .emit_to(
+            "main",
+            "prompt:resubmit",
+            &ResubmitEvent {
+                terminal_id,
+                spawn_id,
+                text,
+                send: mode == crate::resubmit::ResubmitMode::Send,
+                asked: body.fingerprint,
+            },
+        )
+        .is_ok();
+    resubmit_answer(delivered)
 }
 
 /// Record one context-usage sample for a pane and emit `agent:context` only
@@ -374,13 +533,95 @@ async fn status_handler(
         .into_response()
 }
 
-/// `POST /hook` — the `swarmterm --hook` CLI reporting one Claude Code hook
-/// event for its own pane. The body is a closed enum (`HookBody`), never the
-/// hook's stdin: prompt text, tool input and cwd stay inside the pane. The
+/// Payload of `media:detected` (camelCase, lockstep with
+/// `src/tauri/files.ts::MediaDetectedEvent`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaDetectedEvent {
+    pub terminal_id: String,
+    pub path: String,
+    /// File stamp from the same lookup, so a file overwritten in place reads
+    /// as news while a repeated Read of an unchanged one does not.
+    pub mtime_ms: u64,
+    pub size: u64,
+}
+
+/// Resolve a hook-reported media path off the executor (disk work) and, if
+/// it is an existing image/video, tell the renderer. Not awaited by `/hook`:
+/// the CLI's 300 ms budget belongs to the status signal.
+fn spawn_media_detected(app: AppHandle, terminal_id: String, media: String) {
+    // Bounded: a Read loop (or a token holder flooding /hook) cannot queue
+    // unlimited blocking jobs; a dropped check only loses one gallery name.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+    const MAX_IN_FLIGHT: usize = 8;
+    if IN_FLIGHT.fetch_add(1, Ordering::AcqRel) >= MAX_IN_FLIGHT {
+        IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+        return;
+    }
+    struct Release;
+    impl Drop for Release {
+        fn drop(&mut self) {
+            IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+    let release = Release;
+    let Some(service) = app
+        .try_state::<Arc<crate::files::FileService>>()
+        .map(|s| s.inner().clone())
+    else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        let _release = release;
+        let found = tauri::async_runtime::spawn_blocking(move || {
+            // Absolute by `valid_media_path`, so no cwd is involved.
+            service
+                .check_detected_media(&[media], std::path::Path::new(""))
+                .into_iter()
+                .next()
+                .flatten()
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(hit) = found {
+            use tauri::Emitter;
+            let _ = app.emit(
+                "media:detected",
+                &MediaDetectedEvent {
+                    terminal_id,
+                    path: crate::files::path::display(&hit.path),
+                    mtime_ms: hit.mtime_ms,
+                    size: hit.size,
+                },
+            );
+        }
+    });
+}
+
+/// The media path and cwd of a `/hook` body that pass the CLI's rules. The
+/// CLI applies the same rules; a field that fails them here (rules drifted,
+/// or not our CLI) is dropped so the status signal still lands.
+pub(crate) fn hook_media_and_cwd(body: &crate::hook::HookBody) -> (Option<String>, Option<&str>) {
+    let media = body
+        .media
+        .clone()
+        .filter(|m| crate::hook::valid_media_path(m));
+    let cwd = body.cwd.as_deref().filter(|c| crate::hook::valid_cwd(c));
+    (media, cwd)
+}
+
+/// `POST /hook` — the `swarmterm --hook` / `--codex-session-hook` CLI
+/// reporting one Claude Code or Codex hook event for its own pane. The body is a closed enum (`HookBody`), never the
+/// hook's stdin: prompt text and file content stay inside the pane. The
 /// verdict is re-emitted to the renderer as `agent:hook` (payload in lockstep
 /// with `src/tauri/agent-state.ts::AgentHookEvent`); precedence over
-/// screen-scrape is decided in the renderer. The only hook state Rust keeps
-/// is the voice turn ledger (SWA-58), fed by the body's turn mark.
+/// screen-scrape is decided in the renderer. Hook state Rust keeps: the voice
+/// turn ledger (SWA-58), fed by the body's turn mark, and the agent's last
+/// cwd on the pane's map entry (2026-11-11, in memory, dies with the PTY).
+/// A media path (2026-11-11) is checked like a printed one (existing media
+/// file, not allow-listed) and re-emitted as `media:detected`.
 async fn hook_handler(
     AxumState(app): AxumState<AppHandle>,
     headers: HeaderMap,
@@ -393,7 +634,27 @@ async fn hook_handler(
     if body.turn.as_ref().is_some_and(|t| !t.is_valid()) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    // SWA-58: true asks the hook CLI to hand Claude the `<voice>` instruction.
+    let (media, cwd) = hook_media_and_cwd(&body);
+    if media.is_none() != body.media.is_none() || cwd.is_none() != body.cwd.is_none() {
+        eprintln!("[hook] dropped an invalid media path or cwd from {terminal_id}");
+    }
+    // Media and cwd count for any post with the pane's bearer, also from a
+    // nested agent session inside the pane (decision 2026-11-11): handled
+    // before the nested-session checks below, which only gate status.
+    if let Some(cwd) = cwd {
+        let state = app.state::<AppState>();
+        let mut terminals = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(t) = terminals.get_mut(&terminal_id) {
+            t.agent_cwd = Some(std::path::PathBuf::from(cwd));
+        }
+    }
+    if let Some(media) = media {
+        spawn_media_detected(app.clone(), terminal_id.clone(), media);
+    }
+    // SWA-58: true asks the hook CLI to hand the agent the `<voice>` instruction.
     let mut voice = false;
     if let Some(session) = &body.session {
         // Generation and profile dir copied out under the lock; the voice
@@ -407,7 +668,7 @@ async fn hook_handler(
             terminals
                 .get(&terminal_id)
                 .filter(|t| session.matches(&t.spawn_id, t.agent_id.as_deref()))
-                .map(|t| (t.spawn_id.clone(), t.claude_config_dir.clone()))
+                .map(|t| (t.spawn_id.clone(), t.profile_dir.clone()))
         };
         let Some((spawn_id, config_dir)) = matched else {
             return StatusCode::NO_CONTENT.into_response();
@@ -430,6 +691,27 @@ async fn hook_handler(
             );
         }
         if let Some(turn) = &body.turn {
+            // SWA-88: the edge a `/resubmit` must answer. A prompt the guard
+            // already reported as blocked never ran: it opens no turn and
+            // drives no "working" (nothing to announce when it runs out).
+            if turn.edge == crate::hook::TurnEdge::Prompt
+                && session.agent_id == "claude-code"
+                && app
+                    .state::<crate::pty::AppState>()
+                    .resubmit
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .prompt(
+                        &terminal_id,
+                        &spawn_id,
+                        &session.session_id,
+                        &turn.prompt_id,
+                        turn.asked.as_ref(),
+                        std::time::Instant::now(),
+                    )
+            {
+                return StatusCode::NO_CONTENT.into_response();
+            }
             // A Stop for a prompt that is already over must not end the turn
             // in progress: no ledger change and no idle edge for the renderer.
             if crate::voice::stale_stop(&app, &terminal_id, &spawn_id, &session.session_id, turn) {
@@ -439,15 +721,38 @@ async fn hook_handler(
                 &app,
                 &terminal_id,
                 &spawn_id,
+                &session.agent_id,
                 &session.session_id,
                 turn,
                 config_dir,
             );
         }
     }
-    // Codex capture carries no Claude lifecycle authority.
-    if body.session.as_ref().is_some_and(|s| s.agent_id == "codex") {
-        return StatusCode::NO_CONTENT.into_response();
+    // SWA-71: Codex edges drive the pane like Claude's do, but every one of
+    // them names its session and was matched above. A body without one in a
+    // Codex pane comes from something nested — a `claude` started inside it
+    // inherits SWARMTERM_SESSION, and its PostToolUse would drive the wrong
+    // detector.
+    if body.session.is_none() {
+        let state = app.state::<crate::pty::AppState>();
+        // SWA-88: Claude sends PostToolUse without a session. A tool call
+        // after a prompt edge proves that prompt ran, so no resubmit for it.
+        if matches!(body.signal, crate::hook::Signal::Working) {
+            state
+                .resubmit
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .tool_ran(&terminal_id);
+        }
+        let codex_pane = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&terminal_id)
+            .is_some_and(|t| t.agent_id.as_deref() == Some("codex"));
+        if codex_pane {
+            return StatusCode::NO_CONTENT.into_response();
+        }
     }
     // SessionStart/SessionEnd: whatever turn was open belongs to a
     // conversation that is over.

@@ -11,7 +11,7 @@ const media = vi.hoisted(() => ({ detect: vi.fn((_item: unknown) => true), annou
 vi.mock('@/store/media-store', () => ({ useMediaStore: { getState: () => media } }))
 
 import { FOUND_RECHECK_MS } from '@/lib/media-detect'
-import { forgetMediaOutput, MAX_PENDING_BYTES, noteMediaOutput, SCAN_INTERVAL_MS } from '@/lib/media-passive'
+import { forgetMediaOutput, MAX_PENDING_BYTES, noteHookMedia, noteMediaOutput, SCAN_INTERVAL_MS } from '@/lib/media-passive'
 
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s)
 
@@ -83,5 +83,71 @@ describe('noteMediaOutput', () => {
     noteMediaOutput('t1', 'saved C:/scratch/seen.png\r\n')
     expect(await detectedAfterScan()).toEqual(['C:/scratch/seen.png'])
     expect(media.announce).not.toHaveBeenCalled()
+  })
+})
+
+describe('noteHookMedia', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    media.detect.mockClear()
+    media.announce.mockClear()
+  })
+  afterEach(() => {
+    forgetMediaOutput('t1')
+    media.detect.mockClear()
+    media.announce.mockClear()
+    disk.mtimeMs = 1
+    vi.useRealTimers()
+  })
+
+  it('detects and announces a hook-reported file once, also against the screen scan', async () => {
+    noteHookMedia('t1', 'C:\\scratch\\w1.jpg', 1, 10)
+    noteHookMedia('t1', 'c:\\SCRATCH\\w1.jpg', 1, 10)
+    expect(media.detect).toHaveBeenCalledTimes(1)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    expect(media.detect.mock.calls[0][0]).toMatchObject({ path: 'C:\\scratch\\w1.jpg', kind: 'image', terminalId: 't1', opened: false })
+    // The agent's reply names the same file: no second announcement.
+    noteMediaOutput('t1', 'Looked at C:\\scratch\\w1.jpg\r\n')
+    expect(await detectedAfterScan()).toEqual(['C:\\scratch\\w1.jpg'])
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    // Control: on its own, the screen scan does announce that line.
+    noteMediaOutput('t1', 'Looked at C:\\scratch\\w2.jpg\r\n')
+    expect(await detectedAfterScan()).toEqual(['C:\\scratch\\w1.jpg', 'C:\\scratch\\w2.jpg'])
+    expect(media.announce).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-announces a hook-reported file overwritten in place, but not an unchanged Read', () => {
+    noteHookMedia('t1', 'C:/scratch/shot.png', 1, 10)
+    noteHookMedia('t1', 'C:/scratch/shot.png', 1, 10)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(5)
+    noteHookMedia('t1', 'C:/scratch/shot.png', 2, 12)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+    const items = media.detect.mock.calls.map(([i]) => i as { shownAt: number; version: string })
+    expect(items.map((i) => i.version)).toEqual(['1:10', '2:12'])
+    expect(items[1].shownAt).toBeGreaterThan(items[0].shownAt)
+    noteHookMedia('t1', 'C:/scratch/shot.png', 2, 12)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+  })
+
+  it('a screen hit after the hook stays silent for the same stamp, refreshes for a new one', async () => {
+    noteHookMedia('t1', 'C:/scratch/w3.png', 1, 10)
+    await vi.advanceTimersByTimeAsync(FOUND_RECHECK_MS)
+    noteMediaOutput('t1', 'saved C:/scratch/w3.png\r\n')
+    expect(await detectedAfterScan()).toEqual(['C:/scratch/w3.png'])
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    disk.mtimeMs = 2
+    await vi.advanceTimersByTimeAsync(FOUND_RECHECK_MS)
+    noteMediaOutput('t1', 'saved C:/scratch/w3.png\r\n')
+    expect(await detectedAfterScan()).toHaveLength(2)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+    // The hook then reports the same new version: not news twice.
+    noteHookMedia('t1', 'C:/scratch/w3.png', 2, 10)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores non-media paths', () => {
+    noteHookMedia('t1', 'C:\\scratch\\notes.txt', 1, 10)
+    expect(media.detect).not.toHaveBeenCalled()
   })
 })

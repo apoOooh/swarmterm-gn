@@ -11,11 +11,40 @@ fn files_main_only(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 
+/// The renderer's one-time "boot finished, show the window" (App mount and
+/// the boot guard). How it appears is decided in Rust (`dev_window`): release
+/// = plain show, debug = without focus behind the active window, debug with
+/// `SWARMTERM_DEV_HIDDEN=1` = not at all.
 #[tauri::command]
-pub fn confirm_quit(window: tauri::WebviewWindow, app: AppHandle) -> Result<(), String> {
+pub fn window_reveal(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("window_reveal is available only in the main window".into());
+    }
+    crate::dev_window::reveal(&window)
+}
+
+#[tauri::command]
+pub fn confirm_quit(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    keep_terminals: Option<bool>,
+) -> Result<(), String> {
     files_main_only(&window)?;
-    crate::tray::quit(&app);
+    crate::tray::quit(&app, keep_terminals.unwrap_or(false));
     Ok(())
+}
+
+/// How many panes would survive a quit with "keep terminals running": only
+/// hosted ones can, in-process panes always close. The renderer asks before
+/// quitting and shows the choice only when this is non-zero (SWA-57).
+#[tauri::command]
+pub fn quit_hosted_count(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    files_main_only(&window)?;
+    let map = state.terminals.lock().map_err(|e| e.to_string())?;
+    Ok(map.values().filter(|t| t.is_hosted()).count())
 }
 
 #[tauri::command]
@@ -57,7 +86,8 @@ pub async fn files_request(
 }
 
 /// Passive media detection: the renderer found image/video paths in a pane's
-/// output. Relative paths resolve against that terminal's cwd; the answer has
+/// output. Relative paths resolve against that terminal's spawn cwd, then the
+/// agent's last hook-reported cwd (agents `cd` away from it); the answer has
 /// one entry per input (canonical display path of an existing media file with
 /// its mtime and size, or null). Validation only, nothing is allow-listed here (see
 /// `FileService::check_detected_media`). Disk work runs off the async executor.
@@ -70,17 +100,17 @@ pub async fn media_check_detected(
     paths: Vec<String>,
 ) -> Result<Vec<Option<serde_json::Value>>, String> {
     files_main_only(&window)?;
-    let cwd = state
+    let (cwd, agent_cwd) = state
         .terminals
         .lock()
         .map_err(|e| e.to_string())?
         .get(&terminal_id)
-        .map(|t| t.cwd.clone())
+        .map(|t| (t.cwd.clone(), t.agent_cwd.clone()))
         .ok_or("unknown terminal")?;
     let service = service.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         service
-            .check_detected_media(&paths, std::path::Path::new(&cwd))
+            .check_detected_media_in(&paths, &cwd, agent_cwd.as_deref())
             .iter()
             .map(|hit| {
                 hit.as_ref().map(|d| {
@@ -458,6 +488,8 @@ pub fn kill_terminal(app: AppHandle, state: State<'_, AppState>, id: String) {
     // A pinned dictation must not type into (or show its pill on) a dead or
     // respawned shell. Idempotent with read_loop, like the War Room leave.
     crate::voice::drop_terminal(&app, &id);
+    // SWA-88: a respawned pane answers no resubmit for its predecessor.
+    state.resubmit.lock().unwrap().forget(&id);
     // A dead pane's preview must not linger as an orphaned native webview
     // painting over nothing. Idempotent with the renderer's GC sweep and with
     // read_loop below — whoever runs second finds the label gone.
@@ -504,6 +536,16 @@ pub fn env_policy_set(state: State<'_, AppState>, policy: crate::terminal_env::E
 
 /// Settings → Terminal → Agent safety (War Room execute between agents). Checked per MCP call,
 /// so a change applies to the next call without restarting any pane.
+/// SWA-90: the renderer's "Pane N · Workspace" labels for `war_room.list_peers`.
+/// Replaces the whole map, so closed panes drop out with the next push.
+#[tauri::command]
+pub fn war_room_pane_labels_set(
+    state: State<'_, AppState>,
+    labels: std::collections::HashMap<String, String>,
+) {
+    *state.war_room_pane_labels.lock().unwrap() = crate::warroom::sanitize_pane_labels(labels);
+}
+
 #[tauri::command]
 pub fn agent_policy_set(state: State<'_, AppState>, policy: crate::agent_policy::AgentPolicy) {
     *state
@@ -596,7 +638,7 @@ pub fn report_agent_state(state: State<'_, AppState>, id: String, display: Strin
 /// Async: the first call probes PATH for shells; keep that off the UI thread.
 #[tauri::command]
 pub async fn list_available_shells() -> Vec<crate::shell::ShellEntry> {
-    tauri::async_runtime::spawn_blocking(|| crate::shell::list_shells().to_vec())
+    tauri::async_runtime::spawn_blocking(crate::shell::list_shells)
         .await
         .unwrap_or_default()
 }
@@ -717,6 +759,23 @@ async fn accounts_blocking(app: AppHandle) -> Result<Vec<crate::accounts::AgentA
         .map_err(|e| e.to_string())?
 }
 
+/// Last outcome of each agent integration (hooks, MCP entry, status line).
+/// Never probes or writes; `setup_recheck` does.
+#[tauri::command]
+pub fn setup_status() -> crate::setup::SetupStatus {
+    crate::setup::status()
+}
+
+/// Re-run the integration checks (Welcome mount, Settings → Setup): a CLI
+/// installed while the app runs gets its entries without a restart. Blocking
+/// worker: the first Codex check runs `codex --help` (up to 3 s).
+#[tauri::command]
+pub async fn setup_recheck(app: AppHandle) -> Result<crate::setup::SetupStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::setup::recheck(&app))
+        .await
+        .map_err(|_| "Setup check interrupted".to_string())
+}
+
 /// Install or remove Claude Code's `statusLine` entry. Driven from the renderer
 /// (on boot and on toggle) rather than from Rust's `setup`, because the
 /// preference lives in localStorage and only the renderer can read it. That
@@ -734,17 +793,34 @@ pub async fn set_claude_statusline(app: AppHandle, enabled: bool) -> Result<(), 
             .map_err(|_| "Status line configuration update interrupted")?;
         let enabled =
             crate::accounts::STATUSLINE_ENABLED.load(std::sync::atomic::Ordering::Relaxed);
-        // A custom status line in the default profile is the user's and stays;
-        // it must not stop the profiles below from following the switch.
-        let default = crate::statusline::install::tolerate_foreign(
-            crate::statusline::install::apply(&app, enabled),
-        );
+        // Without Claude Code there is no default profile to configure
+        // (SWA-83); `setup::ensure_claude` applies the preference once the
+        // CLI turns up. A custom status line in the default profile is the
+        // user's and stays; it must not stop the profiles below from
+        // following the switch.
+        let default = if crate::setup::status_line_requested(&app) {
+            // `settings.json` also holds the hooks `setup::ensure_claude`
+            // writes; the shared config lock keeps either from losing the other.
+            // Without Git Bash the command would fail on every render; it is
+            // removed instead and the status says why (SWA-83).
+            let bash = crate::setup::git_bash_ok(&app);
+            let result = {
+                let _lock = crate::accounts::CONFIG_WRITE
+                    .lock()
+                    .map_err(|_| "Status line configuration update interrupted")?;
+                crate::statusline::install::apply(&app, enabled && bash)
+            };
+            crate::setup::record_status_line(&app, enabled, bash, &result);
+            crate::statusline::install::tolerate_foreign(result)
+        } else {
+            Ok(())
+        };
         // One broken profile must not leave the others on the old setting:
         // enroll all, then report the first failure.
         let mut first_err = default.err();
         for account in crate::accounts::list(&app)? {
             if account.agent_id == "claude-code" {
-                if let Err(e) = crate::accounts::enroll(&account, None) {
+                if let Err(e) = crate::accounts::enroll(&account) {
                     eprintln!(
                         "statusline: cannot update account profile {}: {e}",
                         account.id
@@ -910,8 +986,16 @@ pub async fn list_folders(path: String) -> Result<crate::folder_list::FolderList
 
 /// First of `candidates` (an allowlisted editor id) found on PATH. The renderer
 /// asks once and caches; `None` means fall back to revealing in the file manager.
+/// Async (SWA-85): stats PATH × PATHEXT for every candidate, off the UI thread.
 #[tauri::command]
-pub fn find_available_editor(candidates: Vec<String>) -> Option<String> {
+pub async fn find_available_editor(candidates: Vec<String>) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || find_available_editor_blocking(candidates))
+        .await
+        .ok()
+        .flatten()
+}
+
+fn find_available_editor_blocking(candidates: Vec<String>) -> Option<String> {
     let allowed: Vec<String> = candidates
         .into_iter()
         .filter(|c| crate::links::is_allowed_editor(c))
@@ -923,8 +1007,16 @@ pub fn find_available_editor(candidates: Vec<String>) -> Option<String> {
 /// Launch an editor by argv. Never goes through a shell, so nothing in `args`
 /// can be reinterpreted as shell syntax, and `bin` is re-checked against the
 /// allowlist because the renderer is not a trust boundary.
+/// Async (SWA-85): CreateProcess can take seconds under load and must not
+/// stall the UI thread.
 #[tauri::command]
-pub fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
+pub async fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_in_editor_blocking(bin, args))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn open_in_editor_blocking(bin: String, args: Vec<String>) -> Result<(), String> {
     if !crate::links::is_allowed_editor(&bin) {
         return Err(format!("editor not allowed: {bin}"));
     }
@@ -946,9 +1038,12 @@ pub fn open_in_editor(bin: String, args: Vec<String>) -> Result<(), String> {
 /// Show the file in the OS file manager. Used when no allowlisted editor is on
 /// PATH. Reveal-only: the file is selected, never opened, so this can't execute
 /// anything.
+/// Async like `open_in_editor` (spawns explorer.exe).
 #[tauri::command]
-pub fn reveal_in_file_manager(path: String) -> Result<(), String> {
-    crate::links::reveal_in_file_manager(&path)
+pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::links::reveal_in_file_manager(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Frontend drags a pane into one room's drop zone. Metadata is a frontend
@@ -1288,12 +1383,9 @@ pub async fn save_agent_account(
     account: crate::accounts::AccountInput,
 ) -> Result<crate::accounts::AgentAccount, String> {
     files_main_only(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        crate::accounts::save(&app, account, state.mcp_url.get().map(|url| url.as_ref()))
-    })
-    .await
-    .map_err(|_| "Account profile save interrupted")?
+    tauri::async_runtime::spawn_blocking(move || crate::accounts::save(&app, account))
+        .await
+        .map_err(|_| "Account profile save interrupted")?
 }
 #[tauri::command]
 pub async fn delete_agent_account(
@@ -1438,6 +1530,9 @@ pub struct SwarmtermMcpProfile {
     entry: crate::mcp::toggle::EntryState,
     config_path: String,
     url: Option<String>,
+    /// The agent's CLI is found (refreshed PATH). Settings says "Not
+    /// installed" instead of "On" otherwise (SWA-83 V5).
+    installed: bool,
 }
 
 fn swarmterm_mcp_path(
@@ -1480,14 +1575,24 @@ pub async fn swarmterm_mcp_profiles(
         for a in crate::accounts::list(&app)? {
             rows.push((a.agent_id, Some(a.id), Some(a.name)));
         }
+        let claude = crate::agents::find_agent_binary("claude").is_some();
+        let codex = crate::agents::find_agent_binary("codex").is_some();
+        // qwen and opencode rows exist only when their CLI was found.
+        let installed = |agent: &str| match agent {
+            "claude-code" => claude,
+            "codex" => codex,
+            _ => true,
+        };
         rows.into_iter()
             .map(|(agent_id, account_id, account_name)| {
+                let installed = installed(&agent_id);
                 if agent_id == "opencode" {
                     return Ok(SwarmtermMcpProfile {
                         enabled: crate::mcp::toggle::is_enabled("opencode", None),
                         entry: crate::mcp::toggle::EntryState::PerPane,
                         config_path: "OPENCODE_CONFIG_CONTENT (per pane)".into(),
                         url: url.clone(),
+                        installed,
                         agent_id,
                         account_id,
                         account_name,
@@ -1499,6 +1604,7 @@ pub async fn swarmterm_mcp_profiles(
                     entry: crate::mcp::toggle::entry_state_of_file(&path, agent_id == "codex"),
                     config_path: path.to_string_lossy().into_owned(),
                     url: url.clone(),
+                    installed,
                     agent_id,
                     account_id,
                     account_name,
@@ -1549,14 +1655,7 @@ pub async fn set_swarmterm_mcp(
         match agent_id.as_str() {
             "claude-code" => crate::mcp::config::write_mcp_config_to_file(&path),
             "qwen" => crate::mcp::config::write_qwen_settings_to_file(&path),
-            // Dev builds pin Codex per process; only the installed app owns
-            // the URL in config.toml (see mcp::start).
-            _ => match app.state::<AppState>().mcp_url.get() {
-                Some(url) if !cfg!(debug_assertions) => {
-                    crate::mcp::config::write_codex_config_to_file(&path, url)
-                }
-                _ => Ok(()),
-            },
+            _ => crate::mcp::config::write_codex_config_to_file(&path),
         }
     })
     .await

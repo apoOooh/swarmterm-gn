@@ -16,12 +16,19 @@ Both release assets are Tauri NSIS installers. They differ in install mode:
 |---|---|---|
 | Install mode | **per user** (Tauri's default `currentUser`), no administrator rights | **per machine** (`installMode: perMachine` in `src-tauri/tauri.corp.conf.json`), needs administrator rights |
 | Install directory | `%LOCALAPPDATA%\Swarmterm GN\` | `%ProgramFiles%\Swarmterm GN Corp\` (not writable by users) |
-| Files | `swarmterm.exe`, `uninstall.exe` (the optional terminal host `swarmterm-host.exe` is not in the installer yet) | same |
+| Files | `swarmterm.exe`, `swarmterm-host.exe` (optional terminal host, see below), `uninstall.exe` | same |
 | Start menu entry | per user | all users |
 | Uninstall registration | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\` | `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\` |
 | Prerequisite | Microsoft WebView2 Runtime (preinstalled on Windows 11; the installer fetches Microsoft's bootstrapper if it is missing) | same |
 
 Settings and data stay per user in both editions (see [Data locations](#data-locations)).
+
+The terminal host (Settings → Terminal → **Run new panes in the terminal host**, on by default) does not run from the
+install directory: Swarmterm copies `swarmterm-host.exe` to `%LOCALAPPDATA%\<app id>\host\<version>-<hash>\`,
+checks the copy's SHA-256 against the installed file before every start, and runs it from there, so an update never
+has to replace a running binary. Application control that only allows programs from `%ProgramFiles%` (AppLocker,
+WDAC) blocks that copy; the setting then reports why and panes run inside Swarmterm. Allow the path or keep the
+setting off per user (Settings → Terminal).
 
 Silent install of **Corp**, elevated (for example an Intune Win32 app with install behaviour **System**, or an
 administrator PowerShell):
@@ -79,7 +86,7 @@ All data belongs to the Windows user; apart from the Corp program files, nothing
 
 - `%APPDATA%\com.apooooh.swarmterm.gn\`: settings files, account profiles (no credentials), local deletion history.
 - `%LOCALAPPDATA%\com.apooooh.swarmterm.gn\`: WebView2 storage (layouts, preferences), downloaded speech models,
-  local endpoint descriptions.
+  local endpoint descriptions, and the terminal host copies under `host\` when the terminal host is used.
 - `%TEMP%\swarmterm-paste\`, `swarmterm-marked\`, `swarmterm-clipboard\`: pasted and annotated images.
 - Entries the app adds to agent CLI configuration (`~/.claude.json`, `~/.claude/settings.json`, `~/.codex/…`) for its
   MCP server, status line and hooks.
@@ -144,7 +151,7 @@ organisation's certificate or allow it by hash.
 | Encryption | No data leaves the device through the app except the listed HTTPS downloads (TLS). Data at rest relies on Windows (BitLocker, user profile ACLs); the app adds no encryption of its own. |
 | Code integrity | Open source (GPL-3.0-only); releases built only by GitHub Actions from tagged commits on `main`, with SHA-256 checksums, SBOMs and signed provenance. No Authenticode signature. |
 | Secure development | CI: types, unit and browser tests, clippy, `cargo deny` (advisories, licences, sources), `npm audit` and registry signatures, gitleaks secret scan, CodeQL, OpenSSF Scorecard, REUSE licence lint. Actions pinned to commit SHAs; Dependabot updates. Threat model: [security-model.md](security-model.md). |
-| Vulnerability handling | Private reports via GitHub Security Advisories (until private reporting is enabled: a GitHub issue that only asks for a private contact, without details); targets: acknowledge in 5 working days, fix critical/high in 30 days ([SECURITY.md](../SECURITY.md)). Advisories are published with the fixed release. |
+| Vulnerability handling | Private reports via GitHub Security Advisories; targets: acknowledge in 5 working days, fix critical/high in 30 days ([SECURITY.md](../SECURITY.md)). Advisories are published with the fixed release. |
 | Third-party components | Listed in the release SBOMs; copied code and bundled assets in [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md). Dependency licences are checked against an allow list in CI. |
 | Privileges | The app runs as the user; no service or driver. The Corp installer needs administrator rights and writes to Program Files; the Standard installer is per user and needs none. |
 | Central control | Registry policy (HKLM) through Group Policy or Intune ([admin-policy.md](admin-policy.md)). |

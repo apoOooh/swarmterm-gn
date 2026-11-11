@@ -199,13 +199,9 @@ fn same_dir(a: &str, b: &str) -> bool {
     normalized(a) == normalized(b)
 }
 
-pub fn save(
-    app: &AppHandle,
-    input: AccountInput,
-    url: Option<&str>,
-) -> Result<AgentAccount, String> {
+pub fn save(app: &AppHandle, input: AccountInput) -> Result<AgentAccount, String> {
     let _lock = STORE_LOCK.lock().map_err(|e| e.to_string())?;
-    save_at_with(&store_path(app)?, input, |account| enroll(account, url))
+    save_at_with(&store_path(app)?, input, enroll)
 }
 
 pub fn delete_at(path: &Path, id: &str) -> Result<(), String> {
@@ -233,7 +229,10 @@ pub fn resolve(app: &AppHandle, id: &str, agent_id: Option<&str>) -> Result<Agen
     Ok(account)
 }
 
-pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
+pub fn enroll(account: &AgentAccount) -> Result<(), String> {
+    // Before the write lock: the first call may run `claude --version`
+    // (bounded, cached per binary), and no other writer should wait on it.
+    let exec = account.agent_id == "claude-code" && crate::hook::claude_version::exec_hooks();
     // Concurrent pane starts may enroll the same profile. Serialize the entire
     // read/merge/rename sequence so a second writer cannot consume our temp file.
     let _lock = CONFIG_WRITE.lock().map_err(|e| e.to_string())?;
@@ -246,14 +245,18 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
             if mcp_on {
                 crate::mcp::config::write_mcp_config_to_file(&dir.join(".claude.json"))?;
             }
-            crate::hook::install::write_hooks_to_file(
-                &dir.join("settings.json"),
-                Some(&crate::hook::install::format_command(&exe, cfg!(windows))),
-            )?;
+            // Without Git Bash our hook and status-line commands fail on
+            // every event (Claude Code falls back to PowerShell), so they
+            // are taken out until Bash is there (SWA-83). MCP needs no shell.
+            let bash = !crate::git_bash::REQUIRED || crate::git_bash::find(Some(dir)).is_some();
+            // Exec-form hooks run without any shell (SWA-83 1c-ii); only
+            // the shell form of an older Claude Code still needs Bash.
+            let hook = (exec || bash)
+                .then(|| crate::hook::install::claude_hook_entry(&exe, cfg!(windows), exec));
+            crate::hook::install::write_hooks_to_file(&dir.join("settings.json"), hook.as_ref())?;
             adopt_default_claude_config(dir);
             crate::sessions::share::ensure_profile(dir);
-            let command = STATUSLINE_ENABLED
-                .load(Ordering::Relaxed)
+            let command = (bash && STATUSLINE_ENABLED.load(Ordering::Relaxed))
                 .then(|| crate::statusline::install::format_command(&exe, cfg!(windows)));
             // A foreign status line remains owned by the user.
             crate::statusline::install::tolerate_foreign(
@@ -264,10 +267,10 @@ pub fn enroll(account: &AgentAccount, url: Option<&str>) -> Result<(), String> {
             )?;
         }
         "codex" => {
-            // Dev builds leave the Codex URL to the installed app even in a
-            // shared configDir; their panes are pinned per process instead.
-            if let Some(url) = url.filter(|_| mcp_on && !cfg!(debug_assertions)) {
-                crate::mcp::config::write_codex_config_to_file(&dir.join("config.toml"), url)?;
+            // The stdio entry carries no port (SWA-83 1b); a dev build leaves
+            // a live installed app's entry alone (`mcp::entry`).
+            if mcp_on {
+                crate::mcp::config::write_codex_config_to_file(&dir.join("config.toml"))?;
             }
             // Same rule as the default profile: a dev build must not swap the
             // exe path under the installed app's hook and trigger re-trust.

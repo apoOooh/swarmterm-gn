@@ -257,9 +257,14 @@ pub struct ManagedTerminal {
     pub io: TerminalIo,
     pub worktree_mode: bool,
     pub repo_root: Option<String>,
-    /// A Claude account profile's own `CLAUDE_CONFIG_DIR` (SWA-58: where the
-    /// excerpt reader looks for this pane's transcripts). `None` = default.
-    pub claude_config_dir: Option<std::path::PathBuf>,
+    /// An account profile's own config dir: `CLAUDE_CONFIG_DIR` for Claude,
+    /// `CODEX_HOME` for Codex (SWA-58/71: where the excerpt reader looks for
+    /// this pane's transcripts). `None` = the agent's default.
+    pub profile_dir: Option<std::path::PathBuf>,
+    /// The agent's last reported cwd (Claude PostToolUse hook, 2026-11-11):
+    /// where relative media names it prints resolve when the spawn cwd has
+    /// no such file. Memory only; a respawn starts a new entry without it.
+    pub agent_cwd: Option<std::path::PathBuf>,
 }
 
 /// Where a pane's PTY lives (SWA-55, ADR 0001).
@@ -407,6 +412,18 @@ impl IoHandle {
 }
 
 impl ManagedTerminal {
+    /// The PTY lives in the terminal host over a live connection, so it can
+    /// outlive this app (quit with "keep terminals running", SWA-57).
+    pub fn is_hosted(&self) -> bool {
+        match &self.io {
+            TerminalIo::Local { .. } => false,
+            #[cfg(windows)]
+            TerminalIo::Host { conn, .. } => conn.is_alive(),
+        }
+    }
+}
+
+impl ManagedTerminal {
     /// Close the terminal the way a regular terminal window does, then make
     /// sure nothing survives. Returns the thread enforcing the deadline, if any.
     ///
@@ -515,6 +532,11 @@ pub struct AppState {
     /// lock (never nested with `terminals`) so MCP tools keep the
     /// lock-read-drop-before-await rule.
     pub war_rooms: Mutex<crate::warroom::WarRooms>,
+    /// SWA-90: "Pane 2 · Backend" per terminal id, pushed by the renderer on
+    /// every layout change (only it knows pane order and workspaces) and read
+    /// by `list_peers` so agents can name the exact pane. Display only, never
+    /// an address. Its own lock, never nested with `war_rooms`.
+    pub war_room_pane_labels: Mutex<HashMap<String, String>>,
     /// Panes an MCP client has actually spoken to us from. Its own lock, never
     /// nested with `terminals` or `war_rooms`, because the `/mcp` middleware
     /// touches it on every inbound request and must not contend with pty I/O.
@@ -554,6 +576,10 @@ pub struct AppState {
     /// afterwards: the snapshots below apply it on every read, so a renderer
     /// push can never loosen a lock.
     pub admin_policy: crate::policy::AdminPolicy,
+    /// SWA-88: prompt edges and blocked prompt ids per pane (`resubmit.rs`).
+    /// Statement-scoped like `context_usage`: never held with `terminals`
+    /// or any voice lock.
+    pub resubmit: Mutex<crate::resubmit::Gate>,
 }
 
 impl AppState {
@@ -640,6 +666,7 @@ impl Default for AppState {
             quitting: AtomicBool::new(false),
             mcp_url: OnceLock::new(),
             war_rooms: Mutex::new(crate::warroom::WarRooms::default()),
+            war_room_pane_labels: Mutex::new(HashMap::new()),
             mcp_clients: Mutex::new(crate::mcp::clients::McpClients::default()),
             session_tokens: Mutex::new(Default::default()),
             context_usage: Mutex::new(Default::default()),
@@ -649,6 +676,7 @@ impl Default for AppState {
             env_policy: Default::default(),
             agent_policy: Default::default(),
             admin_policy: Default::default(),
+            resubmit: Mutex::new(Default::default()),
         }
     }
 }
@@ -785,7 +813,7 @@ fn spawn_terminal_inner(
             // A pane of that kind that survived the last app instance in the
             // terminal host must not keep running detached: end it.
             #[cfg(windows)]
-            if let Some((_, client)) = app
+            if let Some((_, client, _ticket)) = app
                 .try_state::<crate::host_client::HostHub>()
                 .and_then(|hub| hub.take_detached(&id))
             {
@@ -802,7 +830,8 @@ fn spawn_terminal_inner(
         .try_state::<crate::host_client::HostHub>()
         .and_then(|hub| hub.take_detached(&id))
     {
-        Some((pane, client)) => match attach_hosted(state, &id, pane, on_data, client) {
+        // The ticket lives until the attach is answered (`retire_idle`).
+        Some((pane, client, _ticket)) => match attach_hosted(state, &id, pane, on_data, client) {
             Ok(result) => return result,
             Err(on_data) => on_data,
         },
@@ -921,7 +950,7 @@ struct SpawnPlan {
     agent_id: Option<String>,
     worktree_mode: bool,
     repo_root: Option<String>,
-    claude_config_dir: Option<std::path::PathBuf>,
+    profile_dir: Option<std::path::PathBuf>,
     /// This generation's MCP bearer secret (`SWARMTERM_SESSION`); kept in the
     /// host's meta so a reattached pane keeps authorising.
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -948,6 +977,13 @@ fn plan_spawn(
     id: &str,
     options: CreateTerminalOptions,
 ) -> Result<SpawnPlan, String> {
+    // The agent about to start must find its hooks and MCP entry, also when
+    // its CLI was installed after boot or the boot-time Codex probe is still
+    // running (SWA-83). A no-op once they are in place. Before enrollment:
+    // both take `CONFIG_WRITE`, which is not reentrant.
+    if options.initial_command.is_some() {
+        crate::setup::ensure_for_agent(app, options.agent_id.as_deref());
+    }
     let account = match options.account_id.as_deref() {
         Some(id) => {
             let account = crate::accounts::resolve(app, id, options.agent_id.as_deref())?;
@@ -957,7 +993,7 @@ fn plan_spawn(
             // per account, so different accounts enroll in parallel.
             let lock = enroll_lock(id);
             let _enroll = lock.lock().unwrap_or_else(|e| e.into_inner());
-            crate::accounts::enroll(&account, state.mcp_url.get().map(|url| url.as_ref()))?;
+            crate::accounts::enroll(&account)?;
             Some(account)
         }
         None => None,
@@ -978,10 +1014,28 @@ fn plan_spawn(
     if let Some(account) = &account {
         crate::accounts::apply_environment(&mut env, account);
     }
-    let claude_config_dir = account
+    let profile_dir = account
         .as_ref()
-        .filter(|a| a.agent_id == "claude-code")
         .map(|a| std::path::PathBuf::from(&a.config_dir));
+    // The registry PATH as of now (SWA-83 V3): a CLI or Git installed while
+    // Swarmterm runs is found in a new pane without an app restart. Only
+    // appended, so whatever order the app's own PATH has keeps winning.
+    let path_now = crate::runtime_path::refreshed(env.get("PATH").unwrap_or_default());
+    env.set("PATH", path_now);
+    // Claude Code runs hooks through Git Bash and finds it only via `git` on
+    // PATH or the standard folders; tell it where ours is when it would not
+    // (registry install root, SWA-83). A value the user set always wins.
+    if options.agent_id.as_deref() == Some("claude-code") {
+        let home = app.path().home_dir().unwrap_or_default();
+        let config =
+            crate::voice::completion::reader::claude_config_dir(profile_dir.as_deref(), &home);
+        let found = crate::git_bash::find(Some(&config));
+        if let Some(value) =
+            crate::git_bash::pane_value(found.as_ref(), env.get("CLAUDE_CODE_GIT_BASH_PATH"))
+        {
+            env.set("CLAUDE_CODE_GIT_BASH_PATH", value);
+        }
+    }
     env.set("COLORTERM", "truecolor");
     env.set("TERM", "xterm-256color");
     // GUI launches arrive with no locale vars; fill in a UTF-8 LANG so CLIs
@@ -1055,9 +1109,20 @@ fn plan_spawn(
             options.agent_id.as_deref(),
             options.agent_id.as_deref() == Some("codex") && crate::hook::codex::supported(),
         );
-        // A switched-off profile gets no per-process pin either.
+        // A switched-off profile gets no per-process pin either, and neither
+        // does one whose config.toml already holds the stdio entry (SWA-83
+        // 1b: Codex refuses `url` on a stdio server).
         let mcp_on = options.agent_id.as_deref().is_none_or(|agent| {
             crate::mcp::toggle::is_enabled(agent, options.account_id.as_deref())
+        }) && (options.agent_id.as_deref() != Some("codex") || {
+            let config = match &profile_dir {
+                Some(dir) => dir.join("config.toml"),
+                None => crate::mcp::config::resolve_codex_config_path(
+                    &app.path().home_dir().unwrap_or_default(),
+                    std::env::var("CODEX_HOME").ok().as_deref(),
+                ),
+            };
+            crate::mcp::config::codex_needs_url_pin(&config)
         });
         let ic = crate::hook::codex::with_mcp_url(
             &ic,
@@ -1087,7 +1152,7 @@ fn plan_spawn(
         agent_id: options.agent_id,
         worktree_mode: options.worktree_mode.unwrap_or(false),
         repo_root: options.repo_root,
-        claude_config_dir,
+        profile_dir,
         session_token,
     })
 }
@@ -1194,7 +1259,8 @@ fn spawn_local(
             worktree_mode: plan.worktree_mode,
             repo_root: plan.repo_root,
             cwd: std::path::PathBuf::from(&plan.cwd),
-            claude_config_dir: plan.claude_config_dir,
+            profile_dir: plan.profile_dir,
+            agent_cwd: None,
         },
     );
     state.with_session_tokens(|t| t.settle(&id));
@@ -1253,7 +1319,9 @@ fn spawn_hosted(
         "agentId": plan.agent_id,
         "worktreeMode": plan.worktree_mode,
         "repoRoot": plan.repo_root,
-        "claudeConfigDir": plan.claude_config_dir,
+        // Key kept from SWA-58 so a host started by an older build still
+        // hands the profile back on reattach.
+        "claudeConfigDir": plan.profile_dir,
         "sessionToken": plan.session_token,
     });
     let op = serde_json::json!({
@@ -1274,7 +1342,7 @@ fn spawn_hosted(
             cwd: std::path::PathBuf::from(&plan.cwd),
             worktree_mode: plan.worktree_mode,
             repo_root: plan.repo_root,
-            claude_config_dir: plan.claude_config_dir,
+            profile_dir: plan.profile_dir,
         },
         on_data,
     );
@@ -1335,7 +1403,7 @@ fn attach_hosted(
         cwd: std::path::PathBuf::from(&pane.cwd),
         worktree_mode: meta["worktreeMode"].as_bool().unwrap_or(false),
         repo_root: text("repoRoot"),
-        claude_config_dir: text("claudeConfigDir").map(std::path::PathBuf::from),
+        profile_dir: text("claudeConfigDir").map(std::path::PathBuf::from),
     };
     // The pane's env still carries the secret it was spawned with; re-learn
     // it so the reattached pane keeps authorising. A pane created by a build
@@ -1422,7 +1490,8 @@ pub fn register_hosted(
             },
             worktree_mode: pending.worktree_mode,
             repo_root: pending.repo_root,
-            claude_config_dir: pending.claude_config_dir,
+            profile_dir: pending.profile_dir,
+            agent_cwd: None,
         },
     );
     // Never nest `session_tokens` inside `terminals`.
@@ -1604,6 +1673,7 @@ pub fn finish_generation(
             let _ = app.emit("warroom:event", &crate::warroom::scoped(&room_id, event));
         }
         crate::voice::drop_terminal(app, id);
+        state.resubmit.lock().unwrap().forget(id);
         // Same preview cleanup as kill_terminal: this is the path a shell
         // takes when it exits on its own (typed `exit`, crashed), where no one
         // called kill_terminal. preview:closed tells the renderer too — the

@@ -2,6 +2,142 @@
 
 ## [Unreleased]
 
+- Media: an image or video overwritten in place (same name, new content)
+  shows up again in the Media strip with its new thumbnail, whether the agent
+  prints the path again or Claude's Read/Write tools touch it; repeating an
+  unchanged file stays quiet.
+
+## [1.28.0] - 2026-11-09
+
+- Security: updated the MCP library `rmcp` from 2.1 to 3.9 (RUSTSEC-2026-0457,
+  RUSTSEC-2026-0462). Both advisories concern rmcp's OAuth and Streamable
+  HTTP *client*, which Swarmterm does not use (it only runs the server), so
+  no Swarmterm build was exposed; the update keeps the dependency audit
+  clean.
+
+- Prompts blocked by data-shield come back masked (SWA-88): when
+  data-shield's prompt guard blocks a Claude Code prompt because it contains
+  personal data or a secret, Swarmterm clears the original from Claude's
+  input box, puts the masked version (placeholders instead of the values)
+  back into the same pane and sends it. **Settings → Terminal → Agent
+  safety → Prompts blocked by data-shield**: *put back and send* (default),
+  *put back, I press Enter*, or *do nothing*. A blocked prompt is never
+  announced as done. Administrators can switch it off or forbid the
+  automatic send (`DisablePromptResubmit`, `DisablePromptResubmitSend`; Corp
+  never sends). The text is never logged, announced or stored.
+
+- War Room: every member row, message header, the composer's target list
+  and the `@` list show the pane's number as its header shows it (`Pane 2`,
+  or `Pane 2 · Backend` with more than one workspace open, `Drawer` for a
+  parked pane), so several members with the same title stay apart (SWA-90).
+  The tag follows the layout live; agents see it as `pane` in
+  `war_room.list_peers`.
+
+- Setup assistant on a new installation (SWA-83): four steps for tools and
+  agents (what is missing, why, the vendor link and an install command to
+  copy — Swarmterm installs nothing itself), sign-in (passing an API key
+  variable to panes by name), voice and a first workspace. Skippable, and
+  available again under Settings → Setup. Voice dictation is now off by
+  default on a new installation; existing installations keep it as it was.
+
+- Claude Code hooks no longer need Git Bash with Claude Code 2.1.139 or
+  newer (SWA-83): Swarmterm now registers them so that Claude Code starts
+  `swarmterm.exe --hook` directly instead of through a shell, which also
+  works under the PowerShell that Claude Code falls back to. Older Claude
+  Code versions keep the previous entry and still need Git Bash; the entries
+  switch over by themselves when Claude Code is updated. The status line
+  still needs Git Bash.
+
+- Security: hardened putting back prompts blocked by data-shield (SWA-88
+  review). The masked prompt is written only after a real Enter of yours in
+  that pane (within 15 s, once per Enter; a line break with Shift+Enter or
+  Ctrl+J, a paste or a terminal query answer does not count) and only while
+  Claude shows the restored draft; a one-line draft must also match the blocked prompt
+  (otherwise the pane offers **Copy masked prompt**). Any input since that
+  Enter (also Esc, Ctrl+C or a new Enter), IME input, a permission prompt,
+  the setting and the pane are re-checked before every Esc, after every wait,
+  before the insert and before the Enter. At most one
+  automatic send per pane every 30 s (failed attempts count); a further one
+  is put back without Enter and noted in the bell. Prompt fingerprints now
+  expire on a timer after 10 s. The remaining self-injection risk is
+  documented in `docs/security-model.md`; sending automatically stays the
+  default (`docs/decisions.md`).
+
+- Security: `swarmterm --dump-ui <pid> <file>` now enforces the hang-dump
+  gates itself (SWA-85 review): `DisableHangDumps`, the Corp edition and the
+  opt-in in Settings → Terminal → Diagnostics. Before, any process (a pane
+  included) could start it directly and get a dump of Swarmterm despite a
+  lock or without the opt-in. A refused call exits with code 1 and creates
+  no file.
+
+- MCP: Claude Code and Codex now start Swarmterm's server entry as a small
+  local helper, `swarmterm.exe --mcp-stdio` (SWA-83). It forwards to the
+  Swarmterm the pane runs in; in a terminal outside Swarmterm it offers no
+  tools instead of showing a failed server. The previous HTTP entry is
+  replaced at the first start of this version, but only when it is exactly
+  the entry Swarmterm wrote; a server of your own named `swarmterm` is left
+  alone. Codex's `config.toml` is no longer rewritten on every start.
+  Going back to 1.27.0 or older: switch the Swarmterm server off under
+  Settings → MCP before uninstalling this version and on again in the older
+  one, because older versions do not know `--mcp-stdio`.
+
+- Diagnostics: Swarmterm now notices when its window stops responding
+  (SWA-85). A background watchdog writes one line (time and duration, no
+  content) for every stall of 2 s or more to
+  `%LOCALAPPDATA%\<app id>\diagnostics\ui-stalls.log`; it is always on, stays
+  on your computer and is never sent anywhere. Optional: Settings →
+  Terminal → Diagnostics → **Write a dump when the window stops
+  responding** (off by default) saves one small minidump per stall of 4 s
+  (the last three are kept) so a hang can be analysed. A dump can contain
+  terminal text; it never leaves the machine. Administrators can turn it
+  off with the new policy value `DisableHangDumps`; the Corp edition has it
+  locked.
+- Fix: fewer freezes of the window. The `swarmterm-media` protocol now reads
+  files off the UI thread, and images or documents served whole (without
+  range requests) are limited to 32 MB: the webview copies such an answer on
+  the UI thread, so a 250 MB image froze the window for about 0.6 s. Larger
+  files show **Open in default app**; videos are unaffected. Closing detached panes,
+  the buzzkey status and start, Open in editor, Reveal in Explorer and the
+  editor lookup no longer run on the UI thread. A test now fails when a
+  synchronous command or scheme handler is added without a reason.
+- Security: private vulnerability reporting is enabled; [SECURITY.md](SECURITY.md)
+  and the corporate review pack no longer describe the issue fallback as
+  temporary. The repository now protects `main`, `dev` and release tags
+  server-side and requires SHA-pinned actions
+  ([maintainer to-dos](docs/maintainer-todos.md)).
+
+## [1.27.0] - 2026-11-09
+
+- Terminal host is on by default (ADR 0001 phase 4, SWA-82): new panes run
+  in `swarmterm-host.exe` and survive a quit (on request), a crash or an
+  update. If you turned it off before, it stays off; without a usable host
+  panes still open inside Swarmterm and Settings → Terminal says why.
+- Terminal host: Quit asks *Keep terminals running?* while panes run in the
+  host (ADR 0001 phase 4a, SWA-57). **Close all** (default) closes them as
+  before, **Keep running** leaves them running and the next start takes them
+  over. Without hosted panes Quit does not ask.
+- Terminal host: the installer now ships `swarmterm-host.exe` (ADR 0001
+  phase 4, SWA-82). Swarmterm copies it to a folder per build under
+  `%LOCALAPPDATA%\<app id>\host\`, checks the copy's hash before each
+  start and runs it from there, so an update never replaces a running host.
+  After an update, panes on the previous build's host stay there and can be
+  reopened; new panes go to the new host, and Settings → Terminal says so.
+  An old host disconnects once it holds no pane, and its folder is removed
+  at the next start. Debug builds keep running the host from the build
+  folder (`SWARMTERM_HOST_VERSIONED=1` opts in).
+- Voice: Codex turns end exactly (SWA-71). Swarmterm registers Codex's
+  `Stop` and `Interrupt` hooks next to the session capture (one more
+  `/hooks` review in Codex). A Codex pane's status follows these edges, a
+  pause in the middle of a turn is no longer announced as done, Esc is said
+  as interrupted, and with **Allow excerpts** the agent's reply is spoken
+  for Codex too.
+- Terminal links: a relative file path that does not exist below the pane's
+  folder is also looked up in the absolute folders printed on the same line
+  and the newest lines above (Windows and Git Bash `/d/…` paths), so
+  Ctrl+click works on paths a tool printed relative to its own folder. The
+  click follows the file the link resolved to, also for bare names in a
+  `dir` listing (SWA-62).
+
 ## [1.26.0] - 2026-10-29
 
 Corporate readiness release: no telemetry, no updater, secrets withheld from

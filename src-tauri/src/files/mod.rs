@@ -201,20 +201,41 @@ impl FileService {
     /// the file's mtime and size, so the renderer can tell a file overwritten
     /// in place (same path, new screenshot) from a plain redraw.
     pub fn check_detected_media(&self, raws: &[String], cwd: &Path) -> Vec<Option<DetectedMedia>> {
+        self.check_detected_media_in(raws, cwd, None)
+    }
+
+    /// As `check_detected_media`; a relative path that is no media file under
+    /// `cwd` is tried under `fallback` (the agent's own cwd) as well.
+    pub fn check_detected_media_in(
+        &self,
+        raws: &[String],
+        cwd: &Path,
+        fallback: Option<&Path>,
+    ) -> Vec<Option<DetectedMedia>> {
         raws.iter()
             .enumerate()
             .map(|(i, raw)| {
                 if i >= MAX_DETECTED_PER_CALL {
                     return None;
                 }
-                let path = media::resolve_media(raw, cwd).ok()?;
+                let path = media::resolve_media(raw, cwd).ok().or_else(|| {
+                    let other = fallback.filter(|f| *f != cwd)?;
+                    if Path::new(raw.trim()).is_absolute() {
+                        return None;
+                    }
+                    media::resolve_media(raw, other).ok()
+                })?;
                 let meta = fs::metadata(&path).ok()?;
                 let mtime_ms = meta
                     .modified()
                     .ok()
                     .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
                     .map_or(0, |d| d.as_millis() as u64);
-                Some(DetectedMedia { path, mtime_ms, size: meta.len() })
+                Some(DetectedMedia {
+                    path,
+                    mtime_ms,
+                    size: meta.len(),
+                })
             })
             .collect()
     }
@@ -259,7 +280,6 @@ impl FileService {
     }
 
     /// Image/video extension check (the unrooted route's kind rule) for other modules.
-    #[cfg(windows)]
     pub(crate) fn is_media_path(path: &Path) -> bool {
         media::is_media(path)
     }

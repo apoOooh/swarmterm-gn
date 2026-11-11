@@ -1,19 +1,27 @@
 //! Settings → Terminal → "Run terminals in the terminal host" (SWA-55),
 //! persisted as `terminal-host.json` in the app data dir (tmp + rename like
-//! `voice/settings.rs`). Missing or unreadable file = off: until phase 4 the
-//! host is opt-in, and the in-process PTY stays the default.
+//! `voice/settings.rs`). Missing or unreadable file = on (SWA-82, ADR 0001
+//! phase 4): the installer ships the host and panes survive quit, crash and
+//! update there. A user who turned it off has a file saying so, and keeps it.
+//! Without a usable host, panes still open in-process (`HostHub::for_spawn`).
 
 use std::fs;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct HostSettings {
     /// New panes spawn in `swarmterm-host.exe`. Running panes keep their
     /// backend; the switch only decides where the next pane starts.
     pub enabled: bool,
+}
+
+impl Default for HostSettings {
+    fn default() -> Self {
+        HostSettings { enabled: true }
+    }
 }
 
 pub fn load(path: &Path) -> HostSettings {
@@ -41,11 +49,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_to_off_when_missing_or_broken() {
+    fn defaults_to_on_when_missing_broken_or_empty() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("terminal-host.json");
-        assert!(!load(&path).enabled);
+        assert!(load(&path).enabled);
         fs::write(&path, "{not json").unwrap();
+        assert!(load(&path).enabled);
+        fs::write(&path, "{}").unwrap();
+        assert!(load(&path).enabled);
+    }
+
+    #[test]
+    fn a_saved_off_stays_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("terminal-host.json");
+        fs::write(&path, r#"{"enabled": false}"#).unwrap();
         assert!(!load(&path).enabled);
     }
 

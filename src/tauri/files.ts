@@ -47,6 +47,9 @@ export const unrootedMediaUrl = (path: string, revision: string | number = 0): s
 export interface ClipboardMediaEvent { path: string }
 /** `media:clipboard`: a clipboard image saved as PNG (or a copied media file), canonical and already registered. */
 export const onClipboardMedia = (cb: (e: ClipboardMediaEvent) => void): Promise<() => void> => listen<ClipboardMediaEvent>('media:clipboard', (e) => cb(e.payload))
+/** `media:detected` (camelCase, lockstep with `MediaDetectedEvent` in `mcp/server.rs`): a media file an agent's Read/Write touched, canonical and existing, NOT registered; `mtimeMs`/`size` stamp the content like `checkDetectedMedia` hits. */
+export interface MediaDetectedEvent { terminalId: string; path: string; mtimeMs: number; size: number }
+export const onMediaDetected = (cb: (e: MediaDetectedEvent) => void): Promise<() => void> => listen<MediaDetectedEvent>('media:detected', (e) => cb(e.payload))
 /** Starts/stops the backend clipboard watcher (opt-in setting). */
 export const setClipboardMediaEnabled = (enabled: boolean): Promise<void> => invoke('clipboard_media_set_enabled', { enabled })
 /** A passive-detection hit: canonical path plus the stamp that tells an overwritten file apart. */

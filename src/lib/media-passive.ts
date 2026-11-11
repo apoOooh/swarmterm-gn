@@ -90,13 +90,18 @@ function scan(terminalId: string, state: ScanState): void {
     .catch(() => {})
 }
 
-/** Called for every decoded pty chunk of a live pane (not for replayed history). */
-export function noteMediaOutput(terminalId: string, data: Uint8Array | string): void {
+function stateOf(terminalId: string): ScanState {
   let state = states.get(terminalId)
   if (!state) {
     state = { chunks: [], bytes: 0, decoder: new TextDecoder(), buffer: new MediaOutputBuffer(), seen: new SeenPaths(), timer: null }
     states.set(terminalId, state)
   }
+  return state
+}
+
+/** Called for every decoded pty chunk of a live pane (not for replayed history). */
+export function noteMediaOutput(terminalId: string, data: Uint8Array | string): void {
+  const state = stateOf(terminalId)
   state.chunks.push(data)
   state.bytes += chunkSize(data)
   // Rare (a >256 KB burst within one interval): drop the oldest chunks. Lines
@@ -114,6 +119,25 @@ export function noteMediaOutput(terminalId: string, data: Uint8Array | string): 
 /** UTF-16 length for strings: a cheap cap estimate, no encode on the hot path. */
 function chunkSize(chunk: Uint8Array | string): number {
   return typeof chunk === 'string' ? chunk.length : chunk.byteLength
+}
+
+/**
+ * A media file an agent (or one of its subagents) opened or wrote, reported
+ * by the Claude PostToolUse hook (`media:detected`): canonical, existing,
+ * never shown on screen. Shares the pane's `SeenPaths` with the screen scan,
+ * so a path named both ways is announced once; like the screen path, a known
+ * path whose stamp (mtime and size) changed is news again (overwritten in
+ * place), an unchanged one stays silent.
+ */
+export function noteHookMedia(terminalId: string, path: string, mtimeMs: number, size: number): void {
+  const kind = mediaKind(path)
+  if (!kind) return
+  const state = stateOf(terminalId)
+  const at = Date.now()
+  const version = `${mtimeMs}:${size}`
+  if (!state.seen.confirm(path, version, at)) return
+  const item = { path, kind, terminalId, source: paneSourceLabel(terminalId), shownAt: at, opened: false, version }
+  if (useMediaStore.getState().detect(item)) useMediaStore.getState().announce(item, 'agent')
 }
 
 export function forgetMediaOutput(terminalId: string): void {

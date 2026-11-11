@@ -695,8 +695,43 @@ impl WarRooms {
     }
 }
 
+/// Upper bounds for the renderer's pane-label push (SWA-90): a label is a
+/// short "Pane 2 · Workspace", so anything bigger is cut rather than let an
+/// oversized push sit in memory and in every `list_peers` answer.
+pub const MAX_PANE_LABELS: usize = 512;
+pub const MAX_PANE_LABEL_CHARS: usize = 80;
+
+/// Bounds the pushed labels: at most `MAX_PANE_LABELS` entries, each label
+/// trimmed and cut to `MAX_PANE_LABEL_CHARS` characters, empty ones dropped.
+pub fn sanitize_pane_labels(labels: HashMap<String, String>) -> HashMap<String, String> {
+    labels
+        .into_iter()
+        .filter_map(|(id, label)| {
+            let label: String = label.trim().chars().take(MAX_PANE_LABEL_CHARS).collect();
+            (!label.is_empty()).then_some((id, label))
+        })
+        .take(MAX_PANE_LABELS)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pane_labels_are_bounded() {
+        let mut m = HashMap::new();
+        m.insert("a".to_string(), "  Pane 1 · W  ".to_string());
+        m.insert("b".to_string(), "   ".to_string());
+        m.insert("c".to_string(), "x".repeat(500));
+        let out = sanitize_pane_labels(m);
+        assert_eq!(out.get("a").map(String::as_str), Some("Pane 1 · W"));
+        assert!(!out.contains_key("b"));
+        assert_eq!(out["c"].chars().count(), MAX_PANE_LABEL_CHARS);
+        let many: HashMap<String, String> = (0..2000)
+            .map(|i| (i.to_string(), "Pane".to_string()))
+            .collect();
+        assert_eq!(sanitize_pane_labels(many).len(), MAX_PANE_LABELS);
+    }
+
     use super::*;
 
     fn room_with_two() -> WarRoom {

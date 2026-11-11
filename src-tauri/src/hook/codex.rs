@@ -1,6 +1,6 @@
 //! Codex session capture. User hooks remain additive and require Codex's
 //! normal `/hooks` trust flow; never write trust records or bypass trust.
-use super::install::{merge_events, HooksWrite};
+use super::install::{merge_events, merge_events_timed, HooksWrite};
 use std::{
     fs,
     io::Read,
@@ -12,7 +12,20 @@ use std::{
 use tauri::{AppHandle, Manager};
 use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
 
-const EVENTS: [&str; 2] = ["SessionStart", "UserPromptSubmit"];
+/// Session capture plus (SWA-71) the turn edges. Codex ignores event names it
+/// does not know, so an older CLI simply never fires `Interrupt`. New events
+/// need one `/hooks` review by the user; existing trust is untouched.
+pub const EVENTS: [&str; 4] = ["SessionStart", "UserPromptSubmit", "Stop", "Interrupt"];
+
+/// Codex clamps the `Interrupt` hook to 3 s and warns on every start when
+/// asked for more.
+fn timeout_for(event: &str) -> u64 {
+    if event == "Interrupt" {
+        3
+    } else {
+        5
+    }
+}
 
 /// Probe cache. A definite answer is kept for the process; a timed-out probe
 /// (cold disk, AV scan) is retried, but no more often than `RETRY_AFTER`.
@@ -31,11 +44,18 @@ const RETRY_AFTER: Duration = Duration::from_secs(60);
 const PROBE_WAIT: Duration = Duration::from_millis(3_500);
 
 /// Whether the installed Codex supports hook isolation. Warmed off-thread at
-/// startup (`warm`), so pane spawns normally hit the cache. The lock is never
+/// startup (`setup::boot`), so pane spawns normally hit the cache. The lock is never
 /// held across the probe: a caller arriving while another probe runs waits up
 /// to `PROBE_WAIT` for its answer (then `false`); within `RETRY_AFTER` of a
 /// timeout it gets `false` without probing again.
 pub fn supported() -> bool {
+    probe_supported().unwrap_or(false)
+}
+
+/// `supported`, but `None` while undecided (probe timed out or still running
+/// after `PROBE_WAIT`): Settings must not tell the user to update a Codex
+/// that merely started slowly.
+pub fn probe_supported() -> Option<bool> {
     static STATE: Mutex<ProbeState> = Mutex::new(ProbeState::Unknown);
     static DONE: Condvar = Condvar::new();
     supported_with(&STATE, &DONE, PROBE_WAIT, Instant::now, probe)
@@ -47,7 +67,7 @@ fn supported_with(
     wait: Duration,
     now: impl Fn() -> Instant,
     probe: impl FnOnce() -> Option<bool>,
-) -> bool {
+) -> Option<bool> {
     {
         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
         if *s == ProbeState::Probing {
@@ -60,10 +80,10 @@ fn supported_with(
                 .0;
         }
         match *s {
-            ProbeState::Known(known) => return known,
-            ProbeState::Probing => return false,
+            ProbeState::Known(known) => return Some(known),
+            ProbeState::Probing => return None,
             ProbeState::TimedOut(at) if now().saturating_duration_since(at) < RETRY_AFTER => {
-                return false
+                return None
             }
             ProbeState::Unknown | ProbeState::TimedOut(_) => *s = ProbeState::Probing,
         }
@@ -76,14 +96,7 @@ fn supported_with(
         None => ProbeState::TimedOut(now()),
     };
     done.notify_all();
-    result.unwrap_or(false)
-}
-
-/// Run the first probe on a blocking worker so no IPC/async thread pays it.
-pub fn warm() {
-    tauri::async_runtime::spawn_blocking(|| {
-        supported();
-    });
+    result
 }
 
 /// `None` = undecided (timed out); retried after `RETRY_AFTER`.
@@ -148,12 +161,12 @@ pub fn isolated_command(command: &str, agent: Option<&str>, supported: bool) -> 
     command.into()
 }
 
-/// Pin the pane's Codex to THIS app's MCP server via `-c` overrides. The
-/// shared `config.toml` holds one URL, and a second Swarmterm (the dev build
-/// next to the installed one) rewrites it on boot with its own port — every
-/// pane of the other app then talks to a server that does not know its
-/// bearer and silently never joins the War Room. A per-process override
-/// cannot be clobbered. The URL is our own loopback string; anything outside
+/// Pin the pane's Codex to THIS app's MCP server via `-c` overrides. Only
+/// for a `config.toml` without our stdio entry (`mcp::config::codex_needs_url_pin`): a legacy HTTP entry holds one URL, which a second
+/// Swarmterm (the dev build next to the installed one) rewrote with its own
+/// port — every pane of the other app then talked to a server that did not
+/// know its bearer. The stdio proxy reads the pane's own address instead,
+/// and Codex refuses `url` on a stdio server. The URL is our own loopback string; anything outside
 /// a plain URL charset is refused rather than quoted into a shell line.
 pub fn with_mcp_url(command: &str, agent: Option<&str>, url: Option<&str>) -> String {
     let safe = |u: &str| {
@@ -191,7 +204,8 @@ pub fn format_command(exe: &str, windows: bool) -> String {
 }
 
 pub fn merge_json(existing: Option<&str>, command: &str) -> Result<HooksWrite, String> {
-    merge_events(existing, Some(command), &EVENTS, is_ours)
+    let entry = serde_json::json!({ "type": "command", "command": command });
+    merge_events_timed(existing, Some(&entry), &EVENTS, is_ours, timeout_for)
 }
 
 /// Edit the existing representation in place, preserving comments and foreign
@@ -226,7 +240,8 @@ pub fn merge_toml(existing: &str, command: &str) -> Result<Option<String>, Strin
                 let hs = g["hooks"].as_array_of_tables().unwrap();
                 hs.len() == 1
                     && hs.get(0).unwrap().get("command").and_then(Item::as_str) == Some(command)
-                    && hs.get(0).unwrap().get("timeout").and_then(Item::as_integer) == Some(5)
+                    && hs.get(0).unwrap().get("timeout").and_then(Item::as_integer)
+                        == Some(timeout_for(event) as i64)
             })
         {
             continue;
@@ -235,7 +250,7 @@ pub fn merge_toml(existing: &str, command: &str) -> Result<Option<String>, Strin
         let mut handler = Table::new();
         handler["type"] = value("command");
         handler["command"] = value(command);
-        handler["timeout"] = value(5);
+        handler["timeout"] = value(timeout_for(event) as i64);
         let mut handlers = ArrayOfTables::new();
         handlers.push(handler);
         let mut group = Table::new();
@@ -302,6 +317,13 @@ pub fn has_ours(home: &Path) -> bool {
     })
 }
 
+/// Does `config.toml` or `hooks.json` already carry exactly `command`?
+fn has_command(home: &Path, command: &str) -> bool {
+    ["config.toml", "hooks.json"]
+        .iter()
+        .any(|f| fs::read_to_string(home.join(f)).is_ok_and(|s| s.contains(command)))
+}
+
 fn remove_ours_from_json(json_path: &Path) -> Result<(), String> {
     let existing = match fs::read_to_string(json_path) {
         Ok(s) => s,
@@ -319,28 +341,40 @@ fn remove_ours_from_json(json_path: &Path) -> Result<(), String> {
     })
 }
 
-pub fn register(app: &AppHandle) {
-    if !supported() {
-        return;
+/// What `register` did; `setup::ensure_codex` records it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Registered {
+    Written,
+    /// No hook isolation in this Codex.
+    Unsupported,
+    /// The probe did not answer in time; retried by a later call.
+    Undecided,
+    /// Dev build next to an existing entry of ours.
+    Deferred,
+}
+
+pub fn register(app: &AppHandle) -> Result<Registered, String> {
+    match probe_supported() {
+        Some(true) => {}
+        Some(false) => return Ok(Registered::Unsupported),
+        None => return Ok(Registered::Undecided),
     }
     let home = std::env::var("CODEX_HOME")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .map(std::path::PathBuf::from)
         .or_else(|| app.path().home_dir().ok().map(|p| p.join(".codex")));
-    let (Some(home), Ok(exe)) = (home, std::env::current_exe()) else {
-        return;
-    };
+    let home = home.ok_or("cannot resolve the Codex home directory")?;
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     // A dev build next to the installed app would swap the exe path on every
     // boot, and Codex re-asks for hook trust each time the command changes.
     // The hook only reads env, so the installed app's entry serves dev panes.
-    if cfg!(debug_assertions) && has_ours(&home) {
-        return;
-    }
     let command = format_command(&exe.to_string_lossy(), cfg!(windows));
-    if let Err(e) = install(&home, &command) {
-        eprintln!("Codex session hook registration failed: {e}");
+    // Our own earlier write (same exe, e.g. "Check again") is not deferred.
+    if cfg!(debug_assertions) && has_ours(&home) && !has_command(&home, &command) {
+        return Ok(Registered::Deferred);
     }
+    install(&home, &command).map(|()| Registered::Written)
 }
 
 #[cfg(test)]
@@ -360,39 +394,45 @@ mod tests {
                 r
             }
         };
-        assert!(!supported_with(
-            &state,
-            &Condvar::new(),
-            Duration::ZERO,
-            || t0,
-            probe(None)
-        ));
+        assert_eq!(
+            supported_with(&state, &Condvar::new(), Duration::ZERO, || t0, probe(None)),
+            None
+        );
         assert_eq!(*state.lock().unwrap(), ProbeState::TimedOut(t0));
         // Within the retry interval: no new probe.
-        assert!(!supported_with(
-            &state,
-            &Condvar::new(),
-            Duration::ZERO,
-            || t0 + Duration::from_secs(30),
-            probe(Some(true))
-        ));
+        assert_eq!(
+            supported_with(
+                &state,
+                &Condvar::new(),
+                Duration::ZERO,
+                || t0 + Duration::from_secs(30),
+                probe(Some(true))
+            ),
+            None
+        );
         assert_eq!(calls.get(), 1);
         // After it: probe again, and a definite answer is cached.
-        assert!(supported_with(
-            &state,
-            &Condvar::new(),
-            Duration::ZERO,
-            || t0 + RETRY_AFTER,
-            probe(Some(true))
-        ));
+        assert_eq!(
+            supported_with(
+                &state,
+                &Condvar::new(),
+                Duration::ZERO,
+                || t0 + RETRY_AFTER,
+                probe(Some(true))
+            ),
+            Some(true)
+        );
         assert_eq!(calls.get(), 2);
-        assert!(supported_with(
-            &state,
-            &Condvar::new(),
-            Duration::ZERO,
-            || t0 + RETRY_AFTER * 10,
-            probe(Some(false))
-        ));
+        assert_eq!(
+            supported_with(
+                &state,
+                &Condvar::new(),
+                Duration::ZERO,
+                || t0 + RETRY_AFTER * 10,
+                probe(Some(false))
+            ),
+            Some(true)
+        );
         assert_eq!(calls.get(), 2);
     }
 
@@ -413,7 +453,7 @@ mod tests {
             || panic!("must not probe while another probe runs"),
         );
         t.join().unwrap();
-        assert!(got);
+        assert_eq!(got, Some(true));
     }
 
     #[test]
@@ -427,7 +467,7 @@ mod tests {
             Instant::now,
             || panic!("must not probe"),
         );
-        assert!(!got);
+        assert_eq!(got, None);
         assert!(start.elapsed() < Duration::from_secs(2));
     }
 
@@ -441,7 +481,7 @@ mod tests {
             Instant::now,
             || panic!("probe blew up"),
         );
-        assert!(!got);
+        assert_eq!(got, None);
         assert!(matches!(*state.lock().unwrap(), ProbeState::TimedOut(_)));
     }
 
@@ -559,6 +599,42 @@ mod tests {
         assert!(!repaired.contains(OURS));
         assert!(repaired.contains("D:/Swarmterm"));
     }
+    /// SWA-71: an install from before the turn edges gains Stop/Interrupt,
+    /// leaves the trusted SessionStart/UserPromptSubmit groups as they are,
+    /// and asks for 3 s on Interrupt (Codex's clamp).
+    #[test]
+    fn an_older_install_gains_the_turn_edges_additively() {
+        let ours =
+            |t: u64| serde_json::json!({"hooks":[{"type":"command","command":OURS,"timeout":t}]});
+        let old = serde_json::json!({"hooks":{
+            "SessionStart":[{"hooks":[{"type":"command","command":"notify"}]}, ours(5)],
+            "UserPromptSubmit":[ours(5)]
+        }})
+        .to_string();
+        let HooksWrite::Write(next) = merge_json(Some(&old), OURS).unwrap() else {
+            panic!()
+        };
+        let v: serde_json::Value = serde_json::from_str(&next).unwrap();
+        assert_eq!(
+            v["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+            "notify"
+        );
+        assert_eq!(v["hooks"]["SessionStart"][1], ours(5));
+        assert_eq!(v["hooks"]["UserPromptSubmit"], serde_json::json!([ours(5)]));
+        assert_eq!(v["hooks"]["Stop"], serde_json::json!([ours(5)]));
+        assert_eq!(v["hooks"]["Interrupt"], serde_json::json!([ours(3)]));
+        assert!(matches!(
+            merge_json(Some(&next), OURS).unwrap(),
+            HooksWrite::Unchanged
+        ));
+
+        let toml = merge_toml("[hooks]\n", OURS).unwrap().unwrap();
+        let doc = toml.parse::<DocumentMut>().unwrap();
+        let timeout = |e: &str| doc["hooks"][e][0]["hooks"][0]["timeout"].as_integer();
+        assert_eq!(EVENTS.map(timeout), [Some(5), Some(5), Some(5), Some(3)]);
+        assert!(merge_toml(&toml, OURS).unwrap().is_none());
+    }
+
     #[test]
     fn malformed_config_is_never_overwritten() {
         let dir = tempfile::tempdir().unwrap();

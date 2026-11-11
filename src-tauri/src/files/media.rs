@@ -43,12 +43,16 @@ fn extension(path: &Path) -> String {
         .to_ascii_lowercase()
 }
 
+/// Image/video extensions, lowercase. Mirrors `MEDIA_EXTENSIONS` in
+/// `src/lib/media-detect.ts` (a test keeps them in step): the hook CLI only
+/// forwards paths with these, and the screen scan only matches these.
+pub(crate) const MEDIA_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "gif", "mp4", "m4v", "mov", "webm",
+];
+
 /// Images and videos shown by MediaView — the only kinds MediaStat/OpenMedia accept.
-pub(super) fn is_media(path: &Path) -> bool {
-    matches!(
-        extension(path).as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "mp4" | "m4v" | "mov" | "webm"
-    )
+pub(crate) fn is_media(path: &Path) -> bool {
+    MEDIA_EXTENSIONS.contains(&extension(path).as_str())
 }
 
 /// Context id of the unrooted route: `/unrooted?path=<canonical abs path>`.
@@ -57,6 +61,22 @@ pub(super) fn is_media(path: &Path) -> bool {
 /// user opened (or copied). Preview/popout webviews can never read them.
 /// Must stay in lockstep with `UNROOTED_MEDIA` in `src/tauri/files.ts`.
 pub(super) const UNROOTED_ID: &str = "unrooted";
+
+/// Whether `raw` names a network share or a device: `\\server\share`,
+/// `//server/share`, the verbatim `\\?\UNC\server\share` and device
+/// namespace `\\.\` forms. Only `\\?\C:\...` (a local verbatim path) is
+/// allowed among the `\\` prefixes.
+pub(crate) fn is_network_path(raw: &str) -> bool {
+    let norm = raw.replace('/', "\\");
+    if !norm.starts_with(r"\\") {
+        return false;
+    }
+    let Some(rest) = norm.strip_prefix(r"\\?\") else {
+        return true;
+    };
+    let b = rest.as_bytes();
+    !(b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':')
+}
 
 /// Resolve a path a pane printed or the user opened (absolute, or relative to
 /// the terminal cwd) to a canonical regular media file. Deliberately NO root
@@ -70,7 +90,7 @@ pub(super) fn resolve_media(raw: &str, cwd: &Path) -> Result<std::path::PathBuf,
     }
     // UNC shares would make the app open an SMB connection because of
     // printed text; screenshots are local files, so refuse network paths.
-    if (raw.starts_with(r"\\") || raw.starts_with("//")) && !raw.starts_with(r"\\?\") {
+    if is_network_path(raw) {
         return Err("network (UNC) paths are not supported".into());
     }
     let given = Path::new(raw);
@@ -306,7 +326,7 @@ pub fn response(
             request.headers().get("range").and_then(|v| v.to_str().ok()),
             len,
         )?;
-        if requested.is_none() && len > 256 * 1024 * 1024 {
+        if requested.is_none() && len > MAX_UNRANGED_BYTES {
             return Err("Large media requires range requests".into());
         }
         let (start, end) = requested.unwrap_or((0, len.saturating_sub(1)));
@@ -337,6 +357,14 @@ pub fn response(
     })();
     result.unwrap_or_else(denied)
 }
+
+/// Largest media answer without a Range header (user decision 2026-11-09,
+/// SWA-85). wry hands a scheme response to WebView2 on the UI thread and
+/// copies the whole body there (`SHCreateMemStream`), also for asynchronous
+/// handlers, so the window stalls in proportion to the size: a 250 MB image
+/// measured 0.6 s. Video uses ranges (8 MiB each, `range`) and is unaffected;
+/// a larger image gets the viewer's "Open in default app".
+pub const MAX_UNRANGED_BYTES: u64 = 32 * 1024 * 1024;
 
 fn denied(error: String) -> Response<Vec<u8>> {
     Response::builder()
@@ -375,6 +403,40 @@ mod tests {
         assert!(range(Some("bytes=1000-"), 1000).is_err());
         assert!(range(Some("bytes=1-2,3-4"), 1000).is_err());
     }
+    #[test]
+    fn unranged_media_is_capped_at_32_mb_ranged_is_not() {
+        // SWA-85: WebView2 copies a scheme response on the UI thread (wry),
+        // so a whole-file answer stalls the window in proportion to its size.
+        let t = tempfile::tempdir().unwrap();
+        let service = FileService::new(t.path().join("history"));
+        let c = service.open(t.path()).unwrap();
+        let request = |name: &str, range: Option<&str>| {
+            let mut url =
+                url::Url::parse(&format!("swarmterm-media://localhost/{}", c.id)).unwrap();
+            url.query_pairs_mut()
+                .append_pair("path", &t.path().join(name).to_string_lossy());
+            let mut b = Request::builder().uri(url.as_str());
+            if let Some(r) = range {
+                b = b.header("range", r);
+            }
+            response(&service, APP_WEBVIEW, b.body(vec![]).unwrap())
+        };
+        let at_cap = fs::File::create(t.path().join("at.png")).unwrap();
+        at_cap.set_len(MAX_UNRANGED_BYTES).unwrap();
+        let over = fs::File::create(t.path().join("over.png")).unwrap();
+        over.set_len(MAX_UNRANGED_BYTES + 1).unwrap();
+        assert_eq!(MAX_UNRANGED_BYTES, 32 * 1024 * 1024);
+        let r = request("at.png", None);
+        assert_eq!(r.status(), 200);
+        assert_eq!(r.body().len() as u64, MAX_UNRANGED_BYTES);
+        let r = request("over.png", None);
+        assert_eq!(r.status(), 403);
+        assert!(r.body().starts_with(b"Large media requires range requests"));
+        let r = request("over.png", Some("bytes=0-"));
+        assert_eq!(r.status(), 206);
+        assert_eq!(r.body().len(), 8 * 1024 * 1024);
+    }
+
     #[test]
     fn protocol_refuses_outside_media_and_unregistered_roots() {
         let t = tempfile::tempdir().unwrap();
@@ -614,7 +676,10 @@ mod tests {
         let raws: Vec<String> = vec!["a.png".into(), abs, "b.txt".into(), "gone.gif".into()];
         let got = service.check_detected_media(&raws, t.path());
         let a = canonical(&t.path().join("a.png")).unwrap();
-        let paths: Vec<_> = got.iter().map(|d| d.as_ref().map(|d| d.path.clone())).collect();
+        let paths: Vec<_> = got
+            .iter()
+            .map(|d| d.as_ref().map(|d| d.path.clone()))
+            .collect();
         assert_eq!(paths, vec![Some(a.clone()), Some(a.clone()), None, None]);
         assert_eq!(got[0].as_ref().unwrap().size, 1);
         assert!(got[0].as_ref().unwrap().mtime_ms > 0);
@@ -639,6 +704,41 @@ mod tests {
     }
 
     #[test]
+    fn relative_names_fall_back_to_the_agent_cwd() {
+        let t = tempfile::tempdir().unwrap();
+        let service = FileService::new(t.path().join("history"));
+        let agent = t.path().join("worktree").join("device");
+        fs::create_dir_all(&agent).unwrap();
+        fs::write(agent.join("8-detail-960.png"), [0]).unwrap();
+        fs::write(t.path().join("root.png"), [0]).unwrap();
+        let raws: Vec<String> = vec![
+            "8-detail-960.png".into(),
+            "root.png".into(),
+            "gone.png".into(),
+        ];
+        let got = service.check_detected_media_in(&raws, t.path(), Some(&agent));
+        let paths: Vec<_> = got
+            .iter()
+            .map(|d| d.as_ref().map(|d| d.path.clone()))
+            .collect();
+        // The fallback hit is stamped like a direct one.
+        let hit = got[0].as_ref().unwrap();
+        assert_eq!(hit.size, 1);
+        assert!(hit.mtime_ms > 0);
+        assert_eq!(
+            paths,
+            vec![
+                Some(canonical(&agent.join("8-detail-960.png")).unwrap()),
+                Some(canonical(&t.path().join("root.png")).unwrap()),
+                None
+            ]
+        );
+        // Without the agent cwd the bare name stays a miss.
+        assert!(service.check_detected_media(&raws[..1], t.path())[0].is_none());
+        assert!(!service.unrooted_registered(&canonical(&agent.join("8-detail-960.png")).unwrap()));
+    }
+
+    #[test]
     fn user_media_registration_requires_absolute_existing_media() {
         let t = tempfile::tempdir().unwrap();
         let service = FileService::new(t.path().join("history"));
@@ -650,6 +750,42 @@ mod tests {
         assert!(service.register_user_media("a.webp").is_err());
         assert!(service.register_user_media(&abs("a.html")).is_err());
         assert!(service.register_user_media(&abs("nope.png")).is_err());
+    }
+
+    #[test]
+    fn network_and_device_paths_are_refused() {
+        for p in [
+            r"\\srv\share\a.png",
+            "//srv/share/a.png",
+            r"\\?\UNC\srv\share\a.png",
+            r"\\?\unc\srv\share\a.png",
+            "//?/UNC/srv/share/a.png",
+            r"\\.\pipe\x.png",
+        ] {
+            assert!(is_network_path(p), "{p}");
+            assert!(
+                resolve_media(p, Path::new("")).unwrap_err().contains("UNC"),
+                "{p}"
+            );
+        }
+        for p in [r"\\?\C:\a\b.png", r"C:\a\b.png", "C:/a/b.png", "rel.png"] {
+            assert!(!is_network_path(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn media_extensions_mirror_the_renderer_list() {
+        let ts = include_str!("../../../src/lib/media-detect.ts");
+        let line = ts
+            .lines()
+            .find(|l| l.starts_with("export const MEDIA_EXTENSIONS"))
+            .expect("MEDIA_EXTENSIONS in media-detect.ts");
+        let list = &line[line.find('[').unwrap() + 1..line.find(']').unwrap()];
+        let renderer: Vec<&str> = list
+            .split(',')
+            .map(|e| e.trim().trim_matches('\''))
+            .collect();
+        assert_eq!(renderer, MEDIA_EXTENSIONS);
     }
 
     #[test]

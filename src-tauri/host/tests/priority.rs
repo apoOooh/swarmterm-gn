@@ -38,6 +38,77 @@ fn class(pid: u32) -> u32 {
     }
 }
 
+/// The class an outer job forces on this test process and everything it
+/// starts, if any. The build queue (`heavy.ps1`) runs the whole command in a
+/// job with `JOB_OBJECT_LIMIT_PRIORITY_CLASS`; cargo nests the test binary in
+/// a job of its own, so `QueryInformationJobObject(NULL)` only sees cargo's
+/// job. Probed instead: a short `ping` asked to start at Normal reads the
+/// forced class. `None` (Normal) outside such a job.
+fn outer_forced_class() -> Option<u32> {
+    static FORCED: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *FORCED.get_or_init(|| {
+        let mut probe = Command::new(sys32("PING.EXE"))
+            .args(["-n", "3", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW | NORMAL_PRIORITY_CLASS)
+            .spawn()
+            .unwrap_or_else(|e| {
+                panic!("priority probe: cannot start PING.EXE to detect an outer priority job: {e}")
+            });
+        let c = class(probe.id());
+        let _ = probe.kill();
+        let _ = probe.wait();
+        (c != NORMAL_PRIORITY_CLASS).then_some(c)
+    })
+}
+
+/// Idle < BelowNormal < Normal.
+fn rank(c: u32) -> u8 {
+    match c {
+        IDLE_PRIORITY_CLASS => 0,
+        BELOW_NORMAL_PRIORITY_CLASS => 1,
+        _ => 2,
+    }
+}
+
+/// Outer-job aware class asserts. Under an outer job that forces class F
+/// (see `outer_forced_class`) a pane-limited process cannot be above F, and
+/// a process outside any pane-job class limit (`unlimited`: limits lifted,
+/// priority off, a class it set itself) always reads F. Such an impossible
+/// assert is skipped with a one-line `[priority]` notice; every other
+/// assert still runs. Outside such a job these are plain `assert_eq!`s.
+fn check_class(pid: u32, want: u32, unlimited: bool, line: u32) {
+    if class_assert_possible(want, unlimited, line) {
+        assert_eq!(class(pid), want, "class of pid {pid} (line {line})");
+    }
+}
+
+/// False (after printing the notice) when an outer job makes reading class
+/// `want` impossible.
+fn class_assert_possible(want: u32, unlimited: bool, line: u32) -> bool {
+    match outer_forced_class() {
+        Some(forced) if want != forced && (unlimited || rank(want) > rank(forced)) => {
+            println!(
+                "[priority] outer job forces class {forced}; skipping class assert at line {line} (want {want})"
+            );
+            false
+        }
+        _ => true,
+    }
+}
+
+macro_rules! assert_class {
+    ($pid:expr, $want:expr) => {
+        check_class($pid, $want, false, line!())
+    };
+}
+
+macro_rules! assert_unlimited_class {
+    ($pid:expr, $want:expr) => {
+        check_class($pid, $want, true, line!())
+    };
+}
+
 /// `cmd /d /s /c "<line>"` hidden, with stdout discarded. Every command in a
 /// line is an absolute path (`ping()`, `node_exe()`): the GitHub windows
 /// runner's cmd failed to resolve a bare `ping` even with System32 first on
@@ -154,12 +225,12 @@ fn child_is_born_with_the_job_class_and_cannot_be_raised() {
     let mut shell = cmd(&late_ping());
     let job = JobHandle::capturing_with(shell.id(), &strict()).unwrap();
     // Running members are moved to the class at once, too.
-    assert_eq!(class(shell.id()), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(shell.id(), BELOW_NORMAL_PRIORITY_CLASS);
     let m = wait_members(&job, |m| {
         m.iter().filter(|(_, n)| n == "ping.exe").count() == 1
     });
     let ping = pid_of(&m, "ping.exe");
-    assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(ping, BELOW_NORMAL_PRIORITY_CLASS);
     // Raising from outside does not stick either.
     // SAFETY: handle opened and closed here.
     unsafe {
@@ -171,7 +242,7 @@ fn child_is_born_with_the_job_class_and_cannot_be_raised() {
         SetPriorityClass(h, NORMAL_PRIORITY_CLASS);
         CloseHandle(h);
     }
-    assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(ping, BELOW_NORMAL_PRIORITY_CLASS);
     job.terminate();
     let _ = shell.wait();
 }
@@ -193,7 +264,8 @@ fn process_raising_itself_stays_capped() {
     drop(job);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
-        text.trim_end().ends_with("BelowNormal"),
+        !class_assert_possible(BELOW_NORMAL_PRIORITY_CLASS, false, line!())
+            || text.trim_end().ends_with("BelowNormal"),
         "powershell said {text:?}"
     );
 }
@@ -214,7 +286,7 @@ fn orphan_stays_in_the_job_and_capped() {
         !m.iter().any(|(p, _)| *p == shell.id()),
         "shell still alive: {m:?}"
     );
-    assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(ping, BELOW_NORMAL_PRIORITY_CLASS);
     job.terminate();
 }
 
@@ -224,32 +296,32 @@ fn live_limit_changes_apply_and_lifting_raises_back() {
     let job = JobHandle::capturing_with(shell.id(), &strict()).unwrap();
     let m = wait_members(&job, |m| m.iter().any(|(_, n)| n == "ping.exe"));
     let ping = pid_of(&m, "ping.exe");
-    assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(ping, BELOW_NORMAL_PRIORITY_CLASS);
     job.set_limits(&Limits {
         pane: Some(Level::Idle),
         ..strict()
     });
-    assert_eq!(class(ping), IDLE_PRIORITY_CLASS);
+    assert_class!(ping, IDLE_PRIORITY_CLASS);
     // Relaxing a level (not lifting it) also applies to running members:
     // the limit sets the class, it does not only cap it.
     job.set_limits(&strict());
-    assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(ping, BELOW_NORMAL_PRIORITY_CLASS);
     assert_eq!(job.assign_build(ping), Assign::Done);
-    assert_eq!(class(ping), IDLE_PRIORITY_CLASS);
+    assert_class!(ping, IDLE_PRIORITY_CLASS);
     job.set_limits(&Limits {
         pane: None,
         build: Some(Level::BelowNormal),
         cpu_cap: None,
     });
-    assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(ping, BELOW_NORMAL_PRIORITY_CLASS);
     // Already inside the build job counts as assigned.
     assert_eq!(job.assign_build(ping), Assign::Done);
     job.set_limits(&Limits::NONE);
-    assert_eq!(class(ping), NORMAL_PRIORITY_CLASS);
+    assert_unlimited_class!(ping, NORMAL_PRIORITY_CLASS);
     // ping is in the build job now: strict gives it the lowest class in the
     // chain, Idle.
     job.set_limits(&strict());
-    assert_eq!(class(ping), IDLE_PRIORITY_CLASS);
+    assert_class!(ping, IDLE_PRIORITY_CLASS);
     job.terminate();
     let _ = shell.wait();
 }
@@ -266,8 +338,8 @@ fn nested_build_job_lowers_further_and_cpu_cap_is_accepted() {
     let ping = pid_of(&m, "ping.exe");
     // A process already in the pane job moves into the nested job.
     assert_eq!(job.assign_build(ping), Assign::Done);
-    assert_eq!(class(ping), IDLE_PRIORITY_CLASS);
-    assert_eq!(class(shell.id()), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(ping, IDLE_PRIORITY_CLASS);
+    assert_class!(shell.id(), BELOW_NORMAL_PRIORITY_CLASS);
     // The pane job's list includes the nested job's members.
     assert!(job.pids().contains(&ping));
     // A nested build level above the pane level is clamped to the pane's.
@@ -276,7 +348,7 @@ fn nested_build_job_lowers_further_and_cpu_cap_is_accepted() {
         build: Some(Level::BelowNormal),
         cpu_cap: None,
     });
-    assert_eq!(class(ping), IDLE_PRIORITY_CLASS);
+    assert_class!(ping, IDLE_PRIORITY_CLASS);
     job.terminate();
     let _ = shell.wait();
 }
@@ -325,14 +397,14 @@ fn agent_normal_keeps_the_agent_and_idles_its_child() {
     let (agent, ping) = (pid_of(&m, "claude.exe"), pid_of(&m, "ping.exe"));
     registry.pass(&mut Memo::default());
     assert_eq!(class(agent), inherited);
-    assert_eq!(class(ping), IDLE_PRIORITY_CLASS);
+    assert_class!(ping, IDLE_PRIORITY_CLASS);
     // Exempting the pane lifts the limits live.
     registry.set(Settings {
         mode: Mode::AgentNormal,
         exempt: vec!["pane".into()],
         ..Settings::default()
     });
-    assert_eq!(class(ping), NORMAL_PRIORITY_CLASS);
+    assert_unlimited_class!(ping, NORMAL_PRIORITY_CLASS);
     job.terminate();
     let _ = shell.wait();
 }
@@ -383,7 +455,7 @@ fn child_started_before_capture_is_swept_into_the_job() {
     };
     let job = JobHandle::capturing_with(shell.id(), &strict()).unwrap();
     assert!(job.pids().contains(&ping), "ping not swept into the job");
-    assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(ping, BELOW_NORMAL_PRIORITY_CLASS);
     job.terminate();
     let _ = shell.wait();
 }
@@ -420,7 +492,7 @@ fn grandchild_started_before_capture_is_swept_into_the_job() {
         pids.contains(&inner) && pids.contains(&ping),
         "members {pids:?}"
     );
-    assert_eq!(class(ping), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(ping, BELOW_NORMAL_PRIORITY_CLASS);
     assert!(job.strays().is_empty());
     job.terminate();
     let _ = shell.wait();
@@ -477,7 +549,7 @@ fn grandchild_started_during_the_first_round_is_swept_by_the_second() {
         pids.contains(&inner) && pids.contains(&second),
         "members {pids:?}"
     );
-    assert_eq!(class(second), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(second, BELOW_NORMAL_PRIORITY_CLASS);
     assert!(job.strays().is_empty());
     job.terminate();
     let _ = shell.wait();
@@ -598,18 +670,18 @@ fn early_child_with_its_own_job_is_forced_to_the_pane_class() {
     );
     assert!(!job.pids().contains(&node));
     assert!(job.pids().contains(&ping), "ping not captured");
-    assert_eq!(class(node), BELOW_NORMAL_PRIORITY_CLASS);
-    assert_eq!(class(inner), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(node, BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(inner, BELOW_NORMAL_PRIORITY_CLASS);
     // Raised from outside: the next watcher pass forces it back.
     set_class(node, NORMAL_PRIORITY_CLASS);
     registry.pass(&mut Memo::default());
-    assert_eq!(class(node), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(node, BELOW_NORMAL_PRIORITY_CLASS);
     // Lifting the limit gives strays Normal back.
     registry.set(Settings {
         mode: Mode::Off,
         ..Settings::default()
     });
-    assert_eq!(class(node), NORMAL_PRIORITY_CLASS);
+    assert_unlimited_class!(node, NORMAL_PRIORITY_CLASS);
     kill_pid(node);
     job.terminate();
     let _ = shell.wait();
@@ -638,8 +710,8 @@ fn stray_that_lowered_itself_stays_lowered_while_priority_is_off() {
     let mut memo = Memo::default();
     for _ in 0..3 {
         registry.pass(&mut memo);
-        assert_eq!(class(node), IDLE_PRIORITY_CLASS);
-        assert_eq!(class(inner), BELOW_NORMAL_PRIORITY_CLASS);
+        assert_unlimited_class!(node, IDLE_PRIORITY_CLASS);
+        assert_unlimited_class!(inner, BELOW_NORMAL_PRIORITY_CLASS);
     }
     kill_pid(node);
     job.terminate();
@@ -679,8 +751,8 @@ fn build_job_nests_under_the_pane_not_under_node() {
     // Pre-order: node's cmd is tried first. Before the fix it created the
     // build job inside node's libuv job and ping was then refused.
     registry.pass(&mut Memo::default());
-    assert_eq!(class(ping), IDLE_PRIORITY_CLASS);
-    assert_eq!(class(inner), BELOW_NORMAL_PRIORITY_CLASS);
+    assert_class!(ping, IDLE_PRIORITY_CLASS);
+    assert_class!(inner, BELOW_NORMAL_PRIORITY_CLASS);
     // The agent exits: its libuv job closes and kills node's cmd, but the
     // build job is not inside it, so ping lives on, still Idle.
     // SAFETY: handle opened and closed here.
@@ -691,7 +763,7 @@ fn build_job_nests_under_the_pane_not_under_node() {
         CloseHandle(h);
     }
     std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(class(ping), IDLE_PRIORITY_CLASS);
+    assert_class!(ping, IDLE_PRIORITY_CLASS);
     job.terminate();
     let _ = shell.wait();
 }
