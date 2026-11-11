@@ -14,6 +14,9 @@ export type Animation = 'off' | 'subtle'
 
 export interface StatuslineSettings {
   claude: Preset
+  codex: Preset | null
+  codexEnabled: boolean
+  codexUseColors: boolean
   scheme: Scheme
   vibrance: number
   animation: Animation
@@ -23,6 +26,9 @@ export interface StatuslineSettings {
 
 export const DEFAULT_STATUSLINE_SETTINGS: StatuslineSettings = {
   claude: 'compact',
+  codex: null,
+  codexEnabled: true,
+  codexUseColors: false,
   scheme: 'subtle',
   vibrance: 50,
   animation: 'off',

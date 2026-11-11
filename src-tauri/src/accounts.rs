@@ -233,6 +233,9 @@ pub fn enroll(account: &AgentAccount) -> Result<(), String> {
     // Before the write lock: the first call may run `claude --version`
     // (bounded, cached per binary), and no other writer should wait on it.
     let exec = account.agent_id == "claude-code" && crate::hook::claude_version::exec_hooks();
+    if account.agent_id == "codex" {
+        crate::hook::codex_statusline::prepare_version();
+    }
     // Concurrent pane starts may enroll the same profile. Serialize the entire
     // read/merge/rename sequence so a second writer cannot consume our temp file.
     let _lock = CONFIG_WRITE.lock().map_err(|e| e.to_string())?;
@@ -267,6 +270,7 @@ pub fn enroll(account: &AgentAccount) -> Result<(), String> {
             )?;
         }
         "codex" => {
+            crate::hook::codex_statusline::enroll(dir)?;
             // The stdio entry carries no port (SWA-83 1b); a dev build leaves
             // a live installed app's entry alone (`mcp::entry`).
             if mcp_on {

@@ -1694,6 +1694,60 @@ fn statusline_settings_file(app: &AppHandle) -> Result<std::path::PathBuf, Strin
         .map_err(|e| e.to_string())
 }
 
+static STATUSLINE_SETTINGS_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[tauri::command]
+pub async fn codex_statusline_apply(
+    app: AppHandle,
+    preset: crate::statusline::settings::Preset,
+    use_colors: bool,
+    enabled: bool,
+) -> Result<Vec<crate::hook::codex_statusline::Status>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = STATUSLINE_SETTINGS_WRITE
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let file = statusline_settings_file(&app)?;
+        let mut settings = crate::statusline::settings::load(&file);
+        settings.codex = Some(preset);
+        settings.codex_use_colors = use_colors;
+        settings.codex_enabled = enabled;
+        crate::statusline::settings::save(&file, &settings).map_err(|e| e.to_string())?;
+        crate::hook::codex_statusline::update(&app, Some((preset, use_colors, enabled)), true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn codex_statusline_status(
+    app: AppHandle,
+) -> Result<Vec<crate::hook::codex_statusline::Status>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::hook::codex_statusline::update(&app, None, false)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn codex_statusline_release(
+    app: AppHandle,
+) -> Result<Vec<crate::hook::codex_statusline::Status>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = STATUSLINE_SETTINGS_WRITE
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let file = statusline_settings_file(&app)?;
+        let mut settings = crate::statusline::settings::load(&file);
+        settings.codex = None;
+        crate::statusline::settings::save(&file, &settings).map_err(|e| e.to_string())?;
+        crate::hook::codex_statusline::update(&app, None, true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The saved status line template, scheme, vibrance and animation.
 #[tauri::command]
 pub async fn statusline_settings_get(
@@ -1715,6 +1769,9 @@ pub async fn statusline_settings_set(
 ) -> Result<(), String> {
     let file = statusline_settings_file(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = STATUSLINE_SETTINGS_WRITE
+            .lock()
+            .map_err(|e| e.to_string())?;
         crate::statusline::settings::save(&file, &settings).map_err(|e| e.to_string())
     })
     .await

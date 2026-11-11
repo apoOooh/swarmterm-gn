@@ -487,10 +487,14 @@ pub fn ensure_codex(app: &AppHandle) {
     }
     // Probe BEFORE taking the write lock; `register` then hits the cache.
     let _ = crate::hook::codex::probe_supported();
+    crate::hook::codex_statusline::prepare_version();
     let (hooks, mcp) = {
         let _lock = crate::accounts::CONFIG_WRITE
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = crate::hook::codex_statusline::enroll_default(app) {
+            eprintln!("Codex status line configuration failed: {e}");
+        }
         let result = crate::hook::codex::register(app);
         if let Err(e) = &result {
             eprintln!("Codex session hook registration failed: {e}");
