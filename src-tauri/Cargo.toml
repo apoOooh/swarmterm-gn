@@ -71,6 +71,7 @@ axum = "0.8"
 # than ride feature unification that a dependency bump could silently drop.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "sync", "time", "io-util"] }
 toml_edit = "0.22"
+unicode-segmentation = "1"
 notify = "8.2"
 clipboard-rs = { version = "0.3.5", default-features = false, features = ["image"] }
 dunce = "1"

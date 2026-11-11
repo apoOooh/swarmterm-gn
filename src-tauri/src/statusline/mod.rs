@@ -1,9 +1,14 @@
 //! The `swarmterm --statusline` command: Claude Code runs it and renders the
-//! single line it prints below the input box.
+//! rows it prints below the input box. Template, scheme and vibrance come from
+//! `statusline.json` (SWA-92, `settings.rs`), the width from `COLUMNS`.
 
 pub mod install;
+pub mod layout;
+pub mod preset;
 pub mod probe;
 pub mod render;
+pub mod settings;
+pub mod style;
 
 use std::io::Read;
 use std::time::Duration;
@@ -81,12 +86,95 @@ pub fn run_cli() {
         probe::probe(u, t, pct, &limits, PROBE_TIMEOUT)
     });
 
-    println!("{}", render::render(mcp, ctx, true));
+    let input: render::StatusInput = serde_json::from_str(&stdin).unwrap_or_default();
+    let cfg = settings::path()
+        .map(|p| settings::load(&p))
+        .unwrap_or_default();
+    let dir = input
+        .workspace
+        .as_ref()
+        .and_then(|w| w.current_dir.clone())
+        .or_else(|| input.cwd.clone());
+    let branch = dir
+        .as_deref()
+        .and_then(|d| git_branch(std::path::Path::new(d)));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let frame = preset::Frame {
+        input: &input,
+        mcp,
+        branch: branch.as_deref(),
+        now,
+        width: layout::term_width(std::env::var("COLUMNS").ok().as_deref()),
+        color: true,
+    };
+    println!("{}", preset::render(&frame, &cfg).join("\n"));
+}
+
+/// The checked-out branch of the repo containing `dir`, read from `HEAD`
+/// directly: Claude Code re-runs the status line on every render, and a `git`
+/// process per render and pane is noticeable. Follows a worktree's `.git`
+/// file to its gitdir. Detached HEAD = short hash; anything odd = `None`.
+pub fn git_branch(dir: &std::path::Path) -> Option<String> {
+    let mut cur = Some(dir);
+    while let Some(d) = cur {
+        let dot = d.join(".git");
+        let head = if dot.is_dir() {
+            dot.join("HEAD")
+        } else if dot.is_file() {
+            let link = std::fs::read_to_string(&dot).ok()?;
+            let gd = link.trim().strip_prefix("gitdir:")?.trim();
+            let gd = std::path::Path::new(gd);
+            let gd = if gd.is_absolute() {
+                gd.to_path_buf()
+            } else {
+                d.join(gd)
+            };
+            gd.join("HEAD")
+        } else {
+            cur = d.parent();
+            continue;
+        };
+        let text = std::fs::read_to_string(head).ok()?;
+        let text = text.trim();
+        return match text.strip_prefix("ref: refs/heads/") {
+            Some(b) => Some(b.to_string()),
+            None if text.len() >= 7 && text.chars().all(|c| c.is_ascii_hexdigit()) => {
+                Some(text[..7].to_string())
+            }
+            None => None,
+        };
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_branch_reads_head_and_worktree_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join("src/deep")).unwrap();
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/dev\n").unwrap();
+        assert_eq!(git_branch(&repo.join("src/deep")).as_deref(), Some("dev"));
+
+        let wt_git = repo.join(".git/worktrees/wt");
+        std::fs::create_dir_all(&wt_git).unwrap();
+        std::fs::write(wt_git.join("HEAD"), "ref: refs/heads/feat/x\n").unwrap();
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", wt_git.display())).unwrap();
+        assert_eq!(git_branch(&wt).as_deref(), Some("feat/x"));
+
+        std::fs::write(repo.join(".git/HEAD"), "0123456789abcdef0123\n").unwrap();
+        assert_eq!(git_branch(&repo).as_deref(), Some("0123456"));
+        assert_eq!(git_branch(&dir.path().join("nowhere")), None);
+    }
 
     #[test]
     fn absent_env_means_no_mcp_segment() {

@@ -34,6 +34,43 @@ pub struct CtxInfo {
 pub struct StatusInput {
     pub context_window: Option<ContextWindow>,
     pub rate_limits: Option<crate::mcp::rate_limits::RawRateLimits>,
+    // SWA-92 templates: read only by `preset.rs`, every field optional.
+    pub model: Option<Model>,
+    pub effort: Option<Effort>,
+    pub cost: Option<Cost>,
+    pub prompt_cache: Option<PromptCache>,
+    pub workspace: Option<Workspace>,
+    pub cwd: Option<String>,
+    pub session_id: Option<String>,
+    pub transcript_path: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Model {
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Effort {
+    pub level: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Cost {
+    pub total_cost_usd: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct PromptCache {
+    pub caching_observed: Option<bool>,
+    pub hit_ratio: Option<f64>,
+    pub warm: Option<bool>,
+    pub expires_at: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Workspace {
+    pub current_dir: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
