@@ -17,7 +17,7 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   is not announced. A version with an older mtime never replaces a newer
   recorded one (a late lookup must not roll back an overwrite), so a file
   replaced by a copy that keeps an older mtime (Explorer copy, `Copy-Item`,
-  `cp -p`, restore from backup, git checkout of an older blob) or after the
+  `cp -p`, restore from backup) or after the
   clock went backwards is not refreshed until a newer mtime appears. Agent
   screenshot overwrites write fresh files, so their mtime moves forward.
 - **Agent media detection uses the Claude hook; the hook forwards media
