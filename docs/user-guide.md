@@ -178,7 +178,8 @@ new content once it is printed again or opened/written by Claude's Read/Write
 tools; printing or reading an unchanged file again adds nothing. Not detected: newly created files that are
 never printed or opened by Claude's Read/Write tools (for example screenshots
 an agent only creates through shell commands), paths built from shell
-variables (`$DIR/shot.png`), and POSIX-style paths (`/c/...`, `~/...`).
+variables (`$DIR/shot.png`), POSIX-style paths (`/c/...`, `~/...`), and a file
+replaced by a copy with an older modification time (for example a restored backup).
 Relative paths resolve against the folder the pane started in and, in Claude
 Code panes, the agent's current folder.
 
