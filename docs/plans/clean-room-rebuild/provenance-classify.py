@@ -1,5 +1,6 @@
-import subprocess, sys, csv, re, fnmatch, time
-REPO = r"G:\ai\claude\swarmterm-gn\repo"
+import subprocess, sys, csv, re, fnmatch, os, time
+# Repo root: SWARMTERM_REPO, else three levels above this script (docs/plans/clean-room-rebuild).
+REPO = os.environ.get("SWARMTERM_REPO") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 UP_LAST = "89f9bb780c0aa0b99cfe638235c580de2f1a1319"
 UP = "duongducnguyen"
 out = sys.argv[1]
@@ -10,7 +11,7 @@ files = [f for f in git("ls-files", "*.rs", "*.ts", "*.tsx", "*.js", "*.css").sp
          if not f.startswith(("dist/", "node_modules/"))]
 up_paths = set(git("ls-tree", "-r", "--name-only", UP_LAST).splitlines())
 # third-party paths from REUSE.toml (Apache annotations)
-reuse = open(REPO + r"\REUSE.toml", encoding="utf-8").read()
+reuse = open(os.path.join(REPO, "REUSE.toml"), encoding="utf-8").read()
 tp = set(re.findall(r'"(src/lib/(?:agent-state|files|theme)/[^"]+)"', reuse))
 if limit: files = files[:limit]
 t0 = time.time()

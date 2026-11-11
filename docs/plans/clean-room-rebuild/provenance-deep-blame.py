@@ -1,5 +1,6 @@
-import csv, subprocess, sys, time
-REPO = r"G:\ai\claude\swarmterm-gn\repo"
+import csv, os, subprocess, sys, time
+# Repo root: SWARMTERM_REPO, else three levels above this script (docs/plans/clean-room-rebuild).
+REPO = os.environ.get("SWARMTERM_REPO") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 rows = [r for r in csv.DictReader(open(sys.argv[3] if len(sys.argv) > 3 else "all.csv", encoding="utf-8")) if r["class"] in ("a", "a?")]
 lim = int(sys.argv[2]) if len(sys.argv) > 2 else 0
 if lim: rows = rows[:lim]
