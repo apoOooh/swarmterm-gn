@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---|---|
-| 1.28.x | Yes |
-| < 1.28 | No |
+| 1.29.x | Yes |
+| < 1.29 | No |
 
 Only the latest release on
 [GitHub Releases](https://github.com/apoOooh/swarmterm-gn/releases) receives

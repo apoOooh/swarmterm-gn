@@ -15,6 +15,42 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   overwrites a list the user changed. Own Settings category; the setup
   assistant shows only the templates. Agreed with Codex in the War Room
   (2026-11-09).
+- **Hook-reported media is stamped like printed media** (lead decision).
+  `media:detected` carries the file's `mtimeMs` and `size` from the same
+  existence check, so a Read/Write of a file overwritten in place refreshes
+  the gallery entry and is announced again, exactly like a reprinted path,
+  while an unchanged one stays silent. Screen and hook share one per-pane
+  record, so the same version is never announced twice. Both values are file
+  metadata of a path that is already sent; no content crosses the port.
+  Accepted gap: an entry the user opened or pasted (no stamp yet) adopts the
+  first detected stamp silently, so an overwrite before any detection of it
+  is not announced. A version with an older mtime never replaces a newer
+  recorded one (a late lookup must not roll back an overwrite), so a file
+  replaced by a copy that keeps an older mtime (Explorer copy, `Copy-Item`,
+  `cp -p`, restore from backup) or after the
+  clock went backwards is not refreshed until a newer mtime appears. Agent
+  screenshot overwrites write fresh files, so their mtime moves forward.
+- **Agent media detection uses the Claude hook; the hook forwards media
+  paths and cwd, never content.** Passive media detection missed most images
+  agents and their subagents open (collapsed tool lines, subagent calls that
+  never reach the screen, wrapped long paths, relative names after a `cd`).
+  So the `swarmterm --hook` contract is widened: on `PostToolUse` of `Read`
+  or `Write` it forwards the tool input's `file_path` when that is an
+  absolute local path (at most 1024 characters) with an image/video
+  extension, and on every `PostToolUse` the agent's current `cwd` (absolute,
+  same bound). Nothing else from the tool input or response is read into a
+  struct; file content never crosses the loopback port. The app checks the
+  path like a printed one (existing media file, not allow-listed) and keeps
+  the cwd in memory per pane only, to resolve relative names printed on
+  screen when the pane's start folder has no such file. Screen detection
+  also joins absolute paths Claude Code hard-wraps at the pane edge.
+- **A nested agent session in the same pane also counts for media** (lead
+  decision). A `claude` started inside a pane inherits the pane's bearer, so
+  its hook posts reach `/hook` as that pane: its media path is detected and
+  its cwd updates the pane's agent cwd, although its status signals may be
+  ignored (Codex panes). Rationale: the file must still exist, is checked by
+  kind, is never allow-listed or opened without a click, and the nested
+  agent's images are wanted in the pane's Media gallery.
 
 ## 2026-11-09
 

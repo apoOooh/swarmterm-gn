@@ -159,7 +159,11 @@ closes.
 Swarmterm notices media paths a pane prints: absolute paths
 (`C:\...\shot.png`, spaces included), quoted paths and paths relative to the
 pane's starting folder, also inside tables whose cells the agent wrapped over
-several lines (such as Claude Code's bordered tables). If such a file exists,
+several lines (such as Claude Code's bordered tables) and long absolute paths
+Claude Code wraps at the pane edge. Images and videos a Claude Code agent or
+any of its subagents opens or writes with its Read/Write tools are detected
+too, even when the pane never shows the path (collapsed tool lines, subagent
+work). If such a file exists,
 it joins the Media strip with its thumbnail (videos show a film icon), and the
 pane shows a **N new images/videos** pill
 in its top-right corner. To view it large, click the pill (opens the newest),
@@ -168,9 +172,16 @@ on a media path outside the project opens it straight in the Media tab. The pane
 never opens by itself, and your keyboard stays in the terminal. Only
 PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local drives are
 accepted. A path printed just before the file is written is retried a few times
-when printed again within seconds. Not detected: newly created files that are
-never printed, POSIX-style paths (`/c/...`, `~/...`), and relative paths after a
-`cd` (they resolve against the folder the pane started in).
+when printed again within seconds. A file overwritten in place (an agent saving a
+new screenshot under the same name) moves back to the front of the strip with its
+new content once it is printed again or opened/written by Claude's Read/Write
+tools; printing or reading an unchanged file again adds nothing. Not detected: newly created files that are
+never printed or opened by Claude's Read/Write tools (for example screenshots
+an agent only creates through shell commands), paths built from shell
+variables (`$DIR/shot.png`), POSIX-style paths (`/c/...`, `~/...`), and a file
+replaced by a copy with an older modification time (for example a restored backup).
+Relative paths resolve against the folder the pane started in and, in Claude
+Code panes, the agent's current folder.
 
 **New-media popup.** Settings → Media → **Show popup** (off by default) shows a
 small list in the bottom-right corner whenever new media arrives: thumbnail,

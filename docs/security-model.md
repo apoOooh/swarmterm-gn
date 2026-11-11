@@ -64,6 +64,15 @@ rotated on respawn, separate from the pane id that War Room peers can see
 `Authorization: Bearer` header carrying the token of a live pane is refused,
 and the token stops working when the pane ends (`src-tauri/src/mcp/server.rs`).
 The same check guards `/hook` and `/status`, so one pane cannot act as another.
+`/hook` takes a closed body (`HookBody`, unknown fields refused): a signal,
+session and turn ids, and (2026-11-11) one absolute image/video path a Claude
+`Read`/`Write` touched plus the agent's absolute cwd, both at most 1024
+characters, UNC refused. The path is only checked (existing regular media
+file) and shown as a gallery name; like printed paths it is never
+allow-listed for serving until the user opens it. The cwd lives in memory on
+the pane's entry and only widens where relative printed names are looked up.
+A nested agent session started inside the pane carries the same bearer, so its
+media path and cwd count for that pane too (decision 2026-11-11).
 Exception: a pane that survived in the terminal host from a build before
 per-pane secrets keeps its id as bearer until it is respawned (logged as
 `no session secret in meta`).
