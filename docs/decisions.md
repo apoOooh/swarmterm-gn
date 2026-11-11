@@ -19,6 +19,13 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   the cwd in memory per pane only, to resolve relative names printed on
   screen when the pane's start folder has no such file. Screen detection
   also joins absolute paths Claude Code hard-wraps at the pane edge.
+- **A nested agent session in the same pane also counts for media** (lead
+  decision). A `claude` started inside a pane inherits the pane's bearer, so
+  its hook posts reach `/hook` as that pane: its media path is detected and
+  its cwd updates the pane's agent cwd, although its status signals may be
+  ignored (Codex panes). Rationale: the file must still exist, is checked by
+  kind, is never allow-listed or opened without a click, and the nested
+  agent's images are wanted in the pane's Media gallery.
 
 ## 2026-11-09
 

@@ -45,7 +45,9 @@
 //! memory per pane so relative names printed on screen resolve where the
 //! agent works. Every other tool-input field (file content, commands) and
 //! `tool_response` are skipped by the deserialiser without being stored; no
-//! other tool's input is used. File content never crosses the port.
+//! other tool's input is used. File content never crosses the port. A nested
+//! `claude` inside the pane posts with the pane's bearer; its media and cwd
+//! count for the pane too (decision 2026-11-11).
 
 pub mod adopt;
 pub mod claude_version;
@@ -494,6 +496,30 @@ pub fn run_agent_cli(agent_id: &str) {
     let Ok(input) = serde_json::from_str::<HookInput>(&raw) else {
         return;
     };
+    let generation = std::env::var("SWARMTERM_PTY_GENERATION").ok();
+    let Some(body) = hook_body(agent_id, &input, generation) else {
+        return;
+    };
+    let is_prompt = body
+        .turn
+        .as_ref()
+        .is_some_and(|t| t.edge == TurnEdge::Prompt);
+    let answer = post::post_body_answer(url.trim(), token.trim(), &body, POST_TIMEOUT);
+    if is_prompt && answer.as_deref().is_some_and(wants_voice) {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(voice_context().as_bytes());
+        let _ = out.flush();
+    }
+}
+
+/// The `/hook` body for one parsed hook event, or `None` when the event
+/// posts nothing. `generation` is `SWARMTERM_PTY_GENERATION`.
+pub fn hook_body(
+    agent_id: &str,
+    input: &HookInput,
+    generation: Option<String>,
+) -> Option<HookBody> {
     // Stop carries the session too (SWA-58): the app closes a turn only for
     // the generation and session it was opened in.
     let session = if matches!(
@@ -505,64 +531,41 @@ pub fn run_agent_cli(agent_id: &str) {
             .clone()
             .filter(|id| crate::sessions::is_uuid(id))
             .and_then(|session_id| {
-                std::env::var("SWARMTERM_PTY_GENERATION")
-                    .ok()
-                    .map(|spawn_id| SessionMetadata {
-                        agent_id: agent_id.into(),
-                        session_id,
-                        spawn_id,
-                    })
+                generation.map(|spawn_id| SessionMetadata {
+                    agent_id: agent_id.into(),
+                    session_id,
+                    spawn_id,
+                })
             })
     } else {
         None
     };
     let turn = match agent_id {
         _ if session.is_none() => None,
-        "claude-code" => TurnMark::from_input(&input),
-        "codex" => TurnMark::from_codex_input(&input),
+        "claude-code" => TurnMark::from_input(input),
+        "codex" => TurnMark::from_codex_input(input),
         _ => None,
     };
     let signal = if agent_id == "codex" {
         // No identity, no authority: the app could not tell this pane's
         // Codex from a nested one, so it would not act on it anyway.
-        if session.is_none() {
-            return;
-        };
-        let Some(signal) = codex_signal_for(&input.hook_event_name) else {
-            return;
-        };
-        signal
+        session.as_ref()?;
+        codex_signal_for(&input.hook_event_name)?
     } else {
-        let Some(signal) = signal_for(&input.hook_event_name, input.notification_type.as_deref())
-        else {
-            return;
-        };
-        signal
+        signal_for(&input.hook_event_name, input.notification_type.as_deref())?
     };
     let (media, cwd) = if agent_id == "claude-code" {
-        (media_from_input(&input), cwd_from_input(&input))
+        (media_from_input(input), cwd_from_input(input))
     } else {
         (None, None)
     };
-    let is_prompt = turn.as_ref().is_some_and(|t| t.edge == TurnEdge::Prompt);
-    let answer = post::post_body_answer(
-        url.trim(),
-        token.trim(),
-        &HookBody {
-            signal,
-            session,
-            turn,
-            media,
-            cwd,
-        },
-        POST_TIMEOUT,
-    );
-    if is_prompt && answer.as_deref().is_some_and(wants_voice) {
-        use std::io::Write;
-        let mut out = std::io::stdout().lock();
-        let _ = out.write_all(voice_context().as_bytes());
-        let _ = out.flush();
-    }
+    Some(HookBody {
+        signal,
+        session,
+        turn,
+        media,
+        cwd,
+    })
 }
 
 /// The app's answer to a prompt edge: `{"voice":true}` and nothing else
