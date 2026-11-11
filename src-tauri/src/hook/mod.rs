@@ -904,10 +904,7 @@ mod tests {
         ] {
             let i = post_tool("Read", ti);
             assert_eq!(media_from_input(&i), None);
-            assert_eq!(
-                signal_for(&i.hook_event_name, None),
-                Some(Signal::Working)
-            );
+            assert_eq!(signal_for(&i.hook_event_name, None), Some(Signal::Working));
         }
         // Another event with a media Read shape: nothing at all.
         let mut i = post_tool("Read", j(r"C:\a\b.png"));
@@ -916,7 +913,9 @@ mod tests {
         // A relative or odd cwd / tool_name is not forwarded and not an error.
         let i = input(serde_json::json!({"hook_event_name": "PostToolUse", "cwd": "rel"}));
         assert_eq!(cwd_from_input(&i), None);
-        let i = input(serde_json::json!({"hook_event_name": "PostToolUse", "cwd": 7, "tool_name": false}));
+        let i = input(
+            serde_json::json!({"hook_event_name": "PostToolUse", "cwd": 7, "tool_name": false}),
+        );
         assert_eq!((cwd_from_input(&i), i.tool_name), (None, None));
     }
 
@@ -929,9 +928,7 @@ mod tests {
             (body.media.as_deref(), body.cwd.as_deref()),
             (Some(r"C:\a\b.png"), Some(r"C:\a"))
         );
-        assert!(
-            serde_json::from_str::<HookBody>(r#"{"signal":"working","content":"x"}"#).is_err()
-        );
+        assert!(serde_json::from_str::<HookBody>(r#"{"signal":"working","content":"x"}"#).is_err());
         assert!(valid_media_path(r"C:\a\b.PNG"));
         assert!(valid_media_path("C:/a/b.webm"));
         assert!(!valid_media_path(r"C:\a\b.svg"));

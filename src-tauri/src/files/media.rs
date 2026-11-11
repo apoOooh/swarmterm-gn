@@ -46,8 +46,9 @@ fn extension(path: &Path) -> String {
 /// Image/video extensions, lowercase. Mirrors `MEDIA_EXTENSIONS` in
 /// `src/lib/media-detect.ts` (a test keeps them in step): the hook CLI only
 /// forwards paths with these, and the screen scan only matches these.
-pub(crate) const MEDIA_EXTENSIONS: &[&str] =
-    &["png", "jpg", "jpeg", "webp", "gif", "mp4", "m4v", "mov", "webm"];
+pub(crate) const MEDIA_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "gif", "mp4", "m4v", "mov", "webm",
+];
 
 /// Images and videos shown by MediaView — the only kinds MediaStat/OpenMedia accept.
 pub(crate) fn is_media(path: &Path) -> bool {
@@ -697,7 +698,11 @@ mod tests {
         fs::create_dir_all(&agent).unwrap();
         fs::write(agent.join("8-detail-960.png"), [0]).unwrap();
         fs::write(t.path().join("root.png"), [0]).unwrap();
-        let raws: Vec<String> = vec!["8-detail-960.png".into(), "root.png".into(), "gone.png".into()];
+        let raws: Vec<String> = vec![
+            "8-detail-960.png".into(),
+            "root.png".into(),
+            "gone.png".into(),
+        ];
         let got = service.check_detected_media_in(&raws, t.path(), Some(&agent));
         assert_eq!(
             got,
@@ -708,7 +713,10 @@ mod tests {
             ]
         );
         // Without the agent cwd the bare name stays a miss.
-        assert_eq!(service.check_detected_media(&raws[..1], t.path()), vec![None]);
+        assert_eq!(
+            service.check_detected_media(&raws[..1], t.path()),
+            vec![None]
+        );
         assert!(!service.unrooted_registered(&canonical(&agent.join("8-detail-960.png")).unwrap()));
     }
 
@@ -737,7 +745,10 @@ mod tests {
             r"\\.\pipe\x.png",
         ] {
             assert!(is_network_path(p), "{p}");
-            assert!(resolve_media(p, Path::new("")).unwrap_err().contains("UNC"), "{p}");
+            assert!(
+                resolve_media(p, Path::new("")).unwrap_err().contains("UNC"),
+                "{p}"
+            );
         }
         for p in [r"\\?\C:\a\b.png", r"C:\a\b.png", "C:/a/b.png", "rel.png"] {
             assert!(!is_network_path(p), "{p}");
