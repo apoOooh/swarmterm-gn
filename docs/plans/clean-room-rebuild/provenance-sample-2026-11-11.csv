@@ -1,0 +1,767 @@
+path,lines,upstream_lines,upstream_pct,at_upstream_path,first_author,third_party,class
+playwright.config.ts,10,0,0.0,0,apoOooh,0,a
+playwright.perf.config.ts,19,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/build.rs,46,10,21.7,1,duongducnguyen,0,b
+src-tauri/host/src/engine.rs,833,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/flow.rs,296,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/host/src/frame.rs,355,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/idle.rs,55,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/input.rs,191,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/job.rs,770,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/lib.rs,25,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/main.rs,83,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/modes.rs,523,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/output.rs,140,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/priority.rs,787,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/host/src/protocol.rs,437,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/resize.rs,212,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/host/src/ring.rs,160,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/security.rs,99,0,0.0,0,apoOooh,0,a
+src-tauri/host/src/server.rs,561,0,0.0,0,apoOooh,0,a
+src-tauri/host/tests/e2e.rs,585,0,0.0,0,apoOooh,0,a
+src-tauri/host/tests/priority.rs,769,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/src/account_status.rs,493,0,0.0,0,apoOooh,0,a
+src-tauri/src/accounts.rs,466,0,0.0,0,apoOooh,0,a
+src-tauri/src/agent_policy.rs,72,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/src/agent_process.rs,268,0,0.0,0,apoOooh,0,a
+src-tauri/src/agents.rs,236,229,97.0,1,duongducnguyen,0,b
+src-tauri/src/child_priority.rs,167,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/src/clipboard_media.rs,597,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/src/commands.rs,1685,500,29.7,1,duongducnguyen,0,b
+src-tauri/src/dev_defer.rs,308,0,0.0,0,SesioN,0,a
+src-tauri/src/dev_window.rs,187,0,0.0,0,apoOooh,0,a
+src-tauri/src/devlog.rs,30,0,0.0,0,apoOooh,0,a
+src-tauri/src/diagnostics.rs,144,0,0.0,0,apoOooh,0,a
+src-tauri/src/dump_ui.rs,272,0,0.0,0,apoOooh,0,a
+src-tauri/src/files/clipboard.rs,46,0,0.0,0,apoOooh,0,a
+src-tauri/src/files/git.rs,111,0,0.0,0,apoOooh,0,a
+src-tauri/src/files/history.rs,310,0,0.0,0,apoOooh,0,a
+src-tauri/src/files/marktext.rs,136,0,0.0,0,apoOooh,0,a
+src-tauri/src/files/media.rs,858,0,0.0,0,apoOooh,0,a
+src-tauri/src/files/mod.rs,973,0,0.0,0,apoOooh,0,a
+src-tauri/src/files/path.rs,208,0,0.0,0,apoOooh,0,a
+src-tauri/src/files/watch.rs,807,0,0.0,0,apoOooh,0,a
+src-tauri/src/first_run.rs,303,0,0.0,0,apoOooh,0,a
+src-tauri/src/folder_list.rs,177,0,0.0,0,apoOooh,0,a
+src-tauri/src/git.rs,1523,1304,85.6,1,duongducnguyen,0,b
+src-tauri/src/git_bash.rs,281,0,0.0,0,apoOooh,0,a
+src-tauri/src/hook/adopt.rs,415,8,1.9,0,apoOooh,0,a?
+src-tauri/src/hook/claude_version.rs,437,0,0.0,0,apoOooh,0,a
+src-tauri/src/hook/codex.rs,649,5,0.8,0,apoOooh,0,a?
+src-tauri/src/hook/install.rs,829,476,57.4,1,duongducnguyen,0,b
+src-tauri/src/hook/mod.rs,1000,238,23.8,1,duongducnguyen,0,b
+src-tauri/src/hook/post.rs,312,204,65.4,1,duongducnguyen,0,b
+src-tauri/src/host_client/conn.rs,786,0,0.0,0,apoOooh,0,a
+src-tauri/src/host_client/detached.rs,235,0,0.0,0,apoOooh,0,a
+src-tauri/src/host_client/launch.rs,514,0,0.0,0,apoOooh,0,a
+src-tauri/src/host_client/mod.rs,1178,2,0.2,0,apoOooh,0,a?
+src-tauri/src/host_client/routes.rs,137,0,0.0,0,apoOooh,0,a
+src-tauri/src/host_client/settings.rs,77,0,0.0,0,apoOooh,0,a
+src-tauri/src/json_style.rs,176,152,86.4,1,duongducnguyen,0,b
+src-tauri/src/lib.rs,408,138,33.8,1,duongducnguyen,0,b
+src-tauri/src/links.rs,197,163,82.7,1,duongducnguyen,0,b
+src-tauri/src/main.rs,45,26,57.8,1,duongducnguyen,0,b
+src-tauri/src/marked_media.rs,240,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/src/mcp/auth.rs,97,62,63.9,1,duongducnguyen,0,b
+src-tauri/src/mcp/catalog.rs,487,0,0.0,0,apoOooh,0,a
+src-tauri/src/mcp/clients.rs,106,90,84.9,1,duongducnguyen,0,b
+src-tauri/src/mcp/config.rs,1249,723,57.9,1,duongducnguyen,0,b
+src-tauri/src/mcp/context_usage.rs,231,231,100.0,1,duongducnguyen,0,b
+src-tauri/src/mcp/entry.rs,252,0,0.0,0,apoOooh,0,a
+src-tauri/src/mcp/mod.rs,207,43,20.8,1,duongducnguyen,0,b
+src-tauri/src/mcp/peer_state.rs,550,520,94.5,1,duongducnguyen,0,b
+src-tauri/src/mcp/rate_limits.rs,281,0,0.0,0,apoOooh,0,a
+src-tauri/src/mcp/server.rs,784,363,46.3,1,duongducnguyen,0,b
+src-tauri/src/mcp/session_tokens.rs,160,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/src/mcp/toggle.rs,287,15,5.2,0,apoOooh,0,a?
+src-tauri/src/mcp/tools/browser.rs,163,157,96.3,1,duongducnguyen,0,b
+src-tauri/src/mcp/tools/mod.rs,8,8,100.0,1,duongducnguyen,0,b
+src-tauri/src/mcp/tools/peers.rs,962,716,74.4,1,duongducnguyen,0,b
+src-tauri/src/mcp/tools/warroom.rs,453,320,70.6,1,duongducnguyen,0,b
+src-tauri/src/mcp/tools/worktree.rs,252,247,98.0,1,duongducnguyen,0,b
+src-tauri/src/mcp_stdio.rs,864,0,0.0,0,apoOooh,0,a
+src-tauri/src/paste_image.rs,99,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/src/policy.rs,1614,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/src/prerequisites.rs,116,0,0.0,0,apoOooh,0,a
+src-tauri/src/preview.rs,284,272,95.8,1,duongducnguyen,0,b
+src-tauri/src/prof.rs,287,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/src/pty.rs,2110,487,23.1,1,duongducnguyen,0,b
+src-tauri/src/resubmit.rs,584,0,0.0,0,apoOooh,0,a
+src-tauri/src/routine_cmd.rs,244,0,0.0,0,apoOooh,0,a
+src-tauri/src/runtime_path.rs,256,0,0.0,0,apoOooh,0,a
+src-tauri/src/sessions/claude.rs,184,181,98.4,1,duongducnguyen,0,b
+src-tauri/src/sessions/codex.rs,326,218,66.9,1,duongducnguyen,0,b
+src-tauri/src/sessions/mod.rs,502,140,27.9,1,duongducnguyen,0,b
+src-tauri/src/sessions/opencode.rs,133,131,98.5,1,duongducnguyen,0,b
+src-tauri/src/sessions/qwen.rs,206,203,98.5,1,duongducnguyen,0,b
+src-tauri/src/sessions/share.rs,804,0,0.0,0,SesioN,0,a
+src-tauri/src/sessions/thread.rs,367,0,0.0,0,apoOooh,0,a
+src-tauri/src/setup.rs,732,0,0.0,0,apoOooh,0,a
+src-tauri/src/shell.rs,503,422,83.9,1,duongducnguyen,0,b
+src-tauri/src/statusline/install.rs,616,454,73.7,1,duongducnguyen,0,b
+src-tauri/src/statusline/mod.rs,173,165,95.4,1,duongducnguyen,0,b
+src-tauri/src/statusline/probe.rs,399,324,81.2,1,duongducnguyen,0,b
+src-tauri/src/statusline/render.rs,312,311,99.7,1,duongducnguyen,0,b
+src-tauri/src/terminal_env.rs,946,0,0.0,0,apoOooh,0,a
+src-tauri/src/tray.rs,167,83,49.7,1,duongducnguyen,0,b
+src-tauri/src/ui_watchdog.rs,353,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/companion/install.rs,152,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/companion/mod.rs,507,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/companion/names.rs,6,0,0.0,0,Pawel Grzesik,0,a
+src-tauri/src/voice/companion/release.rs,418,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/companion/system.rs,334,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/completion/claude.rs,348,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/completion/codex.rs,202,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/completion/excerpt.rs,407,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/completion/mod.rs,777,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/completion/reader.rs,564,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/completion/speech_text.rs,132,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/mod.rs,1440,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/pins.rs,293,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/pipe.rs,449,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/protocol.rs,819,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/settings.rs,213,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/speech/capture.rs,245,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/speech/engine.rs,181,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/speech/mod.rs,490,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/speech/model.rs,264,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/speech/recommend.rs,160,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/tts/mod.rs,620,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/tts/queue.rs,184,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/tts/sapi.rs,200,0,0.0,0,apoOooh,0,a
+src-tauri/src/voice/tts/text.rs,185,0,0.0,0,apoOooh,0,a
+src-tauri/src/warroom.rs,1548,1368,88.4,1,duongducnguyen,0,b
+src-tauri/src/window_fit.rs,100,100,100.0,1,duongducnguyen,0,b
+src-tauri/tests/boot_off_ui_thread.rs,171,0,0.0,0,apoOooh,0,a
+src-tauri/tests/ui_thread_commands.rs,270,0,0.0,0,apoOooh,0,a
+src/App.tsx,1420,757,53.3,1,duongducnguyen,0,b
+src/boot-guard.ts,57,57,100.0,1,duongducnguyen,0,b
+src/components/ActivityDot.tsx,17,17,100.0,1,duongducnguyen,0,b
+src/components/AgentIcon.tsx,27,27,100.0,1,duongducnguyen,0,b
+src/components/Browser/AddressBar.tsx,109,109,100.0,1,duongducnguyen,0,b
+src/components/Browser/BrowserColumn.tsx,110,105,95.5,1,duongducnguyen,0,b
+src/components/BuzzkeyUpdateToast.tsx,62,0,0.0,0,apoOooh,0,a
+src/components/DangerousModeDialog.tsx,57,0,0.0,0,Pawel Grzesik,0,a
+src/components/FileDropListener.tsx,115,68,59.1,1,duongducnguyen,0,b
+src/components/Files/CodeEditor.tsx,116,0,0.0,0,apoOooh,0,a
+src/components/Files/CodeFence.tsx,22,0,0.0,0,apoOooh,0,a
+src/components/Files/ExplorerDragGhost.tsx,22,0,0.0,0,apoOooh,0,a
+src/components/Files/FileDialog.tsx,44,0,0.0,0,apoOooh,0,a
+src/components/Files/FileExplorer.tsx,407,2,0.5,0,apoOooh,0,a?
+src/components/Files/FileView.tsx,159,2,1.3,0,apoOooh,0,a?
+src/components/Files/HtmlPreview.tsx,46,0,0.0,0,apoOooh,0,a
+src/components/Files/MediaView.tsx,72,0,0.0,0,apoOooh,0,a
+src/components/Files/PaneWorkbench.tsx,72,1,1.4,0,apoOooh,0,a?
+src/components/Files/SvgPreview.tsx,78,0,0.0,0,apoOooh,0,a
+src/components/FolderPicker/FolderPicker.tsx,322,2,0.6,0,apoOooh,0,a?
+src/components/Git/ChangedFileList.tsx,110,110,100.0,1,duongducnguyen,0,b
+src/components/Git/GitPanel.tsx,130,126,96.9,1,duongducnguyen,0,b
+src/components/Git/InlineDiff.tsx,74,74,100.0,1,duongducnguyen,0,b
+src/components/Git/WorktreeSelector.tsx,71,71,100.0,1,duongducnguyen,0,b
+src/components/Logo.tsx,33,33,100.0,1,duongducnguyen,0,b
+src/components/Media/AnnotateView.tsx,313,0,0.0,0,Pawel Grzesik,0,a
+src/components/Media/MediaOverlay.tsx,104,0,0.0,0,Pawel Grzesik,0,a
+src/components/Media/MediaPanel.tsx,128,0,0.0,0,Pawel Grzesik,0,a
+src/components/Media/flatten-marked.ts,31,0,0.0,0,Pawel Grzesik,0,a
+src/components/Media/start-media-drag.ts,29,0,0.0,0,Pawel Grzesik,0,a
+src/components/Media/use-zoom-pan.tsx,237,0,0.0,0,Pawel Grzesik,0,a
+src/components/Navbar/AttentionBadge.tsx,95,77,81.1,1,duongducnguyen,0,b
+src/components/Navbar/Navbar.tsx,572,324,56.6,1,duongducnguyen,0,b
+src/components/Navbar/TerminalList.tsx,194,56,28.9,1,duongducnguyen,0,b
+src/components/Prompts/PromptLibraryDialog.tsx,293,2,0.7,0,apoOooh,0,a?
+src/components/RightPanel/RightPanel.tsx,204,96,47.1,1,duongducnguyen,0,b
+src/components/Routines/RoutinesDialog.tsx,305,0,0.0,0,apoOooh,0,a
+src/components/Routines/routine-runtime.ts,58,3,5.2,0,apoOooh,0,a?
+src/components/Settings/AccountCard.tsx,65,0,0.0,0,apoOooh,0,a
+src/components/Settings/AccountsPanel.tsx,113,0,0.0,0,apoOooh,0,a
+src/components/Settings/AddAccountWizard.tsx,59,0,0.0,0,apoOooh,0,a
+src/components/Settings/AdminPolicySection.tsx,54,0,0.0,0,Pawel Grzesik,0,a
+src/components/Settings/AppearancePanel.tsx,190,111,58.4,1,duongducnguyen,0,b
+src/components/Settings/BuzzkeySection.tsx,190,0,0.0,0,apoOooh,0,a
+src/components/Settings/FilesPanel.tsx,89,1,1.1,0,apoOooh,0,a?
+src/components/Settings/KeyboardShortcutsPanel.tsx,47,5,10.6,1,duongducnguyen,0,b
+src/components/Settings/MCPPanel.tsx,60,0,0.0,0,apoOooh,0,a
+src/components/Settings/MediaPanel.tsx,71,0,0.0,0,Pawel Grzesik,0,a
+src/components/Settings/NotificationsPanel.tsx,110,101,91.8,1,duongducnguyen,0,b
+src/components/Settings/SettingsView.tsx,138,109,79.0,1,duongducnguyen,0,b
+src/components/Settings/SetupPanel.tsx,143,4,2.8,0,apoOooh,0,a?
+src/components/Settings/StartupWorkspaces.tsx,48,0,0.0,0,apoOooh,0,a
+src/components/Settings/SwarmtermMcpSwitches.tsx,57,0,0.0,0,apoOooh,0,a
+src/components/Settings/TerminalPanel.tsx,1069,501,46.9,1,duongducnguyen,0,b
+src/components/Settings/TitleBarPanel.tsx,170,2,1.2,0,SesioN,0,a?
+src/components/Settings/VoicePanel.tsx,311,4,1.3,0,apoOooh,0,a?
+src/components/Settings/WorkspacesPanel.tsx,241,13,5.4,0,SesioN,0,a?
+src/components/SetupWizard/SetupWizard.tsx,412,6,1.5,0,apoOooh,0,a?
+src/components/StateDot.tsx,44,44,100.0,1,duongducnguyen,0,b
+src/components/TerminalPane/DockPicker.tsx,84,0,0.0,0,Pawel Grzesik,0,a
+src/components/TerminalPane/DynamicPaneIcon.tsx,23,0,0.0,0,Pawel Grzesik,0,a
+src/components/TerminalPane/HandoffBriefDialog.tsx,150,0,0.0,0,apoOooh,0,a
+src/components/TerminalPane/HandoffDialog.tsx,293,2,0.7,0,apoOooh,0,a?
+src/components/TerminalPane/HeldDeliveryPill.tsx,50,42,84.0,1,duongducnguyen,0,b
+src/components/TerminalPane/MediaBadge.tsx,38,0,0.0,0,Pawel Grzesik,0,a
+src/components/TerminalPane/PaneHeader.tsx,762,234,30.7,1,duongducnguyen,0,b
+src/components/TerminalPane/PaneIdentityDialog.tsx,273,3,1.1,0,Pawel Grzesik,0,a?
+src/components/TerminalPane/PaneIdentityIcon.tsx,52,0,0.0,0,Pawel Grzesik,0,a
+src/components/TerminalPane/PaneStatusFrame.tsx,43,0,0.0,0,apoOooh,0,a
+src/components/TerminalPane/PaneTitle.tsx,130,0,0.0,0,apoOooh,0,a
+src/components/TerminalPane/ResubmitPill.tsx,44,0,0.0,0,apoOooh,0,a
+src/components/TerminalPane/SearchOverlay.tsx,235,235,100.0,1,duongducnguyen,0,b
+src/components/TerminalPane/TerminalPane.tsx,644,388,60.2,1,duongducnguyen,0,b
+src/components/TerminalPane/ThreadDialog.tsx,126,0,0.0,0,apoOooh,0,a
+src/components/TerminalPane/VoiceIndicatorPill.tsx,43,0,0.0,0,apoOooh,0,a
+src/components/TitleBar/HeaderRecentSearch.tsx,136,136,100.0,1,duongducnguyen,0,b
+src/components/TitleBar/NotificationBell.tsx,121,3,2.5,0,apoOooh,0,a?
+src/components/TitleBar/TitleBar.tsx,227,201,88.5,1,duongducnguyen,0,b
+src/components/WarRoom/Avatar.tsx,71,55,77.5,1,duongducnguyen,0,b
+src/components/WarRoom/DiscussionTab.tsx,271,206,76.0,1,duongducnguyen,0,b
+src/components/WarRoom/MembersTab.tsx,139,119,85.6,1,duongducnguyen,0,b
+src/components/WarRoom/MentionPopup.tsx,154,0,0.0,0,Pawel Grzesik,0,a
+src/components/WarRoom/ModeratorComposer.tsx,458,254,55.5,1,duongducnguyen,0,b
+src/components/WarRoom/PaneTag.tsx,39,0,0.0,0,apoOooh,0,a
+src/components/WarRoom/RoomTabs.tsx,169,169,100.0,1,duongducnguyen,0,b
+src/components/WarRoom/WarRoomPanel.tsx,116,106,91.4,1,duongducnguyen,0,b
+src/components/WarRoom/useMemberConnection.ts,35,1,2.9,0,apoOooh,0,a?
+src/components/Welcome/AgentCountEditor.tsx,192,126,65.6,0,SesioN,0,b
+src/components/Welcome/LayoutPreview.tsx,77,71,92.2,1,duongducnguyen,0,b
+src/components/Welcome/RecentsDialog.tsx,135,135,100.0,1,duongducnguyen,0,b
+src/components/Welcome/SavedWorkspaceCard.tsx,37,0,0.0,0,apoOooh,0,a
+src/components/Welcome/SavedWorkspaceNotice.tsx,13,0,0.0,0,apoOooh,0,a
+src/components/Welcome/SessionRow.tsx,72,45,62.5,1,duongducnguyen,0,b
+src/components/Welcome/SessionsDialog.tsx,190,173,91.1,1,duongducnguyen,0,b
+src/components/Welcome/Welcome.tsx,753,469,62.3,1,duongducnguyen,0,b
+src/components/Workspace/BroadcastBanner.tsx,48,48,100.0,1,duongducnguyen,0,b
+src/components/Workspace/ClearWorktreeDialog.tsx,110,110,100.0,1,duongducnguyen,0,b
+src/components/Workspace/CornerHandles.tsx,128,0,0.0,0,apoOooh,0,a
+src/components/Workspace/FloatingPane.tsx,93,0,0.0,0,apoOooh,0,a
+src/components/Workspace/SnapBar.tsx,116,0,0.0,0,Pawel Grzesik,0,a
+src/components/Workspace/Workspace.tsx,201,84,41.8,1,duongducnguyen,0,b
+src/components/WorkspaceTabs/WorkspaceTabs.tsx,338,305,90.2,1,duongducnguyen,0,b
+src/components/ui/button.tsx,43,43,100.0,1,duongducnguyen,0,b
+src/components/ui/context-menu-separator.tsx,4,0,0.0,0,apoOooh,0,a
+src/components/ui/context-menu.tsx,43,42,97.7,1,duongducnguyen,0,b
+src/components/ui/dropdown-menu.tsx,93,44,47.3,1,duongducnguyen,0,b
+src/components/ui/use-modal-focus.ts,83,0,0.0,0,apoOooh,0,a
+src/components/use-edge-peek.ts,115,0,0.0,0,SesioN,0,a
+src/index.css,176,105,59.7,1,duongducnguyen,0,b
+src/lib/account-status.test.ts,39,0,0.0,0,apoOooh,0,a
+src/lib/account-status.ts,48,0,0.0,0,apoOooh,0,a
+src/lib/account-usage.test.ts,96,0,0.0,0,apoOooh,0,a
+src/lib/account-usage.ts,114,0,0.0,0,apoOooh,0,a
+src/lib/activity-tracker.test.ts,70,70,100.0,1,duongducnguyen,0,b
+src/lib/activity-tracker.ts,76,51,67.1,1,duongducnguyen,0,b
+src/lib/agent-accounts.test.ts,35,0,0.0,0,apoOooh,0,a
+src/lib/agent-accounts.ts,47,0,0.0,0,apoOooh,0,a
+src/lib/agent-allocation.test.ts,77,77,100.0,1,duongducnguyen,0,b
+src/lib/agent-allocation.ts,42,42,100.0,1,duongducnguyen,0,b
+src/lib/agent-newline.test.ts,25,0,0.0,0,apoOooh,0,a
+src/lib/agent-newline.ts,27,0,0.0,0,apoOooh,0,a
+src/lib/agent-policy.test.ts,41,0,0.0,0,Pawel Grzesik,0,a
+src/lib/agent-policy.ts,53,0,0.0,0,Pawel Grzesik,0,a
+src/lib/agent-pref.test.ts,116,0,0.0,0,Pawel Grzesik,0,a
+src/lib/agent-pref.ts,112,0,0.0,0,Pawel Grzesik,0,a
+src/lib/agent-sessions.test.ts,169,169,100.0,1,duongducnguyen,0,b
+src/lib/agent-sessions.ts,112,110,98.2,1,duongducnguyen,0,b
+src/lib/agent-spawn-command.test.ts,111,55,49.5,1,duongducnguyen,0,b
+src/lib/agent-spawn-command.ts,116,51,44.0,1,duongducnguyen,0,b
+src/lib/agent-state-mirror.test.ts,116,116,100.0,1,duongducnguyen,0,b
+src/lib/agent-state-mirror.ts,62,62,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/detect-schedule.test.ts,31,23,74.2,1,duongducnguyen,0,b
+src/lib/agent-state/detect-schedule.ts,39,32,82.1,1,duongducnguyen,0,b
+src/lib/agent-state/detector.test.ts,325,272,83.7,1,duongducnguyen,0,b
+src/lib/agent-state/detector.ts,249,225,90.4,1,duongducnguyen,0,b
+src/lib/agent-state/engine.test.ts,81,81,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/engine.ts,66,66,100.0,1,duongducnguyen,1,c
+src/lib/agent-state/hook-signal.test.ts,208,185,88.9,1,duongducnguyen,0,b
+src/lib/agent-state/hook-signal.ts,106,95,89.6,1,duongducnguyen,0,b
+src/lib/agent-state/manifests/amp.ts,85,85,100.0,1,duongducnguyen,1,c
+src/lib/agent-state/manifests/antigravity.ts,41,41,100.0,1,duongducnguyen,1,c
+src/lib/agent-state/manifests/claude-code.ts,178,178,100.0,1,duongducnguyen,1,c
+src/lib/agent-state/manifests/codex.ts,99,99,100.0,1,duongducnguyen,1,c
+src/lib/agent-state/manifests/copilot.ts,49,49,100.0,1,duongducnguyen,1,c
+src/lib/agent-state/manifests/cursor.ts,69,69,100.0,1,duongducnguyen,1,c
+src/lib/agent-state/manifests/gemini.ts,46,46,100.0,1,duongducnguyen,1,c
+src/lib/agent-state/manifests/index.ts,34,30,88.2,1,duongducnguyen,0,b
+src/lib/agent-state/manifests/manifests.test.ts,272,272,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/manifests/opencode.ts,54,54,100.0,1,duongducnguyen,1,c
+src/lib/agent-state/manifests/perf-mock.ts,30,2,6.7,0,Pawel Grzesik,0,a?
+src/lib/agent-state/manifests/qwen.ts,125,125,100.0,1,duongducnguyen,1,c
+src/lib/agent-state/pending-idle.test.ts,54,54,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/pending-idle.ts,50,50,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/regions.test.ts,92,92,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/regions.ts,102,102,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/rollup.test.ts,51,51,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/rollup.ts,55,55,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/snapshot.test.ts,23,23,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/snapshot.ts,24,24,100.0,1,duongducnguyen,0,b
+src/lib/agent-state/types.ts,73,73,100.0,1,duongducnguyen,0,b
+src/lib/app-actions.ts,44,0,0.0,0,apoOooh,0,a
+src/lib/appearance.test.ts,53,53,100.0,1,duongducnguyen,0,b
+src/lib/appearance.ts,33,29,87.9,1,duongducnguyen,0,b
+src/lib/attention-jump.ts,23,23,100.0,1,duongducnguyen,0,b
+src/lib/attention.test.ts,155,155,100.0,1,duongducnguyen,0,b
+src/lib/attention.ts,88,88,100.0,1,duongducnguyen,0,b
+src/lib/backend-alerts.test.ts,51,0,0.0,0,SesioN,0,a
+src/lib/backend-alerts.ts,70,0,0.0,0,SesioN,0,a
+src/lib/boot-error.test.ts,37,37,100.0,1,duongducnguyen,0,b
+src/lib/boot-error.ts,43,43,100.0,1,duongducnguyen,0,b
+src/lib/broadcast-input.test.ts,56,56,100.0,1,duongducnguyen,0,b
+src/lib/broadcast-input.ts,25,25,100.0,1,duongducnguyen,0,b
+src/lib/build-priority.test.ts,80,0,0.0,0,Pawel Grzesik,0,a
+src/lib/build-priority.ts,104,0,0.0,0,Pawel Grzesik,0,a
+src/lib/buzzkey-update.test.ts,112,0,0.0,0,apoOooh,0,a
+src/lib/buzzkey-update.ts,102,0,0.0,0,apoOooh,0,a
+src/lib/clear-input.test.ts,22,0,0.0,0,apoOooh,0,a
+src/lib/clear-input.ts,30,0,0.0,0,apoOooh,0,a
+src/lib/clipboard-image.test.ts,27,0,0.0,0,Pawel Grzesik,0,a
+src/lib/clipboard-image.ts,27,0,0.0,0,Pawel Grzesik,0,a
+src/lib/close-guard.test.ts,10,0,0.0,0,apoOooh,0,a
+src/lib/close-guard.ts,11,0,0.0,0,apoOooh,0,a
+src/lib/context-usage.test.ts,61,61,100.0,1,duongducnguyen,0,b
+src/lib/context-usage.ts,71,71,100.0,1,duongducnguyen,0,b
+src/lib/custom-shortcuts.test.ts,74,0,0.0,0,apoOooh,0,a
+src/lib/custom-shortcuts.ts,45,0,0.0,0,apoOooh,0,a
+src/lib/dev-log.test.ts,13,0,0.0,0,apoOooh,0,a
+src/lib/dev-log.ts,65,0,0.0,0,apoOooh,0,a
+src/lib/dnd-sensors.ts,26,26,100.0,1,duongducnguyen,0,b
+src/lib/drag-ghost.test.ts,16,0,0.0,0,Pawel Grzesik,0,a
+src/lib/drag-ghost.ts,29,0,0.0,0,Pawel Grzesik,0,a
+src/lib/edition.test.ts,19,0,0.0,0,Pawel Grzesik,0,a
+src/lib/edition.ts,25,0,0.0,0,Pawel Grzesik,0,a
+src/lib/editor-command.test.ts,58,58,100.0,1,duongducnguyen,0,b
+src/lib/editor-command.ts,52,52,100.0,1,duongducnguyen,0,b
+src/lib/env-policy.test.ts,56,0,0.0,0,Pawel Grzesik,0,a
+src/lib/env-policy.ts,74,0,0.0,0,Pawel Grzesik,0,a
+src/lib/explorer-open-retry.test.ts,23,0,0.0,0,apoOooh,0,a
+src/lib/explorer-open-retry.ts,14,0,0.0,0,apoOooh,0,a
+src/lib/file-url.test.ts,33,33,100.0,1,duongducnguyen,0,b
+src/lib/file-url.ts,28,28,100.0,1,duongducnguyen,0,b
+src/lib/files/documents.test.ts,31,0,0.0,0,apoOooh,0,a
+src/lib/files/documents.ts,31,0,0.0,0,apoOooh,0,a
+src/lib/files/edit.test.ts,112,0,0.0,0,apoOooh,0,a
+src/lib/files/edit.ts,77,0,0.0,0,apoOooh,1,c
+src/lib/files/editor-cache.ts,5,0,0.0,0,apoOooh,0,a
+src/lib/files/markdown-search.ts,24,0,0.0,0,apoOooh,0,a
+src/lib/files/media.test.ts,14,0,0.0,0,apoOooh,0,a
+src/lib/files/media.ts,54,0,0.0,0,apoOooh,1,c
+src/lib/files/messages.ts,10,0,0.0,0,apoOooh,1,c
+src/lib/files/ops.test.ts,195,0,0.0,0,apoOooh,0,a
+src/lib/files/ops.ts,105,0,0.0,0,apoOooh,1,c
+src/lib/files/paths.test.ts,128,0,0.0,0,apoOooh,0,a
+src/lib/files/paths.ts,108,0,0.0,0,apoOooh,1,c
+src/lib/files/preview-kind.test.ts,28,0,0.0,0,apoOooh,0,a
+src/lib/files/preview-kind.ts,42,0,0.0,0,apoOooh,0,a
+src/lib/files/run.ts,15,0,0.0,0,apoOooh,0,a
+src/lib/files/selection.test.ts,87,0,0.0,0,apoOooh,0,a
+src/lib/files/selection.ts,47,0,0.0,0,apoOooh,1,c
+src/lib/files/tree.test.ts,30,0,0.0,0,apoOooh,0,a
+src/lib/files/tree.ts,35,0,0.0,0,apoOooh,0,a
+src/lib/files/undo.ts,9,0,0.0,0,apoOooh,0,a
+src/lib/files/watch-lease.test.ts,19,0,0.0,0,apoOooh,0,a
+src/lib/files/watch-lease.ts,18,0,0.0,0,apoOooh,0,a
+src/lib/first-run.test.ts,37,0,0.0,0,apoOooh,0,a
+src/lib/first-run.ts,38,0,0.0,0,apoOooh,0,a
+src/lib/floating-panes.test.ts,68,0,0.0,0,apoOooh,0,a
+src/lib/floating-panes.ts,67,0,0.0,0,apoOooh,0,a
+src/lib/focus-report.test.ts,28,0,0.0,0,apoOooh,0,a
+src/lib/focus-report.ts,30,0,0.0,0,apoOooh,0,a
+src/lib/folder-picker.test.ts,158,0,0.0,0,apoOooh,0,a
+src/lib/folder-picker.ts,171,0,0.0,0,apoOooh,0,a
+src/lib/frame-batch.test.ts,69,0,0.0,0,SesioN,0,a
+src/lib/frame-batch.ts,49,0,0.0,0,SesioN,0,a
+src/lib/frame-task-queue.test.ts,56,0,0.0,0,apoOooh,0,a
+src/lib/frame-task-queue.ts,28,0,0.0,0,apoOooh,0,a
+src/lib/git-diff.test.ts,136,136,100.0,1,duongducnguyen,0,b
+src/lib/git-diff.ts,50,50,100.0,1,duongducnguyen,0,b
+src/lib/git-refresh.test.ts,279,279,100.0,1,duongducnguyen,0,b
+src/lib/git-refresh.ts,164,164,100.0,1,duongducnguyen,0,b
+src/lib/handoff-brief.test.ts,88,0,0.0,0,apoOooh,0,a
+src/lib/handoff-brief.ts,137,0,0.0,0,apoOooh,0,a
+src/lib/handoff-delivery.test.ts,88,1,1.1,0,apoOooh,0,a?
+src/lib/handoff-delivery.ts,169,3,1.8,0,apoOooh,0,a?
+src/lib/handoff-flow.test.ts,233,0,0.0,0,apoOooh,0,a
+src/lib/handoff-flow.ts,229,0,0.0,0,apoOooh,0,a
+src/lib/header-layout-pref.test.ts,168,0,0.0,0,SesioN,0,a
+src/lib/header-layout-pref.ts,178,0,0.0,0,SesioN,0,a
+src/lib/header-layout.test.ts,135,58,43.0,1,duongducnguyen,0,b
+src/lib/header-layout.ts,100,40,40.0,1,duongducnguyen,0,b
+src/lib/host-reattach.test.ts,45,0,0.0,0,apoOooh,0,a
+src/lib/host-reattach.ts,39,0,0.0,0,apoOooh,0,a
+src/lib/host-status-store.test.ts,45,0,0.0,0,Pawel Grzesik,0,a
+src/lib/host-status-store.ts,64,0,0.0,0,Pawel Grzesik,0,a
+src/lib/keybindings.test.ts,236,211,89.4,1,duongducnguyen,0,b
+src/lib/keybindings.ts,98,79,80.6,1,duongducnguyen,0,b
+src/lib/launch-mode-safety.test.ts,139,0,0.0,0,Pawel Grzesik,0,a
+src/lib/launch-mode-safety.ts,79,0,0.0,0,Pawel Grzesik,0,a
+src/lib/layout-collision.test.ts,28,0,0.0,0,Pawel Grzesik,0,a
+src/lib/layout-collision.ts,17,0,0.0,0,Pawel Grzesik,0,a
+src/lib/layout-presets.test.ts,119,14,11.8,0,Pawel Grzesik,0,a?
+src/lib/layout-presets.ts,143,3,2.1,0,Pawel Grzesik,0,a?
+src/lib/layout-tree.test.ts,733,469,64.0,1,duongducnguyen,0,b
+src/lib/layout-tree.ts,484,313,64.7,1,duongducnguyen,0,b
+src/lib/list-paging.test.ts,27,27,100.0,1,duongducnguyen,0,b
+src/lib/list-paging.ts,25,25,100.0,1,duongducnguyen,0,b
+src/lib/listener-cleanup.test.ts,51,0,0.0,0,SesioN,0,a
+src/lib/listener-cleanup.ts,41,0,0.0,0,SesioN,0,a
+src/lib/markdown-pref.test.ts,34,0,0.0,0,apoOooh,0,a
+src/lib/markdown-pref.ts,47,0,0.0,0,apoOooh,0,a
+src/lib/mcp-catalog.ts,20,0,0.0,0,apoOooh,0,a
+src/lib/media-annotate.test.ts,160,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-annotate.ts,271,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-detect.test.ts,260,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-detect.ts,337,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-drag.test.ts,133,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-drag.ts,89,1,1.1,0,Pawel Grzesik,0,a?
+src/lib/media-gallery.test.ts,37,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-gallery.ts,52,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-overlay.test.ts,113,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-overlay.ts,148,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-passive.test.ts,91,0,0.0,0,?,0,a
+src/lib/media-passive.ts,162,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-zoom.test.ts,78,0,0.0,0,Pawel Grzesik,0,a
+src/lib/media-zoom.ts,97,0,0.0,0,Pawel Grzesik,0,a
+src/lib/merge-readiness.test.ts,75,75,100.0,1,duongducnguyen,0,b
+src/lib/merge-readiness.ts,51,51,100.0,1,duongducnguyen,0,b
+src/lib/modal-stack.test.ts,35,0,0.0,0,apoOooh,0,a
+src/lib/modal-stack.ts,26,0,0.0,0,apoOooh,0,a
+src/lib/navbar-visibility.test.ts,63,63,100.0,1,duongducnguyen,0,b
+src/lib/navbar-visibility.ts,24,24,100.0,1,duongducnguyen,0,b
+src/lib/notification-center.test.ts,88,0,0.0,0,apoOooh,0,a
+src/lib/notification-center.ts,96,0,0.0,0,apoOooh,0,a
+src/lib/notification-entry-view.test.ts,35,0,0.0,0,SesioN,0,a
+src/lib/notification-entry-view.ts,40,0,0.0,0,SesioN,0,a
+src/lib/notification-flow.test.ts,346,323,93.4,1,duongducnguyen,0,b
+src/lib/notification-flow.ts,231,195,84.4,1,duongducnguyen,0,b
+src/lib/notification-pref.test.ts,63,63,100.0,1,duongducnguyen,0,b
+src/lib/notification-pref.ts,52,52,100.0,1,duongducnguyen,0,b
+src/lib/notification-sound.ts,48,48,100.0,1,duongducnguyen,0,b
+src/lib/notification-watch.test.ts,383,316,82.5,1,duongducnguyen,0,b
+src/lib/notification-watch.ts,218,160,73.4,1,duongducnguyen,0,b
+src/lib/osc52.test.ts,79,79,100.0,1,duongducnguyen,0,b
+src/lib/osc52.ts,69,69,100.0,1,duongducnguyen,0,b
+src/lib/output-ack.test.ts,83,0,0.0,0,Pawel Grzesik,0,a
+src/lib/output-ack.ts,88,0,0.0,0,Pawel Grzesik,0,a
+src/lib/overlay-watch.test.ts,19,15,78.9,1,duongducnguyen,0,b
+src/lib/overlay-watch.ts,45,33,73.3,1,duongducnguyen,0,b
+src/lib/pane-address.test.ts,80,0,0.0,0,apoOooh,0,a
+src/lib/pane-address.ts,80,0,0.0,0,apoOooh,0,a
+src/lib/pane-agents.test.ts,24,24,100.0,1,duongducnguyen,0,b
+src/lib/pane-agents.ts,11,11,100.0,1,duongducnguyen,0,b
+src/lib/pane-drawer.test.ts,41,0,0.0,0,Pawel Grzesik,0,a
+src/lib/pane-drawer.ts,46,0,0.0,0,Pawel Grzesik,0,a
+src/lib/pane-identity.test.ts,153,0,0.0,0,Pawel Grzesik,0,a
+src/lib/pane-identity.ts,164,0,0.0,0,Pawel Grzesik,0,a
+src/lib/pane-location.test.ts,56,0,0.0,0,apoOooh,0,a
+src/lib/pane-location.ts,59,0,0.0,0,apoOooh,0,a
+src/lib/pane-selectors.test.ts,65,0,0.0,0,Pawel Grzesik,0,a
+src/lib/pane-selectors.ts,52,1,1.9,0,Pawel Grzesik,0,a?
+src/lib/pane-status-color.test.ts,38,0,0.0,0,apoOooh,0,a
+src/lib/pane-status-color.ts,58,0,0.0,0,apoOooh,0,a
+src/lib/pane-status-pref.test.ts,54,0,0.0,0,apoOooh,0,a
+src/lib/pane-status-pref.ts,50,0,0.0,0,apoOooh,0,a
+src/lib/pane-title.test.ts,26,26,100.0,1,duongducnguyen,0,b
+src/lib/pane-title.ts,15,12,80.0,1,duongducnguyen,0,b
+src/lib/pane-zoom.test.ts,25,0,0.0,0,apoOooh,0,a
+src/lib/pane-zoom.ts,26,0,0.0,0,apoOooh,0,a
+src/lib/path-link-parse.test.ts,139,70,50.4,1,duongducnguyen,0,b
+src/lib/path-link-parse.ts,207,94,45.4,1,duongducnguyen,0,b
+src/lib/perf-render-count.ts,11,0,0.0,0,Pawel Grzesik,0,a
+src/lib/platform.test.ts,37,37,100.0,1,duongducnguyen,0,b
+src/lib/platform.ts,21,21,100.0,1,duongducnguyen,0,b
+src/lib/pointer-drag-session.ts,88,0,0.0,0,apoOooh,0,a
+src/lib/pointer-drag.test.ts,28,0,0.0,0,apoOooh,0,a
+src/lib/pointer-drag.ts,47,0,0.0,0,apoOooh,0,a
+src/lib/policy.test.ts,95,0,0.0,0,Pawel Grzesik,0,a
+src/lib/policy.ts,138,0,0.0,0,Pawel Grzesik,0,a
+src/lib/preview-bounds.test.ts,30,30,100.0,1,duongducnguyen,0,b
+src/lib/preview-bounds.ts,34,34,100.0,1,duongducnguyen,0,b
+src/lib/preview-registry.ts,94,94,100.0,1,duongducnguyen,0,b
+src/lib/prompt-delivery.test.ts,9,0,0.0,0,apoOooh,0,a
+src/lib/prompt-delivery.ts,37,0,0.0,0,apoOooh,0,a
+src/lib/prompt-draft.test.ts,63,0,0.0,0,Pawel Grzesik,0,a
+src/lib/prompt-draft.ts,77,0,0.0,0,Pawel Grzesik,0,a
+src/lib/prompt-library.test.ts,100,0,0.0,0,apoOooh,0,a
+src/lib/prompt-library.ts,108,0,0.0,0,apoOooh,0,a
+src/lib/prompt-resubmit-wiring.ts,81,0,0.0,0,apoOooh,0,a
+src/lib/prompt-resubmit.test.ts,497,0,0.0,0,apoOooh,0,a
+src/lib/prompt-resubmit.ts,285,0,0.0,0,apoOooh,0,a
+src/lib/prompt-sanitize.test.ts,35,35,100.0,1,duongducnguyen,0,b
+src/lib/prompt-sanitize.ts,16,16,100.0,1,duongducnguyen,0,b
+src/lib/quit-flow.test.ts,30,0,0.0,0,apoOooh,0,a
+src/lib/quit-flow.ts,35,0,0.0,0,apoOooh,0,a
+src/lib/recent-folders.test.ts,129,129,100.0,1,duongducnguyen,0,b
+src/lib/recent-folders.ts,62,62,100.0,1,duongducnguyen,0,b
+src/lib/renderer-policy.test.ts,382,0,0.0,0,Pawel Grzesik,0,a
+src/lib/renderer-policy.ts,311,0,0.0,0,Pawel Grzesik,0,a
+src/lib/replay-history.test.ts,24,0,0.0,0,Pawel Grzesik,0,a
+src/lib/replay-history.ts,24,0,0.0,0,Pawel Grzesik,0,a
+src/lib/resize-debounce.test.ts,65,0,0.0,0,apoOooh,0,a
+src/lib/resize-debounce.ts,61,0,0.0,0,apoOooh,0,a
+src/lib/resume-command.test.ts,105,55,52.4,1,duongducnguyen,0,b
+src/lib/resume-command.ts,52,31,59.6,1,duongducnguyen,0,b
+src/lib/routine-scheduler.test.ts,116,0,0.0,0,apoOooh,0,a
+src/lib/routine-scheduler.ts,107,0,0.0,0,apoOooh,0,a
+src/lib/routines.test.ts,163,0,0.0,0,apoOooh,0,a
+src/lib/routines.ts,245,0,0.0,0,apoOooh,0,a
+src/lib/run-workspace-macro.test.ts,6,0,0.0,0,apoOooh,0,a
+src/lib/run-workspace-macro.ts,9,0,0.0,0,apoOooh,0,a
+src/lib/saved-workspace-restore.test.ts,33,0,0.0,0,apoOooh,0,a
+src/lib/saved-workspace-restore.ts,40,0,0.0,0,apoOooh,0,a
+src/lib/saved-workspace-sync.test.ts,111,0,0.0,0,apoOooh,0,a
+src/lib/saved-workspace-sync.ts,81,0,0.0,0,apoOooh,0,a
+src/lib/saved-workspaces.test.ts,203,0,0.0,0,apoOooh,0,a
+src/lib/saved-workspaces.ts,203,0,0.0,0,apoOooh,0,a
+src/lib/scrollbar-activity.test.ts,69,69,100.0,1,duongducnguyen,0,b
+src/lib/scrollbar-activity.ts,42,42,100.0,1,duongducnguyen,0,b
+src/lib/session-transfer.test.ts,55,0,0.0,0,SesioN,0,a
+src/lib/session-transfer.ts,54,0,0.0,0,SesioN,0,a
+src/lib/setup-status.test.ts,227,0,0.0,0,apoOooh,0,a
+src/lib/setup-status.ts,214,0,0.0,0,apoOooh,0,a
+src/lib/setup-wizard.test.ts,167,0,0.0,0,apoOooh,0,a
+src/lib/setup-wizard.ts,235,0,0.0,0,apoOooh,0,a
+src/lib/shell-marks.test.ts,153,153,100.0,1,duongducnguyen,0,b
+src/lib/shell-marks.ts,126,126,100.0,1,duongducnguyen,0,b
+src/lib/sidebar-layout.test.ts,14,0,0.0,0,apoOooh,0,a
+src/lib/sidebar-layout.ts,23,0,0.0,0,apoOooh,0,a
+src/lib/sidebar-peek.test.ts,81,0,0.0,0,SesioN,0,a
+src/lib/sidebar-peek.ts,67,0,0.0,0,SesioN,0,a
+src/lib/split-junctions.test.ts,82,0,0.0,0,apoOooh,0,a
+src/lib/split-junctions.ts,118,0,0.0,0,apoOooh,0,a
+src/lib/split-sync.test.ts,55,10,18.2,0,apoOooh,0,a?
+src/lib/split-sync.ts,28,0,0.0,0,apoOooh,0,a
+src/lib/stale-sweep.test.ts,14,0,0.0,0,SesioN,0,a
+src/lib/stale-sweep.ts,6,0,0.0,0,SesioN,0,a
+src/lib/state-age.test.ts,80,80,100.0,1,duongducnguyen,0,b
+src/lib/state-age.ts,57,57,100.0,1,duongducnguyen,0,b
+src/lib/statusline-pref.test.ts,48,48,100.0,1,duongducnguyen,0,b
+src/lib/statusline-pref.ts,31,31,100.0,1,duongducnguyen,0,b
+src/lib/templates.test.ts,169,139,82.2,1,duongducnguyen,0,b
+src/lib/templates.ts,310,219,70.6,1,duongducnguyen,0,b
+src/lib/terminal-clipboard.test.ts,81,81,100.0,1,duongducnguyen,0,b
+src/lib/terminal-clipboard.ts,46,46,100.0,1,duongducnguyen,0,b
+src/lib/terminal-drop.test.ts,116,79,68.1,1,duongducnguyen,0,b
+src/lib/terminal-drop.ts,100,66,66.0,1,duongducnguyen,0,b
+src/lib/terminal-focus.test.ts,77,45,58.4,1,duongducnguyen,0,b
+src/lib/terminal-focus.ts,77,49,63.6,1,duongducnguyen,0,b
+src/lib/terminal-host-status.test.ts,46,0,0.0,0,apoOooh,0,a
+src/lib/terminal-host-status.ts,15,0,0.0,0,apoOooh,0,a
+src/lib/terminal-input-client.test.ts,421,421,100.0,1,duongducnguyen,0,b
+src/lib/terminal-input-client.ts,345,345,100.0,1,duongducnguyen,0,b
+src/lib/terminal-link-actions.test.ts,68,68,100.0,1,duongducnguyen,0,b
+src/lib/terminal-link-actions.ts,57,57,100.0,1,duongducnguyen,0,b
+src/lib/terminal-links.test.ts,60,60,100.0,1,duongducnguyen,0,b
+src/lib/terminal-links.ts,62,62,100.0,1,duongducnguyen,0,b
+src/lib/terminal-pref.test.ts,137,137,100.0,1,duongducnguyen,0,b
+src/lib/terminal-pref.ts,106,106,100.0,1,duongducnguyen,0,b
+src/lib/terminal-registry-unicode.test.ts,25,0,0.0,0,Pawel Grzesik,0,a
+src/lib/terminal-registry.ts,2013,1247,61.9,1,duongducnguyen,0,b
+src/lib/terminal-search.test.ts,62,62,100.0,1,duongducnguyen,0,b
+src/lib/terminal-search.ts,57,57,100.0,1,duongducnguyen,0,b
+src/lib/terminal-session.test.ts,369,170,46.1,1,duongducnguyen,0,b
+src/lib/terminal-session.ts,218,139,63.8,1,duongducnguyen,0,b
+src/lib/terminal-text.test.ts,195,147,75.4,1,duongducnguyen,0,b
+src/lib/terminal-text.ts,168,133,79.2,1,duongducnguyen,0,b
+src/lib/terminal-typing.test.ts,142,80,56.3,1,duongducnguyen,0,b
+src/lib/terminal-typing.ts,108,46,42.6,1,duongducnguyen,0,b
+src/lib/terminal-unicode.test.ts,38,0,0.0,0,Pawel Grzesik,0,a
+src/lib/terminal-unicode.ts,13,0,0.0,0,Pawel Grzesik,0,a
+src/lib/terminal-zoom.test.ts,65,0,0.0,0,Pawel Grzesik,0,a
+src/lib/terminal-zoom.ts,39,0,0.0,0,Pawel Grzesik,0,a
+src/lib/theme-adapter.test.ts,28,0,0.0,0,apoOooh,0,a
+src/lib/theme-adapter.ts,81,0,0.0,0,apoOooh,0,a
+src/lib/theme/apply.test.ts,128,0,0.0,0,apoOooh,1,c
+src/lib/theme/apply.ts,79,0,0.0,0,apoOooh,1,c
+src/lib/theme/color.test.ts,43,0,0.0,0,apoOooh,1,c
+src/lib/theme/color.ts,53,0,0.0,0,apoOooh,1,c
+src/lib/theme/contrast.test.ts,45,0,0.0,0,apoOooh,1,c
+src/lib/theme/contrast.ts,22,0,0.0,0,apoOooh,1,c
+src/lib/theme/themes.contrast.test.ts,58,0,0.0,0,apoOooh,1,c
+src/lib/theme/themes.test.ts,74,0,0.0,0,apoOooh,1,c
+src/lib/theme/themes.ts,189,0,0.0,0,apoOooh,1,c
+src/lib/thread-view.test.ts,43,0,0.0,0,apoOooh,0,a
+src/lib/thread-view.ts,39,0,0.0,0,apoOooh,0,a
+src/lib/titlebar-chrome.test.ts,68,68,100.0,1,duongducnguyen,0,b
+src/lib/titlebar-chrome.ts,62,62,100.0,1,duongducnguyen,0,b
+src/lib/utils.ts,7,7,100.0,1,duongducnguyen,0,b
+src/lib/voice-companion.test.ts,77,0,0.0,0,apoOooh,0,a
+src/lib/voice-companion.ts,116,0,0.0,0,apoOooh,0,a
+src/lib/voice-delivery.test.ts,92,0,0.0,0,apoOooh,0,a
+src/lib/voice-delivery.ts,103,0,0.0,0,apoOooh,0,a
+src/lib/voice-dictation.test.ts,89,0,0.0,0,apoOooh,0,a
+src/lib/voice-dictation.ts,96,0,0.0,0,apoOooh,0,a
+src/lib/voice-focus.test.ts,61,0,0.0,0,apoOooh,0,a
+src/lib/voice-focus.ts,49,0,0.0,0,apoOooh,0,a
+src/lib/voice-indicator.test.ts,32,0,0.0,0,apoOooh,0,a
+src/lib/voice-indicator.ts,25,0,0.0,0,apoOooh,0,a
+src/lib/voice-insert.test.ts,72,0,0.0,0,apoOooh,0,a
+src/lib/voice-insert.ts,65,1,1.5,0,apoOooh,0,a?
+src/lib/voice-tts.test.ts,25,0,0.0,0,apoOooh,0,a
+src/lib/voice-tts.ts,26,0,0.0,0,apoOooh,0,a
+src/lib/voice-turns.test.ts,32,0,0.0,0,apoOooh,0,a
+src/lib/voice-turns.ts,54,0,0.0,0,apoOooh,0,a
+src/lib/voice-wiring.ts,190,4,2.1,0,apoOooh,0,a?
+src/lib/war-room-busy-gate.test.ts,76,0,0.0,0,Pawel Grzesik,0,a
+src/lib/war-room-composer.test.ts,93,93,100.0,1,duongducnguyen,0,b
+src/lib/war-room-composer.ts,89,89,100.0,1,duongducnguyen,0,b
+src/lib/war-room-connection.test.ts,24,0,0.0,0,apoOooh,0,a
+src/lib/war-room-connection.ts,56,4,7.1,0,apoOooh,0,a?
+src/lib/war-room-delivery.test.ts,438,347,79.2,1,duongducnguyen,0,b
+src/lib/war-room-delivery.ts,302,170,56.3,1,duongducnguyen,0,b
+src/lib/war-room-drop.test.ts,124,90,72.6,1,duongducnguyen,0,b
+src/lib/war-room-drop.ts,120,72,60.0,1,duongducnguyen,0,b
+src/lib/war-room-identity.test.ts,21,21,100.0,1,duongducnguyen,0,b
+src/lib/war-room-identity.ts,32,32,100.0,1,duongducnguyen,0,b
+src/lib/war-room-markdown.test.ts,42,42,100.0,1,duongducnguyen,0,b
+src/lib/war-room-markdown.ts,43,43,100.0,1,duongducnguyen,0,b
+src/lib/war-room-mention-routing.test.ts,155,0,0.0,0,Pawel Grzesik,0,a
+src/lib/war-room-mention-routing.ts,151,1,0.7,0,Pawel Grzesik,0,a?
+src/lib/war-room-mentions.test.ts,170,0,0.0,0,Pawel Grzesik,0,a
+src/lib/war-room-mentions.ts,374,0,0.0,0,Pawel Grzesik,0,a
+src/lib/war-room-nudge.test.ts,154,154,100.0,1,duongducnguyen,0,b
+src/lib/war-room-nudge.ts,212,130,61.3,1,duongducnguyen,0,b
+src/lib/war-room-transcript.test.ts,80,80,100.0,1,duongducnguyen,0,b
+src/lib/war-room-transcript.ts,102,102,100.0,1,duongducnguyen,0,b
+src/lib/web-url.test.ts,31,31,100.0,1,duongducnguyen,0,b
+src/lib/web-url.ts,34,34,100.0,1,duongducnguyen,0,b
+src/lib/windows-pty.test.ts,14,0,0.0,0,apoOooh,0,a
+src/lib/windows-pty.ts,12,0,0.0,0,apoOooh,0,a
+src/lib/workspace-macros.ts,28,0,0.0,0,apoOooh,0,a
+src/lib/workspace-name.test.ts,52,43,82.7,1,duongducnguyen,0,b
+src/lib/workspace-name.ts,34,26,76.5,1,duongducnguyen,0,b
+src/lib/workspace-presets.test.ts,156,0,0.0,0,SesioN,0,a
+src/lib/workspace-presets.ts,244,0,0.0,0,SesioN,0,a
+src/lib/worktree-cleanup.test.ts,73,73,100.0,1,duongducnguyen,0,b
+src/lib/worktree-cleanup.ts,44,44,100.0,1,duongducnguyen,0,b
+src/lib/worktree-match.test.ts,90,90,100.0,1,duongducnguyen,0,b
+src/lib/worktree-match.ts,70,70,100.0,1,duongducnguyen,0,b
+src/lib/worktree-naming.test.ts,109,109,100.0,1,duongducnguyen,0,b
+src/lib/worktree-naming.ts,122,122,100.0,1,duongducnguyen,0,b
+src/main.tsx,56,18,32.1,1,duongducnguyen,0,b
+src/store/account-usage-store.test.ts,24,0,0.0,0,apoOooh,0,a
+src/store/account-usage-store.ts,26,0,0.0,0,apoOooh,0,a
+src/store/agent-accounts-store.test.ts,113,0,0.0,0,apoOooh,0,a
+src/store/agent-accounts-store.ts,88,0,0.0,0,apoOooh,0,a
+src/store/agent-availability-store.test.ts,89,0,0.0,0,apoOooh,0,a
+src/store/agent-availability-store.ts,43,27,62.8,1,duongducnguyen,0,b
+src/store/agent-policy-store.ts,18,0,0.0,0,Pawel Grzesik,0,a
+src/store/agent-pref-store.ts,42,0,0.0,0,Pawel Grzesik,0,a
+src/store/agent-state-store.test.ts,85,85,100.0,1,duongducnguyen,0,b
+src/store/agent-state-store.ts,55,55,100.0,1,duongducnguyen,0,b
+src/store/app-store.test.ts,1413,964,68.2,1,duongducnguyen,0,b
+src/store/app-store.ts,991,502,50.7,1,duongducnguyen,0,b
+src/store/appearance-store.ts,31,29,93.5,1,duongducnguyen,0,b
+src/store/browser-store.test.ts,117,117,100.0,1,duongducnguyen,0,b
+src/store/browser-store.ts,79,79,100.0,1,duongducnguyen,0,b
+src/store/build-priority-store.ts,18,0,0.0,0,Pawel Grzesik,0,a
+src/store/buzzkey-update-store.ts,131,0,0.0,0,apoOooh,0,a
+src/store/context-usage-store.test.ts,35,35,100.0,1,duongducnguyen,0,b
+src/store/context-usage-store.ts,51,51,100.0,1,duongducnguyen,0,b
+src/store/document-store.test.ts,78,0,0.0,0,apoOooh,0,a
+src/store/document-store.ts,172,0,0.0,0,apoOooh,0,a
+src/store/env-policy-store.ts,18,0,0.0,0,Pawel Grzesik,0,a
+src/store/explorer-drag-store.ts,18,0,0.0,0,apoOooh,0,a
+src/store/explorer-store.test.ts,51,0,0.0,0,apoOooh,0,a
+src/store/explorer-store.ts,144,0,0.0,0,apoOooh,0,a
+src/store/file-dialog-store.ts,17,0,0.0,0,apoOooh,0,a
+src/store/folder-picker-store.ts,47,0,0.0,0,apoOooh,0,a
+src/store/git-store.test.ts,154,154,100.0,1,duongducnguyen,0,b
+src/store/git-store.ts,251,247,98.4,1,duongducnguyen,0,b
+src/store/handoff-store.ts,46,0,0.0,0,apoOooh,0,a
+src/store/header-layout-store.ts,40,0,0.0,0,SesioN,0,a
+src/store/markdown-pref-store.ts,32,0,0.0,0,apoOooh,0,a
+src/store/media-pref-store.ts,17,0,0.0,0,Pawel Grzesik,0,a
+src/store/media-store.test.ts,100,0,0.0,0,Pawel Grzesik,0,a
+src/store/media-store.ts,136,0,0.0,0,Pawel Grzesik,0,a
+src/store/navbar-visibility-store.ts,32,32,100.0,1,duongducnguyen,0,b
+src/store/notification-center-store.ts,35,0,0.0,0,apoOooh,0,a
+src/store/notification-pref-store.ts,36,36,100.0,1,duongducnguyen,0,b
+src/store/pane-identity-dialog-store.ts,15,0,0.0,0,Pawel Grzesik,0,a
+src/store/pane-status-pref-store.ts,32,0,0.0,0,apoOooh,0,a
+src/store/policy-store.ts,37,0,0.0,0,Pawel Grzesik,0,a
+src/store/prompt-library-store.test.ts,37,0,0.0,0,apoOooh,0,a
+src/store/prompt-library-store.ts,74,0,0.0,0,apoOooh,0,a
+src/store/prompt-resubmit-store.ts,25,0,0.0,0,apoOooh,0,a
+src/store/recents-store.ts,32,32,100.0,1,duongducnguyen,0,b
+src/store/routine-store.ts,86,0,0.0,0,apoOooh,0,a
+src/store/saved-workspace-lifecycle.test.ts,58,0,0.0,0,apoOooh,0,a
+src/store/saved-workspaces-store.test.ts,27,0,0.0,0,Pawel Grzesik,0,a
+src/store/saved-workspaces-store.ts,195,0,0.0,0,apoOooh,0,a
+src/store/setup-status-store.ts,39,0,0.0,0,apoOooh,0,a
+src/store/setup-wizard-store.ts,53,0,0.0,0,apoOooh,0,a
+src/store/shell-availability-store.ts,41,41,100.0,1,duongducnguyen,0,b
+src/store/shell-mark-store.test.ts,35,35,100.0,1,duongducnguyen,0,b
+src/store/shell-mark-store.ts,40,40,100.0,1,duongducnguyen,0,b
+src/store/shortcut-store.test.ts,34,0,0.0,0,apoOooh,0,a
+src/store/shortcut-store.ts,36,0,0.0,0,apoOooh,0,a
+src/store/sidebar-layout-store.ts,16,0,0.0,0,apoOooh,0,a
+src/store/sidebar-peek-store.ts,38,0,0.0,0,SesioN,0,a
+src/store/statusline-store.ts,44,44,100.0,1,duongducnguyen,0,b
+src/store/terminal-activity-store.test.ts,35,35,100.0,1,duongducnguyen,0,b
+src/store/terminal-activity-store.ts,35,35,100.0,1,duongducnguyen,0,b
+src/store/terminal-pref-store.ts,29,29,100.0,1,duongducnguyen,0,b
+src/store/terminal-search-store.test.ts,39,39,100.0,1,duongducnguyen,0,b
+src/store/terminal-search-store.ts,21,21,100.0,1,duongducnguyen,0,b
+src/store/terminal-text-store.ts,52,45,86.5,1,duongducnguyen,0,b
+src/store/terminal-title-store.test.ts,30,30,100.0,1,duongducnguyen,0,b
+src/store/terminal-title-store.ts,30,30,100.0,1,duongducnguyen,0,b
+src/store/terminal-typing-store.test.ts,201,108,53.7,1,duongducnguyen,0,b
+src/store/terminal-typing-store.ts,136,49,36.0,1,duongducnguyen,0,b
+src/store/voice-dictation-store.ts,64,0,0.0,0,apoOooh,0,a
+src/store/voice-indicator-store.ts,13,0,0.0,0,apoOooh,0,a
+src/store/war-room-store.test.ts,202,202,100.0,1,duongducnguyen,0,b
+src/store/war-room-store.ts,237,227,95.8,1,duongducnguyen,0,b
+src/store/workspace-presets-store.ts,60,0,0.0,0,SesioN,0,a
+src/tauri/accounts.ts,17,0,0.0,0,apoOooh,0,a
+src/tauri/agent-state.ts,64,49,76.6,1,duongducnguyen,0,b
+src/tauri/agents.ts,12,11,91.7,1,duongducnguyen,0,b
+src/tauri/app.ts,19,4,21.1,1,duongducnguyen,0,b
+src/tauri/clipboard.ts,20,8,40.0,1,duongducnguyen,0,b
+src/tauri/devlog.ts,4,0,0.0,0,apoOooh,0,a
+src/tauri/diagnostics.ts,16,0,0.0,0,apoOooh,0,a
+src/tauri/dialog.ts,24,17,70.8,1,duongducnguyen,0,b
+src/tauri/dragdrop.ts,28,28,100.0,1,duongducnguyen,0,b
+src/tauri/files.ts,72,0,0.0,0,apoOooh,0,a
+src/tauri/folders.ts,17,0,0.0,0,apoOooh,0,a
+src/tauri/git.ts,78,78,100.0,1,duongducnguyen,0,b
+src/tauri/links.ts,30,25,83.3,1,duongducnguyen,0,b
+src/tauri/mcp-catalog.ts,7,0,0.0,0,apoOooh,0,a
+src/tauri/notification.ts,27,27,100.0,1,duongducnguyen,0,b
+src/tauri/opener.ts,4,4,100.0,1,duongducnguyen,0,b
+src/tauri/policy.ts,5,0,0.0,0,Pawel Grzesik,0,a
+src/tauri/popout.ts,8,8,100.0,1,duongducnguyen,0,b
+src/tauri/preview.ts,98,98,100.0,1,duongducnguyen,0,b
+src/tauri/prompt-resubmit.ts,29,0,0.0,0,apoOooh,0,a
+src/tauri/routines.ts,7,0,0.0,0,apoOooh,0,a
+src/tauri/sessions.ts,35,5,14.3,1,duongducnguyen,0,b
+src/tauri/setup.ts,22,0,0.0,0,apoOooh,0,a
+src/tauri/shell.ts,17,13,76.5,1,duongducnguyen,0,b
+src/tauri/statusline.ts,10,10,100.0,1,duongducnguyen,0,b
+src/tauri/swarmterm-mcp.ts,20,0,0.0,0,apoOooh,0,a
+src/tauri/terminal-host.ts,48,0,0.0,0,apoOooh,0,a
+src/tauri/terminal.test.ts,88,0,0.0,0,Pawel Grzesik,0,a
+src/tauri/terminal.ts,208,40,19.2,1,duongducnguyen,0,b
+src/tauri/voice-companion.ts,45,0,0.0,0,apoOooh,0,a
+src/tauri/voice.ts,156,0,0.0,0,apoOooh,0,a
+src/tauri/warroom.ts,109,103,94.5,1,duongducnguyen,0,b
+src/tauri/window.ts,34,30,88.2,1,duongducnguyen,0,b
+src/tauri/worktree.ts,28,28,100.0,1,duongducnguyen,0,b
+src/theme-fonts.css,113,0,0.0,0,apoOooh,0,a
+src/vite-env.d.ts,6,1,16.7,1,duongducnguyen,0,b
+tests/e2e/accounts.spec.ts,84,0,0.0,0,apoOooh,0,a
+tests/e2e/custom-shortcuts.spec.ts,94,0,0.0,0,apoOooh,0,a
+tests/e2e/drag-layouts.spec.ts,69,0,0.0,0,Pawel Grzesik,0,a
+tests/e2e/drawer.spec.ts,28,0,0.0,0,Pawel Grzesik,0,a
+tests/e2e/equalize-split.spec.ts,63,0,0.0,0,SesioN,0,a
+tests/e2e/explorer.spec.ts,184,0,0.0,0,apoOooh,0,a
+tests/e2e/feature-performance.spec.ts,47,0,0.0,0,apoOooh,0,a
+tests/e2e/global-setup.ts,21,0,0.0,0,Pawel Grzesik,0,a
+tests/e2e/mcp-catalog.spec.ts,46,0,0.0,0,apoOooh,0,a
+tests/e2e/pane-header-overflow.spec.ts,150,0,0.0,0,SesioN,0,a
+tests/e2e/pane-header-settings.spec.ts,123,0,0.0,0,SesioN,0,a
+tests/e2e/right-panel-peek.spec.ts,43,0,0.0,0,SesioN,0,a
+tests/e2e/saved-workspaces.spec.ts,92,0,0.0,0,apoOooh,0,a
+tests/e2e/workspace-presets.spec.ts,143,0,0.0,0,SesioN,0,a
+tests/fixtures/app.tsx,112,0,0.0,0,apoOooh,0,a
+tests/perf/flood.perf.ts,1036,0,0.0,0,Pawel Grzesik,0,a
+tests/perf/profile-capture.ts,107,0,0.0,0,Pawel Grzesik,0,a
+vite.config.ts,47,33,70.2,1,duongducnguyen,0,b
+vitest.config.ts,7,6,85.7,1,duongducnguyen,0,b
