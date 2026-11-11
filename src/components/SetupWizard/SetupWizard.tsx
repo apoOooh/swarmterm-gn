@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 import { StatuslinePicker } from '@/components/Statusline/StatuslinePicker'
+import { CodexStatuslinePicker } from '@/components/Statusline/CodexStatuslinePicker'
 import { Check, CheckCircle2, CircleMinus, Copy, ExternalLink, FolderSearch, RefreshCw, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -211,7 +212,10 @@ function StatuslineStep(): ReactElement {
       <p className="text-sm text-muted-foreground">
         What Claude Code shows under the prompt in each pane. Colours and more in Settings → Status line.
       </p>
+      <h3 className="pt-1 text-xs font-medium text-foreground">Claude Code</h3>
       <StatuslinePicker brief />
+      <h3 className="pt-2 text-xs font-medium text-foreground">Codex</h3>
+      <CodexStatuslinePicker brief />
     </div>
   )
 }

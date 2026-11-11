@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react'
 import { StatuslinePicker } from '@/components/Statusline/StatuslinePicker'
+import { CodexStatuslinePicker } from '@/components/Statusline/CodexStatuslinePicker'
 
 /**
  * Settings → Status line (SWA-92): its own category because template,
@@ -21,6 +22,16 @@ export function StatuslinePanel(): ReactElement {
       <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
         <h2 className="mb-4 text-sm font-semibold text-foreground">Claude Code</h2>
         <StatuslinePicker />
+      </section>
+
+      <section className="rounded-xl border border-border bg-card/40 p-5 sm:p-6">
+        <h2 className="text-sm font-semibold text-foreground">Codex</h2>
+        <p className="mb-4 mt-1 text-xs leading-relaxed text-muted-foreground">
+          Sets <span className="font-mono">[tui] status_line</span> in each Codex profile&rsquo;s{' '}
+          <span className="font-mono">config.toml</span>. A list you changed yourself is never
+          overwritten; <em>Not managed</em> restores what was there before.
+        </p>
+        <CodexStatuslinePicker />
       </section>
     </div>
   )
