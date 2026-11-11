@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import { StatuslinePicker } from '@/components/Statusline/StatuslinePicker'
 import { Check, CheckCircle2, CircleMinus, Copy, ExternalLink, FolderSearch, RefreshCw, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -37,6 +38,7 @@ import type { CategoryId } from '@/components/Settings/SettingsView'
 const STEP_TITLE: Record<WizardStep, string> = {
   prerequisites: 'Tools and agents',
   signin: 'Sign-in',
+  statusline: 'Status line',
   voice: 'Voice',
   workspace: 'First workspace'
 }
@@ -194,6 +196,22 @@ function SigninStep(): ReactElement {
           </ul>
         </section>
       )}
+    </div>
+  )
+}
+
+/**
+ * SWA-92: template choice with preview only. Scheme, vibrance and width live
+ * in Settings → Status line. Choosing writes our own entry, like the switch
+ * did; a foreign status line is still never touched.
+ */
+function StatuslineStep(): ReactElement {
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        What Claude Code shows under the prompt in each pane. Colours and more in Settings → Status line.
+      </p>
+      <StatuslinePicker brief />
     </div>
   )
 }
@@ -370,6 +388,7 @@ export function SetupWizard({ onOpenSettings }: { onOpenSettings: (tab: Category
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {step === 'prerequisites' && <PrerequisitesStep />}
           {step === 'signin' && <SigninStep />}
+          {step === 'statusline' && <StatuslineStep />}
           {step === 'voice' && <VoiceStep choice={voice} onChoice={setVoice} />}
           {step === 'workspace' && <WorkspaceStep draft={draft} onDraft={setDraft} home={home} />}
         </div>

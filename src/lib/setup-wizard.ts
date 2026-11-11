@@ -12,7 +12,7 @@ import { isBroadFolder, type SetupStatus } from './setup-status'
 import { DEFAULT_TEMPLATE_ID, TEMPLATES, type AgentAvailabilityMap, type WorkspaceTemplate } from './templates'
 import type { VoiceSettings } from '@/tauri/voice'
 
-export const WIZARD_STEPS = ['prerequisites', 'signin', 'voice', 'workspace'] as const
+export const WIZARD_STEPS = ['prerequisites', 'signin', 'statusline', 'voice', 'workspace'] as const
 export type WizardStep = (typeof WIZARD_STEPS)[number]
 
 /** Pane counts the last step offers; Welcome has the full range. */
