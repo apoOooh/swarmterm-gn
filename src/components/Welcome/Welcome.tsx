@@ -24,7 +24,7 @@ import { planWorktreeBranches, provisionWorktrees } from '@/lib/worktree-naming'
 import { folderName, VISIBLE_RECENT_ROWS } from '@/lib/recent-folders'
 import { useRecentsStore } from '@/store/recents-store'
 import { useSetupStatusStore } from '@/store/setup-status-store'
-import { codexHookHint, defaultWelcomeFolder, gitInstalled, isBroadFolder, worktreeOptionNote } from '@/lib/setup-status'
+import { codexHookHint, defaultWelcomeFolder, gitInstalled, isBroadFolder, isRepoSubfolder, worktreeOptionNote } from '@/lib/setup-status'
 import { visibleSlice, hiddenCount } from '@/lib/list-paging'
 import {
   mergeSessions,
@@ -86,10 +86,11 @@ export function Welcome(): ReactElement {
   const [templateName, setTemplateName] = useState<string | null>(null)
   const [savedNotice, setSavedNotice] = useState('')
   const [isGitRepo, setIsGitRepo] = useState(false)
+  const [repoSubfolder, setRepoSubfolder] = useState(false)
   // A failed `git init`/first commit used to vanish into the console (SWA-83 V4).
   const [submitError, setSubmitError] = useState<string | null>(null)
   const git = gitInstalled(useSetupStatusStore(s => s.status))
-  const worktreeNote = worktreeOptionNote({ git, isGitRepo })
+  const worktreeNote = worktreeOptionNote({ git, isGitRepo, subfolder: repoSubfolder })
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Optional workspace name; blank ⇒ named after the folder on create.
   const [workspaceName, setWorkspaceName] = useState('')
@@ -218,10 +219,12 @@ export function Welcome(): ReactElement {
   useEffect(() => {
     if (trimmedFolder === '') {
       setIsGitRepo(false)
+      setRepoSubfolder(false)
       return
     }
     let cancelled = false
     setIsGitRepo(false)
+    setRepoSubfolder(false)
     const timer = window.setTimeout(() => { void listWorktrees(trimmedFolder)
       .then((trees) => {
         if (cancelled) return
@@ -232,10 +235,12 @@ export function Welcome(): ReactElement {
         const main = trees.find((t) => t.isMain)
         const unborn = main !== undefined && /^0+$/.test(main.head)
         setIsGitRepo(trees.length > 0 && !unborn)
+        setRepoSubfolder(isRepoSubfolder(trees, trimmedFolder))
       })
       .catch(() => {
         if (!cancelled) {
           setIsGitRepo(false)
+          setRepoSubfolder(false)
         }
       }) }, 250)
     return () => {
@@ -306,7 +311,9 @@ export function Welcome(): ReactElement {
     try {
       addRecentFolder(trimmedFolder)
 
-      const isolate = isolateWorktrees && git !== false
+      // SWA-94: never for a subfolder of a larger repo — the worktree would be
+      // the whole repo and the panes would start at its root, not here.
+      const isolate = isolateWorktrees && git !== false && !repoSubfolder
       let paneWorktrees: ({ path: string; branch: string } | null)[] | undefined
 
       if (isolate) {
@@ -366,7 +373,7 @@ export function Welcome(): ReactElement {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [trimmedFolder, terminalCount, counts, isolateWorktrees, isGitRepo, isSubmitting, tickedSessions, sessions, accounts, accountSelections]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [trimmedFolder, terminalCount, counts, isolateWorktrees, isGitRepo, repoSubfolder, isSubmitting, tickedSessions, sessions, accounts, accountSelections]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build caption: "4 panes · 2×2 · 2 AI agents · 2 Terminals"
   const aiCount = agentIds.filter((id) => id !== DEFAULT_TEMPLATE_ID).length
@@ -634,14 +641,14 @@ export function Welcome(): ReactElement {
             className={cn(
               'mb-3 flex cursor-pointer items-start gap-2',
               worktreeNote !== null && 'opacity-50',
-              git === false && 'cursor-not-allowed'
+              (git === false || repoSubfolder) && 'cursor-not-allowed'
             )}
             title={worktreeNote ?? undefined}
           >
             <input
               type="checkbox"
-              disabled={git === false}
-              checked={isolateWorktrees && git !== false}
+              disabled={git === false || repoSubfolder}
+              checked={isolateWorktrees && git !== false && !repoSubfolder}
               onChange={(e) => setIsolateWorktrees(e.target.checked)}
               className="mt-0.5 accent-current"
             />
@@ -650,7 +657,7 @@ export function Welcome(): ReactElement {
                 Isolate features in git worktrees
               </span>
               <span className="block text-xs text-muted-foreground">
-                {git === false ? worktreeNote : 'Each agent pane starts in its own worktree and branch.'}
+                {git === false || repoSubfolder ? worktreeNote : 'Each agent pane starts in its own worktree and branch.'}
               </span>
             </span>
           </label>

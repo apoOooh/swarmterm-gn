@@ -260,7 +260,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   its own `<repo>.worktrees/<slug>` worktree on branch `swarm/<agent>-<n>`
   (plain Terminal panes stay at the repo root; a failed creation falls back
   to the repo root with a console warning, never blocking workspace
-  creation). The `worktree.spawn/list/remove` MCP tools remain as the
+  creation; a chosen folder that is only a subfolder of a repo gets no
+  isolation at all, SWA-94 `isRepoSubfolder`, so panes start there).
+  The `worktree.spawn/list/remove` MCP tools remain as the
   secondary path — mid-session delegation to new worker panes and
   agent-driven cleanup — still gated on the same toggle via `worktree_mode`
   in the terminal map. Removal refuses dirty worktrees and anything outside
