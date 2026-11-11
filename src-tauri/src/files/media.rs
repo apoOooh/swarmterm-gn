@@ -43,12 +43,15 @@ fn extension(path: &Path) -> String {
         .to_ascii_lowercase()
 }
 
+/// Image/video extensions, lowercase. Mirrors `MEDIA_EXTENSIONS` in
+/// `src/lib/media-detect.ts` (a test keeps them in step): the hook CLI only
+/// forwards paths with these, and the screen scan only matches these.
+pub(crate) const MEDIA_EXTENSIONS: &[&str] =
+    &["png", "jpg", "jpeg", "webp", "gif", "mp4", "m4v", "mov", "webm"];
+
 /// Images and videos shown by MediaView — the only kinds MediaStat/OpenMedia accept.
-pub(super) fn is_media(path: &Path) -> bool {
-    matches!(
-        extension(path).as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "mp4" | "m4v" | "mov" | "webm"
-    )
+pub(crate) fn is_media(path: &Path) -> bool {
+    MEDIA_EXTENSIONS.contains(&extension(path).as_str())
 }
 
 /// Context id of the unrooted route: `/unrooted?path=<canonical abs path>`.
@@ -629,6 +632,29 @@ mod tests {
     }
 
     #[test]
+    fn relative_names_fall_back_to_the_agent_cwd() {
+        let t = tempfile::tempdir().unwrap();
+        let service = FileService::new(t.path().join("history"));
+        let agent = t.path().join("worktree").join("device");
+        fs::create_dir_all(&agent).unwrap();
+        fs::write(agent.join("8-detail-960.png"), [0]).unwrap();
+        fs::write(t.path().join("root.png"), [0]).unwrap();
+        let raws: Vec<String> = vec!["8-detail-960.png".into(), "root.png".into(), "gone.png".into()];
+        let got = service.check_detected_media_in(&raws, t.path(), Some(&agent));
+        assert_eq!(
+            got,
+            vec![
+                Some(canonical(&agent.join("8-detail-960.png")).unwrap()),
+                Some(canonical(&t.path().join("root.png")).unwrap()),
+                None
+            ]
+        );
+        // Without the agent cwd the bare name stays a miss.
+        assert_eq!(service.check_detected_media(&raws[..1], t.path()), vec![None]);
+        assert!(!service.unrooted_registered(&canonical(&agent.join("8-detail-960.png")).unwrap()));
+    }
+
+    #[test]
     fn user_media_registration_requires_absolute_existing_media() {
         let t = tempfile::tempdir().unwrap();
         let service = FileService::new(t.path().join("history"));
@@ -640,6 +666,21 @@ mod tests {
         assert!(service.register_user_media("a.webp").is_err());
         assert!(service.register_user_media(&abs("a.html")).is_err());
         assert!(service.register_user_media(&abs("nope.png")).is_err());
+    }
+
+    #[test]
+    fn media_extensions_mirror_the_renderer_list() {
+        let ts = include_str!("../../../src/lib/media-detect.ts");
+        let line = ts
+            .lines()
+            .find(|l| l.starts_with("export const MEDIA_EXTENSIONS"))
+            .expect("MEDIA_EXTENSIONS in media-detect.ts");
+        let list = &line[line.find('[').unwrap() + 1..line.find(']').unwrap()];
+        let renderer: Vec<&str> = list
+            .split(',')
+            .map(|e| e.trim().trim_matches('\''))
+            .collect();
+        assert_eq!(renderer, MEDIA_EXTENSIONS);
     }
 
     #[test]

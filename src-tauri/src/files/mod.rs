@@ -190,13 +190,30 @@ impl FileService {
     /// registers it (`register_user_media`). Bounded per call so one output
     /// line cannot make the backend stat thousands of paths.
     pub fn check_detected_media(&self, raws: &[String], cwd: &Path) -> Vec<Option<PathBuf>> {
+        self.check_detected_media_in(raws, cwd, None)
+    }
+
+    /// As `check_detected_media`; a relative path that is no media file under
+    /// `cwd` is tried under `fallback` (the agent's own cwd) as well.
+    pub fn check_detected_media_in(
+        &self,
+        raws: &[String],
+        cwd: &Path,
+        fallback: Option<&Path>,
+    ) -> Vec<Option<PathBuf>> {
         raws.iter()
             .enumerate()
             .map(|(i, raw)| {
                 if i >= MAX_DETECTED_PER_CALL {
                     return None;
                 }
-                media::resolve_media(raw, cwd).ok()
+                media::resolve_media(raw, cwd).ok().or_else(|| {
+                    let other = fallback.filter(|f| *f != cwd)?;
+                    if Path::new(raw.trim()).is_absolute() {
+                        return None;
+                    }
+                    media::resolve_media(raw, other).ok()
+                })
             })
             .collect()
     }
@@ -241,7 +258,6 @@ impl FileService {
     }
 
     /// Image/video extension check (the unrooted route's kind rule) for other modules.
-    #[cfg(windows)]
     pub(crate) fn is_media_path(path: &Path) -> bool {
         media::is_media(path)
     }

@@ -9,7 +9,7 @@ vi.mock('@/tauri/files', () => ({
 const media = vi.hoisted(() => ({ detect: vi.fn(), announce: vi.fn(), clearUnseen: vi.fn() }))
 vi.mock('@/store/media-store', () => ({ useMediaStore: { getState: () => media } }))
 
-import { forgetMediaOutput, MAX_PENDING_BYTES, noteMediaOutput, SCAN_INTERVAL_MS } from '@/lib/media-passive'
+import { forgetMediaOutput, MAX_PENDING_BYTES, noteHookMedia, noteMediaOutput, SCAN_INTERVAL_MS } from '@/lib/media-passive'
 
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s)
 
@@ -52,5 +52,36 @@ describe('noteMediaOutput', () => {
     noteMediaOutput('t1', 'x'.repeat(MAX_PENDING_BYTES) + '\r\n')
     noteMediaOutput('t1', 'saved C:\\shots\\new.png\r\n')
     expect(await detectedAfterScan()).toEqual(['C:\\shots\\new.png'])
+  })
+})
+
+describe('noteHookMedia', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    media.detect.mockClear()
+    media.announce.mockClear()
+  })
+  afterEach(() => {
+    forgetMediaOutput('t1')
+    media.detect.mockClear()
+    media.announce.mockClear()
+    vi.useRealTimers()
+  })
+
+  it('detects and announces a hook-reported file once, also against the screen scan', async () => {
+    noteHookMedia('t1', 'C:\scratch\w1.jpg')
+    noteHookMedia('t1', 'c:\SCRATCH\w1.jpg')
+    expect(media.detect).toHaveBeenCalledTimes(1)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    expect(media.detect.mock.calls[0][0]).toMatchObject({ path: 'C:\scratch\w1.jpg', kind: 'image', terminalId: 't1', opened: false })
+    // The agent's reply names the same file: no second announcement.
+    noteMediaOutput('t1', 'Looked at C:\scratch\w1.jpg\r\n')
+    expect(await detectedAfterScan()).toEqual(['C:\scratch\w1.jpg'])
+    expect(media.announce).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores non-media paths', () => {
+    noteHookMedia('t1', 'C:\scratch\notes.txt')
+    expect(media.detect).not.toHaveBeenCalled()
   })
 })

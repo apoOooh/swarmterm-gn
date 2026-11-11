@@ -148,7 +148,11 @@ closes.
 Swarmterm notices media paths a pane prints: absolute paths
 (`C:\...\shot.png`, spaces included), quoted paths and paths relative to the
 pane's starting folder, also inside tables whose cells the agent wrapped over
-several lines (such as Claude Code's bordered tables). If such a file exists,
+several lines (such as Claude Code's bordered tables) and long absolute paths
+Claude Code wraps at the pane edge. Images and videos a Claude Code agent or
+any of its subagents opens or writes with its Read/Write tools are detected
+too, even when the pane never shows the path (collapsed tool lines, subagent
+work). If such a file exists,
 it joins the Media strip with its thumbnail (videos show a film icon), and the
 pane shows a **N new images/videos** pill
 in its top-right corner. To view it large, click the pill (opens the newest),
@@ -158,8 +162,11 @@ never opens by itself, and your keyboard stays in the terminal. Only
 PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local drives are
 accepted. A path printed just before the file is written is retried a few times
 when printed again within seconds. Not detected: newly created files that are
-never printed, POSIX-style paths (`/c/...`, `~/...`), and relative paths after a
-`cd` (they resolve against the folder the pane started in).
+never printed or opened by Claude's Read/Write tools (for example screenshots
+an agent only creates through shell commands), paths built from shell
+variables (`$DIR/shot.png`), and POSIX-style paths (`/c/...`, `~/...`).
+Relative paths resolve against the folder the pane started in and, in Claude
+Code panes, the agent's current folder.
 
 **New-media popup.** Settings → Media → **Show popup** (off by default) shows a
 small list in the bottom-right corner whenever new media arrives: thumbnail,
