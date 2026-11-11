@@ -44,6 +44,8 @@ pub fn post_signal(mcp_url: &str, token: &str, signal: Signal, timeout: Duration
             signal,
             session: None,
             turn: None,
+            media: None,
+            cwd: None,
         },
         timeout,
     )

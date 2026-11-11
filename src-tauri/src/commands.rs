@@ -86,7 +86,8 @@ pub async fn files_request(
 }
 
 /// Passive media detection: the renderer found image/video paths in a pane's
-/// output. Relative paths resolve against that terminal's cwd; the answer has
+/// output. Relative paths resolve against that terminal's spawn cwd, then the
+/// agent's last hook-reported cwd (agents `cd` away from it); the answer has
 /// one entry per input (canonical display path of an existing media file, or
 /// null). Validation only, nothing is allow-listed here (see
 /// `FileService::check_detected_media`). Disk work runs off the async executor.
@@ -99,17 +100,17 @@ pub async fn media_check_detected(
     paths: Vec<String>,
 ) -> Result<Vec<Option<String>>, String> {
     files_main_only(&window)?;
-    let cwd = state
+    let (cwd, agent_cwd) = state
         .terminals
         .lock()
         .map_err(|e| e.to_string())?
         .get(&terminal_id)
-        .map(|t| t.cwd.clone())
+        .map(|t| (t.cwd.clone(), t.agent_cwd.clone()))
         .ok_or("unknown terminal")?;
     let service = service.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         service
-            .check_detected_media(&paths, std::path::Path::new(&cwd))
+            .check_detected_media_in(&paths, &cwd, agent_cwd.as_deref())
             .iter()
             .map(|p| p.as_deref().map(crate::files::path::display))
             .collect()

@@ -3,6 +3,23 @@
 Decisions made by the maintainer that every contributor follows. Newest
 first. Architecture decisions with longer reasoning live in [adr/](adr/).
 
+## 2026-11-11
+
+- **Agent media detection uses the Claude hook; the hook forwards media
+  paths and cwd, never content.** Passive media detection missed most images
+  agents and their subagents open (collapsed tool lines, subagent calls that
+  never reach the screen, wrapped long paths, relative names after a `cd`).
+  So the `swarmterm --hook` contract is widened: on `PostToolUse` of `Read`
+  or `Write` it forwards the tool input's `file_path` when that is an
+  absolute local path (at most 1024 characters) with an image/video
+  extension, and on every `PostToolUse` the agent's current `cwd` (absolute,
+  same bound). Nothing else from the tool input or response is read into a
+  struct; file content never crosses the loopback port. The app checks the
+  path like a printed one (existing media file, not allow-listed) and keeps
+  the cwd in memory per pane only, to resolve relative names printed on
+  screen when the pane's start folder has no such file. Screen detection
+  also joins absolute paths Claude Code hard-wraps at the pane edge.
+
 ## 2026-11-09
 
 - **Local hang diagnostics; dumps are opt-in.** After the installed app was

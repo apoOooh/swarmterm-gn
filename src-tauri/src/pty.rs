@@ -261,6 +261,10 @@ pub struct ManagedTerminal {
     /// `CODEX_HOME` for Codex (SWA-58/71: where the excerpt reader looks for
     /// this pane's transcripts). `None` = the agent's default.
     pub profile_dir: Option<std::path::PathBuf>,
+    /// The agent's last reported cwd (Claude PostToolUse hook, 2026-11-11):
+    /// where relative media names it prints resolve when the spawn cwd has
+    /// no such file. Memory only; a respawn starts a new entry without it.
+    pub agent_cwd: Option<std::path::PathBuf>,
 }
 
 /// Where a pane's PTY lives (SWA-55, ADR 0001).
@@ -1256,6 +1260,7 @@ fn spawn_local(
             repo_root: plan.repo_root,
             cwd: std::path::PathBuf::from(&plan.cwd),
             profile_dir: plan.profile_dir,
+            agent_cwd: None,
         },
     );
     state.with_session_tokens(|t| t.settle(&id));
@@ -1486,6 +1491,7 @@ pub fn register_hosted(
             worktree_mode: pending.worktree_mode,
             repo_root: pending.repo_root,
             profile_dir: pending.profile_dir,
+            agent_cwd: None,
         },
     );
     // Never nest `session_tokens` inside `terminals`.

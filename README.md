@@ -51,7 +51,7 @@ Real split terminals, one git worktree per agent, and an app your agents can dri
 - Web preview column per terminal, with address bar and history.
 - Git panel: worktree, branch, changes, inline diff and merge check for the focused pane.
 - File explorer and editor that follow the focused terminal, Markdown/SVG/HTML previews, local deletion history.
-- Media panel: images from pane output as thumbnails, large viewer, annotation, drag into panes.
+- Media panel: images from pane output and from what agents and subagents open, as thumbnails, large viewer, annotation, drag into panes.
 - Seven dark themes from Astera.
 
 **Voice and system**

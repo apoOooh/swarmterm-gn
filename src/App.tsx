@@ -135,7 +135,8 @@ import {
   onWarRoomRooms
 } from '@/tauri/warroom'
 import { onPreviewOpen } from '@/tauri/preview'
-import { onClipboardMedia, setClipboardMediaEnabled } from '@/tauri/files'
+import { onClipboardMedia, onMediaDetected, setClipboardMediaEnabled } from '@/tauri/files'
+import { noteHookMedia } from '@/lib/media-passive'
 import { useMediaPrefStore } from '@/store/media-pref-store'
 import { MediaOverlay } from '@/components/Media/MediaOverlay'
 import { CLIPBOARD_SOURCE, useMediaStore } from '@/store/media-store'
@@ -1036,6 +1037,15 @@ export default function App(): ReactElement {
       useMediaStore.getState().add(item)
       useMediaStore.getState().announce(item, 'clipboard')
     })
+    return () => {
+      void unlisten.then((fn) => fn())
+    }
+  }, [])
+
+  // Images an agent or its subagents Read/Wrote (Claude PostToolUse hook):
+  // the screen often never shows them (collapsed tool lines, subagents).
+  useEffect(() => {
+    const unlisten = onMediaDetected((e) => noteHookMedia(e.terminalId, e.path))
     return () => {
       void unlisten.then((fn) => fn())
     }

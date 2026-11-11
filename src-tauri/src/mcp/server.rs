@@ -533,13 +533,77 @@ async fn status_handler(
         .into_response()
 }
 
+/// Payload of `media:detected` (camelCase, lockstep with
+/// `src/tauri/files.ts::MediaDetectedEvent`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaDetectedEvent {
+    pub terminal_id: String,
+    pub path: String,
+}
+
+/// Resolve a hook-reported media path off the executor (disk work) and, if
+/// it is an existing image/video, tell the renderer. Not awaited by `/hook`:
+/// the CLI's 300 ms budget belongs to the status signal.
+fn spawn_media_detected(app: AppHandle, terminal_id: String, media: String) {
+    // Bounded: a Read loop (or a token holder flooding /hook) cannot queue
+    // unlimited blocking jobs; a dropped check only loses one gallery name.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+    const MAX_IN_FLIGHT: usize = 8;
+    if IN_FLIGHT.fetch_add(1, Ordering::AcqRel) >= MAX_IN_FLIGHT {
+        IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+        return;
+    }
+    struct Release;
+    impl Drop for Release {
+        fn drop(&mut self) {
+            IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+    let release = Release;
+    let Some(service) = app
+        .try_state::<Arc<crate::files::FileService>>()
+        .map(|s| s.inner().clone())
+    else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        let _release = release;
+        let found = tauri::async_runtime::spawn_blocking(move || {
+            // Absolute by `valid_media_path`, so no cwd is involved.
+            service
+                .check_detected_media(&[media], std::path::Path::new(""))
+                .into_iter()
+                .next()
+                .flatten()
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(path) = found {
+            use tauri::Emitter;
+            let _ = app.emit(
+                "media:detected",
+                &MediaDetectedEvent {
+                    terminal_id,
+                    path: crate::files::path::display(&path),
+                },
+            );
+        }
+    });
+}
+
 /// `POST /hook` — the `swarmterm --hook` / `--codex-session-hook` CLI
 /// reporting one Claude Code or Codex hook event for its own pane. The body is a closed enum (`HookBody`), never the
-/// hook's stdin: prompt text, tool input and cwd stay inside the pane. The
+/// hook's stdin: prompt text and file content stay inside the pane. The
 /// verdict is re-emitted to the renderer as `agent:hook` (payload in lockstep
 /// with `src/tauri/agent-state.ts::AgentHookEvent`); precedence over
-/// screen-scrape is decided in the renderer. The only hook state Rust keeps
-/// is the voice turn ledger (SWA-58), fed by the body's turn mark.
+/// screen-scrape is decided in the renderer. Hook state Rust keeps: the voice
+/// turn ledger (SWA-58), fed by the body's turn mark, and the agent's last
+/// cwd on the pane's map entry (2026-11-11, in memory, dies with the PTY).
+/// A media path (2026-11-11) is checked like a printed one (existing media
+/// file, not allow-listed) and re-emitted as `media:detected`.
 async fn hook_handler(
     AxumState(app): AxumState<AppHandle>,
     headers: HeaderMap,
@@ -551,6 +615,29 @@ async fn hook_handler(
     use tauri::Emitter;
     if body.turn.as_ref().is_some_and(|t| !t.is_valid()) {
         return StatusCode::BAD_REQUEST.into_response();
+    }
+    // The CLI applies the same rules; a field that fails them here (rules
+    // drifted, or not our CLI) is dropped so the status signal still lands.
+    let media = body
+        .media
+        .clone()
+        .filter(|m| crate::hook::valid_media_path(m));
+    let cwd = body.cwd.as_deref().filter(|c| crate::hook::valid_cwd(c));
+    if media.is_none() != body.media.is_none() || cwd.is_none() != body.cwd.is_none() {
+        eprintln!("[hook] dropped an invalid media path or cwd from {terminal_id}");
+    }
+    if let Some(cwd) = cwd {
+        let state = app.state::<AppState>();
+        let mut terminals = state
+            .terminals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(t) = terminals.get_mut(&terminal_id) {
+            t.agent_cwd = Some(std::path::PathBuf::from(cwd));
+        }
+    }
+    if let Some(media) = media {
+        spawn_media_detected(app.clone(), terminal_id.clone(), media);
     }
     // SWA-58: true asks the hook CLI to hand the agent the `<voice>` instruction.
     let mut voice = false;
