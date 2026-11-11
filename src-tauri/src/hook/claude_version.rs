@@ -185,7 +185,7 @@ fn probe(binary: &Path) -> Option<(u32, u32, u32)> {
 /// `AssignProcessToJobObject`, which then fails (access denied on a dead
 /// root), and that child would outlive the probe. No job, no probe — the
 /// caller's verdict stays unsettled and the shell form is kept.
-fn run_bounded(mut command: Command, timeout: Duration) -> Option<String> {
+pub(crate) fn run_bounded(mut command: Command, timeout: Duration) -> Option<String> {
     let deadline = Instant::now() + timeout;
     command
         .stdin(Stdio::null())

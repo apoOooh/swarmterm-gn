@@ -38,6 +38,7 @@
 pub mod adopt;
 pub mod claude_version;
 pub mod codex;
+pub mod codex_statusline;
 pub mod install;
 pub mod post;
 

@@ -33,6 +33,10 @@ pub enum Animation {
 #[serde(rename_all = "camelCase", default)]
 pub struct StatuslineSettings {
     pub claude: Preset,
+    /// None leaves Codex unmanaged; disabling a managed line writes `[]`.
+    pub codex: Option<Preset>,
+    pub codex_enabled: bool,
+    pub codex_use_colors: bool,
     pub scheme: Scheme,
     /// 0–100, 50 = as designed.
     pub vibrance: u8,
@@ -46,6 +50,9 @@ impl Default for StatuslineSettings {
     fn default() -> Self {
         Self {
             claude: Preset::Compact,
+            codex: None,
+            codex_enabled: true,
+            codex_use_colors: false,
             scheme: Scheme::Subtle,
             vibrance: 50,
             animation: Animation::Off,
@@ -109,7 +116,24 @@ mod tests {
         assert_eq!(s.claude, Preset::Detailed);
         assert_eq!(s.scheme, Scheme::HighContrast);
         assert_eq!(s.vibrance, 50);
+        assert_eq!(s.codex, None);
+        assert!(s.codex_enabled);
+        assert!(!s.codex_use_colors);
         save(&p, &s).unwrap();
         assert_eq!(load(&p), s);
+    }
+
+    #[test]
+    fn codex_preferences_round_trip_with_camel_case_keys() {
+        let settings: StatuslineSettings = serde_json::from_str(
+            r#"{"codex":"extended","codexUseColors":true,"codexEnabled":false}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.codex, Some(Preset::Extended));
+        assert!(settings.codex_use_colors);
+        assert!(!settings.codex_enabled);
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["codexUseColors"], true);
+        assert_eq!(json["codexEnabled"], false);
     }
 }
