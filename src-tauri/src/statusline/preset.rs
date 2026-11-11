@@ -8,6 +8,7 @@
 //! as many rows as needed. Below 50 cells branch and cache are dropped —
 //! model/context, limits and the MCP state always stay.
 
+use super::breakdown::{cells, Bar};
 use super::layout::{pack, SEP_TEXT};
 use super::render::{ctx_color, ctx_info, format_tokens, CtxColor, McpState, StatusInput};
 use super::settings::{Preset, StatuslineSettings};
@@ -21,6 +22,9 @@ pub struct Frame<'a> {
     pub now: u64,
     pub width: usize,
     pub color: bool,
+    /// Detailed only: subagents (count, tokens, USD) and the transcript bars.
+    pub agents: Option<(usize, u64, f64)>,
+    pub bars: &'a [Bar],
 }
 
 struct Ctx<'a> {
@@ -213,11 +217,125 @@ fn segments(c: &Ctx, fr: &Frame, preset: Preset, f: Form) -> Vec<String> {
             } else {
                 None
             },
+            if wide { agents_seg(c, fr.agents) } else { None },
             if wide { branch_seg(c, fr.branch) } else { None },
             mcp_seg(c, fr.mcp),
         ],
     };
     v.into_iter().flatten().collect()
+}
+
+/// The status rows for this frame.
+fn head(fr: &Frame, s: &StatuslineSettings, c: &Ctx, sep: &str) -> Vec<String> {
+    let full = pack(
+        &segments(
+            c,
+            fr,
+            s.claude,
+            Form {
+                bar: 8,
+                short: false,
+            },
+        ),
+        sep,
+        fr.width,
+    );
+    if full.len() <= 1 {
+        return full;
+    }
+    pack(
+        &segments(
+            c,
+            fr,
+            s.claude,
+            Form {
+                bar: 4,
+                short: true,
+            },
+        ),
+        sep,
+        fr.width,
+    )
+}
+
+/// Blank row as Claude Code keeps it: a Braille blank, since an empty line
+/// would be dropped.
+pub const BLANK: &str = "\u{2800}";
+
+fn agents_seg(c: &Ctx, agents: Option<(usize, u64, f64)>) -> Option<String> {
+    let (n, tokens, cost) = agents?;
+    let mut s = format!("{} {n}", c.paint(&c.p.label, "agents"));
+    if n > 0 {
+        s.push_str(&c.paint(
+            &c.p.label,
+            &format!(" (≈{}, ≈${cost:.2})", format_tokens(tokens)),
+        ));
+    }
+    Some(s)
+}
+
+/// Bar rows at the widest bar (20/12/8 cells) that keeps them in one row,
+/// else 8 cells wrapped; legends from 60 cells. Colours cycle per part.
+fn bar_rows(c: &Ctx, bars: &[Bar], sep: &str, width: usize) -> Vec<String> {
+    let colors = [&c.p.label, &c.p.ok, &c.p.warn, &c.p.text];
+    let row = |bw: usize| -> Vec<String> {
+        bars.iter()
+            .map(|b| {
+                let vals: Vec<f64> = b.parts.iter().map(|p| p.1).collect();
+                let bar: String = cells(&vals, bw)
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, n)| **n > 0)
+                    .map(|(i, n)| c.paint(colors[i % colors.len()], &"█".repeat(*n)))
+                    .collect();
+                let bar = if bar.is_empty() {
+                    c.paint(&c.p.dim, &"░".repeat(bw))
+                } else {
+                    bar
+                };
+                format!(
+                    "{} {bar} {}",
+                    c.paint(&c.p.label, b.label),
+                    c.paint(&c.p.text, &format_tokens(b.shown))
+                )
+            })
+            .collect()
+    };
+    let mut out = Vec::new();
+    for bw in [20, 12, 8] {
+        let rows = pack(&row(bw), sep, width);
+        if rows.len() == 1 || bw == 8 {
+            out = rows;
+            break;
+        }
+    }
+    if width >= 60 {
+        let legends: Vec<String> = bars
+            .iter()
+            .map(|b| {
+                let total: f64 = b.parts.iter().map(|p| p.1).sum();
+                b.parts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (n, v))| {
+                        let pct = if total > 0.0 {
+                            (v / total * 100.0).round()
+                        } else {
+                            0.0
+                        };
+                        format!(
+                            "{} {}",
+                            c.paint(colors[i % colors.len()], "■"),
+                            c.paint(&c.p.label, &format!("{n} {pct}%"))
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        out.extend(pack(&legends, sep, width));
+    }
+    out
 }
 
 /// The status rows for this frame.
@@ -237,35 +355,12 @@ pub fn render(fr: &Frame, s: &StatuslineSettings) -> Vec<String> {
     } else {
         SEP_TEXT.to_string()
     };
-    let full = pack(
-        &segments(
-            &c,
-            fr,
-            s.claude,
-            Form {
-                bar: 8,
-                short: false,
-            },
-        ),
-        &sep,
-        fr.width,
-    );
-    if full.len() <= 1 {
-        return full;
+    let mut rows = head(fr, s, &c, &sep);
+    if s.claude == Preset::Detailed && !fr.bars.is_empty() {
+        rows.push(BLANK.to_string());
+        rows.extend(bar_rows(&c, fr.bars, &sep, fr.width));
     }
-    pack(
-        &segments(
-            &c,
-            fr,
-            s.claude,
-            Form {
-                bar: 4,
-                short: true,
-            },
-        ),
-        &sep,
-        fr.width,
-    )
+    rows
 }
 
 #[cfg(test)]
@@ -299,6 +394,8 @@ mod tests {
             now: NOW,
             width,
             color: false,
+            agents: None,
+            bars: &[],
         };
         render(
             &fr,
@@ -355,6 +452,12 @@ mod tests {
 
     #[test]
     fn no_row_is_wider_than_the_terminal() {
+        let mut st = super::super::breakdown::State::default();
+        st.usage.insert("m".into(), [1_200, 30_000, 90_000, 4_000]);
+        st.text_chars = 4_000;
+        st.results.insert("Read".into(), 8_000);
+        st.results.insert("Bash".into(), 2_000);
+        let bars = super::super::breakdown::bars(&st);
         for preset in [Preset::Compact, Preset::Extended, Preset::Detailed] {
             for w in [20, 30, 40, 60, 80, 118, 200] {
                 let i = input();
@@ -365,6 +468,8 @@ mod tests {
                     now: NOW,
                     width: w,
                     color: true,
+                    agents: Some((2, 31_200, 0.84)),
+                    bars: &bars,
                 };
                 for scheme in [
                     super::super::style::Scheme::Subtle,
@@ -388,6 +493,45 @@ mod tests {
     }
 
     #[test]
+    fn detailed_appends_bar_rows_and_legends_when_wide() {
+        let mut st = super::super::breakdown::State::default();
+        st.usage.insert("m".into(), [1_200, 30_000, 90_000, 4_000]);
+        let bars = super::super::breakdown::bars(&st);
+        let i = input();
+        let mk = |w| Frame {
+            input: &i,
+            mcp: McpState::Absent,
+            branch: None,
+            now: NOW,
+            width: w,
+            color: false,
+            agents: Some((2, 31_200, 0.84)),
+            bars: &bars,
+        };
+        let s = StatuslineSettings {
+            claude: Preset::Detailed,
+            ..Default::default()
+        };
+        let wide = render(&mk(250), &s);
+        assert!(wide.iter().any(|r| r == BLANK));
+        assert!(wide.iter().any(|r| r.starts_with("in ")), "{wide:?}");
+        assert!(wide.iter().any(|r| r.contains("cached")), "legend at 250");
+        assert!(wide.join("").contains("agents 2 (≈31k, ≈$0.84)"));
+        assert!(
+            !render(&mk(50), &s).join("").contains("cached"),
+            "no legend at 50"
+        );
+        let e = StatuslineSettings {
+            claude: Preset::Extended,
+            ..Default::default()
+        };
+        assert!(
+            !render(&mk(250), &e).iter().any(|r| r == BLANK),
+            "bars only in Detailed"
+        );
+    }
+
+    #[test]
     fn missing_data_degrades_to_shorter_rows() {
         let i: StatusInput = serde_json::from_str("{}").unwrap();
         let fr = Frame {
@@ -397,6 +541,8 @@ mod tests {
             now: NOW,
             width: 118,
             color: false,
+            agents: None,
+            bars: &[],
         };
         let s = StatuslineSettings {
             claude: Preset::Detailed,

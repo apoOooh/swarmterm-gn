@@ -2,6 +2,7 @@
 //! rows it prints below the input box. Template, scheme and vibrance come from
 //! `statusline.json` (SWA-92, `settings.rs`), the width from `COLUMNS`.
 
+pub mod breakdown;
 pub mod install;
 pub mod layout;
 pub mod preset;
@@ -102,6 +103,19 @@ pub fn run_cli() {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // Detailed only: the transcript and subagent files are not touched for
+    // the lighter templates, which re-render every few seconds too.
+    let (bars, agents) = match (cfg.claude, input.transcript_path.as_deref()) {
+        (settings::Preset::Detailed, Some(tp)) => {
+            let tp = std::path::Path::new(tp);
+            let session = input.session_id.as_deref().unwrap_or("x");
+            let bars = breakdown::update(tp, &breakdown::state_path(session))
+                .map(|st| breakdown::bars(&st))
+                .unwrap_or_default();
+            (bars, breakdown::agents(tp))
+        }
+        _ => (Vec::new(), None),
+    };
     let frame = preset::Frame {
         input: &input,
         mcp,
@@ -109,6 +123,8 @@ pub fn run_cli() {
         now,
         width: layout::term_width(std::env::var("COLUMNS").ok().as_deref()),
         color: true,
+        agents,
+        bars: &bars,
     };
     println!("{}", preset::render(&frame, &cfg).join("\n"));
 }
