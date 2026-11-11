@@ -633,6 +633,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   forwards `set_priority` to the host (and on every host connect).
   `AGENT_EXES`/`AGENT_MARKERS` mirror the app catalog; a test keeps them
   in step. Normal and above are not representable.
+  `host/tests/priority.rs` probes for an outer job that forces a class (the
+  `heavy.ps1` queue) and then skips only the class asserts it makes
+  impossible, with a `[priority] outer job forces class ...` notice.
 - **Environment filter.** `terminal_env::EnvPolicy` (in `AppState.env_policy`,
   secure default, pushed by `env-policy-store` via `env_policy_set`) filters
   the inherited env in `plan_spawn` (both backends) and `run_routine_command`

@@ -241,4 +241,75 @@ mod tests {
             Duration::from_millis(300)
         ));
     }
+
+    /// Hook replay, synthetic only: the PostToolUse JSON Claude pipes to
+    /// `swarmterm --hook` (a main-agent Read and a second post of the same
+    /// shape standing in for a subagent Read) -> `hook_body` -> the HTTP body
+    /// on the wire -> what `/hook` deserialises and keeps
+    /// (`hook_media_and_cwd`) -> the check `media:detected` is emitted on.
+    /// Unknown tool-input fields never reach the body; a relative name printed
+    /// on screen resolves via the agent cwd the post carried.
+    #[test]
+    fn post_tool_use_replay_reaches_media_detection_for_an_existing_png() {
+        let tmp = tempfile::tempdir().unwrap();
+        let png = tmp.path().join("w1.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\n").unwrap();
+        let cwd = tmp.path().to_str().unwrap().to_string();
+        let file = png.to_str().unwrap().to_string();
+        let service = crate::files::FileService::new(tmp.path().join("history"));
+        for _agent in ["main", "subagent"] {
+            let raw = serde_json::json!({
+                "session_id": "11111111-2222-4333-8444-555555555555",
+                "hook_event_name": "PostToolUse",
+                "cwd": cwd,
+                "tool_name": "Read",
+                "tool_input": {"file_path": file, "content": "x", "extra": "SECRET-FIELD"},
+                "tool_response": {"file": {"content": "SECRET-RESPONSE"}}
+            })
+            .to_string();
+            let input: crate::hook::HookInput = serde_json::from_str(&raw).unwrap();
+            let body = crate::hook::hook_body("claude-code", &input, Some("7".into())).unwrap();
+            let (url, server) = serve_once(
+                b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            assert!(post_body_answer(&url, "tok", &body, Duration::from_millis(500)).is_some());
+            let req = server.join().unwrap();
+            let wire = req.split("\r\n\r\n").nth(1).unwrap();
+            assert!(
+                !wire.contains("SECRET") && !wire.contains("content"),
+                "{wire}"
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(wire).unwrap(),
+                serde_json::json!({"signal": "working", "media": file, "cwd": cwd})
+            );
+            // What the server's `Json<HookBody>` extractor accepts (closed body).
+            let got: crate::hook::HookBody = serde_json::from_str(wire).unwrap();
+            let (media, agent_cwd) = crate::mcp::server::hook_media_and_cwd(&got);
+            assert_eq!(agent_cwd, Some(cwd.as_str()));
+            let found = service.check_detected_media(&[media.unwrap()], std::path::Path::new(""));
+            assert_eq!(
+                found[0]
+                    .as_deref()
+                    .map(|p| p.file_name().unwrap().to_owned()),
+                Some("w1.png".into())
+            );
+        }
+        // A bare `w1.png` on screen in a pane whose start folder lacks it.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let names = ["w1.png".to_string()];
+        assert_eq!(
+            service.check_detected_media(&names, elsewhere.path())[0],
+            None
+        );
+        let found = service.check_detected_media_in(
+            &names,
+            elsewhere.path(),
+            Some(std::path::Path::new(&cwd)),
+        );
+        assert!(
+            found[0].is_some(),
+            "relative name not resolved via agent cwd"
+        );
+    }
 }

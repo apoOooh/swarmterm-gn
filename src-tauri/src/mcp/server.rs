@@ -594,6 +594,18 @@ fn spawn_media_detected(app: AppHandle, terminal_id: String, media: String) {
     });
 }
 
+/// The media path and cwd of a `/hook` body that pass the CLI's rules. The
+/// CLI applies the same rules; a field that fails them here (rules drifted,
+/// or not our CLI) is dropped so the status signal still lands.
+pub(crate) fn hook_media_and_cwd(body: &crate::hook::HookBody) -> (Option<String>, Option<&str>) {
+    let media = body
+        .media
+        .clone()
+        .filter(|m| crate::hook::valid_media_path(m));
+    let cwd = body.cwd.as_deref().filter(|c| crate::hook::valid_cwd(c));
+    (media, cwd)
+}
+
 /// `POST /hook` — the `swarmterm --hook` / `--codex-session-hook` CLI
 /// reporting one Claude Code or Codex hook event for its own pane. The body is a closed enum (`HookBody`), never the
 /// hook's stdin: prompt text and file content stay inside the pane. The
@@ -616,16 +628,13 @@ async fn hook_handler(
     if body.turn.as_ref().is_some_and(|t| !t.is_valid()) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    // The CLI applies the same rules; a field that fails them here (rules
-    // drifted, or not our CLI) is dropped so the status signal still lands.
-    let media = body
-        .media
-        .clone()
-        .filter(|m| crate::hook::valid_media_path(m));
-    let cwd = body.cwd.as_deref().filter(|c| crate::hook::valid_cwd(c));
+    let (media, cwd) = hook_media_and_cwd(&body);
     if media.is_none() != body.media.is_none() || cwd.is_none() != body.cwd.is_none() {
         eprintln!("[hook] dropped an invalid media path or cwd from {terminal_id}");
     }
+    // Media and cwd count for any post with the pane's bearer, also from a
+    // nested agent session inside the pane (decision 2026-11-11): handled
+    // before the nested-session checks below, which only gate status.
     if let Some(cwd) = cwd {
         let state = app.state::<AppState>();
         let mut terminals = state
