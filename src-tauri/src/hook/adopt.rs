@@ -338,7 +338,12 @@ mod tests {
     fn stays_put_alongside_the_hook_installer() {
         use crate::hook::install::{merge_hooks, HooksWrite};
         let cmd = "\"C:/Swarmterm/swarmterm.exe\" --hook";
-        let install = |text: &str| match merge_hooks(Some(text), Some(cmd)).unwrap() {
+        let install = |text: &str| match merge_hooks(
+            Some(text),
+            Some(&serde_json::json!({ "type": "command", "command": cmd })),
+        )
+        .unwrap()
+        {
             HooksWrite::Write(s) => (s, true),
             HooksWrite::Unchanged => (text.to_owned(), false),
         };

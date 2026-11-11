@@ -30,6 +30,12 @@ ignore = [
     # swarmterm-host); we never open serial ports, only ConPTY. Fixed by the
     # portable-pty 0.9 upgrade, which is an API change tracked separately.
     { id = "RUSTSEC-2017-0008", reason = "serial: unmaintained, via portable-pty 0.8; serial ports unused; revisit with portable-pty 0.9 upgrade" },
+    # Unmaintained (archived 2026-10-01), no vulnerability. pin-utils 0.1.0
+    # comes only through nix 0.25 <- portable-pty 0.8, and nix is a unix-only
+    # dependency of portable-pty: the Windows-only build never compiles it.
+    # No pin-utils release fixes it; goes away with the portable-pty 0.9
+    # upgrade (newer nix) together with the serial entry above.
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils: unmaintained, via nix 0.25 <- portable-pty 0.8 (unix-only, not built on Windows); revisit with portable-pty 0.9 upgrade" },
 ]
 
 [licenses]

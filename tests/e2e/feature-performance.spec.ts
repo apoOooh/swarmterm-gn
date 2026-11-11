@@ -3,6 +3,8 @@ import { expect, test } from '@playwright/test'
 test('folder typing starts only the settled project scans and unchanged profile refreshes do not rescan', async ({ page }) => {
   await page.goto('/tests/fixtures/app.html?welcome=1')
   await expect(page.getByRole('heading', { name: 'Compose' })).toBeVisible()
+  // Welcome no longer pre-fills the home folder (SWA-83): pick one first.
+  await page.getByPlaceholder('Choose a folder…').fill('/project')
   await expect.poll(() => page.evaluate(() => (window as any).fixture.counters.sessionFolders.length)).toBe(1)
   await page.evaluate(() => {
     const counters = (window as any).fixture.counters
@@ -28,6 +30,8 @@ test('folder typing starts only the settled project scans and unchanged profile 
 test('a multi-workspace macro probes profile and agent metadata once', async ({ page }) => {
   await page.goto('/tests/fixtures/app.html?welcome=1')
   await expect(page.getByRole('heading', { name: 'Compose' })).toBeVisible()
+  // Welcome no longer pre-fills the home folder (SWA-83): pick one first.
+  await page.getByPlaceholder('Choose a folder…').fill('/project')
   await expect.poll(() => page.evaluate(() => (window as any).fixture.counters.sessionFolders.length)).toBe(1)
   await page.evaluate(async () => {
     const { useShortcutStore } = await import('/src/store/shortcut-store.ts' as string)

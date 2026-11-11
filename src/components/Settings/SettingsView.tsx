@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from 'react'
 import { AdminPolicySection } from '@/components/Settings/AdminPolicySection'
-import { Bell, FileText, Images, Keyboard, LayoutGrid, Mic, Palette, PanelTop, Terminal, Users, Plug, X } from 'lucide-react'
+import { Bell, FileText, Images, Keyboard, LayoutGrid, ListChecks, Mic, Palette, PanelTop, Terminal, Users, Plug, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { AppearancePanel } from './AppearancePanel'
@@ -14,8 +14,9 @@ import { VoicePanel } from './VoicePanel'
 import { TitleBarPanel } from './TitleBarPanel'
 import { WorkspacesPanel } from './WorkspacesPanel'
 import { MediaSettingsPanel } from './MediaPanel'
+import { SetupPanel } from './SetupPanel'
 
-export type CategoryId = 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts' | 'accounts' | 'mcp' | 'voice' | 'title-bar' | 'workspaces' | 'media'
+export type CategoryId = 'setup' | 'appearance' | 'terminal' | 'files' | 'notifications' | 'shortcuts' | 'accounts' | 'mcp' | 'voice' | 'title-bar' | 'workspaces' | 'media'
 
 interface Category {
   id: CategoryId
@@ -25,6 +26,7 @@ interface Category {
 
 const CATEGORIES: Category[] = [
   { id: 'appearance', label: 'Appearance', Icon: Palette },
+  { id: 'setup', label: 'Setup', Icon: ListChecks },
   { id: 'accounts', label: 'Accounts', Icon: Users },
   { id: 'mcp', label: 'MCP', Icon: Plug },
   { id: 'workspaces', label: 'Workspaces', Icon: LayoutGrid },
@@ -117,6 +119,7 @@ export function SettingsView({ onClose, initialCategory }: SettingsViewProps): R
               <AdminPolicySection />
               {activeCategory === 'accounts' && <AccountsPanel onLogin={onClose} />}
               {activeCategory === 'appearance' && <AppearancePanel />}
+              {activeCategory === 'setup' && <SetupPanel />}
               {activeCategory === 'terminal' && <TerminalPanel />}
               {activeCategory === 'files' && <FilesPanel />}
               {activeCategory === 'notifications' && <NotificationsPanel />}

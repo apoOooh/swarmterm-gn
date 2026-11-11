@@ -1,3 +1,5 @@
+import { parseResubmitMode, type ResubmitMode } from '@/lib/prompt-resubmit'
+
 /**
  * Settings → Terminal → Agent safety: what one agent may make another pane do. Enforced in
  * Rust (`agent_policy::AgentPolicy`, checked on every MCP call); the renderer
@@ -12,16 +14,24 @@ export interface AgentPolicy {
    *  Bypass/YOLO mode (user decision 2026-10-29, default off). Forced off by
    *  the admin policy DisableBypassModes. */
   workersInheritBypass: boolean
+  /** SWA-88: a prompt data-shield blocked comes back masked into the same
+   *  pane: inserted and sent (default, user decision 2026-11-09), inserted
+   *  only, or not at all. Admin locks tighten it in Rust and in Settings. */
+  promptResubmit: ResubmitMode
 }
 
-export const DEFAULT_AGENT_POLICY: AgentPolicy = { allowWarRoomExecute: false, workersInheritBypass: false }
+export const DEFAULT_AGENT_POLICY: AgentPolicy = { allowWarRoomExecute: false, workersInheritBypass: false, promptResubmit: 'send' }
 
 export const AGENT_POLICY_KEY = 'swarmterm.agentPolicy'
 
 /** Field-wise validation: anything but a literal `true` keeps the secure default. */
 export function parseAgentPolicy(raw: unknown): AgentPolicy {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-  return { allowWarRoomExecute: o.allowWarRoomExecute === true, workersInheritBypass: o.workersInheritBypass === true }
+  return {
+    allowWarRoomExecute: o.allowWarRoomExecute === true,
+    workersInheritBypass: o.workersInheritBypass === true,
+    promptResubmit: parseResubmitMode(o.promptResubmit)
+  }
 }
 
 export function readAgentPolicy(storage: Pick<Storage, 'getItem'>): AgentPolicy {

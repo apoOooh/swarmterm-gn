@@ -17,6 +17,7 @@ import { useContextUsageStore } from '@/store/context-usage-store'
 import { Button } from '@/components/ui/button'
 import { HeldDeliveryPill } from '@/components/TerminalPane/HeldDeliveryPill'
 import { VoiceIndicatorPill } from '@/components/TerminalPane/VoiceIndicatorPill'
+import { ResubmitPill } from '@/components/TerminalPane/ResubmitPill'
 import { MediaBadge } from '@/components/TerminalPane/MediaBadge'
 import { SearchOverlay } from '@/components/TerminalPane/SearchOverlay'
 import { PaneHeader } from './PaneHeader'
@@ -573,6 +574,7 @@ export function TerminalPane({
 
         <HeldDeliveryPill terminalId={terminalId} />
         <VoiceIndicatorPill terminalId={terminalId} />
+        <ResubmitPill terminalId={terminalId} />
         {!searchOpen && <MediaBadge terminalId={terminalId} />}
         <DockPicker leafId={leafId} />
         {searchOpen && <SearchOverlay terminalId={terminalId} />}

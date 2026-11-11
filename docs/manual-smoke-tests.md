@@ -457,6 +457,10 @@ Do not mark them passed from the in-memory fixture alone.
       prompts in other panes; agent A sends execute → the prompt runs in pane B
       and the transcript marks it orange. Turn it off again → the next execute
       is refused without restarting anything.
+- [ ] **Pane tag:** two members with the same title show different `Pane N`
+      tags in the member list, message headers and the target list; swap the
+      panes' order → the tags follow; with a second workspace open the tag
+      adds the workspace name; `list_peers` returns the same text as `pane`.
 - [ ] **Revocation:** drag a chip out or press ✕ → the next tool call from that
       pane is refused with "not in the War Room".
 - [ ] **PTY death:** close a member pane → the transcript logs the leave and
@@ -555,6 +559,13 @@ server. The full Quit/restart and conversation checks below require real CLIs.
       perform no steady-state config writes, and never change hook trust.
 - [ ] Check saved storage: no terminal text, prompt, startup command, runtime
       terminal id, file tab, unsaved buffer or broadcast group is persisted.
+- [ ] Codex turn edges (SWA-71, Codex 0.163+): after the update Codex asks
+      to review Swarmterm's new Stop/Interrupt hooks in `/hooks`; trust them.
+      With Speak announcements and Allow excerpts on, a Codex turn in a
+      background pane is announced once with the agent's `<voice>` line,
+      Esc in a running turn is said as interrupted and lands in the bell, and
+      no "fertig" is said while the turn is still running. With the new hooks
+      untrusted, the pane's status and announcements behave as before.
 
 ## Session resume (composer)
 
@@ -613,6 +624,7 @@ has never run Swarmterm from source. Details in
       or "damaged" dialog.
 - [ ] A terminal pane spawns and runs `ls`; a split pane spawns a second shell.
 - [ ] The web preview column loads `https://github.com`.
+- [ ] `claude mcp list` in a terminal outside Swarmterm shows `swarmterm` as connected (no tools), not as failed; inside a pane the agent joins the War Room.
 - [ ] `echo $SWARMTERM_MCP_URL` inside a pane prints a loopback URL (a pane opened within ~10 s of a restart, while the previous MCP port is awaited, may print nothing: known limit, user guide).
 - [ ] A War Room message reaches a second pane.
 - [ ] Prompts for Desktop/Documents/Downloads access name Swarmterm and carry a
@@ -788,7 +800,35 @@ Use Task Manager → Details → "Base priority" (or Process Explorer).
 - [ ] Workspace ⋮ → untick **Lower build priority** → that workspace's processes return to "Normal".
       Reopen the saved workspace: still unticked.
 - [ ] Settings → Terminal → **Run terminals in the terminal host** on, new pane → same results as above.
+- [ ] Fresh profile: Settings → Terminal → **Run new panes in the terminal host** is on, and a new pane runs in
+      `swarmterm-host.exe`. A profile that had it switched off keeps it off.
+- [ ] Installed build, terminal host on, a pane open: `swarmterm-host.exe` runs from
+      `%LOCALAPPDATA%\<app id>\host\<version>-<hash>\`, not from the install directory. Install a newer build
+      over it while the pane runs: the installer finishes without a file-in-use prompt. Start the new build: the
+      old pane reopens (saved workspace) on the old host, a new pane starts on a second host, and Settings →
+      Terminal names the old host. Close the old pane: ten minutes later the old host has ended, and the next
+      start removes its folder.
 - [ ] Upgrade from a build with the old "Lower build priority" switched off → mode shows **Off**.
+
+## Quit with the terminal host
+
+- [ ] Terminal host off, tray → **Quit** → quits without asking, as before.
+- [ ] Terminal host on, `ping -t localhost` in a saved workspace, tray → **Quit** → *Keep terminals running?*;
+      **Cancel** and Esc keep Swarmterm open, panes unchanged.
+- [ ] **Close all** → Swarmterm quits, Task Manager shows no `ping` left, `swarmterm-host.exe` exits.
+- [ ] **Keep running** → Swarmterm quits, `ping` keeps running under `swarmterm-host.exe`; start Swarmterm,
+      open the workspace → the pane is taken over and still counting. Wait two minutes: it stays open.
+- [ ] Keep running with an unsaved file open → the unsaved-changes prompt comes first.
+
+## Diagnostics (SWA-85)
+
+- [ ] Settings → Terminal → Diagnostics: **Write a dump when the window stops responding** is off by default; the
+      choice survives a restart (`diagnostics.json`). The description shows the folder `%LOCALAPPDATA%\<app id>\diagnostics\`.
+- [ ] Switch on, freeze the UI thread for more than 4 s (testlab scenario or a debug hook): exactly one
+      `ui-stall-<n>.dmp` appears, `ui-stalls.log` gets one line, and the window recovers. Switch off: a further stall
+      writes the log line but no dump.
+- [ ] Open an image just under 32 MB in the Media tab: it shows and the window stays responsive. An image over 32 MB
+      shows *Open in default app* instead (no freeze); a long video still plays and seeks.
 
 ## Administrator policy
 
@@ -802,6 +842,15 @@ start it again after every change; remove the key at the end:
       is off and greyed. A saved workspace with a Bypass pane restored → that pane shows "Launch refused … DisableBypassModes".
 - [ ] Settings → Terminal → Agent safety → **Spawned workers inherit Bypass/YOLO** (no policy): on, Claude pane in
       Bypass asks `worktree.spawn` → the worker starts in Bypass with the red badge. Off → worker starts in Default.
+- [ ] **Blocked prompt (SWA-88, real Claude, data-shield guard on):** in a Claude pane inside the guarded
+      workspace, send a prompt with a test IBAN → the original disappears from the input box, the masked
+      prompt appears and is sent; no clipboard copy, no "done" announcement or bell entry for the blocked one.
+      "Put back, I press Enter" → masked prompt stands unsent. Type a character right after Enter → nothing is
+      replaced, the pill offers **Copy masked prompt**. `DisablePromptResubmitSend` = 1 → "send" is greyed and
+      the prompt is only put back; `DisablePromptResubmit` = 1 → the select is greyed, nothing is put back.
+      Needs the **installed** release build (first: 1.28.0) and a data-shield guard released after the
+      SWA-88 merge: Claude's `--hook` entry runs the installed exe (dev builds defer), and an older exe
+      sends no prompt fingerprint, so nothing is resubmitted from a `tauri dev` run.
 - [ ] `DisableWarRoomExecute` = 1: the Agent safety execute switch is greyed; an agent's `war_room.send` execute is
       refused with a message naming `DisableWarRoomExecute`; probe still works.
 - [ ] `DisableWarRoom` = 1: the War Room tab shows "Managed by your administrator", the execute switch is greyed,
@@ -819,6 +868,8 @@ start it again after every change; remove the key at the end:
       fails with the policy message in its last result.
 - [ ] `DisablePreviewBrowser` = 1: the right panel's Preview shows "Managed by your administrator"; an agent's
       `browser.open_preview` is refused.
+- [ ] `DisableHangDumps` = 1: Settings → Terminal → Diagnostics shows the dump switch off and greyed out ("Managed by
+      your administrator"); a long stall writes the log line but no `.dmp`. The Corp build shows it locked without a key.
 - [ ] `reg add … /v EnvPolicy /t REG_SZ /d strict /f` and `reg add … /v EnvAllow /t REG_MULTI_SZ /d CORP_X /f`:
       the Environment controls are greyed, `set` in a new pane shows only system variables plus `CORP_X`.
 - [ ] `DisableMcp` = `REG_SZ "1"` (wrong type): fails closed, MCP is off; the app log has `policy: DisableMcp: expected REG_DWORD … treated as 1`.

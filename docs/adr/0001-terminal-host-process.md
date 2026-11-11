@@ -89,6 +89,14 @@ the host and widen its attack surface.
   Otherwise new panes go to a new host and old panes stay on the old one
   until they exit. A host with no client and no PTY exits after 10 minutes.
   Old version directories are pruned when no host runs from them.
+  As built (SWA-82): the directory is `<version>-<sha256 prefix>` and the
+  data dir of that host (pipe name and discovery file derive from it), so
+  each build is a host of its own. New panes always go to this build's
+  host, never to an older one even if its `proto` would allow it: that
+  keeps every new pane on current code (process priority, flow control).
+  Older hosts found at boot are only connected to attach their panes, and
+  disconnected once they hold none. Debug builds keep the binary next to
+  the exe unless `SWARMTERM_HOST_VERSIONED=1`.
 - Dev builds use their own app-id, and therefore their own pipe and host,
   mirroring `tauri.dev-instance.conf.json`.
 

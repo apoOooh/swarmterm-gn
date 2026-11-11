@@ -226,9 +226,14 @@ fn status(app: &AppHandle) -> CompanionStatus {
     }
 }
 
+/// Async (SWA-85): `status` walks the whole process list (Toolhelp
+/// snapshot) and reads the registry; Settings polls it every 3 s, the update
+/// toast every 30 s, and under build load that is too slow for the UI thread.
 #[tauri::command]
-pub fn voice_companion_status(app: AppHandle) -> CompanionStatus {
-    status(&app)
+pub async fn voice_companion_status(app: AppHandle) -> Result<CompanionStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || status(&app))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// "Check for update" (click, or the update toast's schedule). Compares against the version the
@@ -438,15 +443,22 @@ fn corp_refusal<T>(app: &AppHandle) -> Result<T, String> {
     Err("unsupported".into())
 }
 
+/// Async like `voice_companion_status` (process walk + CreateProcess).
 #[tauri::command]
-pub fn voice_companion_start(app: AppHandle) -> Result<CompanionStatus, String> {
+pub async fn voice_companion_start(app: AppHandle) -> Result<CompanionStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || start_blocking(&app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn start_blocking(app: &AppHandle) -> Result<CompanionStatus, String> {
     if system::whisper_key_running() {
         return Err("whisper-key-running".into());
     }
     if !system::buzzkey_running() {
         system::start(&system::install_dir().ok_or("no-install-dir")?)?;
     }
-    Ok(status(&app))
+    Ok(status(app))
 }
 
 /// Polite quit over the pipe. Without the capability the panel tells the

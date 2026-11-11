@@ -1,11 +1,13 @@
-//! Completion adapters (SWA-58, docs/adr/0004): which Claude turn finished
-//! and — only with Settings → Voice "Allow excerpts" — what to say about it.
+//! Completion adapters (SWA-58/71, docs/adr/0004): which Claude or Codex
+//! turn finished and — only with Settings → Voice "Allow excerpts" — what to
+//! say about it.
 //!
 //! - `speech_text`: final answer → the agent's `<voice>` line, else quoted
 //!   prose (pure).
 //! - `excerpt`: the filter both go through (pure).
 //! - `claude`: Claude Code transcript tail → final text / Esc marker of ONE
 //!   turn (pure).
+//! - `codex`: Codex rollout tail → final text of ONE turn (pure, SWA-71).
 //! - `reader`: finds and reads the transcript under the pane's own config
 //!   dir, with the open contract and budget from the ADR.
 //! - this file: `Fingerprint` and the `Ledger`, the one place that decides
@@ -17,6 +19,7 @@
 //! until it is handed to the voice.
 
 pub mod claude;
+pub mod codex;
 pub mod excerpt;
 pub mod reader;
 pub mod speech_text;
@@ -82,6 +85,11 @@ struct Closed {
     pending: bool,
     /// Set when the renderer's status for this turn arrived.
     published: Option<Published>,
+    /// SWA-71: the status arrived while the turn was still open (held), so
+    /// the closing edge said it. A later status for it stays silent.
+    replayed: bool,
+    /// The closing edge has to say it now (taken once by `take_replay`).
+    replay_due: bool,
 }
 
 /// The renderer's status for a pane: how to name it, and whether the user
@@ -100,6 +108,14 @@ struct Pane {
     /// The prompt whose answer is being written right now.
     open: Option<String>,
     closed: Option<Closed>,
+    /// SWA-71: this generation has delivered a closing edge (Stop or
+    /// Interrupt) before. Only then is an idle status during an open turn a
+    /// gap worth holding: a Codex whose new Stop hook is not trusted yet
+    /// opens turns that never close, and must keep its plain statuses.
+    ends_seen: bool,
+    /// SWA-71: a status that arrived while the turn was open, kept for the
+    /// closing edge.
+    held: Option<Published>,
 }
 
 /// What a Stop asks the caller to do next.
@@ -120,6 +136,9 @@ pub enum View {
     Plain,
     /// The read is still running; its commit says what to speak.
     Pending,
+    /// SWA-71: the closing edge already said this turn (its status had been
+    /// held): nothing to speak or push.
+    Silent,
     /// Closed: the outcome and, for a done turn, the reply if there is one
     /// (taken out of the ledger — it is spoken once).
     Closed {
@@ -137,6 +156,15 @@ pub struct Late {
     pub reply: Option<Reply>,
 }
 
+/// What a closing edge asks the caller to say: the turn's status had been
+/// held while it was open (SWA-71).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Replay {
+    pub token: String,
+    pub outcome: Outcome,
+    pub published: Published,
+}
+
 #[derive(Debug, Default)]
 pub struct Ledger {
     panes: HashMap<String, Pane>,
@@ -149,9 +177,12 @@ impl Ledger {
     fn pane(&mut self, terminal_id: &str, spawn_id: &str, session_id: &str) -> &mut Pane {
         let pane = self.panes.entry(terminal_id.to_owned()).or_default();
         if pane.spawn_id != spawn_id || pane.session_id != session_id {
+            // The same process keeps its hooks across /new and resume.
+            let ends_seen = pane.spawn_id == spawn_id && pane.ends_seen;
             *pane = Pane {
                 spawn_id: spawn_id.to_owned(),
                 session_id: session_id.to_owned(),
+                ends_seen,
                 ..Pane::default()
             };
         }
@@ -169,6 +200,7 @@ impl Ledger {
         let pane = self.pane(terminal_id, spawn_id, session_id);
         pane.open = Some(prompt_id.to_owned());
         pane.closed = None;
+        pane.held = None;
     }
 
     /// A Stop for another prompt than the one open in this generation and
@@ -210,6 +242,7 @@ impl Ledger {
         }
         let token = self.token(terminal_id);
         let pane = self.panes.get_mut(terminal_id)?;
+        pane.ends_seen = true;
         if continued {
             let ours = pane.open.as_deref() == Some(prompt_id)
                 || pane
@@ -235,13 +268,19 @@ impl Ledger {
         }
         pane.open = None;
         let read = read && outcome == Outcome::Done;
+        // A status held during the turn is this turn's status: with a read
+        // running, its commit speaks (`Late`); otherwise the caller does now.
+        let held = pane.held.take();
+        let replayed = held.is_some();
         pane.closed = Some(Closed {
             token: token.clone(),
             prompt_id: prompt_id.to_owned(),
             outcome,
             reply: None,
             pending: read,
-            published: None,
+            published: held,
+            replayed,
+            replay_due: replayed && !read,
         });
         read.then(|| ReadJob {
             token,
@@ -294,6 +333,9 @@ impl Ledger {
         let Some(c) = pane.closed.as_mut() else {
             return View::Plain;
         };
+        if c.replayed {
+            return View::Silent;
+        }
         if c.published.is_some() {
             return View::Plain;
         }
@@ -349,8 +391,39 @@ impl Ledger {
             reply: None,
             pending: false,
             published: Some(p),
+            replayed: false,
+            replay_due: false,
         });
         Some(token)
+    }
+
+    /// SWA-71: an idle status while the turn is still open, in a pane whose
+    /// agent reports its own turn ends (Codex). That is a pause inside the
+    /// turn, not its end: kept for the closing edge instead of announced.
+    /// False = not holdable, the caller goes on as before.
+    pub fn hold(&mut self, terminal_id: &str, spawn_id: &str, p: Published) -> bool {
+        let Some(pane) = self.panes.get_mut(terminal_id) else {
+            return false;
+        };
+        if pane.spawn_id != spawn_id || pane.open.is_none() || !pane.ends_seen {
+            return false;
+        }
+        pane.held = Some(p);
+        true
+    }
+
+    /// The closing edge of a turn whose status was held: what to say now,
+    /// once. `None` while a read runs (its commit speaks) or nothing was held.
+    pub fn take_replay(&mut self, terminal_id: &str) -> Option<Replay> {
+        let c = self.panes.get_mut(terminal_id)?.closed.as_mut()?;
+        if !std::mem::take(&mut c.replay_due) {
+            return None;
+        }
+        Some(Replay {
+            token: c.token.clone(),
+            outcome: c.outcome,
+            published: c.published.clone()?,
+        })
     }
 
     /// Whether `token` still names the latest turn of its pane — re-checked
@@ -359,6 +432,37 @@ impl Ledger {
         self.panes
             .values()
             .any(|p| p.open.is_none() && p.closed.as_ref().is_some_and(|c| c.token == token))
+    }
+
+    /// SWA-88: a UserPromptSubmit hook (data-shield) blocked `prompt_id`, so
+    /// the turn never ran. Closed silently: the status the renderer reports
+    /// when its working edge runs out is `View::Silent`, never a "fertig"
+    /// for a prompt the agent never saw. True if it was the open turn.
+    pub fn blocked(&mut self, terminal_id: &str, spawn_id: &str, prompt_id: &str) -> bool {
+        let open = self
+            .panes
+            .get(terminal_id)
+            .is_some_and(|p| p.spawn_id == spawn_id && p.open.as_deref() == Some(prompt_id));
+        if !open {
+            return false;
+        }
+        let token = self.token(terminal_id);
+        let Some(pane) = self.panes.get_mut(terminal_id) else {
+            return false;
+        };
+        pane.open = None;
+        pane.held = None;
+        pane.closed = Some(Closed {
+            token,
+            prompt_id: prompt_id.to_owned(),
+            outcome: Outcome::Done,
+            reply: None,
+            pending: false,
+            published: None,
+            replayed: true,
+            replay_due: false,
+        });
+        true
     }
 
     /// SessionStart/SessionEnd, kill, respawn: the conversation is over.
@@ -588,6 +692,57 @@ mod tests {
     }
 
     #[test]
+    fn an_idle_gap_is_held_only_once_the_agent_has_proved_its_turn_ends() {
+        let mut l = Ledger::default();
+        l.prompt(T, G, S, "p1");
+        // No closing edge seen yet (e.g. the new Stop hook is not trusted):
+        // statuses go out as before, or they would be silenced forever.
+        assert!(!l.hold(T, G, published(false)));
+        stop(&mut l, "p1");
+        l.prompt(T, G, S, "p2");
+        assert!(l.hold(T, G, published(false)));
+        assert!(!l.hold(T, "gen2", published(false)), "other generation");
+        // /new in the same process keeps the proof; a respawn does not.
+        l.prompt(T, G, "other-session", "q1");
+        assert!(l.hold(T, G, published(false)));
+        l.prompt(T, "gen2", S, "r1");
+        assert!(!l.hold(T, "gen2", published(false)));
+    }
+
+    #[test]
+    fn a_held_status_is_said_once_by_the_closing_edge() {
+        let mut l = Ledger::default();
+        l.prompt(T, G, S, "p0");
+        stop(&mut l, "p0");
+        // Without a read: the caller speaks at the edge, a later status is silent.
+        l.prompt(T, G, S, "p1");
+        assert!(l.hold(T, G, published(false)));
+        assert_eq!(l.stop(T, G, S, "p1", Outcome::Done, false, false), None);
+        let r = l.take_replay(T).unwrap();
+        assert_eq!((r.outcome, r.published), (Outcome::Done, published(false)));
+        assert_eq!(l.take_replay(T), None);
+        assert_eq!(l.publish(T, G, published(false)), View::Silent);
+        // With a read: the commit speaks (Late), not the edge.
+        l.prompt(T, G, S, "p2");
+        l.hold(T, G, published(true));
+        let job = stop(&mut l, "p2").unwrap();
+        assert_eq!(l.take_replay(T), None);
+        assert!(matches!(l.commit(&job.token, voice("Fertig.")),
+            Some(Late { published: p, .. }) if p == published(true)));
+        // Interrupt closes a held turn as interrupted.
+        l.prompt(T, G, S, "p3");
+        l.hold(T, G, published(false));
+        l.stop(T, G, S, "p3", Outcome::Interrupted, false, true);
+        assert_eq!(l.take_replay(T).unwrap().outcome, Outcome::Interrupted);
+        // A new prompt drops whatever was held for the last one.
+        l.prompt(T, G, S, "p4");
+        l.hold(T, G, published(false));
+        l.prompt(T, G, S, "p5");
+        l.stop(T, G, S, "p5", Outcome::Done, false, false);
+        assert_eq!(l.take_replay(T), None);
+    }
+
+    #[test]
     fn opt_out_and_forget_drop_replies() {
         let mut l = Ledger::default();
         l.prompt(T, G, S, "p1");
@@ -600,5 +755,23 @@ mod tests {
         ));
         l.forget(T);
         assert!(!l.holds(&job.token));
+    }
+
+    #[test]
+    fn a_blocked_prompt_closes_silently_and_only_the_open_one() {
+        let mut l = Ledger::default();
+        assert!(!l.blocked(T, G, "p1"), "unknown pane");
+        l.prompt(T, G, S, "p1");
+        assert!(!l.blocked(T, "gen2", "p1"), "other generation");
+        assert!(!l.blocked(T, G, "p0"), "not the open prompt");
+        assert!(l.blocked(T, G, "p1"));
+        assert_eq!(l.open_turn(T, G), None);
+        assert_eq!(l.publish(T, G, published(false)), View::Silent);
+        // A late Stop of the blocked prompt closes nothing more.
+        assert_eq!(stop(&mut l, "p1"), None);
+        // The resubmitted prompt is an ordinary new turn.
+        l.prompt(T, G, S, "p2");
+        assert!(stop(&mut l, "p2").is_some());
+        assert!(matches!(l.publish(T, G, published(false)), View::Pending));
     }
 }

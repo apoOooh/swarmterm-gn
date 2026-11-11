@@ -1,17 +1,22 @@
-//! Reading one Claude Code transcript for an excerpt (SWA-58). Runs only
-//! after the ledger asked for it, i.e. only with "Allow excerpts" on.
+//! Reading one Claude Code transcript (SWA-58) or Codex rollout (SWA-71)
+//! for an excerpt. Runs only after the ledger asked for it, i.e. only with
+//! "Allow excerpts" on.
 //!
 //! The hook's `transcript_path` is never used. The file is located from the
 //! pane's own config dir (account profiles have their own
 //! `CLAUDE_CONFIG_DIR`) and the session id the ledger already validated:
-//! `<config>/projects/<dir>/<session>.jsonl`. Opening it follows a strict
+//! `<config>/projects/<dir>/<session>.jsonl`; for Codex the pane's
+//! `CODEX_HOME` and `sessions/YYYY/MM/DD/rollout-<ts>-<session>.jsonl`.
+//! Opening it follows a strict
 //! contract, because the path crosses directories a same-user program could
 //! swap for a junction between our check and our open:
 //! - the file itself must not be a reparse point (opened with
 //!   FILE_FLAG_OPEN_REPARSE_POINT, attribute checked on the handle);
-//! - the handle's FINAL path must lie inside the canonical config root,
-//!   compared component by component — never a string prefix;
-//! - the name is `<uuid>.jsonl`, built here, so no `..`, ADS or device name.
+//! - the handle's FINAL path must lie inside the canonical store
+//!   (`projects` / `sessions`), compared component by component — never a
+//!   string prefix;
+//! - the name is `<uuid>.jsonl`, built here, or a directory entry that ends
+//!   in `-<uuid>.jsonl`, so no `..`, ADS or device name.
 //!
 //! None of this proves the content is genuine — the same user can write any
 //! file — it only keeps us from being pointed at files outside the root.
@@ -21,6 +26,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::claude::{self, Reject};
+use super::codex;
 use super::Fingerprint;
 
 /// Tail read per attempt. The final answer and its prompt sit at the end;
@@ -63,6 +69,52 @@ pub fn locate(root: &Path, session_id: &str) -> Option<PathBuf> {
         .find(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file()))
 }
 
+/// The Codex home of a pane: its account profile, else `CODEX_HOME`, else
+/// `~/.codex`.
+pub fn codex_home(profile: Option<&Path>, home: &Path) -> PathBuf {
+    if let Some(p) = profile {
+        return p.to_path_buf();
+    }
+    std::env::var_os("CODEX_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"))
+}
+
+/// `<home>/sessions/YYYY/MM/DD/rollout-*-<session>.jsonl`. Day folders are
+/// walked newest first and only their names are compared, so a pane's
+/// current conversation (today's folder) costs a handful of directory
+/// listings; a resumed one lives in the folder of the day it started.
+pub fn locate_rollout(home: &Path, session_id: &str) -> Option<PathBuf> {
+    if !crate::sessions::is_uuid(session_id) {
+        return None;
+    }
+    let suffix = format!("-{session_id}.jsonl");
+    let newest_first = |dir: &Path| -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|r| r.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        v.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+        v
+    };
+    for year in newest_first(&home.join("sessions")) {
+        for month in newest_first(&year) {
+            for day in newest_first(&month) {
+                let hit = newest_first(&day).into_iter().find(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(&suffix))
+                        && std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file())
+                });
+                if hit.is_some() {
+                    return hit;
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Whether `path` lies inside `root`, both already canonical (`\\?\`).
 /// Case-insensitive like NTFS; a root that is a prefix of a sibling's name
 /// (`.claude` vs `.claude-evil`) does not count.
@@ -101,7 +153,7 @@ pub fn complete_lines(buf: &[u8], cut_at_start: bool) -> &[u8] {
 }
 
 #[cfg(windows)]
-fn open_checked(root: &Path, path: &Path) -> Result<std::fs::File, ReadError> {
+fn open_checked(store: &Path, path: &Path) -> Result<std::fs::File, ReadError> {
     use std::os::windows::ffi::OsStringExt;
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use std::os::windows::io::AsRawHandle;
@@ -133,38 +185,48 @@ fn open_checked(root: &Path, path: &Path) -> Result<std::fs::File, ReadError> {
         return Err(ReadError::Refused);
     }
     let final_path = PathBuf::from(std::ffi::OsString::from_wide(&buf[..n]));
-    let root = allowed_root(root)?;
+    let root = allowed_root(store)?;
     if !within(&root, &final_path) {
         return Err(ReadError::Refused);
     }
     Ok(file)
 }
 
-/// The directory a transcript must resolve into: `<config>/projects`,
-/// canonical. A junction AT that folder is the user's own setup (several
-/// account profiles sharing one store) and is followed once; a reparse
-/// point on the file itself, or a link below it that leads elsewhere, is not.
-fn allowed_root(config: &Path) -> Result<PathBuf, ReadError> {
-    std::fs::canonicalize(config.join("projects")).map_err(|_| ReadError::Refused)
+/// The directory a transcript must resolve into: `<config>/projects` or
+/// `<codex home>/sessions`, canonical. A junction AT that folder is the
+/// user's own setup (several account profiles sharing one store) and is
+/// followed once; a reparse point on the file itself, or a link below it
+/// that leads elsewhere, is not.
+fn allowed_root(store: &Path) -> Result<PathBuf, ReadError> {
+    std::fs::canonicalize(store).map_err(|_| ReadError::Refused)
 }
 
 #[cfg(not(windows))]
-fn open_checked(root: &Path, path: &Path) -> Result<std::fs::File, ReadError> {
+fn open_checked(store: &Path, path: &Path) -> Result<std::fs::File, ReadError> {
     let meta = std::fs::symlink_metadata(path).map_err(|_| ReadError::NotFound)?;
     if !meta.file_type().is_file() {
         return Err(ReadError::Refused);
     }
     let real = std::fs::canonicalize(path).map_err(|_| ReadError::Refused)?;
-    let root = allowed_root(root)?;
+    let root = allowed_root(store)?;
     if !within(&root, &real) {
         return Err(ReadError::Refused);
     }
     std::fs::File::open(path).map_err(|_| ReadError::NotFound)
 }
 
-/// The tail of the transcript as text, complete lines only.
+/// The tail of a Claude transcript as text, complete lines only.
 pub fn read_tail(root: &Path, path: &Path) -> Result<String, ReadError> {
-    let mut file = open_checked(root, path)?;
+    read_tail_in(&root.join("projects"), path)
+}
+
+/// The same for a Codex rollout under `<home>/sessions`.
+pub fn read_rollout_tail(home: &Path, path: &Path) -> Result<String, ReadError> {
+    read_tail_in(&home.join("sessions"), path)
+}
+
+fn read_tail_in(store: &Path, path: &Path) -> Result<String, ReadError> {
+    let mut file = open_checked(store, path)?;
     let len = file.metadata().map_err(|_| ReadError::Io)?.len();
     let start = len.saturating_sub(MAX_TAIL_BYTES);
     file.seek(SeekFrom::Start(start))
@@ -182,15 +244,41 @@ pub fn read_tail(root: &Path, path: &Path) -> Result<String, ReadError> {
 /// Read until the answer the hook saw is in the file or the budget is gone.
 /// `read` is the file access, injected so tests count opens without a disk.
 pub fn final_answer_within(
-    mut read: impl FnMut() -> Result<String, ReadError>,
+    read: impl FnMut() -> Result<String, ReadError>,
     prompt_id: &str,
     expected: &Fingerprint,
+    budget: Duration,
+) -> Option<String> {
+    answer_within(
+        read,
+        |tail| claude::final_answer(tail, prompt_id, expected),
+        budget,
+    )
+}
+
+/// `final_answer_within` for a Codex rollout, anchored on `turn_id`.
+pub fn codex_answer_within(
+    read: impl FnMut() -> Result<String, ReadError>,
+    turn_id: &str,
+    expected: &Fingerprint,
+    budget: Duration,
+) -> Option<String> {
+    answer_within(
+        read,
+        |tail| codex::final_answer(tail, turn_id, expected),
+        budget,
+    )
+}
+
+fn answer_within(
+    mut read: impl FnMut() -> Result<String, ReadError>,
+    parse: impl Fn(&str) -> Result<String, Reject>,
     budget: Duration,
 ) -> Option<String> {
     let deadline = Instant::now() + budget;
     loop {
         let tail = read().ok()?;
-        match claude::final_answer(&tail, prompt_id, expected) {
+        match parse(&tail) {
             Ok(text) => return Some(text),
             // Not flushed yet: worth another look within the budget.
             Err(Reject::NoAnchor | Reject::NoAnswer | Reject::Mismatch) => {}
@@ -410,5 +498,67 @@ mod tests {
             BUDGET,
         );
         assert_eq!((got, calls), (None, 1));
+    }
+
+    const C: &str = "01a14f4f-955f-7283-beb3-54fc6f2c4012";
+
+    #[test]
+    fn locates_a_codex_rollout_newest_day_first_by_name_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("sessions/2026/09/30");
+        let new = dir.path().join("sessions/2026/10/18");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        let resumed = old.join(format!("rollout-2026-09-30T08-00-00-{C}.jsonl"));
+        std::fs::write(&resumed, "{}\n").unwrap();
+        assert_eq!(locate_rollout(dir.path(), C), Some(resumed));
+        let today = new.join(format!("rollout-2026-10-18T15-59-39-{C}.jsonl"));
+        std::fs::write(&today, "{}\n").unwrap();
+        assert_eq!(locate_rollout(dir.path(), C), Some(today.clone()));
+        assert_eq!(locate_rollout(dir.path(), "../x"), None);
+        assert_eq!(locate_rollout(dir.path(), S), None);
+        // Inside the store it reads; with another home as root it refuses.
+        assert!(read_rollout_tail(dir.path(), &today).is_ok());
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(other.join("sessions")).unwrap();
+        assert_eq!(read_rollout_tail(&other, &today), Err(ReadError::Refused));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_out_of_the_codex_store_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("codex");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(home.join("sessions/2026/10")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join(format!("rollout-x-{C}.jsonl")), "{}\n").unwrap();
+        junction::create(&outside, home.join("sessions/2026/10/18")).unwrap();
+        let path = locate_rollout(&home, C).unwrap();
+        assert_eq!(read_rollout_tail(&home, &path), Err(ReadError::Refused));
+    }
+
+    #[test]
+    fn codex_answer_retries_until_the_final_row_is_there() {
+        let turn = "01a14f4f-9954-7f81-83d0-1c6c6065dd0b";
+        let started = serde_json::json!({"type":"event_msg",
+            "payload":{"type":"task_started","turn_id":turn}});
+        let answer = serde_json::json!({"type":"response_item","payload":{"type":"message",
+            "role":"assistant","content":[{"type":"output_text","text":"Fertig."}]}});
+        let mut calls = 0;
+        let got = codex_answer_within(
+            || {
+                calls += 1;
+                Ok(if calls < 2 {
+                    format!("{started}\n")
+                } else {
+                    format!("{started}\n{answer}\n")
+                })
+            },
+            turn,
+            &Fingerprint::of("Fertig."),
+            BUDGET,
+        );
+        assert_eq!((got.as_deref(), calls), (Some("Fertig."), 2));
     }
 }

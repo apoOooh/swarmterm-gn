@@ -23,6 +23,8 @@ import { listAgentSessions } from '@/tauri/sessions'
 import { planWorktreeBranches, provisionWorktrees } from '@/lib/worktree-naming'
 import { folderName, VISIBLE_RECENT_ROWS } from '@/lib/recent-folders'
 import { useRecentsStore } from '@/store/recents-store'
+import { useSetupStatusStore } from '@/store/setup-status-store'
+import { codexHookHint, defaultWelcomeFolder, gitInstalled, isBroadFolder, worktreeOptionNote } from '@/lib/setup-status'
 import { visibleSlice, hiddenCount } from '@/lib/list-paging'
 import {
   mergeSessions,
@@ -84,6 +86,10 @@ export function Welcome(): ReactElement {
   const [templateName, setTemplateName] = useState<string | null>(null)
   const [savedNotice, setSavedNotice] = useState('')
   const [isGitRepo, setIsGitRepo] = useState(false)
+  // A failed `git init`/first commit used to vanish into the console (SWA-83 V4).
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const git = gitInstalled(useSetupStatusStore(s => s.status))
+  const worktreeNote = worktreeOptionNote({ git, isGitRepo })
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Optional workspace name; blank ⇒ named after the folder on create.
   const [workspaceName, setWorkspaceName] = useState('')
@@ -100,23 +106,32 @@ export function Welcome(): ReactElement {
   // deliberately NOT reset by the folder-change effect below.
   const [recentsDialogOpen, setRecentsDialogOpen] = useState(false)
 
-  // Pre-fill the default folder (or the home directory) on mount, unless a
-  // folder is already chosen.
+  // Home folder, only to warn when it (or a drive root) is picked.
+  const [homeDir, setHomeDir] = useState<string | null>(null)
+  // Pre-fill the template's folder or the newest recent one on mount, unless
+  // a folder is already chosen — never the home folder (SWA-83): a first
+  // workspace there watched the whole profile and asked agents to trust it.
   useEffect(() => {
-    if (useAppStore.getState().welcomeFolder !== '') return
-    if (initial.folder.trim() !== '') {
-      setFolder(initial.folder.trim())
-      return
+    const fill = (home: string | null): void => {
+      if (useAppStore.getState().welcomeFolder !== '') return
+      const next = defaultWelcomeFolder(initial.folder, useRecentsStore.getState().recents, home)
+      if (next !== '') setFolder(next)
     }
     void getHomeDir().then((home) => {
-      if (useAppStore.getState().welcomeFolder === '') setFolder(home)
-    }).catch((e) => console.warn('Welcome: home directory unavailable, leaving folder empty:', e))
+      setHomeDir(home)
+      fill(home)
+    }).catch((e) => {
+      console.warn('Welcome: home directory unavailable:', e)
+      fill(null)
+    })
   }, [setFolder, initial.folder])
 
   // Re-probe installed agent CLIs every time Welcome mounts so a CLI installed
   // while the app runs is picked up without a restart.
   useEffect(() => {
     void useAgentAvailabilityStore.getState().refresh()
+    // Same reason for the agents' hooks and MCP entries (SWA-83).
+    void useSetupStatusStore.getState().recheck()
     // A default saved with a since-deleted account would select nothing;
     // fall back to the default account once the profiles are known.
     void useAgentAccountsStore.getState().refresh().then(() => {
@@ -186,6 +201,11 @@ export function Welcome(): ReactElement {
   // Agents the probe has found missing never spawn and are never saved: only
   // installed agents have a row, and the next count edit drops hidden counts.
   const liveCounts = withAvailableAgents({ ...initial, agentCounts: counts }, isAvailable).agentCounts
+  const codexHint = codexHookHint({
+    codexAvailable: availability.codex === true,
+    sessionHooks: codexSessionHooks,
+    codexCount: liveCounts.codex ?? 0
+  })
   const agentIds = allocateAgents(terminalCount, liveCounts)
 
   const trimmedFolder = folder.trim()
@@ -193,6 +213,8 @@ export function Welcome(): ReactElement {
 
   // Probe whether the chosen folder is inside a git repo. list returns []
   // for non-repos and for the home-dir guard.
+  useEffect(() => { setSubmitError(null) }, [trimmedFolder, isolateWorktrees])
+
   useEffect(() => {
     if (trimmedFolder === '') {
       setIsGitRepo(false)
@@ -280,10 +302,11 @@ export function Welcome(): ReactElement {
     // the same plan, racing two workspaces into existence.
     if (!canCreate || isSubmitting) return
     setIsSubmitting(true)
+    setSubmitError(null)
     try {
       addRecentFolder(trimmedFolder)
 
-      const isolate = isolateWorktrees
+      const isolate = isolateWorktrees && git !== false
       let paneWorktrees: ({ path: string; branch: string } | null)[] | undefined
 
       if (isolate) {
@@ -292,7 +315,7 @@ export function Welcome(): ReactElement {
           await ensureRepoWithCommit(trimmedFolder)
         } catch (err) {
           setIsSubmitting(false)
-          console.error('failed to initialize git repo:', err)
+          setSubmitError(`Could not set up git in this folder: ${String(err)}`)
           return
         }
 
@@ -389,6 +412,12 @@ export function Welcome(): ReactElement {
                 Browse
               </Button>
             </div>
+            {isBroadFolder(folder, homeDir) && (
+              <p className="mt-1.5 text-xs text-amber-500" data-testid="broad-folder-warning">
+                This is your whole user folder or a drive. Pick a project folder: Swarmterm watches every file
+                below it, and agents will ask you to trust all of it.
+              </p>
+            )}
           </div>
 
           {/* Workspace name — optional; the placeholder shows the default. */}
@@ -411,9 +440,7 @@ export function Welcome(): ReactElement {
             <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Saved workspaces</h3>
             <div className="max-h-80 space-y-2 overflow-y-auto">{savedWorkspaces.map(workspace => <SavedWorkspaceCard key={workspace.id} workspace={workspace} />)}</div>
           </section>}
-          {availability.codex === true && <p className="mt-3 text-xs text-muted-foreground">{codexSessionHooks
-            ? 'To save Codex conversations, review and trust the Swarmterm session hooks in /hooks. Send a message after trusting them.'
-            : 'Update Codex CLI to a version with session hooks to save new conversations. Workspace layouts are saved now.'}</p>}
+          {codexHint !== null && <p className="mt-3 text-xs text-muted-foreground">{codexHint}</p>}
 
           {/* Recent folders — inline list capped at VISIBLE_RECENT_ROWS;
               "Show all" opens the searchable pick-one dialog over the full
@@ -606,14 +633,15 @@ export function Welcome(): ReactElement {
           <label
             className={cn(
               'mb-3 flex cursor-pointer items-start gap-2',
-              !isGitRepo && 'cursor-not-allowed opacity-50'
+              worktreeNote !== null && 'opacity-50',
+              git === false && 'cursor-not-allowed'
             )}
-            title={isGitRepo ? undefined : 'Will auto-initialize git when you create'}
+            title={worktreeNote ?? undefined}
           >
             <input
               type="checkbox"
-              disabled={false}
-              checked={isolateWorktrees}
+              disabled={git === false}
+              checked={isolateWorktrees && git !== false}
               onChange={(e) => setIsolateWorktrees(e.target.checked)}
               className="mt-0.5 accent-current"
             />
@@ -622,7 +650,7 @@ export function Welcome(): ReactElement {
                 Isolate features in git worktrees
               </span>
               <span className="block text-xs text-muted-foreground">
-                Each agent pane starts in its own worktree and branch.
+                {git === false ? worktreeNote : 'Each agent pane starts in its own worktree and branch.'}
               </span>
             </span>
           </label>
@@ -693,6 +721,9 @@ export function Welcome(): ReactElement {
             >
               {isSubmitting ? 'Creating worktrees…' : 'Create workspace'}
             </Button>
+            {submitError !== null && (
+              <p role="alert" data-welcome-error className="mt-2 break-words text-center text-xs text-destructive">{submitError}</p>
+            )}
             <p className="mt-2 text-center text-xs text-muted-foreground">
               {canCreate ? 'Press ⌘↵ / Ctrl+↵ to create' : 'Choose a working folder to continue'}
             </p>

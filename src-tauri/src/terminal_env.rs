@@ -193,6 +193,9 @@ const SECRET_NAMES: &[&str] = &["DATABASE_URL", "PGPASSWORD", "MYSQL_PWD"];
 /// Strict mode: what Windows programs and shells expect to exist.
 const STRICT_NAMES: &[&str] = &[
     "PATH",
+    // The user's pointer to Git Bash. Without it Claude Code cannot run
+    // hooks on a machine where Git is not on PATH (SWA-83).
+    "CLAUDE_CODE_GIT_BASH_PATH",
     "PATHEXT",
     "SYSTEMROOT",
     "SYSTEMDRIVE",

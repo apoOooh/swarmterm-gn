@@ -19,6 +19,59 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   the cwd in memory per pane only, to resolve relative names printed on
   screen when the pane's start folder has no such file. Screen detection
   also joins absolute paths Claude Code hard-wraps at the pane edge.
+## 2026-11-09
+
+- **Local hang diagnostics; dumps are opt-in.** After the installed app was
+  reported "not responding" twice (SWA-85), Swarmterm records UI stalls
+  locally. The stall log (`diagnostics\ui-stalls.log`: time and duration of a
+  stall of 2 s or more, no content) is always on. A minidump per stall is
+  opt-in (Settings → Terminal → Diagnostics, off by default), written by a
+  separate process, kept on the machine and never uploaded. The admin policy
+  `DisableHangDumps` locks it, and the Corp edition has it locked (built
+  in), because a dump can hold terminal text from memory. The no-telemetry
+  decision of 2026-10-29 is unchanged: nothing is sent.
+- **Media without range requests is limited to 32 MB** (SWA-85). The webview
+  copies a whole-file answer on the UI thread, so the window stalls in
+  proportion to the size (250 MB measured 0.6 s). Larger images show *Open in
+  default app* instead of the in-app viewer; videos stream in ranges and are
+  unaffected.
+- **No installation from inside the app.** First-run setup (SWA-83) explains
+  a missing prerequisite or agent CLI and shows the vendor link and the
+  install command to copy. Swarmterm never installs anything itself and never
+  types an install command into a pane, not even one that waits for Enter.
+- **Agent config only for installed CLIs.** Swarmterm writes hooks, MCP
+  entries and the status line only for an agent CLI it finds, or into a
+  profile that already holds Swarmterm entries (to keep repairing them).
+  Outcomes are shown in Settings → Setup; only a real failure reaches the
+  bell.
+- **Blocked prompts come back masked, automatically** (user decision,
+  SWA-88). When data-shield's guard blocks a Claude Code prompt, it reports
+  the masked version to `POST /resubmit`; Swarmterm clears the restored
+  plaintext from the input box (Esc Esc, never Ctrl+C), puts the masked
+  prompt there and sends it — nothing interactive. "Put back only" and "off"
+  stay selectable in Settings → Terminal → Agent safety. A key typed in the
+  pane since the Enter wins: nothing is replaced, the pane offers the masked
+  prompt to copy. Corp puts it back but never sends it
+  (`DisablePromptResubmitSend` built in); `DisablePromptResubmit` turns it
+  off. The self-injection safeguards stay (bound to the prompt edge and the
+  blocked prompt's fingerprint, once, 10 s, refused after a tool call, a
+  mask placeholder required); only where it cannot be done safely
+  automatically does the pane fall back to a copy button; the
+  remaining risk is described in `security-model.md`.
+- **Automatic send stays the default despite the self-injection risk**
+  (user decision 2026-11-09, SWA-88 review). A review showed that a process
+  inside the pane can fake a block (its own prompt edge with a chosen
+  fingerprint, then `/resubmit`), so the route is no trust boundary. The
+  user kept "put back and send" as the default everywhere; instead the
+  renderer was hardened: the resubmit needs a real Enter of the user in that
+  pane seen by the renderer (≤ 15 s, once — the anchor) and a visible
+  restored draft; a draft that reads back exactly (one row) must also match
+  the fingerprint, while multi-row, wrapped and "[Pasted text …]" drafts are
+  resubmitted without that comparison (user decision 2026-11-09), re-checks of typing, IME, setting and
+  pane before every Esc/insert/Enter, and at most one attempt with Enter per
+  pane every 30 s; fingerprints expire on a timer after 10 s. The remaining
+  risk is documented in `security-model.md`; `DisablePromptResubmitSend` /
+  `DisablePromptResubmit` and the setting stay the way to switch it off.
 
 ## 2026-10-29
 
@@ -126,3 +179,11 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   locally and `dev` is pushed directly; releases merge `dev` into `main` the
   same way (`docs/release-process.md`). Branch rulesets therefore only block
   deletion and force-push, and do not require pull requests or status checks.
+- **Debug builds start in the background** (user decision 2026-11-09,
+  SWA-84). Scripts, the testlab and agents in panes start debug builds while
+  the user works elsewhere, so a debug build shows its main window without
+  focus and at the bottom of the z-order (`HWND_BOTTOM`, behind every window,
+  only on the first reveal). `SWARMTERM_DEV_HIDDEN=1` keeps it hidden for
+  unattended runs driven over CDP. Release builds never read the variable
+  and keep showing the window in front. Tray "Show" and a second launch
+  still bring the window forward in every build.
