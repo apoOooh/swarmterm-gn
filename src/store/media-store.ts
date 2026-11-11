@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { addMediaItem, markOpened, samePath, type MediaItem } from '@/lib/media-gallery'
+import { addMediaItem, isOlderStamp, markOpened, samePath, type MediaItem } from '@/lib/media-gallery'
 import { createAutoHide, overlayAllows, pushOverlayItem, type MediaOrigin } from '@/lib/media-overlay'
 import { useMediaPrefStore } from '@/store/media-pref-store'
 import { registerOpenedMedia } from '@/tauri/files'
@@ -90,6 +90,9 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     const old = get().items.find((i) => samePath(i.path, item.path))
     // Two spellings of one file, both found with the same stamp: nothing new.
     if (old && item.version !== undefined && old.version === item.version) return false
+    // A late answer for an older version (lookup started before an overwrite
+    // another spelling or the hook already reported) never rolls it back.
+    if (old?.version !== undefined && item.version !== undefined && isOlderStamp(old.version, item.version)) return false
     // An entry without a version (user-shown, clipboard) adopts the stamp
     // silently: the user already has that file, so no badge or announce.
     const news = !old || (old.version !== undefined && item.version !== undefined && old.version !== item.version)
