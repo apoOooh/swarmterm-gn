@@ -19,6 +19,7 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
   the cwd in memory per pane only, to resolve relative names printed on
   screen when the pane's start folder has no such file. Screen detection
   also joins absolute paths Claude Code hard-wraps at the pane edge.
+
 ## 2026-11-09
 
 - **Local hang diagnostics; dumps are opt-in.** After the installed app was
