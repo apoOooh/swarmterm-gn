@@ -3,6 +3,19 @@
 Decisions made by the maintainer that every contributor follows. Newest
 first. Architecture decisions with longer reasoning live in [adr/](adr/).
 
+## 2026-11-11
+
+- **Status line templates (SWA-92).** The Claude status line offers
+  Compact, Extended and Detailed (the maintainer's own line as reference),
+  plus Off. Schemes Subtle, App theme and High contrast; vibrance only on
+  App theme, never fading warnings. Animation limited to Off / a subtle
+  spinner (no blinking or pulsing). The line wraps by segment to `COLUMNS`.
+  Codex gets the same three templates as `tui.status_line` item lists from
+  a per-version whitelist; Swarmterm keeps the previous values and never
+  overwrites a list the user changed. Own Settings category; the setup
+  assistant shows only the templates. Agreed with Codex in the War Room
+  (2026-11-09).
+
 ## 2026-11-09
 
 - **Local hang diagnostics; dumps are opt-in.** After the installed app was

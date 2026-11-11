@@ -403,15 +403,25 @@ If you use data-shield's prompt guard with Claude Code, a prompt it blocks (beca
 
 ## Status line in Claude Code panes
 
-Every Claude Code pane gets a one-line readout under its prompt:
+Every Claude Code pane gets a readout under its prompt. Pick how much it shows in **Settings → Status line** (the setup assistant asks once, too):
 
-```
-mcp ✓  ·  ctx 84k/200k 42%
-```
+- **Compact** — the MCP link, the model and the context window:
 
-The left half tells you whether Claude actually connected to Swarmterm — and therefore has the War Room and worktree tools: `✓` connected, `…` never reached Swarmterm (tools missing), `✗` Swarmterm no longer answering. The right half is the session's context window — tokens used, limit, percentage — amber past 70 %, red past 90 %.
+  ```
+  mcp ✓ | Opus 5.5 ctx 84k/200k 42%
+  ```
 
-Toggle it in **Settings → Terminal**. Swarmterm merge-writes the entry into `~/.claude/settings.json` and never touches a status line you already have.
+- **Extended** — adds the effort level, a context bar, the git branch and your 5-hour and 7-day limits with the time until they reset.
+- **Detailed** — adds the session cost, the prompt cache, subagents, and bars for input, output and tool tokens. Values marked `≈` are estimates (subagent cost from a fixed price table, token shares from text length).
+- **Off** — no status line from Swarmterm.
+
+`mcp ✓` means Claude actually connected to Swarmterm — and therefore has the War Room and worktree tools; `…` never reached Swarmterm (tools missing), `✗` Swarmterm no longer answering. Context turns amber past 70 % and red past 90 %.
+
+The line follows the pane width: when it does not fit, bars get shorter and the "left" texts go, then segments move to a second row. Below about 50 columns the branch, cache and subagents are left out; model, context, limits and the MCP link always stay.
+
+**Colours.** *Subtle* is near-monochrome with only warnings tinted. *App theme* takes text and accent from the active Swarmterm theme (and follows a theme switch); its **Vibrance** slider makes the colours stronger or calmer, warnings stay coloured at 0 %. *High contrast* uses the terminal's 16 basic colours. The preview above the settings is drawn by the same code as the real line; drag its width slider to see how it wraps.
+
+Changes apply at the next refresh of each pane. Swarmterm merge-writes one entry into `~/.claude/settings.json` and never touches a status line you already have; the template and colours are kept in `statusline.json` in Swarmterm's app data folder.
 
 The pane header mirrors the percentage as a small `ctx 63%` chip (same amber / red bands) once the first reply lands, so you can compare panes without reading each status line. It needs the status line enabled — that is where the number comes from — and disappears on `/clear` and when `claude` exits; on very narrow panes it moves into the header's `⋯` row.
 
@@ -568,7 +578,7 @@ Changes apply to the next pane or routine that starts; running panes keep the en
 
 ## Settings, tray and quitting
 
-**Settings** (from the navbar) covers appearance, terminal font and default shell with a live preview, the status line toggle, and the full shortcut list — these preferences persist between launches.
+**Settings** (from the navbar) covers appearance, terminal font and default shell with a live preview, the status line templates, and the full shortcut list — these preferences persist between launches.
 
 **Setup.** Settings → **Setup** lists what Swarmterm added to Claude Code and Codex so panes can report their state, show the status line and reach the War Room: the hooks, the Swarmterm MCP entry and the status line, each with its state. Swarmterm writes nothing for a CLI that is not installed; entries it added earlier are still kept up to date, even when it cannot find that CLI itself. Install one while Swarmterm runs and its entries are added the next time the composer opens, a pane of that agent starts, or you press **Check again**. Your own status line is kept, and an entry you switched off under Settings → MCP shows as switched off. Only a real failure, such as a configuration file that cannot be read, puts one *Agent setup needs attention* entry in the bell. It names the first problem; this page shows all of them.
 
