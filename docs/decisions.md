@@ -5,6 +5,16 @@ first. Architecture decisions with longer reasoning live in [adr/](adr/).
 
 ## 2026-11-11
 
+- **Hook-reported media is stamped like printed media** (lead decision).
+  `media:detected` carries the file's `mtimeMs` and `size` from the same
+  existence check, so a Read/Write of a file overwritten in place refreshes
+  the gallery entry and is announced again, exactly like a reprinted path,
+  while an unchanged one stays silent. Screen and hook share one per-pane
+  record, so the same version is never announced twice. Both values are file
+  metadata of a path that is already sent; no content crosses the port.
+  Accepted gap: an entry the user opened or pasted (no stamp yet) adopts the
+  first detected stamp silently, so an overwrite before any detection of it
+  is not announced.
 - **Agent media detection uses the Claude hook; the hook forwards media
   paths and cwd, never content.** Passive media detection missed most images
   agents and their subagents open (collapsed tool lines, subagent calls that

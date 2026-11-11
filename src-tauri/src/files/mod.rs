@@ -149,6 +149,15 @@ pub enum FileRequest {
 
 /// Upper bound of candidates one `media_check_detected` call resolves.
 pub const MAX_DETECTED_PER_CALL: usize = 20;
+
+/// One passive-detection hit: canonical path plus the stamp (mtime, size)
+/// that tells an overwritten file from an unchanged one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetectedMedia {
+    pub path: PathBuf,
+    pub mtime_ms: u64,
+    pub size: u64,
+}
 /// Upper bound of the session's unrooted allow-list (user-opened and clipboard media).
 pub const MAX_UNROOTED_MEDIA: usize = 2000;
 
@@ -188,8 +197,10 @@ impl FileService {
     /// nothing is allow-listed, because pane output is agent-controlled and
     /// must never decide what the webview may read. The user opening an item
     /// registers it (`register_user_media`). Bounded per call so one output
-    /// line cannot make the backend stat thousands of paths.
-    pub fn check_detected_media(&self, raws: &[String], cwd: &Path) -> Vec<Option<PathBuf>> {
+    /// line cannot make the backend stat thousands of paths. Each hit carries
+    /// the file's mtime and size, so the renderer can tell a file overwritten
+    /// in place (same path, new screenshot) from a plain redraw.
+    pub fn check_detected_media(&self, raws: &[String], cwd: &Path) -> Vec<Option<DetectedMedia>> {
         self.check_detected_media_in(raws, cwd, None)
     }
 
@@ -200,19 +211,30 @@ impl FileService {
         raws: &[String],
         cwd: &Path,
         fallback: Option<&Path>,
-    ) -> Vec<Option<PathBuf>> {
+    ) -> Vec<Option<DetectedMedia>> {
         raws.iter()
             .enumerate()
             .map(|(i, raw)| {
                 if i >= MAX_DETECTED_PER_CALL {
                     return None;
                 }
-                media::resolve_media(raw, cwd).ok().or_else(|| {
+                let path = media::resolve_media(raw, cwd).ok().or_else(|| {
                     let other = fallback.filter(|f| *f != cwd)?;
                     if Path::new(raw.trim()).is_absolute() {
                         return None;
                     }
                     media::resolve_media(raw, other).ok()
+                })?;
+                let meta = fs::metadata(&path).ok()?;
+                let mtime_ms = meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_millis() as u64);
+                Some(DetectedMedia {
+                    path,
+                    mtime_ms,
+                    size: meta.len(),
                 })
             })
             .collect()

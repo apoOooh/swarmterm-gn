@@ -1045,7 +1045,7 @@ export default function App(): ReactElement {
   // Images an agent or its subagents Read/Wrote (Claude PostToolUse hook):
   // the screen often never shows them (collapsed tool lines, subagents).
   useEffect(() => {
-    const unlisten = onMediaDetected((e) => noteHookMedia(e.terminalId, e.path))
+    const unlisten = onMediaDetected((e) => noteHookMedia(e.terminalId, e.path, e.mtimeMs, e.size))
     return () => {
       void unlisten.then((fn) => fn())
     }

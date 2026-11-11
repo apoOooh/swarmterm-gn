@@ -532,7 +532,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   the cwd as `ManagedTerminal::agent_cwd` (memory only; the relative-name
   fallback in `media_check_detected`) and emits `media:detected` after
   `check_detected_media` off the executor (at most 8 in flight), never allow-listing. The renderer's
-  `noteHookMedia` shares the pane's `SeenPaths` with the screen scan.
+  `noteHookMedia` shares the pane's `SeenPaths` with the screen scan; the
+  event carries the lookup's `mtimeMs`/`size` stamp, so an overwritten file
+  refreshes on either path and an unchanged one stays silent.
   `files::media::MEDIA_EXTENSIONS` mirrors `media-detect.ts` (test). Subagent
   tool calls fire the same hook in the same pane, so they need nothing extra.
 - **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:

@@ -84,6 +84,30 @@ describe('media gallery store', () => {
     expect(useMediaStore.getState().unseen).toEqual({})
   })
 
+  it('an overwritten file (new version) is news again; the same version is a no-op', () => {
+    useMediaStore.setState({ items: [], selectedPath: null, unseen: {} })
+    const m = useMediaStore.getState()
+    expect(m.detect({ ...item('C:/s/xs.png'), terminalId: 't1', shownAt: 1, version: '1:10' })).toBe(true)
+    expect(m.detect({ ...item('C:/s/other.png'), terminalId: 't1', shownAt: 2, version: '1:1' })).toBe(true)
+    expect(m.detect({ ...item('c:/S/XS.png'), terminalId: 't1', shownAt: 3, version: '1:10' })).toBe(false)
+    expect(useMediaStore.getState().items.map((i) => i.shownAt)).toEqual([2, 1])
+    expect(m.detect({ ...item('C:/s/xs.png'), terminalId: 't1', shownAt: 4, version: '2:12' })).toBe(true)
+    const s = useMediaStore.getState()
+    // One updated entry, moved to the front with the fresh shownAt (cache-busting revision).
+    expect(s.items.map((i) => [i.path, i.shownAt, i.version])).toEqual([['C:/s/xs.png', 4, '2:12'], ['C:/s/other.png', 2, '1:1']])
+    expect(s.unseen).toEqual({ t1: 3 })
+  })
+
+  it('a detected stamp on a user-shown entry is adopted silently', () => {
+    useMediaStore.setState({ items: [], selectedPath: null, unseen: {} })
+    const m = useMediaStore.getState()
+    m.show({ ...item('C:/s/xs.png'), opened: true })
+    expect(m.detect({ ...item('C:/s/xs.png'), terminalId: 't1', version: '1:10' })).toBe(false)
+    expect(useMediaStore.getState().items[0].version).toBe('1:10')
+    expect(useMediaStore.getState().unseen).toEqual({})
+    expect(m.detect({ ...item('C:/s/xs.png'), terminalId: 't1', version: '2:10' })).toBe(true)
+  })
+
   it('dropClipboard removes clipboard items and a clipboard selection only', () => {
     useMediaStore.setState({ items: [], selectedPath: null, unseen: {}, overlayItems: [] })
     const m = useMediaStore.getState()

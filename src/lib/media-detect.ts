@@ -297,23 +297,35 @@ export class MediaOutputBuffer {
 /** How often and how long a printed path that is not (yet) a file is retried. */
 export const MISS_RETRY_MS = 3000
 export const MISS_MAX_TRIES = 3
+/**
+ * How often a found path is looked up again when reprinted. Agents overwrite
+ * one file (a device screenshot) and print it again; this is what notices the
+ * new content, while a redraw loop costs at most one stat per interval.
+ */
+export const FOUND_RECHECK_MS = 2000
 
 /**
  * Per-pane lookup memory, compared case-insensitively and bounded. A found
- * path is never offered again (agents reprint paths on every redraw). A miss
- * may be retried: "Saving to out.png..." is printed BEFORE the file exists,
- * so it is offered again when reprinted after MISS_RETRY_MS, at most
- * MISS_MAX_TRIES times in total.
+ * path is re-offered at most once per FOUND_RECHECK_MS (agents reprint paths
+ * on every redraw) and remembers its stamp (mtime and size), so only a
+ * changed file counts as news. A miss may be retried: "Saving to out.png..."
+ * is printed BEFORE the file exists, so it is offered again when reprinted
+ * after MISS_RETRY_MS, at most MISS_MAX_TRIES times in total.
  */
 export class SeenPaths {
-  private readonly found = new Set<string>()
+  private readonly found = new Map<string, { at: number; stamp: string }>()
   private readonly misses = new Map<string, { at: number; tries: number }>()
   constructor(private readonly max = 500) {}
 
   /** Whether the path should be looked up now; counts the attempt. */
   offer(path: string, now: number): boolean {
     const key = path.toLowerCase()
-    if (this.found.has(key)) return false
+    const hit = this.found.get(key)
+    if (hit) {
+      if (now - hit.at < FOUND_RECHECK_MS) return false
+      hit.at = now
+      return true
+    }
     const miss = this.misses.get(key)
     if (miss && (miss.tries >= MISS_MAX_TRIES || now - miss.at < MISS_RETRY_MS)) return false
     this.misses.delete(key)
@@ -322,16 +334,21 @@ export class SeenPaths {
     return true
   }
 
-  /** Whether the path was confirmed (found) before. */
-  has(path: string): boolean {
-    return this.found.has(path.toLowerCase())
-  }
-
-  /** The backend confirmed the path: never offer it again. */
-  confirm(path: string): void {
+  /**
+   * The backend found the path with this stamp. True when it is news: first
+   * seen, or the content changed since the last lookup.
+   */
+  confirm(path: string, stamp: string, now: number): boolean {
     const key = path.toLowerCase()
     this.misses.delete(key)
-    this.found.add(key)
-    if (this.found.size > this.max) this.found.delete(this.found.values().next().value as string)
+    const prev = this.found.get(key)
+    // Re-insert so the bound evicts the least recently confirmed path.
+    this.found.delete(key)
+    this.found.set(key, { at: now, stamp })
+    if (this.found.size > this.max) this.found.delete(this.found.keys().next().value as string)
+    // A found path whose lookup now misses (file deleted) keeps its entry and
+    // is simply re-checked per interval; a file recreated with the identical
+    // mtime and size is not news, which is accepted as practically impossible.
+    return prev?.stamp !== stamp
   }
 }

@@ -285,28 +285,24 @@ mod tests {
             let (media, agent_cwd) = crate::mcp::server::hook_media_and_cwd(&got);
             assert_eq!(agent_cwd, Some(cwd.as_str()));
             let found = service.check_detected_media(&[media.unwrap()], std::path::Path::new(""));
-            assert_eq!(
-                found[0]
-                    .as_deref()
-                    .map(|p| p.file_name().unwrap().to_owned()),
-                Some("w1.png".into())
-            );
+            let hit = found[0].as_ref().expect("hook media not found");
+            assert_eq!(hit.path.file_name().unwrap(), "w1.png");
+            // The stamp `media:detected` carries comes from the same lookup.
+            assert_eq!(hit.size, 8);
+            assert!(hit.mtime_ms > 0);
         }
         // A bare `w1.png` on screen in a pane whose start folder lacks it.
         let elsewhere = tempfile::tempdir().unwrap();
         let names = ["w1.png".to_string()];
-        assert_eq!(
-            service.check_detected_media(&names, elsewhere.path())[0],
-            None
-        );
+        assert!(service.check_detected_media(&names, elsewhere.path())[0].is_none());
         let found = service.check_detected_media_in(
             &names,
             elsewhere.path(),
             Some(std::path::Path::new(&cwd)),
         );
-        assert!(
-            found[0].is_some(),
-            "relative name not resolved via agent cwd"
-        );
+        let hit = found[0]
+            .as_ref()
+            .expect("relative name not resolved via agent cwd");
+        assert_eq!(hit.size, 8);
     }
 }

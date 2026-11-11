@@ -540,6 +540,10 @@ async fn status_handler(
 pub struct MediaDetectedEvent {
     pub terminal_id: String,
     pub path: String,
+    /// File stamp from the same lookup, so a file overwritten in place reads
+    /// as news while a repeated Read of an unchanged one does not.
+    pub mtime_ms: u64,
+    pub size: u64,
 }
 
 /// Resolve a hook-reported media path off the executor (disk work) and, if
@@ -581,13 +585,15 @@ fn spawn_media_detected(app: AppHandle, terminal_id: String, media: String) {
         .await
         .ok()
         .flatten();
-        if let Some(path) = found {
+        if let Some(hit) = found {
             use tauri::Emitter;
             let _ = app.emit(
                 "media:detected",
                 &MediaDetectedEvent {
                     terminal_id,
-                    path: crate::files::path::display(&path),
+                    path: crate::files::path::display(&hit.path),
+                    mtime_ms: hit.mtime_ms,
+                    size: hit.size,
                 },
             );
         }

@@ -16,6 +16,8 @@ export interface MediaItem {
   opened: boolean
   /** Display name when the file name on disk is not meaningful (marked copies). */
   label?: string
+  /** Content stamp (mtime:size) of a detected file; a change means it was overwritten. */
+  version?: string
 }
 
 /** Agents re-show the same file while iterating; keep the strip bounded. */

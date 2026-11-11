@@ -88,8 +88,8 @@ pub async fn files_request(
 /// Passive media detection: the renderer found image/video paths in a pane's
 /// output. Relative paths resolve against that terminal's spawn cwd, then the
 /// agent's last hook-reported cwd (agents `cd` away from it); the answer has
-/// one entry per input (canonical display path of an existing media file, or
-/// null). Validation only, nothing is allow-listed here (see
+/// one entry per input (canonical display path of an existing media file with
+/// its mtime and size, or null). Validation only, nothing is allow-listed here (see
 /// `FileService::check_detected_media`). Disk work runs off the async executor.
 #[tauri::command]
 pub async fn media_check_detected(
@@ -98,7 +98,7 @@ pub async fn media_check_detected(
     service: State<'_, std::sync::Arc<crate::files::FileService>>,
     terminal_id: String,
     paths: Vec<String>,
-) -> Result<Vec<Option<String>>, String> {
+) -> Result<Vec<Option<serde_json::Value>>, String> {
     files_main_only(&window)?;
     let (cwd, agent_cwd) = state
         .terminals
@@ -112,7 +112,15 @@ pub async fn media_check_detected(
         service
             .check_detected_media_in(&paths, &cwd, agent_cwd.as_deref())
             .iter()
-            .map(|p| p.as_deref().map(crate::files::path::display))
+            .map(|hit| {
+                hit.as_ref().map(|d| {
+                    serde_json::json!({
+                        "path": crate::files::path::display(&d.path),
+                        "mtimeMs": d.mtime_ms,
+                        "size": d.size,
+                    })
+                })
+            })
             .collect()
     })
     .await

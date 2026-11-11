@@ -70,14 +70,20 @@ function scan(terminalId: string, state: ScanState): void {
     .then((results) => {
       if (states.get(terminalId) !== state) return
       const source = paneSourceLabel(terminalId)
-      results.forEach((path, i) => {
-        if (path === null) return
-        state.seen.confirm(offered[i])
-        const kind = mediaKind(path)
+      // Answer time, not scan time: shownAt orders the strip against items
+      // added meanwhile (clipboard) and is the URL revision.
+      const at = Date.now()
+      results.forEach((hit, i) => {
+        if (hit === null) return
+        // A reprint of an unchanged file (redraw) is not news; an overwritten
+        // one is: it moves up with a fresh shownAt, which also cache-busts
+        // the thumbnail, overlay and viewer URLs.
+        const version = `${hit.mtimeMs}:${hit.size}`
+        if (!state.seen.confirm(offered[i], version, at)) return
+        const kind = mediaKind(hit.path)
         if (!kind) return
-        const item = { path, kind, terminalId, source, shownAt: now, opened: false }
-        useMediaStore.getState().detect(item)
-        useMediaStore.getState().announce(item, 'agent')
+        const item = { path: hit.path, kind, terminalId, source, shownAt: at, opened: false, version }
+        if (useMediaStore.getState().detect(item)) useMediaStore.getState().announce(item, 'agent')
       })
     })
     // The terminal may be gone (unknown terminal); detection is best effort.
@@ -119,17 +125,19 @@ function chunkSize(chunk: Uint8Array | string): number {
  * A media file an agent (or one of its subagents) opened or wrote, reported
  * by the Claude PostToolUse hook (`media:detected`): canonical, existing,
  * never shown on screen. Shares the pane's `SeenPaths` with the screen scan,
- * so a path named both ways is announced once.
+ * so a path named both ways is announced once; like the screen path, a known
+ * path whose stamp (mtime and size) changed is news again (overwritten in
+ * place), an unchanged one stays silent.
  */
-export function noteHookMedia(terminalId: string, path: string): void {
+export function noteHookMedia(terminalId: string, path: string, mtimeMs: number, size: number): void {
   const kind = mediaKind(path)
   if (!kind) return
   const state = stateOf(terminalId)
-  if (state.seen.has(path)) return
-  state.seen.confirm(path)
-  const item = { path, kind, terminalId, source: paneSourceLabel(terminalId), shownAt: Date.now(), opened: false }
-  useMediaStore.getState().detect(item)
-  useMediaStore.getState().announce(item, 'agent')
+  const at = Date.now()
+  const version = `${mtimeMs}:${size}`
+  if (!state.seen.confirm(path, version, at)) return
+  const item = { path, kind, terminalId, source: paneSourceLabel(terminalId), shownAt: at, opened: false, version }
+  if (useMediaStore.getState().detect(item)) useMediaStore.getState().announce(item, 'agent')
 }
 
 export function forgetMediaOutput(terminalId: string): void {

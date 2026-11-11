@@ -172,7 +172,10 @@ on a media path outside the project opens it straight in the Media tab. The pane
 never opens by itself, and your keyboard stays in the terminal. Only
 PNG/JPEG/GIF/WebP images and MP4/M4V/MOV/WebM videos on local drives are
 accepted. A path printed just before the file is written is retried a few times
-when printed again within seconds. Not detected: newly created files that are
+when printed again within seconds. A file overwritten in place (an agent saving a
+new screenshot under the same name) moves back to the front of the strip with its
+new content once it is printed again or opened/written by Claude's Read/Write
+tools; printing or reading an unchanged file again adds nothing. Not detected: newly created files that are
 never printed or opened by Claude's Read/Write tools (for example screenshots
 an agent only creates through shell commands), paths built from shell
 variables (`$DIR/shot.png`), and POSIX-style paths (`/c/...`, `~/...`).
