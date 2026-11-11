@@ -52,7 +52,9 @@ fn outer_forced_class() -> Option<u32> {
             .stdout(Stdio::null())
             .creation_flags(CREATE_NO_WINDOW | NORMAL_PRIORITY_CLASS)
             .spawn()
-            .expect("priority probe");
+            .unwrap_or_else(|e| {
+                panic!("priority probe: cannot start PING.EXE to detect an outer priority job: {e}")
+            });
         let c = class(probe.id());
         let _ = probe.kill();
         let _ = probe.wait();
