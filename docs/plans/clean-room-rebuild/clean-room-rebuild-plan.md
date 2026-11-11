@@ -207,8 +207,8 @@ Risks:
 
 Open questions for the user:
 1. D1: MIT public, proprietary, or open core (MIT core + paid Corp)?
-2. D2: who holds the copyright and sells: a person, apoOooh and Pawel jointly, or a company? (apoOooh, Pawel Grzesik and
-   SesioN count as "us"; is SesioN the same person as Pawel Grzesik?) Both owners confirm the relicence in writing.
+2. D2: who holds the copyright and sells: a person, the authors jointly, or a company? All authors counted as "us"
+   confirm the relicence in writing.
 3. Name and icon: shortlist, and trademark territories (EU only, EU + US)?
 4. Should the new app import GN settings, saved workspaces and accounts (needs P- format specs)?
 5. Clean sessions under a separate Windows user (recommended), or settings/hook barrier only?
