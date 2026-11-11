@@ -41,7 +41,7 @@ export function StatuslinePreview({
       style={{ background: colors.termBg, color: colors.text }}
       aria-label="Status line preview"
     >
-      <div style={{ width: `${columns}ch`, maxWidth: '100%' }}>
+      <div style={{ width: `${columns}ch` }}>
         {rows.map((row, i) => (
           <div key={i} className="whitespace-pre">
             {parseAnsi(row).map((s, j) => (
