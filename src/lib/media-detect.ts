@@ -8,6 +8,7 @@
  * (the overwhelming majority) costs one regex pass and nothing else.
  * Existence is NOT checked here; the backend resolves and allow-lists.
  */
+import { isOlderStamp } from '@/lib/media-gallery'
 
 export const MEDIA_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'm4v', 'mov', 'webm'] as const
 
@@ -39,7 +40,7 @@ export const MAX_MEDIA_PER_SCAN = 20
 export function detectMediaPaths(text: string): string[] {
   if (!EXT_PREFILTER.test(text)) return []
   // Cursor moves stand in for spaces in TUI redraws: keep tokens apart.
-  const clean = stitchTableRows(text.replace(CURSOR_MOVE_RE, ' ').replace(ANSI_RE, ''))
+  const clean = stitchWrappedPaths(stitchTableRows(text.replace(CURSOR_MOVE_RE, ' ').replace(ANSI_RE, '')))
   // Drop URLs: `https://x/y.png` is the browser's business, not a file.
   const masked = clean.replace(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/\S+/g, (m) => ' '.repeat(m.length))
   const hits: { start: number; end: number; path: string }[] = []
@@ -152,6 +153,59 @@ export function stitchTableRows(text: string): string {
   return out.join('\n')
 }
 
+/** A drive-absolute token that runs to the end of the line (no spaces). */
+const WRAP_HEAD_RE = /(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"<>|?*:&;]*$/
+/** An indented continuation line: leading spaces, then a path-character token. */
+const WRAP_TAIL_RE = /^ +([^\s"<>|?*:&;]+)/
+
+/**
+ * Narrowest line taken as cut at the pane edge: a short line such as a
+ * prompt's `cd C:\proj` followed by an indented relative path is no wrap.
+ */
+export const MIN_WRAP_COLUMNS = 40
+
+/** The drive-absolute token a line ends in while it has no media extension yet (a path cut at the pane edge). */
+function cutPathHead(line: string): string | null {
+  const trimmed = line.trimEnd()
+  if (trimmed.length < MIN_WRAP_COLUMNS) return null
+  const head = WRAP_HEAD_RE.exec(trimmed)?.[0]
+  return head && !EXT_PREFILTER.test(head) ? head : null
+}
+
+/**
+ * Claude Code (Ink) hard-wraps a token longer than the free width at the
+ * pane edge and indents the continuation like its paragraph, so a long
+ * scratchpad path would only match by its tail. Conservative join: the line
+ * must END inside a drive-absolute token that has no media extension yet,
+ * and the next line must be indented by spaces and start with a token that
+ * continues a path (contains a separator, or completes a media extension).
+ * Lines are expected ANSI-free (cursor moves already turned into spaces).
+ */
+export function stitchWrappedPaths(text: string): string {
+  if (!/[A-Za-z]:[\\/]/.test(text)) return text
+  const lines = text.split(/\r?\n|\r/)
+  const out: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i]
+    for (let head = cutPathHead(line); head !== null && i + 1 < lines.length; head = cutPathHead(line)) {
+      const tail = WRAP_TAIL_RE.exec(lines[i + 1])?.[1]
+      if (!tail || !(/[\\/]/.test(tail) || EXT_PREFILTER.test(head + tail))) break
+      line = line.trimEnd() + lines[i + 1].replace(/^ +/, '')
+      i++
+    }
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
+/** Length of the last complete line when it ends in a cut path (`stitchWrappedPaths`); 0 otherwise. */
+function cutPathTail(done: string): number {
+  const body = done.replace(/(?:\r?\n|\r)$/, '')
+  const start = Math.max(body.lastIndexOf('\n'), body.lastIndexOf('\r')) + 1
+  const last = body.slice(start).replace(CURSOR_MOVE_RE, ' ').replace(ANSI_RE, '')
+  return cutPathHead(last) ? done.length - start : 0
+}
+
 /**
  * How much of the complete lines `take` holds back while they may still be
  * a wrapped table row: from the start of the last row (a bordered line with a
@@ -223,7 +277,8 @@ export class MediaOutputBuffer {
     // a bordered box that stays last on screen, like an input box, is still
     // scanned one interval later). A row longer than MAX_CARRY is not held
     // and may be split across scans like before.
-    const hold = tableTail(done)
+    // Likewise a line that ends inside a cut absolute path (stitchWrappedPaths).
+    const hold = tableTail(done) || cutPathTail(done)
     if (hold > 0 && hold + this.pending.length <= MAX_CARRY) {
       this.pending = done.slice(-hold) + this.pending
       done = done.slice(0, -hold)
@@ -243,23 +298,35 @@ export class MediaOutputBuffer {
 /** How often and how long a printed path that is not (yet) a file is retried. */
 export const MISS_RETRY_MS = 3000
 export const MISS_MAX_TRIES = 3
+/**
+ * How often a found path is looked up again when reprinted. Agents overwrite
+ * one file (a device screenshot) and print it again; this is what notices the
+ * new content, while a redraw loop costs at most one stat per interval.
+ */
+export const FOUND_RECHECK_MS = 2000
 
 /**
  * Per-pane lookup memory, compared case-insensitively and bounded. A found
- * path is never offered again (agents reprint paths on every redraw). A miss
- * may be retried: "Saving to out.png..." is printed BEFORE the file exists,
- * so it is offered again when reprinted after MISS_RETRY_MS, at most
- * MISS_MAX_TRIES times in total.
+ * path is re-offered at most once per FOUND_RECHECK_MS (agents reprint paths
+ * on every redraw) and remembers its stamp (mtime and size), so only a
+ * changed file counts as news. A miss may be retried: "Saving to out.png..."
+ * is printed BEFORE the file exists, so it is offered again when reprinted
+ * after MISS_RETRY_MS, at most MISS_MAX_TRIES times in total.
  */
 export class SeenPaths {
-  private readonly found = new Set<string>()
+  private readonly found = new Map<string, { at: number; stamp: string }>()
   private readonly misses = new Map<string, { at: number; tries: number }>()
   constructor(private readonly max = 500) {}
 
   /** Whether the path should be looked up now; counts the attempt. */
   offer(path: string, now: number): boolean {
     const key = path.toLowerCase()
-    if (this.found.has(key)) return false
+    const hit = this.found.get(key)
+    if (hit) {
+      if (now - hit.at < FOUND_RECHECK_MS) return false
+      hit.at = now
+      return true
+    }
     const miss = this.misses.get(key)
     if (miss && (miss.tries >= MISS_MAX_TRIES || now - miss.at < MISS_RETRY_MS)) return false
     this.misses.delete(key)
@@ -268,11 +335,25 @@ export class SeenPaths {
     return true
   }
 
-  /** The backend confirmed the path: never offer it again. */
-  confirm(path: string): void {
+  /**
+   * The backend found the path with this stamp. True when it is news: first
+   * seen, or the content changed since the last lookup.
+   */
+  confirm(path: string, stamp: string, now: number): boolean {
     const key = path.toLowerCase()
     this.misses.delete(key)
-    this.found.add(key)
-    if (this.found.size > this.max) this.found.delete(this.found.values().next().value as string)
+    const prev = this.found.get(key)
+    if (prev && isOlderStamp(prev.stamp, stamp)) {
+      prev.at = now
+      return false
+    }
+    // Re-insert so the bound evicts the least recently confirmed path.
+    this.found.delete(key)
+    this.found.set(key, { at: now, stamp })
+    if (this.found.size > this.max) this.found.delete(this.found.keys().next().value as string)
+    // A found path whose lookup now misses (file deleted) keeps its entry and
+    // is simply re-checked per interval; a file recreated with the identical
+    // mtime and size is not news, which is accepted as practically impossible.
+    return prev?.stamp !== stamp
   }
 }

@@ -524,6 +524,21 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   pane per 30 s (failures count). `Gate::expire` runs on a timer. Mode =
   `AgentPolicy.promptResubmit` tightened by `DisablePromptResubmit(Send)`
   (Corp: send locked). Never log, announce or store the text.
+- **Hook media paths (2026-11-11).** Claude's `PostToolUse` hook is the
+  main source for agent media: `hook/mod.rs` reads ONLY `tool_name`, `cwd`
+  and `tool_input.file_path` (hand-written visitor, other keys skipped as
+  `IgnoredAny`, odd shapes degrade to "none" so the status signal never
+  breaks) and sends `media` (Read/Write, absolute, media extension, ≤ 1024)
+  and `cwd` in `HookBody`. `/hook` re-validates both (`files::media::is_network_path` refuses UNC,
+  also `\\?\UNC\`; an invalid field is dropped, the signal still lands), stores
+  the cwd as `ManagedTerminal::agent_cwd` (memory only; the relative-name
+  fallback in `media_check_detected`) and emits `media:detected` after
+  `check_detected_media` off the executor (at most 8 in flight), never allow-listing. The renderer's
+  `noteHookMedia` shares the pane's `SeenPaths` with the screen scan; the
+  event carries the lookup's `mtimeMs`/`size` stamp, so an overwritten file
+  refreshes on either path and an unchanged one stays silent.
+  `files::media::MEDIA_EXTENSIONS` mirrors `media-detect.ts` (test). Subagent
+  tool calls fire the same hook in the same pane, so they need nothing extra.
 - **Command routines (SWA-67).** `kind: 'command'` routines skip the pane:
   `run_routine_command` (main webview only) runs ONE line via
   `cmd.exe /d /s /c` (`raw_arg`, CREATE_NO_WINDOW) in a kill-on-close job
@@ -622,6 +637,9 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   forwards `set_priority` to the host (and on every host connect).
   `AGENT_EXES`/`AGENT_MARKERS` mirror the app catalog; a test keeps them
   in step. Normal and above are not representable.
+  `host/tests/priority.rs` probes for an outer job that forces a class (the
+  `heavy.ps1` queue) and then skips only the class asserts it makes
+  impossible, with a `[priority] outer job forces class ...` notice.
 - **Environment filter.** `terminal_env::EnvPolicy` (in `AppState.env_policy`,
   secure default, pushed by `env-policy-store` via `env_policy_set`) filters
   the inherited env in `plan_spawn` (both backends) and `run_routine_command`

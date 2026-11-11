@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { addMediaItem, markOpened, samePath, type MediaItem } from '@/lib/media-gallery'
+import { addMediaItem, isOlderStamp, markOpened, samePath, type MediaItem } from '@/lib/media-gallery'
 import { createAutoHide, overlayAllows, pushOverlayItem, type MediaOrigin } from '@/lib/media-overlay'
 import { useMediaPrefStore } from '@/store/media-pref-store'
 import { registerOpenedMedia } from '@/tauri/files'
@@ -17,11 +17,14 @@ interface MediaState {
   /**
    * A path found in pane output: joins the strip WITHOUT taking the viewer
    * (the user may be looking at something else) and counts toward the pane
-   * badge. A path already in the gallery only moves to the front. An
-   * unopened item is registered for serving right away so the strip shows
-   * its thumbnail (user decision 2026-10-29: no click-to-load gate).
+   * badge. A path already in the gallery moves to the front (one updated
+   * entry, no history per version) and counts as news again when its
+   * `version` changed (the file was overwritten); the same version is a
+   * no-op. An unopened item is registered for serving right away so the
+   * strip shows its thumbnail (user decision 2026-10-29: no click-to-load
+   * gate). Returns whether the item is news (worth announcing).
    */
-  detect: (item: MediaItem) => void
+  detect: (item: MediaItem) => boolean
   /** A clipboard image: joins the strip without taking the viewer, no pane badge. */
   add: (item: MediaItem) => void
   clearUnseen: (terminalId: string) => void
@@ -41,8 +44,6 @@ interface MediaState {
 
 /** `source` of clipboard items (App.tsx sets it). */
 export const CLIPBOARD_SOURCE = 'clipboard'
-
-const has = (items: MediaItem[], path: string): boolean => items.some((i) => samePath(i.path, path))
 
 /**
  * Registers a path for serving unless it is already known opened, then marks
@@ -78,7 +79,7 @@ export const overlayAutoHide = createAutoHide(
   () => useMediaStore.setState({ overlayVisible: false }),
 )
 
-export const useMediaStore = create<MediaState>((set) => ({
+export const useMediaStore = create<MediaState>((set, get) => ({
   items: [],
   selectedPath: null,
   unseen: {},
@@ -86,15 +87,22 @@ export const useMediaStore = create<MediaState>((set) => ({
   overlayVisible: false,
   show: (item) => set((s) => ({ items: addMediaItem(s.items, item), selectedPath: item.path })),
   detect: (item) => {
-    set((s) => {
-      const fresh = !has(s.items, item.path)
-      return {
-        items: addMediaItem(s.items, item),
-        selectedPath: s.selectedPath ?? item.path,
-        unseen: fresh ? { ...s.unseen, [item.terminalId]: (s.unseen[item.terminalId] ?? 0) + 1 } : s.unseen,
-      }
-    })
+    const old = get().items.find((i) => samePath(i.path, item.path))
+    // Two spellings of one file, both found with the same stamp: nothing new.
+    if (old && item.version !== undefined && old.version === item.version) return false
+    // A late answer for an older version (lookup started before an overwrite
+    // another spelling or the hook already reported) never rolls it back.
+    if (old?.version !== undefined && item.version !== undefined && isOlderStamp(old.version, item.version)) return false
+    // An entry without a version (user-shown, clipboard) adopts the stamp
+    // silently: the user already has that file, so no badge or announce.
+    const news = !old || (old.version !== undefined && item.version !== undefined && old.version !== item.version)
+    set((s) => ({
+      items: addMediaItem(s.items, item),
+      selectedPath: s.selectedPath ?? item.path,
+      unseen: news ? { ...s.unseen, [item.terminalId]: (s.unseen[item.terminalId] ?? 0) + 1 } : s.unseen,
+    }))
     if (!item.opened) void register(item.path)
+    return news
   },
   add: (item) => set((s) => ({ items: addMediaItem(s.items, item), selectedPath: s.selectedPath ?? item.path })),
   clearUnseen: (terminalId) => set((s) => {

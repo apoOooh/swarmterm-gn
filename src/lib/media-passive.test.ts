@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Every offered path "exists" with the current fake stamp.
+const disk = vi.hoisted(() => ({ mtimeMs: 1, size: 10 }))
 vi.mock('@/tauri/files', () => ({
-  // Every offered path "exists": the test is about the chunk handling.
-  checkDetectedMedia: vi.fn(async (_terminalId: string, paths: string[]) => paths),
+  checkDetectedMedia: vi.fn(async (_terminalId: string, paths: string[]) => paths.map((path) => ({ path, ...disk }))),
   registerOpenedMedia: vi.fn(async () => {})
 }))
 
-const media = vi.hoisted(() => ({ detect: vi.fn(), announce: vi.fn(), clearUnseen: vi.fn() }))
+const media = vi.hoisted(() => ({ detect: vi.fn((_item: unknown) => true), announce: vi.fn(), clearUnseen: vi.fn() }))
 vi.mock('@/store/media-store', () => ({ useMediaStore: { getState: () => media } }))
 
-import { forgetMediaOutput, MAX_PENDING_BYTES, noteMediaOutput, SCAN_INTERVAL_MS } from '@/lib/media-passive'
+import { FOUND_RECHECK_MS } from '@/lib/media-detect'
+import { forgetMediaOutput, MAX_PENDING_BYTES, noteHookMedia, noteMediaOutput, SCAN_INTERVAL_MS } from '@/lib/media-passive'
 
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s)
 
@@ -23,6 +25,8 @@ describe('noteMediaOutput', () => {
   afterEach(() => {
     forgetMediaOutput('t1')
     media.detect.mockClear()
+    media.announce.mockClear()
+    disk.mtimeMs = 1
     vi.useRealTimers()
   })
 
@@ -52,5 +56,113 @@ describe('noteMediaOutput', () => {
     noteMediaOutput('t1', 'x'.repeat(MAX_PENDING_BYTES) + '\r\n')
     noteMediaOutput('t1', 'saved C:\\shots\\new.png\r\n')
     expect(await detectedAfterScan()).toEqual(['C:\\shots\\new.png'])
+  })
+
+  it('re-announces a file overwritten in place, but not an unchanged reprint', async () => {
+    const shot = 'saved C:/scratch/xs.png\r\n'
+    noteMediaOutput('t1', shot)
+    expect(await detectedAfterScan()).toEqual(['C:/scratch/xs.png'])
+    // Redraw within the recheck interval: no lookup at all.
+    noteMediaOutput('t1', shot)
+    await vi.advanceTimersByTimeAsync(FOUND_RECHECK_MS)
+    // Reprint after it with the same stamp: looked up, not news.
+    noteMediaOutput('t1', shot)
+    expect(await detectedAfterScan()).toHaveLength(1)
+    disk.mtimeMs = 2
+    await vi.advanceTimersByTimeAsync(FOUND_RECHECK_MS)
+    noteMediaOutput('t1', shot)
+    expect(await detectedAfterScan()).toHaveLength(2)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+    const items = media.detect.mock.calls.map(([i]) => i as { shownAt: number; version: string })
+    expect(items[1].version).toBe('2:10')
+    expect(items[1].shownAt).toBeGreaterThan(items[0].shownAt)
+  })
+
+  it('does not announce what the store says is not news (another pane found the same version)', async () => {
+    media.detect.mockReturnValueOnce(false)
+    noteMediaOutput('t1', 'saved C:/scratch/seen.png\r\n')
+    expect(await detectedAfterScan()).toEqual(['C:/scratch/seen.png'])
+    expect(media.announce).not.toHaveBeenCalled()
+  })
+})
+
+describe('noteHookMedia', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    media.detect.mockClear()
+    media.announce.mockClear()
+  })
+  afterEach(() => {
+    forgetMediaOutput('t1')
+    media.detect.mockClear()
+    media.announce.mockClear()
+    disk.mtimeMs = 1
+    vi.useRealTimers()
+  })
+
+  it('detects and announces a hook-reported file once, also against the screen scan', async () => {
+    noteHookMedia('t1', 'C:\\scratch\\w1.jpg', 1, 10)
+    noteHookMedia('t1', 'c:\\SCRATCH\\w1.jpg', 1, 10)
+    expect(media.detect).toHaveBeenCalledTimes(1)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    expect(media.detect.mock.calls[0][0]).toMatchObject({ path: 'C:\\scratch\\w1.jpg', kind: 'image', terminalId: 't1', opened: false })
+    // The agent's reply names the same file: no second announcement.
+    noteMediaOutput('t1', 'Looked at C:\\scratch\\w1.jpg\r\n')
+    expect(await detectedAfterScan()).toEqual(['C:\\scratch\\w1.jpg'])
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    // Control: on its own, the screen scan does announce that line.
+    noteMediaOutput('t1', 'Looked at C:\\scratch\\w2.jpg\r\n')
+    expect(await detectedAfterScan()).toEqual(['C:\\scratch\\w1.jpg', 'C:\\scratch\\w2.jpg'])
+    expect(media.announce).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-announces a hook-reported file overwritten in place, but not an unchanged Read', () => {
+    noteHookMedia('t1', 'C:/scratch/shot.png', 1, 10)
+    noteHookMedia('t1', 'C:/scratch/shot.png', 1, 10)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(5)
+    noteHookMedia('t1', 'C:/scratch/shot.png', 2, 12)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+    const items = media.detect.mock.calls.map(([i]) => i as { shownAt: number; version: string })
+    expect(items.map((i) => i.version)).toEqual(['1:10', '2:12'])
+    expect(items[1].shownAt).toBeGreaterThan(items[0].shownAt)
+    noteHookMedia('t1', 'C:/scratch/shot.png', 2, 12)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+  })
+
+  it('a screen hit after the hook stays silent for the same stamp, refreshes for a new one', async () => {
+    noteHookMedia('t1', 'C:/scratch/w3.png', 1, 10)
+    await vi.advanceTimersByTimeAsync(FOUND_RECHECK_MS)
+    noteMediaOutput('t1', 'saved C:/scratch/w3.png\r\n')
+    expect(await detectedAfterScan()).toEqual(['C:/scratch/w3.png'])
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    disk.mtimeMs = 2
+    await vi.advanceTimersByTimeAsync(FOUND_RECHECK_MS)
+    noteMediaOutput('t1', 'saved C:/scratch/w3.png\r\n')
+    expect(await detectedAfterScan()).toHaveLength(2)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+    // The hook then reports the same new version: not news twice.
+    noteHookMedia('t1', 'C:/scratch/w3.png', 2, 10)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+  })
+
+  it('a late screen answer with an older version after the hook is silent; a newer one still announces', async () => {
+    noteMediaOutput('t1', 'saved C:/scratch/w4.png\r\n')
+    // The screen lookup is in flight (answers v1) when the hook reports v2.
+    disk.mtimeMs = 1
+    noteHookMedia('t1', 'C:/scratch/w4.png', 2, 10)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(SCAN_INTERVAL_MS * 3)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    expect(media.detect.mock.calls.map(([i]) => (i as { version: string }).version)).toEqual(['2:10'])
+    noteHookMedia('t1', 'C:/scratch/w4.png', 2, 10)
+    expect(media.announce).toHaveBeenCalledTimes(1)
+    noteHookMedia('t1', 'C:/scratch/w4.png', 3, 10)
+    expect(media.announce).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores non-media paths', () => {
+    noteHookMedia('t1', 'C:\\scratch\\notes.txt', 1, 10)
+    expect(media.detect).not.toHaveBeenCalled()
   })
 })

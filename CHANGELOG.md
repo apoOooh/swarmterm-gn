@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Media: an image or video overwritten in place (same name, new content)
+  shows up again in the Media strip with its new thumbnail, whether the agent
+  prints the path again or Claude's Read/Write tools touch it; repeating an
+  unchanged file stays quiet.
+
 ## [1.28.0] - 2026-11-09
 
 - Security: updated the MCP library `rmcp` from 2.1 to 3.9 (RUSTSEC-2026-0457,
