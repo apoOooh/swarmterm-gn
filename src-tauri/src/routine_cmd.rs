@@ -133,11 +133,7 @@ pub struct Captured {
 /// console window, inside a kill-on-close Job Object, with a time limit.
 /// Shared by command routines and the team package (SWA-98), so both get the
 /// same teardown of children left behind.
-pub fn run_captured(
-    mut cmd: Command,
-    timeout: Duration,
-    keep: usize,
-) -> Result<Captured, String> {
+pub fn run_captured(mut cmd: Command, timeout: Duration, keep: usize) -> Result<Captured, String> {
     let started = Instant::now();
     #[cfg(windows)]
     {

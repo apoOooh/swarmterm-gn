@@ -51,7 +51,9 @@ pub fn fingerprint(root: &Path) -> Result<String, String> {
     for rel in &files {
         // Size from metadata first: a wrong folder with one huge file must
         // be refused before it is read into memory.
-        let len = std::fs::metadata(root.join(rel)).map_err(|e| format!("read {rel}: {e}"))?.len();
+        let len = std::fs::metadata(root.join(rel))
+            .map_err(|e| format!("read {rel}: {e}"))?
+            .len();
         total += len;
         if total > MAX_BYTES {
             return Err("The package folder is too large.".into());
@@ -159,14 +161,18 @@ pub async fn team_package_set_source(
 }
 
 fn cfg_args() -> Vec<std::ffi::OsString> {
-    source::git_config_args().into_iter().map(Into::into).collect()
+    source::git_config_args()
+        .into_iter()
+        .map(Into::into)
+        .collect()
 }
 
 /// Run git with our config and no prompts; `Err` carries git's last lines,
 /// prefixed `unreachable:` (no access is an expected state, not a failure).
 fn git(args: Vec<std::ffi::OsString>, cwd: Option<&Path>) -> Result<String, String> {
     let mut cmd = crate::terminal_env::command("git");
-    cmd.env("GIT_TERMINAL_PROMPT", "0").env("GCM_INTERACTIVE", "never");
+    cmd.env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never");
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
@@ -177,7 +183,10 @@ fn git(args: Vec<std::ffi::OsString>, cwd: Option<&Path>) -> Result<String, Stri
         return Err("unreachable: git did not finish in time.".into());
     }
     if c.exit_code != Some(0) {
-        return Err(format!("unreachable: {}", crate::routine_cmd::tail(&c.output)));
+        return Err(format!(
+            "unreachable: {}",
+            crate::routine_cmd::tail(&c.output)
+        ));
     }
     Ok(c.output)
 }
@@ -220,7 +229,8 @@ fn commit_of(dir: &Path) -> Option<String> {
 
 fn run_script(dir: &Path, op: Op, dry_run: bool) -> Result<crate::routine_cmd::Captured, String> {
     let mut cmd = crate::terminal_env::command("node");
-    cmd.current_dir(dir).args(source::node_args(dir, op, dry_run));
+    cmd.current_dir(dir)
+        .args(source::node_args(dir, op, dry_run));
     crate::routine_cmd::run_captured(cmd, TIMEOUT, KEEP_OUTPUT)
         .map_err(|e| format!("Could not run Node.js ({e}). Is Node.js installed?"))
 }
@@ -343,7 +353,10 @@ mod tests {
         std::fs::write(a.path().join("ab"), "c").unwrap();
         let b = tempfile::tempdir().unwrap();
         std::fs::write(b.path().join("a"), "bc").unwrap();
-        assert_ne!(fingerprint(a.path()).unwrap(), fingerprint(b.path()).unwrap());
+        assert_ne!(
+            fingerprint(a.path()).unwrap(),
+            fingerprint(b.path()).unwrap()
+        );
     }
 
     #[cfg(windows)]

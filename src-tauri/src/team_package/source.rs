@@ -95,8 +95,7 @@ impl Op {
 /// `node <script> <op> [--dry-run]`. The script path is absolute, so the
 /// working folder cannot redirect it.
 pub fn node_args(package_dir: &Path, op: Op, dry_run: bool) -> Vec<std::ffi::OsString> {
-    let mut args: Vec<std::ffi::OsString> =
-        vec![package_dir.join(SCRIPT).into(), op.arg().into()];
+    let mut args: Vec<std::ffi::OsString> = vec![package_dir.join(SCRIPT).into(), op.arg().into()];
     if dry_run {
         args.push("--dry-run".into());
     }
@@ -121,7 +120,14 @@ pub fn git_config_args() -> Vec<&'static str> {
 
 pub fn clone_args(url: &str, dest: &Path) -> Vec<std::ffi::OsString> {
     let mut a: Vec<std::ffi::OsString> = git_config_args().into_iter().map(Into::into).collect();
-    for x in ["clone", "--depth", "1", "--no-tags", "--single-branch", "--"] {
+    for x in [
+        "clone",
+        "--depth",
+        "1",
+        "--no-tags",
+        "--single-branch",
+        "--",
+    ] {
         a.push(x.into());
     }
     a.push(url.into());
