@@ -38,6 +38,9 @@ describe('parseAdminPolicy', () => {
     expect(parseAdminPolicy({ disableHangDumps: 1 }).disableHangDumps).toBe(false)
     expect(UNMANAGED_POLICY.disableHangDumps).toBe(false)
     expect(POLICY_DESCRIPTIONS.DisableHangDumps).toBe('Hang dumps are blocked')
+    expect(parseAdminPolicy({ disableTeamPackage: true }).disableTeamPackage).toBe(true)
+    expect(UNMANAGED_POLICY.disableTeamPackage).toBe(false)
+    expect(POLICY_DESCRIPTIONS.DisableTeamPackage).toBe('The team package is blocked')
   })
 })
 

@@ -58,6 +58,7 @@ Real split terminals, one git worktree per agent, and an app your agents can dri
 **Voice and system**
 - Dictation into panes via the buzzkey companion or built-in offline speech recognition (whisper.cpp).
 - Spoken announcements when agents finish (Windows voices, opt-in).
+- Team package: install your team's agent rules, skills and command guards from a Git URL or folder, with a preview before every change.
 - Builds stay responsive: pane processes run in Job Objects with a lower priority class and optional CPU cap.
 
 The [user guide](docs/user-guide.md) covers every feature, shortcut and setting.

@@ -24,6 +24,8 @@ export interface AdminPolicy {
   disablePromptResubmitSend: boolean
   /** Local UI-hang dumps (SWA-85) are off and cannot be turned on. */
   disableHangDumps: boolean
+  /** SWA-98: no team package fetch or install script run. */
+  disableTeamPackage: boolean
   /** Set = the environment filter is forced on with at least this mode. */
   envPolicy: EnvPolicyMode | null
   envAllow: string[]
@@ -52,6 +54,7 @@ export const UNMANAGED_POLICY: AdminPolicy = {
   disablePromptResubmit: false,
   disablePromptResubmitSend: false,
   disableHangDumps: false,
+  disableTeamPackage: false,
   envPolicy: null,
   envAllow: [],
   locked: false,
@@ -72,7 +75,8 @@ const FLAGS = [
   'disablePreviewBrowser',
   'disablePromptResubmit',
   'disablePromptResubmitSend',
-  'disableHangDumps'
+  'disableHangDumps',
+  'disableTeamPackage'
 ] as const
 
 /** Field-wise validation of the IPC answer: only a literal `true` locks. A
@@ -103,6 +107,7 @@ export const POLICY_DESCRIPTIONS: Record<string, string> = {
   DisableRoutineCommands: 'Command routines are blocked',
   DisablePreviewBrowser: 'The web preview is off',
   DisableHangDumps: 'Hang dumps are blocked',
+  DisableTeamPackage: 'The team package is blocked',
   EnvPolicy: 'The environment filter is forced on',
   EnvAllow: 'Extra environment names are allowed by the administrator'
 }

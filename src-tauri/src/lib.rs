@@ -39,6 +39,7 @@ mod shell;
 pub mod statusline;
 // Public so `main.rs` can reach `--hook` without booting Tauri.
 pub mod hook;
+mod team_package;
 mod terminal_env;
 mod tray;
 mod ui_watchdog;
@@ -249,6 +250,10 @@ pub fn run() {
             commands::window_reveal,
             commands::quit_hosted_count,
             commands::run_routine_command,
+            team_package::team_package_get,
+            team_package::run::team_package_set_source,
+            team_package::run::team_package_preview,
+            team_package::run::team_package_run,
             commands::save_clipboard_image,
             commands::files_request,
             commands::files_watch,

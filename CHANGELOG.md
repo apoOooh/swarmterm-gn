@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Settings → Terminal → Team package: fetch a team's rules, skills and command
+  guards for agent CLIs from an https Git URL or a local folder and install,
+  update, remove or check them with the package's own install script. Every
+  change shows a preview first and runs only after you confirm it. Lockable
+  with the new policy value `DisableTeamPackage`; not available in the Corp
+  edition.
+
 ## [1.29.1] - 2026-11-15
 
 - Security (SWA-86): the local MCP server now refuses every request without

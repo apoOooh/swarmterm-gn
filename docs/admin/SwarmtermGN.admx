@@ -87,6 +87,12 @@
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
+    <policy name="DisableTeamPackage" class="Both" displayName="$(string.DisableTeamPackage)" explainText="$(string.DisableTeamPackage_Help)" key="Software\Policies\SwarmtermGN" valueName="DisableTeamPackage">
+      <parentCategory ref="SwarmtermGN" />
+      <supportedOn ref="SUPPORTED_SwarmtermGN" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
     <policy name="EnvPolicy" class="Both" displayName="$(string.EnvPolicy)" explainText="$(string.EnvPolicy_Help)" presentation="$(presentation.EnvPolicy)" key="Software\Policies\SwarmtermGN">
       <parentCategory ref="SwarmtermGN" />
       <supportedOn ref="SUPPORTED_SwarmtermGN" />
