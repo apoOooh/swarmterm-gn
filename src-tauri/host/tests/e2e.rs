@@ -311,11 +311,22 @@ fn unacked_output_stops_the_reader_and_acks_resume_it_in_order() {
         .create(c, spec("t-flow", &["/d", "/q", "/c", &loop_cmd]))
         .unwrap();
 
-    // Wait for the stall: nothing new for 600 ms.
+    // Wait for the first output before timing silence: under load `cmd` can
+    // take longer than the quiet window to print anything, and a window that
+    // starts at spawn would mistake that slow start for a stopped reader
+    // (SWA-91, "sent 0 bytes unacked").
+    let first = Instant::now() + Duration::from_secs(60);
+    while inbox.data.is_empty() {
+        assert!(inbox.pump(first), "no output within 60 s");
+    }
+
+    // Wait for the stall: nothing new for 1.5 s. A stopped reader stays
+    // stopped, so a longer window costs only time, while a short one can
+    // mistake a load hiccup in a slow stream for the stall.
     let deadline = Instant::now() + stall_wait;
-    let mut seen = 0;
+    let mut seen = inbox.data.len();
     let mut quiet_since = Instant::now();
-    while quiet_since.elapsed() < Duration::from_millis(600) {
+    while quiet_since.elapsed() < Duration::from_millis(1500) {
         assert!(
             inbox.pump(deadline),
             "never stalled: {} bytes",

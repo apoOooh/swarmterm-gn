@@ -248,9 +248,14 @@ fn every_registered_command_is_parsed() {
     // parser misses (macro-generated, unusual attribute) would escape the
     // allowlist check.
     let (commands, sources) = collect();
+    // Match the exact path: a substring filter on the absolute path breaks in
+    // a checkout whose folder name happens to contain it (SWA-91 worktree).
+    let lib_rs = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("lib.rs");
     let lib = sources
         .iter()
-        .find(|(file, _)| file.ends_with("lib.rs") && !file.contains("host"))
+        .find(|(file, _)| Path::new(file) == lib_rs)
         .map(|(_, text)| text.as_str())
         .expect("src/lib.rs");
     let start = lib.find("generate_handler![").expect("handler list");
