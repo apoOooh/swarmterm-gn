@@ -30,6 +30,8 @@ export interface DictationOutcome {
 export interface DictationDeps {
   draftInfo: (id: string) => { bracketed: boolean; composing: boolean } | undefined
   agentState: (id: string) => AgentEngineState | undefined
+  /** SWA-96: a choice dialog's empty free-text row is selected (screen read). */
+  freeTextActive: (id: string) => boolean
   write: (id: string, expectedSpawnId: string, data: string) => Promise<void>
   resetInput: (id: string) => void
   markDraft: (id: string, nowMs: number) => number
@@ -52,7 +54,7 @@ function reasonOf(e: unknown): string {
 export async function deliverDictation(req: DictationRequest, deps: DictationDeps): Promise<DictationOutcome> {
   let info = deps.draftInfo(req.terminalId)
   if (!info) return { ok: false, reason: 'target-gone' }
-  const rejection = insertRejection(deps.agentState(req.terminalId))
+  const rejection = insertRejection(deps.agentState(req.terminalId), deps.freeTextActive(req.terminalId))
   if (rejection) return { ok: false, reason: rejection }
 
   // Text written mid-composition would be replaced by the composition's own
@@ -64,7 +66,7 @@ export async function deliverDictation(req: DictationRequest, deps: DictationDep
     if (!info) return { ok: false, reason: 'target-gone' }
   }
   // The wait may have let the agent reach a permission prompt.
-  const late = insertRejection(deps.agentState(req.terminalId))
+  const late = insertRejection(deps.agentState(req.terminalId), deps.freeTextActive(req.terminalId))
   if (late) return { ok: false, reason: late }
 
   const bracketed = info.bracketed

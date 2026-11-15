@@ -75,6 +75,7 @@ import {
 } from '@/lib/terminal-input-client'
 import { AgentStateDetector, type DetectorDeps } from '@/lib/agent-state/detector'
 import { promptBoxDraftText, promptBoxHasDraft, type DraftRow } from '@/lib/prompt-draft'
+import { choiceFreeTextActive } from '@/lib/choice-freetext'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { acceptsAgentHooks } from '@/lib/agent-state/hook-signal'
 import { useAgentStateStore } from '@/store/agent-state-store'
@@ -1576,6 +1577,23 @@ export function paneHasPromptDraft(id: string): boolean {
     lines.push(text.trimEnd())
   }
   return promptBoxHasDraft(lines.join('\n'))
+}
+
+/**
+ * SWA-96: a Claude pane shows a choice dialog with its empty free-text row
+ * selected (`choiceFreeTextActive`). Read on demand for dictation only;
+ * Claude Code only, false for anything else.
+ */
+export function paneChoiceFreeText(id: string): boolean {
+  const entry = entries.get(id)
+  if (!entry || !entry.opened || entry.config.agentId !== 'claude-code') return false
+  const buffer = entry.term.buffer.active
+  const end = buffer.length
+  const rows: string[] = []
+  for (let y = Math.max(0, end - entry.term.rows); y < end; y++) {
+    rows.push(buffer.getLine(y)?.translateToString(true) ?? '')
+  }
+  return choiceFreeTextActive(rows)
 }
 
 /**
