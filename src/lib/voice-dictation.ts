@@ -1,3 +1,4 @@
+import { TARGET_BUSY_COPY } from '@/lib/voice-insert'
 /**
  * Built-in speech source (SWA-38), renderer side. Rust owns the recording
  * and the pin; it reports each phase as `voice:dictation`, and this module
@@ -61,7 +62,7 @@ const COPY: Record<string, string> = {
   'too-short': 'recording was too short',
   expired: 'recording hit the 2-minute limit',
   'target-gone': 'pane closed or restarted',
-  'target-busy': 'agent is waiting for input',
+  'target-busy': TARGET_BUSY_COPY,
   composing: 'input method still composing',
   'pin-invalid': 'dictation was cancelled',
   'model-load-failed': 'the speech model could not be loaded — delete and download it again',

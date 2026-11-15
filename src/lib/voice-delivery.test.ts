@@ -7,6 +7,7 @@ function setup(over: Partial<DictationDeps> = {}) {
   const deps: DictationDeps = {
     draftInfo: () => ({ bracketed: true, composing: false }),
     agentState: () => 'idle',
+    freeTextActive: () => false,
     write: vi.fn(async (_id: string, _spawn: string, data: string) => {
       calls.push(`write:${JSON.stringify(data)}`)
     }),
@@ -44,6 +45,14 @@ describe('deliverDictation', () => {
     const { deps, calls } = setup({ agentState: () => 'blocked' })
     expect(await deliverDictation(req, deps)).toEqual({ ok: false, reason: 'target-busy' })
     expect(calls).toEqual([])
+  })
+
+  it('inserts into a blocked pane whose choice free-text row is selected, without Enter (SWA-96)', async () => {
+    const { deps, calls } = setup({ agentState: () => 'blocked', freeTextActive: () => true })
+    expect(await deliverDictation({ ...req, submit: true }, deps)).toMatchObject({ ok: true })
+    expect(calls).toContain('reset')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(deps.write).toHaveBeenCalledTimes(1)
   })
 
   it('reports target-gone for an unknown pane and for a rejected checked write', async () => {
@@ -88,5 +97,33 @@ describe('deliverDictation', () => {
     const out = await deliverDictation({ ...req, text: 'a\nb', submit: true }, deps)
     expect(out.submitScheduled).toBe(false)
     expect(calls[2]).toBe('write:"a b"')
+  })
+})
+
+describe('deliverDictation into a choice free-text row (SWA-96)', () => {
+  it('inserts single-line and never sends Enter, even when the state turns idle', async () => {
+    let state: 'blocked' | 'idle' = 'blocked'
+    const { deps, calls } = setup({
+      agentState: () => state,
+      freeTextActive: () => true,
+      write: vi.fn(async (_id: string, _spawn: string, data: string) => {
+        calls.push(`write:${JSON.stringify(data)}`)
+        state = 'idle'
+      })
+    })
+    expect(await deliverDictation({ ...req, text: 'a\nb\tc', submit: true }, deps)).toEqual({
+      ok: true,
+      submitScheduled: false
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    const writes = calls.filter((c) => c.startsWith('write'))
+    expect(writes).toHaveLength(1)
+    expect(JSON.parse(writes[0].slice(6))).toBe(String.fromCharCode(27) + '[200~a b c' + String.fromCharCode(27) + '[201~')
+  })
+
+  it('does not read the screen for a pane that is not blocked', async () => {
+    const freeTextActive = vi.fn(() => true)
+    await deliverDictation(req, setup({ freeTextActive }).deps)
+    expect(freeTextActive).not.toHaveBeenCalled()
   })
 })

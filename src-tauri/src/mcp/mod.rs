@@ -7,6 +7,7 @@ pub mod clients;
 pub mod config;
 pub mod context_usage;
 pub mod entry;
+pub mod gate;
 pub mod peer_state;
 pub mod rate_limits;
 pub mod server;
@@ -95,7 +96,7 @@ pub async fn start(app: AppHandle) -> Result<Arc<str>, String> {
         config::register_qwen(&app);
     }
 
-    let router = server::axum_router(app.clone());
+    let router = server::axum_router(app.clone(), addr.port());
     let mut stop = shutdown_signal().subscribe();
     let handle = tokio::spawn(async move {
         let res = axum::serve(listener, router)

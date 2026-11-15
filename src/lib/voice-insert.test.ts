@@ -28,6 +28,11 @@ describe('insertRejection', () => {
     expect(insertRejection('blocked')).toBe('target-busy')
   })
 
+  it('takes text in a choice dialog whose free-text row is selected (SWA-96)', () => {
+    expect(insertRejection('blocked', true)).toBeNull()
+    expect(insertRejection('blocked', false)).toBe('target-busy')
+  })
+
   it('accepts working, idle and unknown panes as a draft target', () => {
     for (const s of ['working', 'idle', 'unknown', undefined] as const) {
       expect(insertRejection(s)).toBeNull()
@@ -68,5 +73,18 @@ describe('shouldSubmitDictation', () => {
     expect(shouldSubmitDictation({ ...base, sameGeneration: false })).toBe(false)
     expect(shouldSubmitDictation({ ...base, inputStampNow: 101 })).toBe(false)
     expect(shouldSubmitDictation({ ...base, inputStampNow: undefined })).toBe(false)
+  })
+})
+
+describe('prepareDictationBody singleLine (SWA-96)', () => {
+  it('flattens CR, LF and TAB inside the paste', () => {
+    expect(prepareDictationBody('a\r\nb\tc', true, true)).toBe('\x1b[200~a b c\x1b[201~')
+  })
+})
+
+describe('insertRejection with a free-text choice (SWA-96)', () => {
+  it('takes text only when the free-text row is selected', () => {
+    expect(insertRejection('blocked', true)).toBeNull()
+    expect(insertRejection('blocked', false)).toBe('target-busy')
   })
 })

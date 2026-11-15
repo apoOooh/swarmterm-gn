@@ -15,13 +15,20 @@ import type { AgentEngineState } from '@/lib/agent-state/types'
 
 export type DictationRejection = 'target-busy'
 
+/** Bell copy for `target-busy`, shared by buzzkey and built-in dictation. */
+export const TARGET_BUSY_COPY =
+  'the pane waits for an answer — dictation only goes into an empty "Type something" field of a choice'
+
 /**
  * Bytes for the body write. Without bracketed paste (a plain shell) a line
  * break IS Enter and a tab IS completion, so both become spaces: dictation
  * must never run or complete anything on its own.
  */
-export function prepareDictationBody(text: string, bracketed: boolean): string {
+export function prepareDictationBody(text: string, bracketed: boolean, singleLine = false): string {
   const clean = sanitizePromptText(text)
+  // SWA-96: a choice dialog's free-text row is one line; a CR there could
+  // confirm the answer and a tab switch the question, even inside a paste.
+  if (bracketed && singleLine) return `\x1b[200~${clean.replace(/\r\n|[\r\n\t]/g, ' ')}\x1b[201~`
   if (bracketed) return `\x1b[200~${clean.replace(/\r?\n/g, '\r')}\x1b[201~`
   return clean.replace(/\r\n|[\r\n\t]/g, ' ')
 }
@@ -31,9 +38,17 @@ export function prepareDictationBody(text: string, bracketed: boolean): string {
  * answer the prompt. The state is detected asynchronously from output, so
  * this narrows the window rather than closing it — which is why submit is
  * off by default.
+ *
+ * SWA-96: the one blocked screen that takes text is a choice dialog with its
+ * empty free-text row selected (`choiceFreeTextActive`); the caller reads it
+ * from the screen. Submit stays off there: `shouldSubmitDictation` refuses
+ * every blocked pane, so the user confirms the answer.
  */
-export function insertRejection(state: AgentEngineState | undefined): DictationRejection | null {
-  return state === 'blocked' ? 'target-busy' : null
+export function insertRejection(
+  state: AgentEngineState | undefined,
+  freeTextActive = false
+): DictationRejection | null {
+  return state === 'blocked' && !freeTextActive ? 'target-busy' : null
 }
 
 export interface SubmitCheck {
