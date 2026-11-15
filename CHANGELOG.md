@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Security (SWA-86): the local MCP server now refuses every request without
+  a live pane's token, including `initialize` and `tools/list`, and all
+  loopback routes reject foreign `Host` headers (DNS rebinding) and browser
+  requests.
 - Dictation now lands in the empty "Type something" field of a Claude Code
   choice dialog instead of being refused (SWA-96); permission prompts stay
   locked and nothing is confirmed automatically.

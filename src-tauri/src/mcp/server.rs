@@ -64,6 +64,7 @@ use axum::Json;
 
 use crate::mcp::auth::{self, AuthError, TerminalId};
 use crate::mcp::context_usage::{self, AgentContextEvent};
+use crate::mcp::gate;
 use crate::mcp::rate_limits::{self, AgentUsageEvent};
 use crate::pty::AppState;
 
@@ -204,7 +205,7 @@ impl ServerHandler for SwarmtermMcpServer {
 /// scopes a call to a terminal, so `LocalSessionManager`'s in-memory session
 /// bookkeeping is used purely to satisfy the transport's type, not to persist
 /// caller state across calls.
-pub fn axum_router(app: AppHandle) -> axum::Router {
+pub fn axum_router(app: AppHandle, port: u16) -> axum::Router {
     let session_manager = Arc::new(LocalSessionManager::default());
     let service = StreamableHttpService::new(
         {
@@ -229,9 +230,13 @@ pub fn axum_router(app: AppHandle) -> axum::Router {
         // layer for the same reason: a hook POST is Swarmterm's own
         // `--hook` CLI talking to itself, not an MCP client, so it must
         // never stamp `connected` either.
+        //
+        // SWA-86: the same layer is the gate — Host, browser and a live bearer
+        // are checked here, so `initialize`/`tools/list` without a token never
+        // reach rmcp.
         .layer(axum::middleware::from_fn_with_state(
-            app.clone(),
-            record_client,
+            (app.clone(), port),
+            mcp_gate,
         ))
         .route("/status", get(status_handler))
         .route("/hook", post(hook_handler))
@@ -243,38 +248,50 @@ pub fn axum_router(app: AppHandle) -> axum::Router {
                 2 * crate::resubmit::MAX_TEXT + 1024,
             )),
         )
+        // Outermost: DNS rebinding reaches the side routes as well, and they
+        // only check their bearer. A rebound page sends its own Host.
+        .layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| async move {
+                if gate::host_ok(req.headers(), port) {
+                    next.run(req).await
+                } else {
+                    gate::Reject::Host.status().into_response()
+                }
+            },
+        ))
         .with_state(app)
 }
 
-/// Middleware: stamp the caller's pane id (resolved from its bearer secret)
-/// into `AppState.mcp_clients`.
-async fn record_client(
-    AxumState(app): AxumState<AppHandle>,
+/// Middleware: refuse anything but a live pane's bearer (SWA-86), then stamp
+/// the caller's pane id into `AppState.mcp_clients`.
+async fn mcp_gate(
+    AxumState((app, port)): AxumState<(AppHandle, u16)>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    if let Some(header) = req
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-    {
-        let state = app.state::<AppState>();
-        // Only live panes are recorded, keyed by pane id (never the secret):
-        // `seen` is pruned per PTY, so an arbitrary loopback token would
-        // otherwise stay in it forever.
-        if let Some(id) = state.live_session_owner(auth::bearer(header)) {
-            let first = state
-                .mcp_clients
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .touch(&id);
-            // A client reaching us (usually `initialize`) is the handshake: a
-            // member dragged in earlier flips to connected without first
-            // having to call a war_room tool (SWA-30).
-            if first {
-                crate::commands::connect_war_room_member(&app, &id);
-            }
+    let state = app.state::<AppState>();
+    let id = match gate::check_mcp(req.headers(), port, |t| state.live_session_owner(t)) {
+        Ok(id) => id,
+        Err(reject) => {
+            let status = reject.status();
+            return if status == StatusCode::UNAUTHORIZED {
+                (status, [(axum::http::header::WWW_AUTHENTICATE, "Bearer")]).into_response()
+            } else {
+                status.into_response()
+            };
         }
+    };
+    // Keyed by pane id (never the secret); `seen` is pruned per PTY.
+    let first = state
+        .mcp_clients
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .touch(&id);
+    // A client reaching us (usually `initialize`) is the handshake: a member
+    // dragged in earlier flips to connected without first having to call a
+    // war_room tool (SWA-30).
+    if first {
+        crate::commands::connect_war_room_member(&app, &id);
     }
     next.run(req).await
 }
@@ -330,14 +347,6 @@ struct ResubmitEvent {
     asked: crate::voice::completion::Fingerprint,
 }
 
-/// A browser can reach loopback too. Every browser request carries Origin or
-/// Fetch Metadata; the guard (node:http) sends neither.
-fn from_browser(headers: &HeaderMap) -> bool {
-    ["origin", "sec-fetch-site", "sec-fetch-mode"]
-        .iter()
-        .any(|h| headers.contains_key(*h))
-}
-
 /// The guard waits for this answer (≈1 s budget): `accepted` = the masked
 /// prompt goes back into the pane, so the guard skips its clipboard copy.
 fn resubmit_answer(accepted: bool) -> Response {
@@ -356,7 +365,7 @@ async fn resubmit_handler(
 ) -> Response {
     use std::time::{Duration, Instant};
     use tauri::Emitter;
-    if from_browser(&headers) {
+    if gate::from_browser(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let Some(terminal_id) = live_caller(&app, &headers) else {

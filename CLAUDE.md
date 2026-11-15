@@ -224,8 +224,10 @@ touched `src-tauri/` — `cargo test`. Don't assert success without the output.
   Codex needs `env_vars` for the two variables, and the per-process `-c url`
   pin (`hook::codex::with_mcp_url`) is only added while the profile's
   `config.toml` has no stdio entry — Codex rejects `url` on a stdio server.
+  Every `/mcp` request (also `initialize`) needs a live pane's bearer, and
+  every route a loopback `Host` with our port (`mcp/gate.rs`, SWA-86).
   "Connected" is set by the first inbound MCP request carrying the pane's
-  bearer (`record_client` middleware → `connect_war_room_member`) and again
+  bearer (`mcp_gate` middleware → `connect_war_room_member`) and again
   on join if that client was already seen — no tool call needed. The
   Settings → MCP switch (`mcp/toggle.rs`) is an opt-out set every MCP writer
   consults (`register_*`, `accounts::enroll`, the Codex `-c` pin); removal
