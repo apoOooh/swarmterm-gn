@@ -17,6 +17,7 @@ import { addressedTarget, dictationTarget } from '@/lib/voice-focus'
 import { resolvePaneTitle } from '@/lib/pane-title'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { deliverDictation } from '@/lib/voice-delivery'
+import { TARGET_BUSY_COPY } from '@/lib/voice-insert'
 import { describeFocusedElement } from '@/lib/terminal-focus'
 import {
   getTerminalAgentId,
@@ -39,7 +40,7 @@ import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 /** Notification copy for a dictation that did not land. */
 const REASON_COPY: Record<string, string> = {
   'target-gone': 'pane closed or restarted',
-  'target-busy': 'the pane is waiting for a confirmation',
+  'target-busy': TARGET_BUSY_COPY,
   composing: 'input method still composing',
   'write-failed': 'write failed'
 }

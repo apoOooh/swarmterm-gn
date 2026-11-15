@@ -75,3 +75,16 @@ describe('shouldSubmitDictation', () => {
     expect(shouldSubmitDictation({ ...base, inputStampNow: undefined })).toBe(false)
   })
 })
+
+describe('prepareDictationBody singleLine (SWA-96)', () => {
+  it('flattens CR, LF and TAB inside the paste', () => {
+    expect(prepareDictationBody('a\r\nb\tc', true, true)).toBe('\x1b[200~a b c\x1b[201~')
+  })
+})
+
+describe('insertRejection with a free-text choice (SWA-96)', () => {
+  it('takes text only when the free-text row is selected', () => {
+    expect(insertRejection('blocked', true)).toBeNull()
+    expect(insertRejection('blocked', false)).toBe('target-busy')
+  })
+})

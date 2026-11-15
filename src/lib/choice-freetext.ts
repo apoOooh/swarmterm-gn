@@ -17,10 +17,21 @@
 const SELECTED_OPTION = /^\s*[❯>]\s*\d+\.\s*(.*)$/
 const FREE_TEXT_LABEL = /^type something\b/i
 
+/** Permission and approval phrasing from the Claude manifest's blockers;
+ *  any of them on screen vetoes, even if a question merely uses the words. */
+const PERMISSION_MARKERS = [
+  'do you want to',
+  'would you like to',
+  'waiting for permission',
+  'allow this connection',
+  'tab to amend',
+  'ctrl+e to explain'
+]
+
 export function choiceFreeTextActive(rows: readonly string[]): boolean {
   const lower = rows.map((r) => r.toLowerCase())
   if (!lower.some((r) => r.includes('enter to select'))) return false
-  if (lower.some((r) => r.includes('do you want to proceed?'))) return false
+  if (lower.some((r) => PERMISSION_MARKERS.some((m) => r.includes(m)))) return false
   const selected = rows.map((r) => SELECTED_OPTION.exec(r)).filter((m) => m !== null)
   // Exactly one highlighted option, or the layout is not the one we know.
   if (selected.length !== 1) return false

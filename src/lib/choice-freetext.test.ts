@@ -39,6 +39,11 @@ describe('choiceFreeTextActive', () => {
     expect(choiceFreeTextActive(rows)).toBe(false)
   })
 
+  it('is false on approval phrasing such as "Would you like to proceed?"', () => {
+    expect(choiceFreeTextActive(['Would you like to proceed?', ...dialog(3)])).toBe(false)
+    expect(choiceFreeTextActive(['Do you want to make this edit?', ...dialog(3)])).toBe(false)
+  })
+
   it('is false without the select footer', () => {
     expect(choiceFreeTextActive(dialog(3).slice(0, -1))).toBe(false)
   })
