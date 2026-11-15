@@ -17,13 +17,15 @@ import { addressedTarget, dictationTarget } from '@/lib/voice-focus'
 import { resolvePaneTitle } from '@/lib/pane-title'
 import { DEFAULT_TEMPLATE_ID } from '@/lib/templates'
 import { deliverDictation } from '@/lib/voice-delivery'
+import { TARGET_BUSY_COPY } from '@/lib/voice-insert'
 import { describeFocusedElement } from '@/lib/terminal-focus'
 import {
   getTerminalAgentId,
   getTerminalDraftInfo,
   isAnyTerminalFocused,
   resetTerminalInputSegment,
-  setUserInputHandler
+  setUserInputHandler,
+  paneChoiceFreeText
 } from '@/lib/terminal-registry'
 import { SUBMIT_DELAY_MS } from '@/lib/war-room-delivery'
 import { useAppStore, selectFocusedTerminalId, visibleLeaves } from '@/store/app-store'
@@ -38,7 +40,7 @@ import { useVoiceDictationStore } from '@/store/voice-dictation-store'
 /** Notification copy for a dictation that did not land. */
 const REASON_COPY: Record<string, string> = {
   'target-gone': 'pane closed or restarted',
-  'target-busy': 'agent is waiting for input',
+  'target-busy': TARGET_BUSY_COPY,
   composing: 'input method still composing',
   'write-failed': 'write failed'
 }
@@ -106,6 +108,7 @@ export function wireVoice(isSettingsOpen: () => boolean): () => void {
     void deliverDictation(e, {
       draftInfo: getTerminalDraftInfo,
       agentState: (id) => useAgentStateStore.getState().byId[id]?.state,
+      freeTextActive: paneChoiceFreeText,
       write: writeTerminalChecked,
       resetInput: resetTerminalInputSegment,
       markDraft: (id, now) => useTerminalTypingStore.getState().markDraft(id, now),
