@@ -54,7 +54,9 @@ function reasonOf(e: unknown): string {
 export async function deliverDictation(req: DictationRequest, deps: DictationDeps): Promise<DictationOutcome> {
   let info = deps.draftInfo(req.terminalId)
   if (!info) return { ok: false, reason: 'target-gone' }
-  const rejection = insertRejection(deps.agentState(req.terminalId), deps.freeTextActive(req.terminalId))
+  // The screen is read only for a blocked pane (SWA-96).
+  const freeText = () => deps.agentState(req.terminalId) === 'blocked' && deps.freeTextActive(req.terminalId)
+  const rejection = insertRejection(deps.agentState(req.terminalId), freeText())
   if (rejection) return { ok: false, reason: rejection }
 
   // Text written mid-composition would be replaced by the composition's own
@@ -66,7 +68,8 @@ export async function deliverDictation(req: DictationRequest, deps: DictationDep
     if (!info) return { ok: false, reason: 'target-gone' }
   }
   // The wait may have let the agent reach a permission prompt.
-  const late = insertRejection(deps.agentState(req.terminalId), deps.freeTextActive(req.terminalId))
+  const viaFreeText = freeText()
+  const late = insertRejection(deps.agentState(req.terminalId), viaFreeText)
   if (late) return { ok: false, reason: late }
 
   const bracketed = info.bracketed
@@ -77,12 +80,14 @@ export async function deliverDictation(req: DictationRequest, deps: DictationDep
   deps.resetInput(req.terminalId)
   const stamp = deps.markDraft(req.terminalId, deps.now())
   try {
-    await deps.write(req.terminalId, req.expectedSpawnId, prepareDictationBody(req.text, bracketed))
+    await deps.write(req.terminalId, req.expectedSpawnId, prepareDictationBody(req.text, bracketed, viaFreeText))
   } catch (e) {
     return { ok: false, reason: reasonOf(e) }
   }
 
-  const wantSubmit = req.submit && bracketed
+  // An answer in a choice dialog is never confirmed for the user, whatever
+  // the state says by the time the Enter would go out.
+  const wantSubmit = req.submit && bracketed && !viaFreeText
   if (wantSubmit) void submitLater(req, deps, stamp)
   return { ok: true, submitScheduled: wantSubmit }
 }
