@@ -250,7 +250,9 @@ fn every_registered_command_is_parsed() {
     let (commands, sources) = collect();
     // Match the exact path: a substring filter on the absolute path breaks in
     // a checkout whose folder name happens to contain it (SWA-91 worktree).
-    let lib_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("lib.rs");
+    let lib_rs = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("lib.rs");
     let lib = sources
         .iter()
         .find(|(file, _)| Path::new(file) == lib_rs)
