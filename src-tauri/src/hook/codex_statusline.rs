@@ -580,7 +580,9 @@ mod tests {
             items(Some("0.168.0"), Preset::Custom, &list, true).0,
             COMPACT.to_vec()
         );
-        assert!(items(Some("0.167.0"), Preset::Custom, &list, false).0.is_empty());
+        assert!(items(Some("0.167.0"), Preset::Custom, &list, false)
+            .0
+            .is_empty());
     }
 
     #[test]

@@ -70,7 +70,12 @@ mod tests {
 
     #[test]
     fn preview_has_every_template_and_respects_the_width() {
-        for claude in [Preset::Compact, Preset::Extended, Preset::Detailed, Preset::Custom] {
+        for claude in [
+            Preset::Compact,
+            Preset::Extended,
+            Preset::Detailed,
+            Preset::Custom,
+        ] {
             let s = StatuslineSettings {
                 claude,
                 ..Default::default()

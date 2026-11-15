@@ -647,7 +647,15 @@ mod tests {
     #[test]
     fn custom_follows_order_and_switches() {
         use Segment::*;
-        let r = custom(&[(Branch, true), (Mcp, true), (Model, true), (FiveHour, false)], 200);
+        let r = custom(
+            &[
+                (Branch, true),
+                (Mcp, true),
+                (Model, true),
+                (FiveHour, false),
+            ],
+            200,
+        );
         assert_eq!(r.len(), 1);
         assert!(r[0].starts_with("⎇ dev | mcp ✓ | Opus 5.5 "), "{r:?}");
         assert!(!r[0].contains("5h") && !r[0].contains("high") && !r[0].contains('$'));
