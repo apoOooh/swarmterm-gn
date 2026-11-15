@@ -10,7 +10,7 @@
 //! * In a pane (`SWARMTERM_MCP_URL` + `SWARMTERM_SESSION` set) it relays each
 //!   JSON-RPC line to the pane's HTTP endpoint with the pane's bearer and
 //!   writes the answers back. The server sees exactly what a direct HTTP
-//!   client sends, so auth, `record_client` ("connected") and every tool are
+//!   client sends, so auth, `mcp_gate` ("connected") and every tool are
 //!   unchanged; the proxy adds no capability.
 //! * Anywhere else, or when the app is not reachable at `initialize`, it is a
 //!   valid MCP server with no tools: the CLI shows it connected and quiet.
@@ -552,6 +552,7 @@ mod tests {
     struct Fake {
         sessions: std::sync::Mutex<Vec<String>>,
         seen_auth: std::sync::Mutex<Vec<String>>,
+        seen_headers: std::sync::Mutex<Vec<HeaderMap>>,
         inits: AtomicUsize,
     }
 
@@ -562,6 +563,7 @@ mod tests {
             .unwrap_or_default()
             .to_string();
         fake.seen_auth.lock().unwrap().push(auth.clone());
+        fake.seen_headers.lock().unwrap().push(headers.clone());
         if auth != "Bearer tok" {
             return StatusCode::UNAUTHORIZED.into_response();
         }
@@ -642,6 +644,13 @@ mod tests {
     #[tokio::test]
     async fn relays_through_the_session_with_the_panes_bearer() {
         let (fake, url) = start_fake().await;
+        let port: u16 = url
+            .trim_end_matches("/mcp")
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
         let up = Upstream {
             url,
             bearer: "tok".into(),
@@ -665,7 +674,13 @@ mod tests {
             .unwrap()
             .iter()
             .all(|a| a == "Bearer tok"));
+        // SWA-86: every relayed request passes the app's Host/browser gate.
+        for h in fake.seen_headers.lock().unwrap().iter() {
+            assert!(crate::mcp::gate::host_ok(h, port), "{h:?}");
+            assert!(!crate::mcp::gate::from_browser(h), "{h:?}");
+        }
     }
+
 
     #[tokio::test]
     async fn a_lost_session_is_renewed_once_and_the_call_retried() {

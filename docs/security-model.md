@@ -63,7 +63,14 @@ rotated on respawn, separate from the pane id that War Room peers can see
 (`src-tauri/src/mcp/session_tokens.rs`). A request without an
 `Authorization: Bearer` header carrying the token of a live pane is refused,
 and the token stops working when the pane ends (`src-tauri/src/mcp/server.rs`).
-The same check guards `/hook` and `/status`, so one pane cannot act as another.
+On `/mcp` this holds for every request, including `initialize` and
+`tools/list` (401 before the MCP layer sees the body; SWA-86,
+`src-tauri/src/mcp/gate.rs`). Loopback is reachable from web pages too, so
+every route also requires exactly one `Host` header naming `127.0.0.1`,
+`localhost` or `[::1]` with the server's port (403 otherwise — a page using DNS
+rebinding sends its own host name), and `/mcp` and `/resubmit` refuse requests
+carrying `Origin` or Fetch Metadata headers (403).
+The same bearer check guards `/hook` and `/status`, so one pane cannot act as another.
 `/hook` takes a closed body (`HookBody`, unknown fields refused): a signal,
 session and turn ids, and (2026-11-11) one absolute image/video path a Claude
 `Read`/`Write` touched plus the agent's absolute cwd, both at most 1024
