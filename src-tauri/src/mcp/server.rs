@@ -63,8 +63,8 @@ use axum::routing::{get, post};
 use axum::Json;
 
 use crate::mcp::auth::{self, AuthError, TerminalId};
-use crate::mcp::gate;
 use crate::mcp::context_usage::{self, AgentContextEvent};
+use crate::mcp::gate;
 use crate::mcp::rate_limits::{self, AgentUsageEvent};
 use crate::pty::AppState;
 

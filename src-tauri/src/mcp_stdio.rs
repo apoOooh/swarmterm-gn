@@ -681,7 +681,6 @@ mod tests {
         }
     }
 
-
     #[tokio::test]
     async fn a_lost_session_is_renewed_once_and_the_call_retried() {
         let (fake, url) = start_fake().await;

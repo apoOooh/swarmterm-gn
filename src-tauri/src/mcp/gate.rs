@@ -106,7 +106,12 @@ mod tests {
 
     #[test]
     fn loopback_hosts_with_our_port_pass() {
-        for host in ["127.0.0.1:52431", "localhost:52431", "LOCALHOST:52431", "[::1]:52431"] {
+        for host in [
+            "127.0.0.1:52431",
+            "localhost:52431",
+            "LOCALHOST:52431",
+            "[::1]:52431",
+        ] {
             assert!(host_ok(&headers(&[("host", host)]), PORT), "{host}");
         }
     }
@@ -146,7 +151,11 @@ mod tests {
         let host = ("host", "127.0.0.1:52431");
         assert_eq!(check_mcp(&headers(&[host]), PORT, owner), Err(Reject::Auth));
         assert_eq!(
-            check_mcp(&headers(&[host, ("authorization", "Bearer nope")]), PORT, owner),
+            check_mcp(
+                &headers(&[host, ("authorization", "Bearer nope")]),
+                PORT,
+                owner
+            ),
             Err(Reject::Auth)
         );
         assert_eq!(
@@ -154,7 +163,11 @@ mod tests {
             Err(Reject::Auth)
         );
         assert_eq!(
-            check_mcp(&headers(&[host, ("authorization", "Bearer good")]), PORT, owner),
+            check_mcp(
+                &headers(&[host, ("authorization", "Bearer good")]),
+                PORT,
+                owner
+            ),
             Ok("pane-1".into())
         );
     }
@@ -173,7 +186,10 @@ mod tests {
 
     #[test]
     fn mcp_refuses_a_rebound_host_before_looking_at_the_token() {
-        let hm = headers(&[("host", "evil.example:52431"), ("authorization", "Bearer good")]);
+        let hm = headers(&[
+            ("host", "evil.example:52431"),
+            ("authorization", "Bearer good"),
+        ]);
         let mut looked = false;
         let r = check_mcp(&hm, PORT, |t| {
             looked = true;
