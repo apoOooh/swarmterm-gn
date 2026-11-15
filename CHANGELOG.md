@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.29.1] - 2026-11-15
+
 - Security (SWA-86): the local MCP server now refuses every request without
   a live pane's token, including `initialize` and `tools/list`, and all
   loopback routes reject foreign `Host` headers (DNS rebinding) and browser
