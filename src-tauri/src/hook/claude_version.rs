@@ -419,8 +419,11 @@ mod tests {
         let started = Instant::now();
         let out = run_bounded(cmd("ping -n 30 127.0.0.1 >nul"), Duration::from_millis(500));
         assert_eq!(out, None);
+        // Bounded against the hang (~29 s), not a tight wall clock: in a full
+        // parallel test run, spawning cmd.exe plus the job teardown alone took
+        // 5 s (SWA-100). Half the hang still proves the CLI was cut off.
         assert!(
-            started.elapsed() < Duration::from_secs(3),
+            started.elapsed() < Duration::from_secs(15),
             "{:?}",
             started.elapsed()
         );

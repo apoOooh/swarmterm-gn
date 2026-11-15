@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { MANAGED_LABEL, isLaunchModeLocked } from '@/lib/policy'
-import { usePolicyStore } from '@/store/policy-store'
+import { useEdition, usePolicyStore } from '@/store/policy-store'
+import { editionFeatures } from '@/lib/edition'
+import { TeamPackageSection } from './TeamPackageSection'
 import { Check, Minus, Plus } from 'lucide-react'
 import { platformShells, type ShellId, type ShellMeta } from '@/lib/terminal-pref'
 import {
@@ -54,6 +56,7 @@ export function TerminalPanel(): ReactElement {
   const setShellId = useTerminalPrefStore((s) => s.setShellId)
   const [available, setAvailable] = useState<AvailableShell[] | null>(null)
   const [staleId, setStaleId] = useState<ShellId | null>(null)
+  const features = editionFeatures(useEdition())
 
   useEffect(() => {
     let cancelled = false
@@ -138,6 +141,7 @@ export function TerminalPanel(): ReactElement {
       <DefaultLaunchModeSettings />
 
       <AgentSafetySettings />
+      {features.teamPackage && <TeamPackageSection />}
 
       <BuildPrioritySettings />
       <EnvironmentSettings />

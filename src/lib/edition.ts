@@ -19,7 +19,11 @@ export function productName(edition: Edition): string {
 
 /** Features whose code the Corp binary does not contain, so their UI is
  *  hidden rather than greyed out. */
-export function editionFeatures(edition: Edition): { companion: boolean; modelDownload: boolean } {
+export function editionFeatures(edition: Edition): {
+  companion: boolean
+  modelDownload: boolean
+  teamPackage: boolean
+} {
   const on = edition !== 'corp'
-  return { companion: on, modelDownload: on }
+  return { companion: on, modelDownload: on, teamPackage: on }
 }
