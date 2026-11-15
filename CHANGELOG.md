@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Dictation now lands in the empty "Type something" field of a Claude Code
+  choice dialog instead of being refused (SWA-96); permission prompts stay
+  locked and nothing is confirmed automatically.
+
 ## [1.29.0] - 2026-11-11
 
 - Status line templates (SWA-92): Compact, Extended, Detailed or Off under

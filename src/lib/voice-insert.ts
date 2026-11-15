@@ -31,9 +31,17 @@ export function prepareDictationBody(text: string, bracketed: boolean): string {
  * answer the prompt. The state is detected asynchronously from output, so
  * this narrows the window rather than closing it — which is why submit is
  * off by default.
+ *
+ * SWA-96: the one blocked screen that takes text is a choice dialog with its
+ * empty free-text row selected (`choiceFreeTextActive`); the caller reads it
+ * from the screen. Submit stays off there: `shouldSubmitDictation` refuses
+ * every blocked pane, so the user confirms the answer.
  */
-export function insertRejection(state: AgentEngineState | undefined): DictationRejection | null {
-  return state === 'blocked' ? 'target-busy' : null
+export function insertRejection(
+  state: AgentEngineState | undefined,
+  freeTextActive = false
+): DictationRejection | null {
+  return state === 'blocked' && !freeTextActive ? 'target-busy' : null
 }
 
 export interface SubmitCheck {

@@ -7,6 +7,7 @@ function setup(over: Partial<DictationDeps> = {}) {
   const deps: DictationDeps = {
     draftInfo: () => ({ bracketed: true, composing: false }),
     agentState: () => 'idle',
+    freeTextActive: () => false,
     write: vi.fn(async (_id: string, _spawn: string, data: string) => {
       calls.push(`write:${JSON.stringify(data)}`)
     }),
@@ -44,6 +45,14 @@ describe('deliverDictation', () => {
     const { deps, calls } = setup({ agentState: () => 'blocked' })
     expect(await deliverDictation(req, deps)).toEqual({ ok: false, reason: 'target-busy' })
     expect(calls).toEqual([])
+  })
+
+  it('inserts into a blocked pane whose choice free-text row is selected, without Enter (SWA-96)', async () => {
+    const { deps, calls } = setup({ agentState: () => 'blocked', freeTextActive: () => true })
+    expect(await deliverDictation({ ...req, submit: true }, deps)).toMatchObject({ ok: true })
+    expect(calls).toContain('reset')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(deps.write).toHaveBeenCalledTimes(1)
   })
 
   it('reports target-gone for an unknown pane and for a rejected checked write', async () => {

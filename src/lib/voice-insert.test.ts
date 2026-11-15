@@ -28,6 +28,11 @@ describe('insertRejection', () => {
     expect(insertRejection('blocked')).toBe('target-busy')
   })
 
+  it('takes text in a choice dialog whose free-text row is selected (SWA-96)', () => {
+    expect(insertRejection('blocked', true)).toBeNull()
+    expect(insertRejection('blocked', false)).toBe('target-busy')
+  })
+
   it('accepts working, idle and unknown panes as a draft target', () => {
     for (const s of ['working', 'idle', 'unknown', undefined] as const) {
       expect(insertRejection(s)).toBeNull()
