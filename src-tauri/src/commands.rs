@@ -1711,6 +1711,8 @@ pub async fn codex_statusline_apply(
     preset: crate::statusline::settings::Preset,
     use_colors: bool,
     enabled: bool,
+    // SWA-93: the Custom list; absent = keep the saved one.
+    items: Option<Vec<crate::statusline::settings::Slot<String>>>,
 ) -> Result<Vec<crate::hook::codex_statusline::Status>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = STATUSLINE_SETTINGS_WRITE
@@ -1721,8 +1723,15 @@ pub async fn codex_statusline_apply(
         settings.codex = Some(preset);
         settings.codex_use_colors = use_colors;
         settings.codex_enabled = enabled;
+        if let Some(items) = items {
+            settings.codex_items = items;
+        }
         crate::statusline::settings::save(&file, &settings).map_err(|e| e.to_string())?;
-        crate::hook::codex_statusline::update(&app, Some((preset, use_colors, enabled)), true)
+        crate::hook::codex_statusline::update(
+            &app,
+            Some((preset, &settings.codex_items, use_colors, enabled)),
+            true,
+        )
     })
     .await
     .map_err(|e| e.to_string())?

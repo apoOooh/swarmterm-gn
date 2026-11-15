@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { Preset } from '@/lib/statusline-presets'
+import type { Preset, Slot } from '@/lib/statusline-presets'
 
 /**
  * Install (or remove) Claude Code's `statusLine` entry in the user-scope
@@ -22,9 +22,10 @@ export interface CodexStatuslineStatus {
 export const applyCodexStatusline = (
   preset: Preset,
   useColors: boolean,
-  enabled = true
+  enabled = true,
+  items: Slot[] | null = null
 ): Promise<CodexStatuslineStatus[]> =>
-  invoke('codex_statusline_apply', { preset, useColors, enabled })
+  invoke('codex_statusline_apply', { preset, useColors, enabled, items })
 
 export const getCodexStatuslineStatus = (): Promise<CodexStatuslineStatus[]> =>
   invoke('codex_statusline_status')

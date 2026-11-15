@@ -1,4 +1,4 @@
-import type { Preset } from './statusline-presets'
+import { normalizeSlots, type Preset, type Slot } from './statusline-presets'
 
 /**
  * Example text for Codex's built-in status line (SWA-92). Codex draws the
@@ -18,7 +18,7 @@ const SAMPLE: Record<string, string> = {
   'context-window-size': '1M window'
 }
 
-export const CODEX_ITEMS: Record<Preset, string[]> = {
+export const CODEX_ITEMS: Record<Exclude<Preset, 'custom'>, string[]> = {
   compact: ['model-with-reasoning', 'context-remaining'],
   extended: ['model-with-reasoning', 'context-remaining', 'git-branch', 'five-hour-limit', 'weekly-limit'],
   detailed: [
@@ -34,6 +34,29 @@ export const CODEX_ITEMS: Record<Preset, string[]> = {
   ]
 }
 
-export function codexPreviewLine(preset: Preset): string {
-  return CODEX_ITEMS[preset].map((id) => SAMPLE[id] ?? id).join(' · ')
+/** Readable names for the Custom list. */
+export const CODEX_ITEM_LABELS: Record<string, string> = {
+  'model-with-reasoning': 'Model and reasoning',
+  'context-remaining': 'Context left',
+  'git-branch': 'Git branch',
+  'five-hour-limit': '5h limit',
+  'weekly-limit': 'Weekly limit',
+  'used-tokens': 'Tokens used',
+  'total-input-tokens': 'Input tokens',
+  'total-output-tokens': 'Output tokens',
+  'context-window-size': 'Window size'
+}
+
+/**
+ * The Custom list (SWA-93) over the tested items only — Rust writes no other
+ * id. An empty saved list starts as Extended.
+ */
+export function codexCustomItems(saved: readonly Slot[]): Slot[] {
+  const seed = saved.length > 0 ? saved : CODEX_ITEMS.extended.map((id) => ({ id, on: true }))
+  return normalizeSlots(seed, CODEX_ITEMS.detailed)
+}
+
+export function codexPreviewLine(preset: Preset, custom: readonly Slot[] = []): string {
+  const ids = preset === 'custom' ? codexCustomItems(custom).filter((s) => s.on).map((s) => s.id) : CODEX_ITEMS[preset]
+  return ids.map((id) => SAMPLE[id] ?? id).join(' · ')
 }

@@ -104,10 +104,11 @@ pub fn run_cli() {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // Detailed only: the transcript and subagent files are not touched for
-    // the lighter templates, which re-render every few seconds too.
-    let (bars, agents) = match (cfg.claude, input.transcript_path.as_deref()) {
-        (settings::Preset::Detailed, Some(tp)) => {
+    // Detailed (or Custom with bars/agents) only: the transcript and
+    // subagent files are not touched for the lighter templates, which
+    // re-render every few seconds too.
+    let (bars, agents) = match input.transcript_path.as_deref() {
+        Some(tp) if preset::wants_transcript(&cfg) => {
             let tp = std::path::Path::new(tp);
             let session = input.session_id.as_deref().unwrap_or("x");
             let bars = breakdown::update(tp, &breakdown::state_path(session))

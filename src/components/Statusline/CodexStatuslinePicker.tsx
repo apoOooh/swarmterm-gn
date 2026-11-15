@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactElement } from 'react'
 import { cn } from '@/lib/utils'
-import { codexPreviewLine } from '@/lib/codex-statusline-preview'
-import type { Preset } from '@/lib/statusline-presets'
+import { CODEX_ITEM_LABELS, codexCustomItems, codexPreviewLine } from '@/lib/codex-statusline-preview'
+import { SegmentList } from './SegmentList'
+import type { Preset, Slot } from '@/lib/statusline-presets'
 import {
   applyCodexStatusline,
   getCodexStatuslineStatus,
@@ -17,8 +18,11 @@ const OPTIONS: { id: CodexChoice; label: string; text: string }[] = [
   { id: 'off', label: 'Off', text: 'Hides Codex’s status line.' },
   { id: 'compact', label: 'Compact', text: 'Model and context left.' },
   { id: 'extended', label: 'Extended', text: 'Adds git branch and the 5h / weekly limits.' },
-  { id: 'detailed', label: 'Detailed', text: 'Adds token counts and the window size.' }
+  { id: 'detailed', label: 'Detailed', text: 'Adds token counts and the window size.' },
+  { id: 'custom', label: 'Custom', text: 'Pick each item and its order.' }
 ]
+
+const ITEM_NAMES = Object.fromEntries(Object.entries(CODEX_ITEM_LABELS).map(([id, label]) => [id, { label }]))
 
 const STATE_TEXT: Record<CodexStatuslineStatus['state'], string> = {
   managed: 'managed by Swarmterm',
@@ -65,14 +69,19 @@ export function CodexStatuslinePicker({ brief = false }: { brief?: boolean }): R
   const choose = (c: CodexChoice): Promise<void> => {
     if (c === 'unmanaged') return run(releaseCodexStatusline)
     const preset: Preset = c === 'off' ? (settings.codex ?? 'compact') : c
-    return run(() => applyCodexStatusline(preset, settings.codexUseColors, c !== 'off'))
+    const items = preset === 'custom' ? codexCustomItems(settings.codexItems) : null
+    return run(() => applyCodexStatusline(preset, settings.codexUseColors, c !== 'off', items))
   }
 
-  const preview = choice !== 'unmanaged' && choice !== 'off' ? codexPreviewLine(choice) : null
+  const customItems = codexCustomItems(settings.codexItems)
+  const setItems = (items: Slot[]): Promise<void> =>
+    run(() => applyCodexStatusline('custom', settings.codexUseColors, true, items))
+
+  const preview = choice !== 'unmanaged' && choice !== 'off' ? codexPreviewLine(choice, settings.codexItems) : null
 
   return (
     <div className="space-y-3">
-      <div role="radiogroup" aria-label="Codex status line" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+      <div role="radiogroup" aria-label="Codex status line" className="grid grid-cols-2 gap-2 sm:grid-cols-6">
         {OPTIONS.map((o) => (
           <button
             key={o.id}
@@ -92,7 +101,17 @@ export function CodexStatuslinePicker({ brief = false }: { brief?: boolean }): R
         ))}
       </div>
 
-      {preview && (
+      {choice === 'custom' && (
+        <SegmentList
+          label="Codex status line items"
+          slots={customItems}
+          names={ITEM_NAMES}
+          disabled={busy}
+          onChange={(items) => void setItems(items)}
+        />
+      )}
+
+      {preview !== null && (
         <div>
           <div className="rounded-md border border-border bg-muted/30 px-3 py-2 font-mono text-[12px]">{preview}</div>
           <p className="mt-1 text-[11px] text-muted-foreground">Example — Codex draws this line itself, without animation.</p>

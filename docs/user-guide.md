@@ -424,6 +424,7 @@ Every Claude Code pane gets a readout under its prompt. Pick how much it shows i
 
 - **Extended** — adds the effort level, a context bar, the git branch and your 5-hour and 7-day limits with the time until they reset.
 - **Detailed** — adds the session cost, the prompt cache, subagents, and bars for input, output and tool tokens. Values marked `≈` are estimates (subagent cost from a fixed price table, token shares from text length).
+- **Custom** — a list of every part (model and context, effort, session cost, 5h and 7d limits, prompt cache, subagents, token bars, git branch, MCP link). Tick the parts you want and use the up and down arrows to set their order; the preview follows at once. Effort and cost always sit next to the model, token bars are rows below the line, and the narrow-width rule below still applies. Codex offers Custom too, limited to the items Swarmterm has tested with your Codex version.
 - **Off** — no status line from Swarmterm.
 
 `mcp ✓` means Claude actually connected to Swarmterm — and therefore has the War Room and worktree tools; `…` never reached Swarmterm (tools missing), `✗` Swarmterm no longer answering. Context turns amber past 70 % and red past 90 %.
