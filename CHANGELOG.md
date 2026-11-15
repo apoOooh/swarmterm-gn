@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Status line (SWA-93): new **Custom** template for Claude Code and Codex.
+  Switch each part on or off and set the order with up/down buttons; Codex
+  offers only the items Swarmterm has tested with its version.
+
 ## [1.29.1] - 2026-11-15
 
 - Security (SWA-86): the local MCP server now refuses every request without
