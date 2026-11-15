@@ -309,6 +309,24 @@ SHA-256 must match before a staged install with rollback
 (`src-tauri/src/voice/companion/`). Speech models are checked against fixed
 SHA-256 hashes (`src-tauri/src/voice/speech/model.rs`).
 
+### Team package
+
+The team package runs a script from a source the user enters (an `https` Git
+URL or an absolute local folder), so its trust is the user's choice, like a
+command routine. Controls (`src-tauri/src/team_package/`): sources that git
+could read as an option or transport (`-…`, `ext::`, `file://`, SSH), URLs with
+credentials and network paths are refused; git runs with every transport but
+https disabled, no repository hooks and no prompts, into a folder owned by the
+app (a local source folder is never deleted). Only `node install.mjs
+<install|update|uninstall|check>` runs, through the environment filter, in a
+kill-on-close job with a 120 s limit. Every writing run shows its `--dry-run`
+first; the confirmed run refuses unless a SHA-256 over the whole package tree
+(links refused) still matches the preview, so a commit pushed or a file edited
+in between is not executed. Nothing runs on its own (no start-up run, no update
+check), the commands answer only the main window, and no MCP or War Room path
+reaches them. Codex hooks the package adds still need the user's approval in
+Codex (`/hooks`). Lockable with `DisableTeamPackage`; locked in Corp.
+
 ### Supply chain
 
 CI runs `cargo deny` (RustSec advisories, licence allow list, crate sources)
@@ -324,7 +342,7 @@ wins per value. The policy is read once at start and cannot be changed while
 the app runs. Each lock is enforced in the backend at the point of action
 (`src-tauri/src/policy.rs`): bypass launch lines, War Room execute,
 `worktree.spawn`, the MCP server and its enrollment, companion install and
-updates, speech-model downloads, command routines, the web preview, hang dumps, and a
+updates, speech-model downloads, command routines, the web preview, hang dumps, the team package, and a
 forced environment filter with an admin allow list. The renderer only greys out
 locked controls. Details: [admin-policy.md](admin-policy.md).
 
@@ -333,7 +351,7 @@ locked controls. Details: [admin-policy.md](admin-policy.md).
 The Swarmterm GN Corp build (Cargo feature `corp`, own identifier
 `com.apooooh.swarmterm.gn.corp`) compiles the locks `DisableBypassModes`,
 `DisableWarRoomExecute`, `DisableCompanion`, `DisableModelDownload`,
-`DisableHangDumps` and `EnvPolicy=default` into the binary (`policy::Edition::locks`). They are
+`DisableHangDumps`, `DisableTeamPackage` and `EnvPolicy=default` into the binary (`policy::Edition::locks`). They are
 combined with the registry policy, which can add locks but not lift these. The
 buzzkey download/installer and the speech-model download are compiled out, not
 only locked; the release workflow fails if their endpoints appear in the Corp

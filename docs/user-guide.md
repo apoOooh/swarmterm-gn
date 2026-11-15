@@ -637,6 +637,30 @@ On a managed computer your administrator can switch any of these abilities off (
 
 War Room abilities only work for panes you dragged into a room, worktree abilities only in workspaces with isolation enabled — and removing a pane from a room revokes its access instantly.
 
+## Team package
+
+A team package bundles shared rules, skills and command guards for agent CLIs
+(Claude Code, Codex and others) together with an `install.mjs` script in its
+root folder. Swarmterm brings no package of its own: you point it at yours in
+**Settings → Terminal → Team package**.
+
+1. Enter the source: an `https` Git URL or an absolute local folder, then
+   **Save**. SSH URLs, URLs with a user name or token, and network paths are
+   not accepted; private repositories use your system's Git credential helper.
+2. **Check** fetches the package and runs its `check`, which changes nothing.
+3. **Install…**, **Update…** and **Remove…** first show the script's
+   `--dry-run` preview, with the commit of a Git source. Nothing is changed
+   until you click **Run**. If the package changed after the preview (a new
+   commit, an edited file), the run is refused and you preview again.
+
+Node.js must be installed. Without access to the source you get a message and
+nothing changes. If the package adds Codex hooks, approve them in Codex with
+`/hooks`; Swarmterm never does that for you. Changing or clearing the source
+discards Swarmterm's own copy of a Git source (a local folder is never
+touched); what the package installed stays until you run **Remove…**.
+An administrator can lock this feature (`DisableTeamPackage`); the Corp
+edition does not include it.
+
 ## Swarmterm MCP
 
 The top of **Settings → MCP** has one switch per agent and account for Swarmterm's own server (War Room, browser and worktree tools). On is the default. Off removes only Swarmterm's entry from that profile's configuration and keeps it from being written again; restart running panes afterwards. A server of your own that happens to be called `swarmterm` is never changed. **Details** shows the configuration file and the server address. For Claude Code and Codex the entry starts a small helper, `swarmterm.exe --mcp-stdio`, which forwards to the Swarmterm the pane runs in; in a terminal outside Swarmterm it offers no tools, so the agent shows no failed server there. An entry written by an older version is replaced at the next start.

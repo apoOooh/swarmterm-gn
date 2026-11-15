@@ -75,6 +75,12 @@ the Detailed template the status line command reads the session transcript
 to count tokens and keeps running totals (numbers only, no text) in a small
 file in the temp folder (`swarmterm-statusline-<session>.json`).
 
+If you set a team package source, it is stored in `team-package.json` in the
+app data folder (the URL or folder only), and a Git source is checked out to
+`team-package\` in the local app data folder. The package's install script
+then writes to your agent CLIs' configuration as the package decides; its own
+uninstall removes that.
+
 Uninstalling the app does not remove these files; delete the folders above to
 remove them.
 
@@ -91,6 +97,7 @@ contains telemetry or personal data beyond what any HTTPS request carries
 | data-shield's prompt guard, if you use it, sends the masked version of a prompt it blocked to the same local server (`POST /resubmit`); Swarmterm types it back into that pane. The text stays in memory, is not logged or stored, and never leaves the computer. To tie the two together, Swarmterm's own hook reports the length and SHA-256 of each Claude prompt (never its content) and the guard reports the same for the blocked one; these fingerprints are kept only in memory, for at most 10 seconds, are dropped once compared, and are never logged or passed on. | When the guard blocks a Claude Code prompt | On; Settings → Terminal → Agent safety (`src-tauri/src/mcp/server.rs`, `src/lib/prompt-resubmit.ts`) |
 | `api.github.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`: lists and downloads releases of the buzzkey voice companion (`apoOooh/buzzkey`) | When you click Check or Install in Settings → Voice; and, only if buzzkey is installed and connected, one release check 20 seconds after start and then every 24 hours | Install: off until you click. Update check: only with buzzkey connected. Automatic install: off (`src-tauri/src/voice/companion/`, `src/lib/buzzkey-update.ts`) |
 | `huggingface.co` (`ggerganov/whisper.cpp`) and the Hugging Face download hosts it redirects to (for example `cdn-lfs.hf.co`, `*.xethub.hf.co`): downloads a speech recognition model | When you click to download a model in Settings → Voice | Off (`src-tauri/src/voice/speech/model.rs`) |
+| The Git server of the team package source you enter (`https` only), via git and your system's credential helper | When you click Check, Install, Update or Remove in Settings → Terminal → Team package | Off until you set a source (`src-tauri/src/team_package/`) |
 | Web preview: loads the address you or an agent in your pane open; text that is not an address becomes a Google search (`www.google.com`) | When a preview is opened | Off until opened (`src-tauri/src/preview.rs`, `src/lib/web-url.ts`) |
 | Images linked from Markdown files you preview (`https:` only), and anything an HTML file you preview loads inside its sandboxed frame | When you open such a preview | Follows the files you open |
 | Links you click (documentation, file links) open in your default browser | On click | Off |
