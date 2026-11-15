@@ -649,8 +649,9 @@ root folder. Swarmterm brings no package of its own: you point it at yours in
    not accepted; private repositories use your system's Git credential helper.
 2. **Check** fetches the package and runs its `check`, which changes nothing.
 3. **Install…**, **Update…** and **Remove…** first show the script's
-   `--dry-run` preview, with the commit of a Git source. Nothing is changed
-   until you click **Run**. If the package changed after the preview (a new
+   `--dry-run` preview, with the commit of a Git source. The preview already
+   runs the package's script, which is asked to change nothing; the real run
+   starts only when you click **Run**. Use only sources you trust. If the package changed after the preview (a new
    commit, an edited file), the run is refused and you preview again.
 
 Node.js must be installed. Without access to the source you get a message and

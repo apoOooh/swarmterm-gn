@@ -92,7 +92,15 @@ fn gate(webview: &tauri::Webview, app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn team_package_get(app: AppHandle) -> Result<TeamPackageState, String> {
+pub async fn team_package_get(
+    webview: tauri::Webview,
+    app: AppHandle,
+) -> Result<TeamPackageState, String> {
+    // The source may name an internal repository: main window only. Locked
+    // is not an error here; the state carries the refusal for the UI.
+    if webview.label() != "main" {
+        return Err("The team package is available only in the main application".into());
+    }
     tauri::async_runtime::spawn_blocking(move || state(&app))
         .await
         .map_err(|e| e.to_string())

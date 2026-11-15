@@ -39,7 +39,7 @@ fn take_busy() -> Result<BusyGuard, String> {
 // ---------- fingerprint ----------
 
 /// SHA-256 over every file below `root` (relative path + length + content,
-/// sorted), skipping `.git` and `node_modules` at the root. Links and
+/// sorted), skipping only `.git` at the root. Links and
 /// junctions are refused rather than followed, so the tree cannot point the
 /// hash at one set of files while node resolves another.
 pub fn fingerprint(root: &Path) -> Result<String, String> {
@@ -49,11 +49,14 @@ pub fn fingerprint(root: &Path) -> Result<String, String> {
     let mut hasher = Sha256::new();
     let mut total = 0u64;
     for rel in &files {
-        let bytes = std::fs::read(root.join(rel)).map_err(|e| format!("read {rel}: {e}"))?;
-        total += bytes.len() as u64;
+        // Size from metadata first: a wrong folder with one huge file must
+        // be refused before it is read into memory.
+        let len = std::fs::metadata(root.join(rel)).map_err(|e| format!("read {rel}: {e}"))?.len();
+        total += len;
         if total > MAX_BYTES {
             return Err("The package folder is too large.".into());
         }
+        let bytes = std::fs::read(root.join(rel)).map_err(|e| format!("read {rel}: {e}"))?;
         hasher.update(rel.as_bytes());
         hasher.update([0]);
         hasher.update((bytes.len() as u64).to_le_bytes());
@@ -67,7 +70,9 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String> {
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
-        if dir == root && (name == ".git" || name == "node_modules") {
+        // Only git's own metadata is skipped: node resolves imports from a
+        // node_modules in the package, so it must be part of the hash.
+        if dir == root && name == ".git" {
             continue;
         }
         let meta = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
@@ -115,18 +120,19 @@ fn checkout_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn save_source(app: &AppHandle, source: Option<String>) -> Result<(), String> {
-    let path = settings_path(app)?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let text = serde_json::to_string_pretty(&Settings { source }).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    // Checkout first: if it cannot be removed (a locked file), the old
+    // source stays saved and the error matches what the UI still shows.
     // Only our own checkout is removed; a local source folder never is.
     let root = checkout_root(app)?;
     if root.exists() {
         std::fs::remove_dir_all(&root).map_err(|e| format!("could not reset the checkout: {e}"))?;
     }
-    Ok(())
+    let path = settings_path(app)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(&Settings { source }).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -166,7 +172,7 @@ fn git(args: Vec<std::ffi::OsString>, cwd: Option<&Path>) -> Result<String, Stri
     }
     cmd.args(args);
     let c = crate::routine_cmd::run_captured(cmd, TIMEOUT, KEEP_OUTPUT)
-        .map_err(|e| format!("Git was not found ({e}). Install Git and try again."))?;
+        .map_err(|e| format!("Could not run git ({e}). Is Git installed?"))?;
     if c.timed_out {
         return Err("unreachable: git did not finish in time.".into());
     }
@@ -216,7 +222,7 @@ fn run_script(dir: &Path, op: Op, dry_run: bool) -> Result<crate::routine_cmd::C
     let mut cmd = crate::terminal_env::command("node");
     cmd.current_dir(dir).args(source::node_args(dir, op, dry_run));
     crate::routine_cmd::run_captured(cmd, TIMEOUT, KEEP_OUTPUT)
-        .map_err(|_| "Node.js was not found. Install Node.js and try again.".to_string())
+        .map_err(|e| format!("Could not run Node.js ({e}). Is Node.js installed?"))
 }
 
 /// Resolve the package folder: fetch a Git source (`refresh`) or use the
@@ -271,9 +277,12 @@ pub async fn team_package_preview(
     let _busy = take_busy()?;
     tauri::async_runtime::spawn_blocking(move || {
         let (dir, is_git) = package_dir(&app, true)?;
-        let fp = fingerprint(&dir)?;
         let dry = op.writes();
         let c = run_script(&dir, op, dry)?;
+        // Hashed after the dry run: a script that writes a cache next to
+        // itself would otherwise never match again. The files that run
+        // next are the ones hashed here.
+        let fp = fingerprint(&dir)?;
         Ok(outcome(op, dry, &dir, is_git, fp, c))
     })
     .await

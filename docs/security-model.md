@@ -320,7 +320,9 @@ https disabled, no repository hooks and no prompts, into a folder owned by the
 app (a local source folder is never deleted). Only `node install.mjs
 <install|update|uninstall|check>` runs, through the environment filter, in a
 kill-on-close job with a 120 s limit. Every writing run shows its `--dry-run`
-first; the confirmed run refuses unless a SHA-256 over the whole package tree
+first. That preview already executes the newest fetched script, and honouring
+`--dry-run` is the package's job, so the source is trusted like any program
+the user runs; the confirmed run refuses unless a SHA-256 over the whole package tree
 (links refused) still matches the preview, so a commit pushed or a file edited
 in between is not executed. Nothing runs on its own (no start-up run, no update
 check), the commands answer only the main window, and no MCP or War Room path

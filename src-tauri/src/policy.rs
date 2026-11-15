@@ -52,7 +52,7 @@ pub struct AdminPolicy {
     pub disable_hang_dumps: bool,
     /// SWA-98: fetching and running a team package's install script.
     pub disable_team_package: bool,
-    /// `Some` =the environment filter is forced on with at least this mode.
+    /// `Some` = the environment filter is forced on with at least this mode.
     pub env_policy: Option<FilterMode>,
     /// Extra names that always pass the filter (admin's allow list).
     pub env_allow: Vec<String>,

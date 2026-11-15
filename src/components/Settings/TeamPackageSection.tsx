@@ -94,7 +94,8 @@ export function TeamPackageSection(): ReactElement {
       <p className="mt-1 max-w-prose text-xs leading-relaxed text-muted-foreground">
         Fetch your team&apos;s shared rules, skills and command guards for agent CLIs from a Git repository (https) or a
         local folder. Swarmterm only runs the package&apos;s own install.mjs with Node.js; what it writes is up to the
-        package. Every change shows a preview first and runs only after you confirm it.
+        package. Every change shows the script&apos;s --dry-run preview first and runs only after you confirm it. The
+        preview already runs the package&apos;s script (asking it to change nothing), so use only sources you trust.
       </p>
       {locked && <p className="mt-3 text-xs text-amber-300">{locked}</p>}
 
@@ -140,7 +141,7 @@ export function TeamPackageSection(): ReactElement {
       {shown && (
         <div className="mt-4 rounded-md border border-border bg-background/60 p-3">
           <div className="text-xs text-muted-foreground">
-            {preview ? `Preview of ${shown.op} (nothing changed yet)` : `Result of ${shown.op}`}
+            {preview ? `Dry run of ${shown.op}` : `Result of ${shown.op}`}
             {shown.commit ? ` · commit ${shown.commit}` : ''}
             {shown.timedOut ? ' · timed out' : shown.exitCode !== 0 ? ` · exit code ${shown.exitCode ?? '?'}` : ''}
           </div>
