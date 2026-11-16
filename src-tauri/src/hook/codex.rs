@@ -177,12 +177,15 @@ fn probe(timeout: Duration) -> Option<Caps> {
         "[codex] isolation probe: {} after {} ms",
         match &outcome {
             Err(why) => format!("undecided ({why:?})"),
-            Ok(_) => verdict.map_or_else(String::new, |caps| {
-                format!(
-                    "no-daemon={} hook-trust={}",
-                    caps.no_daemon, caps.hook_trust
-                )
-            }),
+            Ok(_) => verdict.map_or_else(
+                || "unsupported".to_string(),
+                |caps| {
+                    format!(
+                        "no-daemon={} hook-trust={}",
+                        caps.no_daemon, caps.hook_trust
+                    )
+                }
+            ),
         },
         started.elapsed().as_millis()
     );
@@ -250,7 +253,7 @@ pub fn spawn_isolation(verdict: Option<bool>) -> (bool, bool) {
 
 /// Byte length up to the end of the leading program token (leading blanks
 /// included) when it is Codex looked up on PATH: `codex` or
-/// `codex.exe`/`.cmd`/`.ps1`, any case (SWA-105). Only PATH names count,
+/// `codex.exe`/`.cmd`, any case (SWA-105). Only PATH names count,
 /// because the capability probe runs the PATH Codex (`find_agent_binary`):
 /// a pane started by an explicit path may be another build that rejects
 /// `--no-daemon`, and a quoted path is not even a command in PowerShell.
@@ -261,7 +264,7 @@ fn codex_program_len(command: &str) -> Option<usize> {
     let rest = &command[lead..];
     let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
     let name = rest[..end].to_ascii_lowercase();
-    ["", ".exe", ".cmd", ".ps1"]
+    ["", ".exe", ".cmd"]
         .iter()
         .any(|ext| name.strip_suffix(ext) == Some("codex"))
         .then_some(lead + end)
@@ -714,7 +717,7 @@ mod tests {
     /// SWA-105: Windows extensions and leading blanks still name the PATH
     /// Codex; an explicit path is another binary than the probed one.
     #[test]
-    fn isolates_codex_started_by_path() {
+    fn isolates_only_path_lookup_codex() {
         let iso = |c: &str| isolated_command(c, Some("codex"), true);
         assert_eq!(iso("codex.exe resume x"), "codex.exe --no-daemon resume x");
         assert_eq!(iso("CODEX.CMD"), "CODEX.CMD --no-daemon");

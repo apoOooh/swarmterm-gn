@@ -742,7 +742,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **Terminal output, previews and unsaved editor buffers are transient.** Saved workspaces restore the pane layout and known agent conversations; they do not restore every running process or open file tab.
 - **Eight visual styles** — VS Code Dark Modern plus all seven Astera themes; terminal fonts remain a separate preference.
 - **War Room membership doesn't survive a pane restart** — re-drag the pane.
-- **Codex panes get `--no-daemon` only when the start line runs Codex directly**: `codex` or `codex.exe`/`.cmd`/`.ps1` found on PATH, in a pane created as a Codex pane. A full path (Swarmterm checks only the Codex on PATH for the flag), a wrapper such as `npx codex` or `cmd /c codex`, or a plain terminal where you type `codex` yourself starts without it; add `--no-daemon` to such a line by hand if that Codex supports it.
+- **Codex panes get `--no-daemon` only when the start line runs Codex directly**: `codex` or `codex.exe`/`.cmd` found on PATH, in a pane created as a Codex pane. A full path (Swarmterm checks only the Codex on PATH for the flag), a wrapper such as `npx codex` or `cmd /c codex`, or a plain terminal where you type `codex` yourself starts without it; add `--no-daemon` to such a line by hand if that Codex supports it.
 - **The preview column has no devtools, zoom, tabs, or per-terminal cookie isolation**, and a failed page shows the platform's own error view.
 - **Terminal search covers the visible scrollback only** — matches beyond xterm's own buffer, and search-and-replace, aren't available.
 - **Windows x64 only** — this fork does not support macOS or Linux releases.
