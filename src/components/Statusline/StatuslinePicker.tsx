@@ -67,7 +67,7 @@ export function StatuslinePreview({
  * animation.
  */
 export function StatuslinePicker({ brief = false }: { brief?: boolean }): ReactElement {
-  const { settings, loaded, load, update, choose } = useStatuslinePresetsStore()
+  const { settings, loaded, saving, load, update, choose } = useStatuslinePresetsStore()
   const enabled = useStatuslineStore((s) => s.enabled)
   const style = useAppearanceStore((s) => s.style)
   const [columns, setColumns] = useState(brief ? 100 : 120)
@@ -115,6 +115,7 @@ export function StatuslinePicker({ brief = false }: { brief?: boolean }): ReactE
           label="Status line parts"
           slots={settings.claudeSegments}
           names={SEGMENT_NAMES}
+          disabled={saving}
           onChange={(claudeSegments) => void update({ claudeSegments })}
         />
       )}

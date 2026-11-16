@@ -102,6 +102,62 @@ fn lenient_segments<'de, D: serde::Deserializer<'de>>(
     Ok(normalize_segments(&parsed))
 }
 
+/// A template from a newer build (an unknown name) falls back to the default
+/// for this field only; the rest of the file stays as saved.
+fn lenient_preset<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Preset, D::Error> {
+    let raw: serde_json::Value = Deserialize::deserialize(d)?;
+    Ok(serde_json::from_value(raw).unwrap_or_default())
+}
+
+/// As `lenient_preset`; for Codex the field default is "not managed".
+fn lenient_opt_preset<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Preset>, D::Error> {
+    let raw: serde_json::Value = Deserialize::deserialize(d)?;
+    Ok(serde_json::from_value(raw).ok().flatten())
+}
+
+/// Bounds for the Codex Custom list. Only whitelisted ids are ever written
+/// (`codex_statusline::items`); these caps just keep a broken or hostile
+/// file or IPC payload from growing the settings without limit.
+pub const MAX_CODEX_ITEMS: usize = 32;
+pub const MAX_CODEX_ITEM_LEN: usize = 64;
+
+/// Keep well-formed ids (non-empty, short, `[a-z0-9-_]`), first occurrence
+/// wins, at most `MAX_CODEX_ITEMS`. Shared by the file parser and the IPC
+/// commands that take a list from the renderer.
+pub fn normalize_codex_items(list: &[Slot<String>]) -> Vec<Slot<String>> {
+    let mut out: Vec<Slot<String>> = Vec::new();
+    for s in list {
+        let ok = !s.id.is_empty()
+            && s.id.len() <= MAX_CODEX_ITEM_LEN
+            && s.id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
+        if ok && !out.iter().any(|o| o.id == s.id) {
+            out.push(s.clone());
+            if out.len() == MAX_CODEX_ITEMS {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Like `lenient_segments`: malformed entries are skipped, not fatal.
+fn lenient_codex_items<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<Slot<String>>, D::Error> {
+    let raw: serde_json::Value = Deserialize::deserialize(d)?;
+    let parsed: Vec<Slot<String>> = raw
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(normalize_codex_items(&parsed))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Animation {
@@ -113,8 +169,10 @@ pub enum Animation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct StatuslineSettings {
+    #[serde(deserialize_with = "lenient_preset")]
     pub claude: Preset,
     /// None leaves Codex unmanaged; disabling a managed line writes `[]`.
+    #[serde(deserialize_with = "lenient_opt_preset")]
     pub codex: Option<Preset>,
     pub codex_enabled: bool,
     pub codex_use_colors: bool,
@@ -130,6 +188,7 @@ pub struct StatuslineSettings {
     pub claude_segments: Vec<Slot<Segment>>,
     /// Custom Codex `[tui] status_line` items, in order. Only ids from the
     /// tested whitelist are ever written (`codex_statusline::items`).
+    #[serde(deserialize_with = "lenient_codex_items")]
     pub codex_items: Vec<Slot<String>>,
 }
 
@@ -161,6 +220,22 @@ pub fn path() -> Option<PathBuf> {
             .join(env!("SWARMTERM_APP_IDENTIFIER"))
             .join(FILE),
     )
+}
+
+/// `incoming` with the Codex fields of `saved`, and the Claude list
+/// normalised like the file parser does (an IPC payload is input too).
+pub fn with_codex_of(
+    incoming: StatuslineSettings,
+    saved: &StatuslineSettings,
+) -> StatuslineSettings {
+    StatuslineSettings {
+        codex: saved.codex,
+        codex_enabled: saved.codex_enabled,
+        codex_use_colors: saved.codex_use_colors,
+        codex_items: saved.codex_items.clone(),
+        claude_segments: normalize_segments(&incoming.claude_segments),
+        ..incoming
+    }
 }
 
 pub fn load(path: &Path) -> StatuslineSettings {
@@ -248,5 +323,86 @@ mod tests {
         assert_eq!(ids.len(), Segment::ALL.len());
         assert!(s.claude_segments[0].on);
         assert!(s.claude_segments[2..].iter().all(|x| !x.on));
+    }
+
+    #[test]
+    fn claude_save_keeps_the_saved_codex_fields() {
+        let saved = StatuslineSettings {
+            codex: Some(Preset::Custom),
+            codex_enabled: false,
+            codex_use_colors: true,
+            codex_items: vec![Slot {
+                id: "git-branch".into(),
+                on: true,
+            }],
+            ..Default::default()
+        };
+        let stale = StatuslineSettings {
+            claude: Preset::Detailed,
+            codex: Some(Preset::Compact),
+            claude_segments: vec![Slot {
+                id: Segment::Mcp,
+                on: true,
+            }],
+            ..Default::default()
+        };
+        let m = with_codex_of(stale, &saved);
+        assert_eq!(m.claude, Preset::Detailed);
+        assert_eq!(m.codex, Some(Preset::Custom));
+        assert!(!m.codex_enabled);
+        assert!(m.codex_use_colors);
+        assert_eq!(m.codex_items, saved.codex_items);
+        assert_eq!(m.claude_segments.len(), Segment::ALL.len());
+        assert_eq!(
+            m.claude_segments[0],
+            Slot {
+                id: Segment::Mcp,
+                on: true
+            }
+        );
+    }
+
+    /// A newer build's template name must not cost the rest of the file.
+    #[test]
+    fn unknown_preset_falls_back_for_that_field_only() {
+        let s: StatuslineSettings = serde_json::from_str(
+            r#"{"claude":"future","codex":"future","scheme":"high-contrast","vibrance":80}"#,
+        )
+        .unwrap();
+        assert_eq!(s.claude, Preset::Compact);
+        assert_eq!(s.codex, None);
+        assert_eq!(s.scheme, Scheme::HighContrast);
+        assert_eq!(s.vibrance, 80);
+        let s: StatuslineSettings = serde_json::from_str(r#"{"codex":null}"#).unwrap();
+        assert_eq!(s.codex, None);
+    }
+
+    #[test]
+    fn codex_items_skip_malformed_entries_and_are_capped() {
+        let long = "a".repeat(MAX_CODEX_ITEM_LEN + 1);
+        let json = format!(
+            r#"{{"codexItems":[{{"id":"git-branch","on":true}},{{"id":7,"on":true}},"x",
+                {{"id":"rm -rf","on":true}},{{"id":"{long}","on":true}},{{"id":"","on":true}},
+                {{"id":"git-branch","on":false}},{{"id":"weekly-limit","on":false}}],
+               "scheme":"high-contrast"}}"#
+        );
+        let s: StatuslineSettings = serde_json::from_str(&json).unwrap();
+        let ids: Vec<_> = s.codex_items.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, ["git-branch", "weekly-limit"]);
+        assert!(s.codex_items[0].on);
+        assert_eq!(s.scheme, Scheme::HighContrast);
+        // Not an array at all: empty list, rest kept.
+        let s: StatuslineSettings =
+            serde_json::from_str(r#"{"codexItems":"x","vibrance":10}"#).unwrap();
+        assert!(s.codex_items.is_empty());
+        assert_eq!(s.vibrance, 10);
+        // Count cap.
+        let many: Vec<Slot<String>> = (0..100)
+            .map(|i| Slot {
+                id: format!("i{i}"),
+                on: true,
+            })
+            .collect();
+        assert_eq!(normalize_codex_items(&many).len(), MAX_CODEX_ITEMS);
     }
 }

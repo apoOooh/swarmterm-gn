@@ -416,7 +416,11 @@ pub fn render(fr: &Frame, s: &StatuslineSettings) -> Vec<String> {
     };
     let mut rows = head(fr, s, &c, &sep);
     if wants_bars(s) && !fr.bars.is_empty() {
-        rows.push(BLANK.to_string());
+        // The blank row only separates bars from a line above them; a Custom
+        // line with only token bars must not start with an empty row.
+        if !rows.is_empty() {
+            rows.push(BLANK.to_string());
+        }
         rows.extend(bar_rows(&c, fr.bars, &sep, fr.width));
     }
     rows
@@ -673,5 +677,39 @@ mod tests {
     #[test]
     fn custom_with_nothing_on_renders_nothing() {
         assert!(custom(&[], 200).is_empty());
+    }
+
+    /// Only token bars switched on: the bars start the output, no blank row
+    /// above them (it only separates bars from a line).
+    #[test]
+    fn custom_bars_only_has_no_leading_blank_row() {
+        let mut st = super::super::breakdown::State::default();
+        st.usage.insert("m".into(), [1_200, 30_000, 90_000, 4_000]);
+        let bars = super::super::breakdown::bars(&st);
+        let i = input();
+        let fr = Frame {
+            input: &i,
+            mcp: McpState::Absent,
+            branch: None,
+            now: NOW,
+            width: 200,
+            color: false,
+            agents: None,
+            bars: &bars,
+        };
+        let only_bars =
+            crate::statusline::settings::normalize_segments(&[crate::statusline::settings::Slot {
+                id: Segment::TokenBars,
+                on: true,
+            }]);
+        let s = StatuslineSettings {
+            claude: Preset::Custom,
+            claude_segments: only_bars,
+            ..Default::default()
+        };
+        let r = render(&fr, &s);
+        assert!(!r.is_empty(), "bars rendered");
+        assert_ne!(r[0], BLANK, "{r:?}");
+        assert!(!r.iter().any(|x| x == BLANK), "{r:?}");
     }
 }
