@@ -16,6 +16,8 @@ export interface CodexStatuslineStatus {
   customFields: ('status_line' | 'status_line_use_colors')[]
   version: string | null
   notice: string | null
+  /** Item ids this apply wrote (null when nothing was written). */
+  written?: string[] | null
 }
 
 /** Applies to the default CODEX_HOME and all enrolled Codex account profiles. */

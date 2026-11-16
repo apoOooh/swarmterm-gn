@@ -233,6 +233,23 @@ pub struct Status {
     pub custom_fields: Vec<String>,
     pub version: Option<String>,
     pub notice: Option<String>,
+    /// The item ids this call wrote to `[tui] status_line` (apply only).
+    /// The UI shows these rather than its own preview, so an untested Codex
+    /// version (Compact fallback) or a Custom list with nothing on (empty =
+    /// hidden line) is never a silent difference.
+    pub written: Option<Vec<String>>,
+}
+
+/// Notice for what `items` actually picked when it differs from the choice.
+fn written_notice(preset: Preset, enabled: bool, tested: bool, ids: &[&str]) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    if !tested && preset != Preset::Compact {
+        return Some("Untested Codex version; Compact items written instead".into());
+    }
+    (preset == Preset::Custom && ids.is_empty())
+        .then(|| "No item switched on; Codex hides its status line".into())
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>, String> {
@@ -336,6 +353,7 @@ fn update_home(
         custom_fields: Vec::new(),
         version,
         notice: (!known).then(|| "Untested Codex version; using Compact items".into()),
+        written: None,
     };
     if deferred(debug, owner, &source, home, exe) {
         status.state = "deferred";
@@ -494,10 +512,13 @@ pub fn update(
             if !seen.insert(key) {
                 return Ok(None);
             }
-            let ids = desired.map(|(preset, custom, _, enabled)| {
-                items(version.as_deref(), preset, custom, enabled).0
+            let picked = desired.map(|(preset, custom, _, enabled)| {
+                let (ids, tested) = items(version.as_deref(), preset, custom, enabled);
+                let notice = written_notice(preset, enabled, tested, &ids);
+                (ids, notice)
             });
-            update_home(
+            let ids = picked.as_ref().map(|(ids, _)| ids.clone());
+            let mut status = update_home(
                 &store_path,
                 &home,
                 ids.as_deref().zip(desired.map(|d| d.2)),
@@ -505,8 +526,16 @@ pub fn update(
                 version.clone(),
                 cfg!(debug_assertions),
                 &exe,
-            )
-            .map(Some)
+            )?;
+            if write && status.state != "deferred" {
+                if let Some((ids, notice)) = picked {
+                    status.written = Some(ids.iter().map(|s| (*s).to_owned()).collect());
+                    if notice.is_some() {
+                        status.notice = notice;
+                    }
+                }
+            }
+            Ok(Some(status))
         })();
         match result {
             Ok(Some(s)) => statuses.push(s),
@@ -583,6 +612,21 @@ mod tests {
         assert!(items(Some("0.167.0"), Preset::Custom, &list, false)
             .0
             .is_empty());
+    }
+
+    #[test]
+    fn written_notice_names_every_silent_difference() {
+        // Untested version: anything but Compact falls back, and says so.
+        assert!(written_notice(Preset::Custom, true, false, COMPACT)
+            .is_some_and(|n| n.contains("Compact")));
+        assert!(written_notice(Preset::Compact, true, false, COMPACT).is_none());
+        // Custom with nothing on: the line disappears, and says so.
+        assert!(
+            written_notice(Preset::Custom, true, true, &[]).is_some_and(|n| n.contains("hides"))
+        );
+        assert!(written_notice(Preset::Custom, true, true, &["git-branch"]).is_none());
+        // Off is a deliberate choice, no notice.
+        assert!(written_notice(Preset::Custom, false, true, &[]).is_none());
     }
 
     #[test]

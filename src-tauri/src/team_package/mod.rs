@@ -5,8 +5,10 @@
 //!
 //! Trust: the user picks the source and confirms every writing run after a
 //! `--dry-run` preview. The run must use exactly the files the preview ran:
-//! the preview returns a fingerprint over the whole package tree and the run
-//! refuses on any change (a pushed commit, an edited local folder). Nothing
+//! the preview hashes the whole package tree before its dry run (and refuses
+//! if the dry run changed it) and returns that hash bound to the action and
+//! the saved source; the run refuses on any change (another action, a source
+//! switch, a pushed commit, an edited local folder). Nothing
 //! runs on its own: no start-up run, no update check, no MCP or War Room
 //! path; the commands answer the main webview only. Corp (user decision
 //! 2026-11-15) locks the feature and compiles the fetch/run code out: `run`
@@ -48,7 +50,8 @@ pub struct RunOutcome {
     pub dry_run: bool,
     /// Short commit of a Git source, `None` for a local folder.
     pub commit: Option<String>,
-    /// SHA-256 over the package tree the script ran from (`run::fingerprint`).
+    /// Action + source + package tree hash (`run::bound_fingerprint`); the
+    /// confirmed run must reproduce it.
     pub fingerprint: String,
     pub exit_code: Option<i32>,
     pub timed_out: bool,

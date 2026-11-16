@@ -1724,7 +1724,8 @@ pub async fn codex_statusline_apply(
         settings.codex_use_colors = use_colors;
         settings.codex_enabled = enabled;
         if let Some(items) = items {
-            settings.codex_items = items;
+            // Same rules as the file parser: a renderer payload is input too.
+            settings.codex_items = crate::statusline::settings::normalize_codex_items(&items);
         }
         crate::statusline::settings::save(&file, &settings).map_err(|e| e.to_string())?;
         crate::hook::codex_statusline::update(
@@ -1779,7 +1780,10 @@ pub async fn statusline_settings_get(
 
 /// Store the status line settings. Applies on the next render of every
 /// Claude pane; `settings.json` is not touched (its entry stays
-/// `<exe> --statusline`).
+/// `<exe> --statusline`). The Codex fields are owned by
+/// `codex_statusline_apply`/`_release` (they also rewrite Codex's config), so
+/// they are kept from disk here: a Claude save that raced a Codex change
+/// must not write the renderer's older Codex state back.
 #[tauri::command]
 pub async fn statusline_settings_set(
     app: AppHandle,
@@ -1790,7 +1794,9 @@ pub async fn statusline_settings_set(
         let _guard = STATUSLINE_SETTINGS_WRITE
             .lock()
             .map_err(|e| e.to_string())?;
-        crate::statusline::settings::save(&file, &settings).map_err(|e| e.to_string())
+        let on_disk = crate::statusline::settings::load(&file);
+        let merged = crate::statusline::settings::with_codex_of(settings, &on_disk);
+        crate::statusline::settings::save(&file, &merged).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

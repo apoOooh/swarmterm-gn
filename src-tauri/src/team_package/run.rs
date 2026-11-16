@@ -151,8 +151,9 @@ pub async fn team_package_set_source(
             Some(s.to_string())
         }
     };
-    let _busy = take_busy()?;
+    let busy = take_busy()?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _busy = busy; // see team_package_preview
         save_source(&app, source)?;
         Ok(state(&app))
     })
@@ -236,8 +237,9 @@ fn run_script(dir: &Path, op: Op, dry_run: bool) -> Result<crate::routine_cmd::C
 }
 
 /// Resolve the package folder: fetch a Git source (`refresh`) or use the
-/// local folder; then require the script.
-fn package_dir(app: &AppHandle, refresh: bool) -> Result<(PathBuf, bool), String> {
+/// local folder; then require the script. Also returns the saved source
+/// text, which the bound fingerprint covers.
+fn package_dir(app: &AppHandle, refresh: bool) -> Result<(PathBuf, bool, String), String> {
     let raw = load_settings(app)
         .source
         .ok_or("No team package source is set.")?;
@@ -253,7 +255,20 @@ fn package_dir(app: &AppHandle, refresh: bool) -> Result<(PathBuf, bool), String
             format!("The source has no {} in its root folder.", source::SCRIPT)
         });
     }
-    Ok((dir, is_git))
+    Ok((dir, is_git, raw))
+}
+
+/// What the confirmation is bound to: the action, the saved source and the
+/// package tree. A preview of `update` cannot confirm an `uninstall`, and a
+/// preview taken before a source switch cannot confirm a run against the new
+/// source, even if both trees happen to hash the same.
+pub fn bound_fingerprint(op: Op, source: &str, tree: &str) -> String {
+    let mut h = Sha256::new();
+    for part in [op.arg(), source, tree] {
+        h.update((part.len() as u64).to_le_bytes());
+        h.update(part.as_bytes());
+    }
+    format!("{:x}", h.finalize())
 }
 
 fn outcome(
@@ -284,15 +299,25 @@ pub async fn team_package_preview(
     op: Op,
 ) -> Result<RunOutcome, String> {
     gate(&webview, &app)?;
-    let _busy = take_busy()?;
+    let busy = take_busy()?;
     tauri::async_runtime::spawn_blocking(move || {
-        let (dir, is_git) = package_dir(&app, true)?;
+        // The guard lives in the closure: if the webview reloads, the
+        // future is dropped but git/node keep running here, and a second
+        // action must still be refused until they finish.
+        let _busy = busy;
+        let (dir, is_git, source) = package_dir(&app, true)?;
         let dry = op.writes();
+        // Hashed BEFORE the dry run and compared after it: the user
+        // confirms the tree the dry run saw. A dry run that changes the
+        // package (it must not write) invalidates the preview.
+        let before = fingerprint(&dir)?;
         let c = run_script(&dir, op, dry)?;
-        // Hashed after the dry run: a script that writes a cache next to
-        // itself would otherwise never match again. The files that run
-        // next are the ones hashed here.
-        let fp = fingerprint(&dir)?;
+        if fingerprint(&dir)? != before {
+            return Err(
+                "The package changed during the preview; its dry run must not write.".into(),
+            );
+        }
+        let fp = bound_fingerprint(op, &source, &before);
         Ok(outcome(op, dry, &dir, is_git, fp, c))
     })
     .await
@@ -312,10 +337,11 @@ pub async fn team_package_run(
     if !op.writes() {
         return Err("check runs from the preview.".into());
     }
-    let _busy = take_busy()?;
+    let busy = take_busy()?;
     tauri::async_runtime::spawn_blocking(move || {
-        let (dir, is_git) = package_dir(&app, false)?;
-        let now = self::fingerprint(&dir)?;
+        let _busy = busy; // see team_package_preview
+        let (dir, is_git, source) = package_dir(&app, false)?;
+        let now = bound_fingerprint(op, &source, &self::fingerprint(&dir)?);
         if now != fingerprint {
             return Err("changed-since-preview".into());
         }
@@ -345,6 +371,33 @@ mod tests {
         assert_ne!(a, b);
         std::fs::write(d.path().join("rules/y.md"), "").unwrap();
         assert_ne!(fingerprint(d.path()).unwrap(), b);
+    }
+
+    #[test]
+    fn bound_fingerprint_covers_op_and_source() {
+        let a = bound_fingerprint(Op::Update, "https://x/pkg.git", "t");
+        assert_eq!(a, bound_fingerprint(Op::Update, "https://x/pkg.git", "t"));
+        assert_ne!(
+            a,
+            bound_fingerprint(Op::Uninstall, "https://x/pkg.git", "t")
+        );
+        assert_ne!(a, bound_fingerprint(Op::Update, "https://y/pkg.git", "t"));
+        assert_ne!(a, bound_fingerprint(Op::Update, "https://x/pkg.git", "u"));
+        // Length-prefixed: moving text from one part to the next changes it.
+        assert_ne!(
+            bound_fingerprint(Op::Update, "ab", "c"),
+            bound_fingerprint(Op::Update, "a", "bc")
+        );
+    }
+
+    /// The guard is released where it is dropped (the blocking closure),
+    /// not where it was taken.
+    #[test]
+    fn busy_guard_moves_with_the_work() {
+        let g = take_busy().unwrap();
+        assert!(take_busy().is_err());
+        std::thread::spawn(move || drop(g)).join().unwrap();
+        assert!(take_busy().is_ok());
     }
 
     #[test]

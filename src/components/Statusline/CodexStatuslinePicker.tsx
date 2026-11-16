@@ -141,6 +141,7 @@ export function CodexStatuslinePicker({ brief = false }: { brief?: boolean }): R
               <span className="font-mono">{s.codexHome}</span>: {STATE_TEXT[s.state]}
               {s.version ? ` · Codex ${s.version}` : ''}
               {s.notice ? ` · ${s.notice}` : ''}
+              {s.written ? ` · writes: ${s.written.length ? s.written.join(', ') : 'nothing (line hidden)'}` : ''}
             </li>
           ))}
         </ul>
