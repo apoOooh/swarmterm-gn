@@ -90,14 +90,19 @@ pub fn normalize_segments(list: &[Slot<Segment>]) -> Vec<Slot<Segment>> {
 }
 
 /// A file from a newer build may name segments this one lacks: skip those
-/// entries instead of failing the whole settings file.
+/// entries instead of failing the whole settings file. A value that is not a
+/// list at all (null, string, object) falls back to the default list for
+/// this field only — failing here would reset every other setting too.
 fn lenient_segments<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Vec<Slot<Segment>>, D::Error> {
-    let raw: Vec<serde_json::Value> = Deserialize::deserialize(d)?;
-    let parsed: Vec<Slot<Segment>> = raw
-        .into_iter()
-        .filter_map(|v| serde_json::from_value(v).ok())
+    let raw: serde_json::Value = Deserialize::deserialize(d)?;
+    let Some(items) = raw.as_array() else {
+        return Ok(default_segments());
+    };
+    let parsed: Vec<Slot<Segment>> = items
+        .iter()
+        .filter_map(|v| serde_json::from_value(v.clone()).ok())
         .collect();
     Ok(normalize_segments(&parsed))
 }
@@ -307,6 +312,20 @@ mod tests {
         assert_eq!(s.claude, Preset::Extended);
         assert_eq!(s.claude_segments, default_segments());
         assert!(s.codex_items.is_empty());
+    }
+
+    #[test]
+    fn non_list_segments_keep_the_rest_of_the_file() {
+        for bad in [r#""x""#, "null", r#"{"a":1}"#, "7"] {
+            let json = format!(
+                r#"{{"claude":"detailed","codex":"extended","codexEnabled":false,"claudeSegments":{bad}}}"#
+            );
+            let s: StatuslineSettings = serde_json::from_str(&json).unwrap();
+            assert_eq!(s.claude_segments, default_segments(), "{bad}");
+            assert_eq!(s.claude, Preset::Detailed, "{bad}");
+            assert_eq!(s.codex, Some(Preset::Extended), "{bad}");
+            assert!(!s.codex_enabled, "{bad}");
+        }
     }
 
     #[test]
