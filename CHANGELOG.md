@@ -16,6 +16,10 @@
 
 ### Fixed
 
+- Codex panes (SWA-105) now get `--no-daemon` whenever Codex supports that
+  flag, even if it lacks the hook-trust flag, and also when the start line
+  runs Codex by path or as `codex.exe`. Wrappers such as `npx codex` are a
+  documented known limit.
 - Codex panes no longer start without `--no-daemon` when the machine is busy
   (SWA-102). The Codex version check is retried for each new pane instead of
   remembering a slow or failed check, and if it still gets no answer the bell

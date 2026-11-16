@@ -30,10 +30,10 @@ fn timeout_for(event: &str) -> u64 {
 /// Probe cache. A definite answer is kept for the process; a timed-out probe
 /// (cold disk, AV scan) is retried, but no more often than `RETRY_AFTER`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum ProbeState {
+enum ProbeState<T> {
     Unknown,
     Probing,
-    Known(bool),
+    Known(T),
     TimedOut(Instant),
 }
 
@@ -58,7 +58,24 @@ const SPAWN_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// `codex --help` hangs; the pane then starts unisolated and warns).
 const SPAWN_WAIT: Duration = Duration::from_millis(10_500);
 
-static STATE: Mutex<ProbeState> = Mutex::new(ProbeState::Unknown);
+/// What `codex --help` advertises (SWA-105). The two flags are separate
+/// features: `--no-daemon` keeps a pane off the shared daemon socket and is
+/// all a spawn needs, while hook install also needs
+/// `--dangerously-bypass-hook-trust`. One shared gate used to start a Codex
+/// that knew only `--no-daemon` without isolation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Caps {
+    no_daemon: bool,
+    hook_trust: bool,
+}
+
+impl Caps {
+    fn hooks(self) -> bool {
+        self.no_daemon && self.hook_trust
+    }
+}
+
+static STATE: Mutex<ProbeState<Caps>> = Mutex::new(ProbeState::Unknown);
 static DONE: Condvar = Condvar::new();
 
 /// Whether the installed Codex supports hook isolation. Warmed off-thread at
@@ -77,32 +94,35 @@ pub fn probe_supported() -> Option<bool> {
     supported_with(&STATE, &DONE, PROBE_WAIT, true, Instant::now, || {
         probe(PROBE_TIMEOUT)
     })
+    .map(Caps::hooks)
 }
 
 /// For a Codex pane spawn only (blocking worker, never the UI thread): `None`
-/// means still undecided after `SPAWN_WAIT` / `SPAWN_PROBE_TIMEOUT`.
+/// means still undecided after `SPAWN_WAIT` / `SPAWN_PROBE_TIMEOUT`. Only
+/// `--no-daemon` counts here (SWA-105), not the hook-trust flag.
 pub fn supported_for_spawn() -> Option<bool> {
     supported_with(&STATE, &DONE, SPAWN_WAIT, false, Instant::now, || {
         probe(SPAWN_PROBE_TIMEOUT)
     })
+    .map(|caps| caps.no_daemon)
 }
 
-fn supported_with(
-    state: &Mutex<ProbeState>,
+fn supported_with<T: Copy>(
+    state: &Mutex<ProbeState<T>>,
     done: &Condvar,
     wait: Duration,
     honor_retry_after: bool,
     now: impl Fn() -> Instant,
-    probe: impl FnOnce() -> Option<bool>,
-) -> Option<bool> {
+    probe: impl FnOnce() -> Option<T>,
+) -> Option<T> {
     {
         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-        if *s == ProbeState::Probing {
+        if matches!(*s, ProbeState::Probing) {
             // A probe is running (normally the startup warm-up): wait for its
             // answer, bounded, so a pane spawned during startup still gets
             // hook isolation. The lock is released while waiting.
             s = done
-                .wait_timeout_while(s, wait, |st| *st == ProbeState::Probing)
+                .wait_timeout_while(s, wait, |st| matches!(st, ProbeState::Probing))
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
         }
@@ -143,7 +163,7 @@ enum Undecided {
 /// definite "no" — every other failure is transient (SWA-102: a nonzero exit
 /// or a busy temp dir under load used to pin `false` for the whole process,
 /// and every Codex pane then started without `--no-daemon`).
-fn probe(timeout: Duration) -> Option<bool> {
+fn probe(timeout: Duration) -> Option<Caps> {
     let started = Instant::now();
     let outcome = probe_help(timeout);
     let verdict = classify(&outcome);
@@ -151,8 +171,11 @@ fn probe(timeout: Duration) -> Option<bool> {
         "[codex] isolation probe: {} after {} ms",
         match &outcome {
             Ok(_) => match verdict {
-                Some(true) => "supported".to_string(),
-                _ => "unsupported".to_string(),
+                Some(caps) => format!(
+                    "no-daemon={} hook-trust={}",
+                    caps.no_daemon, caps.hook_trust
+                ),
+                None => "unsupported".to_string(),
             },
             Err(why) => format!("undecided ({why:?})"),
         },
@@ -161,11 +184,12 @@ fn probe(timeout: Duration) -> Option<bool> {
     verdict
 }
 
-fn classify(outcome: &Result<String, Undecided>) -> Option<bool> {
+fn classify(outcome: &Result<String, Undecided>) -> Option<Caps> {
     match outcome {
-        Ok(help) => {
-            Some(help.contains("--no-daemon") && help.contains("--dangerously-bypass-hook-trust"))
-        }
+        Ok(help) => Some(Caps {
+            no_daemon: help.contains("--no-daemon"),
+            hook_trust: help.contains("--dangerously-bypass-hook-trust"),
+        }),
         Err(_) => None,
     }
 }
@@ -219,13 +243,34 @@ pub fn spawn_isolation(verdict: Option<bool>) -> (bool, bool) {
     }
 }
 
+/// Byte length of the leading program token when it names Codex itself:
+/// `codex`, `codex.exe`/`.cmd`/`.ps1`, also with a path and in double
+/// quotes (SWA-105). Wrappers (`npx codex`, `cmd /c codex`) and panes without
+/// the `codex` agent id are deliberately not recognised: a wrapper's own
+/// arguments cannot be told apart from Codex's, and a misplaced flag would
+/// break the start (documented in the user guide's Known limits).
+fn codex_program_len(command: &str) -> Option<usize> {
+    let (program, len) = if let Some(rest) = command.strip_prefix('"') {
+        let close = rest.find('"')?;
+        (&rest[..close], close + 2)
+    } else {
+        let end = command.find(char::is_whitespace).unwrap_or(command.len());
+        (&command[..end], end)
+    };
+    let name = program.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
+    let is_codex = ["", ".exe", ".cmd", ".ps1"]
+        .iter()
+        .any(|ext| name.strip_suffix(ext) == Some("codex"));
+    let tail = &command[len..];
+    (is_codex && (tail.is_empty() || tail.starts_with(char::is_whitespace))).then_some(len)
+}
+
 pub fn isolated_command(command: &str, agent: Option<&str>, supported: bool) -> String {
     if supported && agent == Some("codex") {
-        if let Some(tail) = command.strip_prefix("codex") {
-            if (tail.is_empty() || tail.starts_with(' '))
-                && !tail.split_whitespace().any(|arg| arg == "--no-daemon")
-            {
-                return format!("codex --no-daemon{tail}");
+        if let Some(len) = codex_program_len(command) {
+            let (program, tail) = command.split_at(len);
+            if !tail.split_whitespace().any(|arg| arg == "--no-daemon") {
+                return format!("{program} --no-daemon{tail}");
             }
         }
     }
@@ -540,7 +585,7 @@ mod tests {
 
     #[test]
     fn wait_for_a_running_probe_is_bounded() {
-        let state = Mutex::new(ProbeState::Probing);
+        let state = Mutex::new(ProbeState::<bool>::Probing);
         let start = Instant::now();
         let got = supported_with(
             &state,
@@ -556,7 +601,7 @@ mod tests {
 
     #[test]
     fn panicking_probe_does_not_leave_state_probing() {
-        let state = Mutex::new(ProbeState::Unknown);
+        let state = Mutex::new(ProbeState::<bool>::Unknown);
         let got = supported_with(
             &state,
             &Condvar::new(),
@@ -571,9 +616,20 @@ mod tests {
     /// SWA-102: only a fully read help text decides; every failure retries.
     #[test]
     fn only_a_read_help_text_is_a_definite_answer() {
+        let caps = |no_daemon, hook_trust| {
+            Some(Caps {
+                no_daemon,
+                hook_trust,
+            })
+        };
         let both = "--no-daemon --dangerously-bypass-hook-trust".to_string();
-        assert_eq!(classify(&Ok(both)), Some(true));
-        assert_eq!(classify(&Ok("--no-daemon".into())), Some(false));
+        assert_eq!(classify(&Ok(both)), caps(true, true));
+        assert_eq!(classify(&Ok("--no-daemon".into())), caps(true, false));
+        assert_eq!(
+            classify(&Ok("--dangerously-bypass-hook-trust".into())),
+            caps(false, true)
+        );
+        assert_eq!(classify(&Ok("--help".into())), caps(false, false));
         for why in [
             Undecided::NoBinary,
             Undecided::Io,
@@ -633,6 +689,46 @@ mod tests {
         assert_eq!(spawn_isolation(None), (false, true));
         assert_eq!(spawn_isolation(Some(true)), (true, false));
         assert_eq!(spawn_isolation(Some(false)), (false, false));
+    }
+
+    #[test]
+    /// SWA-105: the spawn gate needs only `--no-daemon`; hooks need both.
+    fn spawn_and_hooks_read_their_own_capability() {
+        for (no_daemon, hook_trust) in [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let caps = Caps {
+                no_daemon,
+                hook_trust,
+            };
+            assert_eq!(caps.hooks(), no_daemon && hook_trust);
+        }
+    }
+
+    /// SWA-105: a path, quotes or a Windows extension still name Codex.
+    #[test]
+    fn isolates_codex_started_by_path() {
+        let iso = |c: &str| isolated_command(c, Some("codex"), true);
+        assert_eq!(iso("codex.exe resume x"), "codex.exe --no-daemon resume x");
+        assert_eq!(iso("CODEX.CMD"), "CODEX.CMD --no-daemon");
+        assert_eq!(
+            iso(r"C:\tools\codex.exe resume x"),
+            r"C:\tools\codex.exe --no-daemon resume x"
+        );
+        assert_eq!(
+            iso(r#""C:\Program Files\Codex\codex.exe" resume x"#),
+            r#""C:\Program Files\Codex\codex.exe" --no-daemon resume x"#
+        );
+        assert_eq!(iso("/usr/bin/codex"), "/usr/bin/codex --no-daemon");
+        assert_eq!(
+            iso(r"C:\x\codex.exe --no-daemon"),
+            r"C:\x\codex.exe --no-daemon"
+        );
+        // Not recognised: wrappers, look-alikes, broken quotes, no agent id.
+        assert_eq!(iso("npx codex"), "npx codex");
+        assert_eq!(iso(r"C:\x\codex-helper.exe"), r"C:\x\codex-helper.exe");
+        assert_eq!(iso(r#""C:\x\codex.exe"#), r#""C:\x\codex.exe"#);
+        assert_eq!(iso(r#""codex"x"#), r#""codex"x"#);
+        assert_eq!(isolated_command("codex.exe", None, true), "codex.exe");
     }
 
     #[test]
