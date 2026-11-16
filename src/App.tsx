@@ -40,7 +40,7 @@ import { templateById } from '@/lib/templates'
 import { isMacPlatform, isWindowsPlatform } from '@/lib/platform'
 import { ClearGuard, clearInputSequence } from '@/lib/clear-input'
 import { shellFlavor } from '@/lib/agent-spawn-command'
-import { setAgentPolicy, setChildPriority, setEnvPolicy, setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
+import { setAgentPolicy, setChildPriority, setEnvPolicy, onCodexIsolationUnavailable, setInputDroppedHandler, writeTerminal } from '@/tauri/terminal'
 import { useEnvPolicyStore } from '@/store/env-policy-store'
 import { useAgentPolicyStore } from '@/store/agent-policy-store'
 import { useAgentPrefStore } from '@/store/agent-pref-store'
@@ -154,7 +154,7 @@ import { SavedWorkspaceNotice } from '@/components/Welcome/SavedWorkspaceNotice'
 import type { CategoryId } from '@/components/Settings/SettingsView'
 import { cleanupWhenResolved } from '@/lib/listener-cleanup'
 import { staleKeys } from '@/lib/stale-sweep'
-import { VOICE_ALERT_ID, createInputDropThrottle, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
+import { VOICE_ALERT_ID, codexIsolationEntry, createInputDropThrottle, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from '@/lib/backend-alerts'
 import { BuzzkeyUpdateToast } from '@/components/BuzzkeyUpdateToast'
 import { useBuzzkeyUpdateStore } from '@/store/buzzkey-update-store'
 import { BUILD_EDITION, editionFeatures, effectiveEdition } from '@/lib/edition'
@@ -934,13 +934,21 @@ export default function App(): ReactElement {
     // the write was dropped (Rust write_terminal), so say so instead of
     // losing the paste silently.
     const allowInputAlert = createInputDropThrottle()
-    setInputDroppedHandler((terminalId) => {
-      if (!allowInputAlert(terminalId, Date.now())) return
+    const paneLabel = (terminalId: string): string => {
       const ws = selectWorkspaceByTerminalId(useAppStore.getState(), terminalId)
       const leaf = ws && collectLeaves(ws.layout).find((l) => l.terminalId === terminalId)
-      const label = leaf ? `${templateById(leaf.agentId ?? 'terminal').name} (${ws.name})` : 'A pane'
-      center().add(inputDroppedEntry(label, Date.now()))
+      return leaf ? `${templateById(leaf.agentId ?? 'terminal').name} (${ws.name})` : 'A pane'
+    }
+    setInputDroppedHandler((terminalId) => {
+      if (!allowInputAlert(terminalId, Date.now())) return
+      center().add(inputDroppedEntry(paneLabel(terminalId), Date.now()))
     })
+    cleanups.push(
+      cleanupWhenResolved(
+        onCodexIsolationUnavailable((terminalId) => center().add(codexIsolationEntry(paneLabel(terminalId), Date.now()))),
+        'codex:isolation-unavailable'
+      )
+    )
     return () => {
       setInputDroppedHandler(undefined)
       for (const c of cleanups) c()

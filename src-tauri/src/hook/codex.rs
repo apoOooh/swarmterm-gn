@@ -43,6 +43,24 @@ const RETRY_AFTER: Duration = Duration::from_secs(60);
 /// itself gives up after 3 s).
 const PROBE_WAIT: Duration = Duration::from_millis(3_500);
 
+/// `codex --help` deadline for the cached, UI-facing checks.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// A Codex pane spawn (SWA-102) runs on a blocking worker and must not start
+/// without `--no-daemon` just because the machine is busy: it probes with a
+/// longer deadline, waits as long for a running probe, and ignores the
+/// `RETRY_AFTER` throttle (that throttle exists for Settings/agent listing,
+/// not for a pane that would otherwise die at the shared daemon socket).
+const SPAWN_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Note: a spawn that waited out `SPAWN_WAIT` for another caller's probe and
+/// then found it timed out probes once more itself, so the worst case is
+/// about `SPAWN_WAIT + SPAWN_PROBE_TIMEOUT` (only on a machine where
+/// `codex --help` hangs; the pane then starts unisolated and warns).
+const SPAWN_WAIT: Duration = Duration::from_millis(10_500);
+
+static STATE: Mutex<ProbeState> = Mutex::new(ProbeState::Unknown);
+static DONE: Condvar = Condvar::new();
+
 /// Whether the installed Codex supports hook isolation. Warmed off-thread at
 /// startup (`setup::boot`), so pane spawns normally hit the cache. The lock is never
 /// held across the probe: a caller arriving while another probe runs waits up
@@ -56,15 +74,24 @@ pub fn supported() -> bool {
 /// after `PROBE_WAIT`): Settings must not tell the user to update a Codex
 /// that merely started slowly.
 pub fn probe_supported() -> Option<bool> {
-    static STATE: Mutex<ProbeState> = Mutex::new(ProbeState::Unknown);
-    static DONE: Condvar = Condvar::new();
-    supported_with(&STATE, &DONE, PROBE_WAIT, Instant::now, probe)
+    supported_with(&STATE, &DONE, PROBE_WAIT, true, Instant::now, || {
+        probe(PROBE_TIMEOUT)
+    })
+}
+
+/// For a Codex pane spawn only (blocking worker, never the UI thread): `None`
+/// means still undecided after `SPAWN_WAIT` / `SPAWN_PROBE_TIMEOUT`.
+pub fn supported_for_spawn() -> Option<bool> {
+    supported_with(&STATE, &DONE, SPAWN_WAIT, false, Instant::now, || {
+        probe(SPAWN_PROBE_TIMEOUT)
+    })
 }
 
 fn supported_with(
     state: &Mutex<ProbeState>,
     done: &Condvar,
     wait: Duration,
+    honor_retry_after: bool,
     now: impl Fn() -> Instant,
     probe: impl FnOnce() -> Option<bool>,
 ) -> Option<bool> {
@@ -82,7 +109,9 @@ fn supported_with(
         match *s {
             ProbeState::Known(known) => return Some(known),
             ProbeState::Probing => return None,
-            ProbeState::TimedOut(at) if now().saturating_duration_since(at) < RETRY_AFTER => {
+            ProbeState::TimedOut(at)
+                if honor_retry_after && now().saturating_duration_since(at) < RETRY_AFTER =>
+            {
                 return None
             }
             ProbeState::Unknown | ProbeState::TimedOut(_) => *s = ProbeState::Probing,
@@ -99,17 +128,52 @@ fn supported_with(
     result
 }
 
-/// `None` = undecided (timed out); retried after `RETRY_AFTER`.
-fn probe() -> Option<bool> {
-    let Some(binary) = crate::agents::find_agent_binary("codex") else {
-        return Some(false);
-    };
-    let Ok(mut output) = tempfile::tempfile() else {
-        return Some(false);
-    };
-    let Ok(stdout) = output.try_clone() else {
-        return Some(false);
-    };
+/// Why a probe stayed undecided; logged, never shown with paths or output.
+#[derive(Debug, PartialEq)]
+enum Undecided {
+    NoBinary,
+    Io,
+    Spawn,
+    Exit,
+    Timeout,
+}
+
+/// `None` = undecided; retried (Settings after `RETRY_AFTER`, a pane spawn
+/// at once). Only a help text that was read in full and lacks a flag is a
+/// definite "no" — every other failure is transient (SWA-102: a nonzero exit
+/// or a busy temp dir under load used to pin `false` for the whole process,
+/// and every Codex pane then started without `--no-daemon`).
+fn probe(timeout: Duration) -> Option<bool> {
+    let started = Instant::now();
+    let outcome = probe_help(timeout);
+    let verdict = classify(&outcome);
+    eprintln!(
+        "[codex] isolation probe: {} after {} ms",
+        match &outcome {
+            Ok(_) => match verdict {
+                Some(true) => "supported".to_string(),
+                _ => "unsupported".to_string(),
+            },
+            Err(why) => format!("undecided ({why:?})"),
+        },
+        started.elapsed().as_millis()
+    );
+    verdict
+}
+
+fn classify(outcome: &Result<String, Undecided>) -> Option<bool> {
+    match outcome {
+        Ok(help) => {
+            Some(help.contains("--no-daemon") && help.contains("--dangerously-bypass-hook-trust"))
+        }
+        Err(_) => None,
+    }
+}
+
+fn probe_help(timeout: Duration) -> Result<String, Undecided> {
+    let binary = crate::agents::find_agent_binary("codex").ok_or(Undecided::NoBinary)?;
+    let mut output = tempfile::tempfile().map_err(|_| Undecided::Io)?;
+    let stdout = output.try_clone().map_err(|_| Undecided::Io)?;
     let mut command = crate::terminal_env::command(binary);
     command
         .arg("--help")
@@ -121,31 +185,38 @@ fn probe() -> Option<bool> {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    let Ok(mut child) = command.spawn() else {
-        return Some(false);
-    };
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut child = command.spawn().map_err(|_| Undecided::Spawn)?;
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return Some(false),
+            Ok(Some(_)) | Err(_) => return Err(Undecided::Exit),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return Err(Undecided::Timeout);
             }
         }
     }
     use std::io::{Seek, SeekFrom};
-    if output.seek(SeekFrom::Start(0)).is_err() {
-        return Some(false);
-    }
+    output.seek(SeekFrom::Start(0)).map_err(|_| Undecided::Io)?;
     let mut help = String::new();
-    if output.take(64 * 1024).read_to_string(&mut help).is_err() {
-        return Some(false);
+    output
+        .take(64 * 1024)
+        .read_to_string(&mut help)
+        .map_err(|_| Undecided::Io)?;
+    Ok(help)
+}
+
+/// Spawn verdict → (add `--no-daemon`, warn the user). Undecided starts
+/// without the flag so a Codex too old for it still runs (user decision
+/// 2026-11-16), but is reported instead of failing silently.
+pub fn spawn_isolation(verdict: Option<bool>) -> (bool, bool) {
+    match verdict {
+        Some(supported) => (supported, false),
+        None => (false, true),
     }
-    Some(help.contains("--no-daemon") && help.contains("--dangerously-bypass-hook-trust"))
 }
 
 pub fn isolated_command(command: &str, agent: Option<&str>, supported: bool) -> String {
@@ -395,7 +466,14 @@ mod tests {
             }
         };
         assert_eq!(
-            supported_with(&state, &Condvar::new(), Duration::ZERO, || t0, probe(None)),
+            supported_with(
+                &state,
+                &Condvar::new(),
+                Duration::ZERO,
+                true,
+                || t0,
+                probe(None)
+            ),
             None
         );
         assert_eq!(*state.lock().unwrap(), ProbeState::TimedOut(t0));
@@ -405,6 +483,7 @@ mod tests {
                 &state,
                 &Condvar::new(),
                 Duration::ZERO,
+                true,
                 || t0 + Duration::from_secs(30),
                 probe(Some(true))
             ),
@@ -417,6 +496,7 @@ mod tests {
                 &state,
                 &Condvar::new(),
                 Duration::ZERO,
+                true,
                 || t0 + RETRY_AFTER,
                 probe(Some(true))
             ),
@@ -428,6 +508,7 @@ mod tests {
                 &state,
                 &Condvar::new(),
                 Duration::ZERO,
+                true,
                 || t0 + RETRY_AFTER * 10,
                 probe(Some(false))
             ),
@@ -449,6 +530,7 @@ mod tests {
             &shared.0,
             &shared.1,
             Duration::from_secs(3),
+            true,
             Instant::now,
             || panic!("must not probe while another probe runs"),
         );
@@ -464,6 +546,7 @@ mod tests {
             &state,
             &Condvar::new(),
             Duration::from_millis(30),
+            true,
             Instant::now,
             || panic!("must not probe"),
         );
@@ -478,11 +561,78 @@ mod tests {
             &state,
             &Condvar::new(),
             Duration::from_millis(30),
+            true,
             Instant::now,
             || panic!("probe blew up"),
         );
         assert_eq!(got, None);
         assert!(matches!(*state.lock().unwrap(), ProbeState::TimedOut(_)));
+    }
+    /// SWA-102: only a fully read help text decides; every failure retries.
+    #[test]
+    fn only_a_read_help_text_is_a_definite_answer() {
+        let both = "--no-daemon --dangerously-bypass-hook-trust".to_string();
+        assert_eq!(classify(&Ok(both)), Some(true));
+        assert_eq!(classify(&Ok("--no-daemon".into())), Some(false));
+        for why in [
+            Undecided::NoBinary,
+            Undecided::Io,
+            Undecided::Spawn,
+            Undecided::Exit,
+            Undecided::Timeout,
+        ] {
+            assert_eq!(classify(&Err(why)), None);
+        }
+    }
+
+    /// SWA-102: a pane spawn right after a timed-out probe probes again
+    /// instead of starting Codex without `--no-daemon` for `RETRY_AFTER`.
+    #[test]
+    fn spawn_ignores_the_retry_throttle_and_caches_the_answer() {
+        let state = Mutex::new(ProbeState::Unknown);
+        let t0 = Instant::now();
+        let cv = Condvar::new();
+        assert_eq!(
+            supported_with(&state, &cv, Duration::ZERO, true, || t0, || None),
+            None
+        );
+        // Settings within the throttle: no new probe.
+        assert_eq!(
+            supported_with(
+                &state,
+                &cv,
+                Duration::ZERO,
+                true,
+                || t0,
+                || panic!("throttled")
+            ),
+            None
+        );
+        // A spawn at the same instant probes and its answer sticks.
+        assert_eq!(
+            supported_with(&state, &cv, Duration::ZERO, false, || t0, || Some(true)),
+            Some(true)
+        );
+        assert_eq!(
+            supported_with(
+                &state,
+                &cv,
+                Duration::ZERO,
+                true,
+                || t0,
+                || panic!("cached")
+            ),
+            Some(true)
+        );
+    }
+
+    /// SWA-102 user decision (2026-11-16): still undecided after the spawn
+    /// deadline = start without the flag, but warn; never claim support.
+    #[test]
+    fn undecided_spawn_starts_unisolated_and_warns() {
+        assert_eq!(spawn_isolation(None), (false, true));
+        assert_eq!(spawn_isolation(Some(true)), (true, false));
+        assert_eq!(spawn_isolation(Some(false)), (false, false));
     }
 
     #[test]
