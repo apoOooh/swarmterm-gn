@@ -1104,11 +1104,20 @@ fn plan_spawn(
     // Run the template's first command (clearing the screen first for the
     // platform default shell so the prompt/echo don't linger above the program).
     let initial_line = options.initial_command.as_ref().map(|ic| {
-        let ic = crate::hook::codex::isolated_command(
-            ic,
-            options.agent_id.as_deref(),
-            options.agent_id.as_deref() == Some("codex") && crate::hook::codex::supported(),
-        );
+        // SWA-102: a Codex pane waits for a definite probe answer (blocking
+        // worker, not the UI thread) instead of the throttled cache, which
+        // under load said "no" and let Codex die at the shared daemon socket.
+        let isolate = options.agent_id.as_deref() == Some("codex") && {
+            let (isolate, warn) =
+                crate::hook::codex::spawn_isolation(crate::hook::codex::supported_for_spawn());
+            if warn {
+                eprintln!("[codex] pane {id}: isolation undecided, starting without --no-daemon");
+                use tauri::Emitter;
+                let _ = app.emit_to("main", "codex:isolation-unavailable", id);
+            }
+            isolate
+        };
+        let ic = crate::hook::codex::isolated_command(ic, options.agent_id.as_deref(), isolate);
         // A switched-off profile gets no per-process pin either, and neither
         // does one whose config.toml already holds the stdio entry (SWA-83
         // 1b: Codex refuses `url` on a stdio server).

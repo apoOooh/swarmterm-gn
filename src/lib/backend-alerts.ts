@@ -37,6 +37,23 @@ export function resubmitHeldEntry(at: number): NewCenterEntry {
   }
 }
 
+export const CODEX_ISOLATION_ALERT_ID = 'backend:codex-isolation'
+
+/**
+ * SWA-102: Rust could not tell in time whether Codex supports `--no-daemon`
+ * and started the pane without it (user decision 2026-11-16: start and warn).
+ * Such a pane can die at Codex's shared daemon socket; restarting it retries.
+ */
+export function codexIsolationEntry(paneLabel: string, at: number): NewCenterEntry {
+  return {
+    kind: 'backend',
+    terminalId: CODEX_ISOLATION_ALERT_ID,
+    title: 'Codex started without isolation',
+    detail: `${paneLabel}: the Codex version check did not answer in time. If the pane fails with a daemon socket error, restart it.`,
+    at
+  }
+}
+
 /**
  * A pane's pty input queue was full (the program stopped reading) and a write
  * was dropped. Not filed under the pane's own id: an `attention` entry there

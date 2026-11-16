@@ -14,6 +14,13 @@
   with the new policy value `DisableTeamPackage`; not available in the Corp
   edition.
 
+### Fixed
+
+- Codex panes no longer start without `--no-daemon` when the machine is busy
+  (SWA-102). The Codex version check is retried for each new pane instead of
+  remembering a slow or failed check, and if it still gets no answer the bell
+  says so.
+
 ## [1.29.1] - 2026-11-15
 
 - Security (SWA-86): the local MCP server now refuses every request without
