@@ -36,45 +36,74 @@ fn take_busy() -> Result<BusyGuard, String> {
     Ok(BusyGuard)
 }
 
-// ---------- fingerprint ----------
+// ---------- fingerprint and staging ----------
 
-/// SHA-256 over every file below `root` (relative path + length + content,
-/// sorted), skipping only `.git` at the root. Links and
-/// junctions are refused rather than followed, so the tree cannot point the
-/// hash at one set of files while node resolves another.
-pub fn fingerprint(root: &Path) -> Result<String, String> {
-    let mut files = Vec::new();
-    walk(root, root, &mut files)?;
-    files.sort();
-    let mut hasher = Sha256::new();
-    let mut total = 0u64;
-    for rel in &files {
-        // Size from metadata first: a wrong folder with one huge file must
-        // be refused before it is read into memory.
-        let len = std::fs::metadata(root.join(rel))
-            .map_err(|e| format!("read {rel}: {e}"))?
-            .len();
-        total += len;
-        if total > MAX_BYTES {
-            return Err("The package folder is too large.".into());
-        }
-        let bytes = std::fs::read(root.join(rel)).map_err(|e| format!("read {rel}: {e}"))?;
-        hasher.update(rel.as_bytes());
-        hasher.update([0]);
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(&bytes);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
+/// One file of the package: its relative path as given to the copy, and the
+/// lossless key that is sorted and hashed.
+struct Entry {
+    rel: PathBuf,
+    key: Vec<u8>,
 }
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String> {
+/// Lossless bytes of a relative path with `/` as separator. Windows names
+/// are UTF-16 and may hold unpaired surrogates: a lossy string would map
+/// two different names onto the same U+FFFD text, so the UTF-16 units go
+/// into the key as they are.
+#[cfg(windows)]
+fn path_key(rel: &Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    rel.as_os_str()
+        .encode_wide()
+        .map(|u| {
+            if u == u16::from(b'\\') {
+                u16::from(b'/')
+            } else {
+                u
+            }
+        })
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+#[cfg(not(windows))]
+fn path_key(rel: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    rel.as_os_str().as_bytes().to_vec()
+}
+
+/// The root itself must be a plain folder: a junction or link as root would
+/// let the hash and node see whatever it points at when each one looks.
+fn check_root(root: &Path) -> Result<(), String> {
+    let meta = std::fs::symlink_metadata(root).map_err(|_| {
+        "unreachable: the source folder does not exist or is not readable.".to_string()
+    })?;
+    if meta.file_type().is_symlink() || is_reparse(&meta) {
+        return Err("The package folder is a link; use the folder it points to.".into());
+    }
+    if !meta.is_dir() {
+        return Err("The package source is not a folder.".into());
+    }
+    Ok(())
+}
+
+/// Every file below `root`, sorted by key. `.git` at the root is skipped
+/// only for our own checkout (`skip_git`): in a local source, `install.mjs`
+/// could import `./.git/x.mjs`, so there it is part of the package.
+fn collect(root: &Path, skip_git: bool) -> Result<Vec<Entry>, String> {
+    check_root(root)?;
+    let mut files = Vec::new();
+    walk(root, root, skip_git, &mut files)?;
+    files.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(files)
+}
+
+fn walk(root: &Path, dir: &Path, skip_git: bool, out: &mut Vec<Entry>) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
         // Only git's own metadata is skipped: node resolves imports from a
         // node_modules in the package, so it must be part of the hash.
-        if dir == root && name == ".git" {
+        if skip_git && dir == root && name == ".git" {
             continue;
         }
         let meta = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
@@ -85,21 +114,80 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String> {
             ));
         }
         if meta.is_dir() {
-            walk(root, &entry.path(), out)?;
+            walk(root, &entry.path(), skip_git, out)?;
         } else if meta.is_file() {
             let rel = entry
                 .path()
                 .strip_prefix(root)
                 .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .replace('\\', "/");
-            out.push(rel);
+                .to_path_buf();
+            let key = path_key(&rel);
+            out.push(Entry { rel, key });
             if out.len() > MAX_FILES {
                 return Err("The package folder has too many files.".into());
             }
         }
     }
     Ok(())
+}
+
+/// SHA-256 over the files (key + length + content, sorted). With `copy_to`
+/// every file is written there from the SAME bytes that went into the hash,
+/// so the copy is exactly what the fingerprint describes.
+fn hash_files(root: &Path, files: &[Entry], copy_to: Option<&Path>) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    let mut total = 0u64;
+    let show = |e: &Entry| e.rel.to_string_lossy().replace('\\', "/");
+    for e in files {
+        let path = root.join(&e.rel);
+        // Size from metadata first: a wrong folder with one huge file must
+        // be refused before it is read into memory.
+        let len = std::fs::metadata(&path)
+            .map_err(|err| format!("read {}: {err}", show(e)))?
+            .len();
+        if total + len > MAX_BYTES {
+            return Err("The package folder is too large.".into());
+        }
+        let bytes = std::fs::read(&path).map_err(|err| format!("read {}: {err}", show(e)))?;
+        // The file may have grown since the metadata call.
+        total += bytes.len() as u64;
+        if total > MAX_BYTES {
+            return Err("The package folder is too large.".into());
+        }
+        hasher.update((e.key.len() as u64).to_le_bytes());
+        hasher.update(&e.key);
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
+        if let Some(dest) = copy_to {
+            let target = dest.join(&e.rel);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+            std::fs::write(&target, &bytes).map_err(|err| format!("stage {}: {err}", show(e)))?;
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Fingerprint of the tree below `root`. Links and junctions (also as the
+/// root) are refused rather than followed, so the tree cannot point the
+/// hash at one set of files while node resolves another.
+pub fn fingerprint(root: &Path, skip_git: bool) -> Result<String, String> {
+    let files = collect(root, skip_git)?;
+    hash_files(root, &files, None)
+}
+
+/// Copy the package into `dest` (emptied first) and return the fingerprint
+/// of the copy. Node only ever runs from the copy: a local source folder
+/// can change at any time, also while node is loading, and the user
+/// confirmed one exact tree.
+pub fn stage(src: &Path, skip_git: bool, dest: &Path) -> Result<String, String> {
+    let files = collect(src, skip_git)?;
+    if std::fs::symlink_metadata(dest).is_ok() {
+        std::fs::remove_dir_all(dest).map_err(|e| format!("could not reset the stage: {e}"))?;
+    }
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    hash_files(src, &files, Some(dest))
 }
 
 #[cfg(windows)]
@@ -119,6 +207,12 @@ fn checkout_root(app: &AppHandle) -> Result<PathBuf, String> {
         .app_local_data_dir()
         .map(|d| d.join(CHECKOUT_DIR))
         .map_err(|e| e.to_string())
+}
+
+/// Where the package is copied before node runs; ours alone, emptied by
+/// every `stage`.
+fn stage_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(checkout_root(app)?.join("stage"))
 }
 
 fn save_source(app: &AppHandle, source: Option<String>) -> Result<(), String> {
@@ -307,12 +401,13 @@ pub async fn team_package_preview(
         let _busy = busy;
         let (dir, is_git, source) = package_dir(&app, true)?;
         let dry = op.writes();
-        // Hashed BEFORE the dry run and compared after it: the user
-        // confirms the tree the dry run saw. A dry run that changes the
-        // package (it must not write) invalidates the preview.
-        let before = fingerprint(&dir)?;
-        let c = run_script(&dir, op, dry)?;
-        if fingerprint(&dir)? != before {
+        // Hashed while staging (before the dry run) and compared after it:
+        // the user confirms the tree the dry run saw. A dry run that
+        // changes the package (it must not write) invalidates the preview.
+        let staged = stage_dir(&app)?;
+        let before = stage(&dir, is_git, &staged)?;
+        let c = run_script(&staged, op, dry)?;
+        if fingerprint(&staged, false)? != before {
             return Err(
                 "The package changed during the preview; its dry run must not write.".into(),
             );
@@ -341,11 +436,13 @@ pub async fn team_package_run(
     tauri::async_runtime::spawn_blocking(move || {
         let _busy = busy; // see team_package_preview
         let (dir, is_git, source) = package_dir(&app, false)?;
-        let now = bound_fingerprint(op, &source, &self::fingerprint(&dir)?);
+        // A fresh copy: node runs from the exact bytes that were compared.
+        let staged = stage_dir(&app)?;
+        let now = bound_fingerprint(op, &source, &stage(&dir, is_git, &staged)?);
         if now != fingerprint {
             return Err("changed-since-preview".into());
         }
-        let c = run_script(&dir, op, false)?;
+        let c = run_script(&staged, op, false)?;
         Ok(outcome(op, false, &dir, is_git, now, c))
     })
     .await
@@ -362,15 +459,20 @@ mod tests {
         std::fs::write(d.path().join("install.mjs"), "a").unwrap();
         std::fs::create_dir(d.path().join("rules")).unwrap();
         std::fs::write(d.path().join("rules/x.md"), "1").unwrap();
-        let a = fingerprint(d.path()).unwrap();
+        let a = fingerprint(d.path(), true).unwrap();
+        assert_eq!(fingerprint(d.path(), false).unwrap(), a);
         std::fs::create_dir(d.path().join(".git")).unwrap();
         std::fs::write(d.path().join(".git/HEAD"), "x").unwrap();
-        assert_eq!(fingerprint(d.path()).unwrap(), a);
+        // Our own checkout skips its .git; a local source hashes it, since
+        // install.mjs could import from there.
+        assert_eq!(fingerprint(d.path(), true).unwrap(), a);
+        assert_ne!(fingerprint(d.path(), false).unwrap(), a);
+        std::fs::remove_dir_all(d.path().join(".git")).unwrap();
         std::fs::write(d.path().join("rules/x.md"), "2").unwrap();
-        let b = fingerprint(d.path()).unwrap();
+        let b = fingerprint(d.path(), false).unwrap();
         assert_ne!(a, b);
         std::fs::write(d.path().join("rules/y.md"), "").unwrap();
-        assert_ne!(fingerprint(d.path()).unwrap(), b);
+        assert_ne!(fingerprint(d.path(), false).unwrap(), b);
     }
 
     #[test]
@@ -407,8 +509,8 @@ mod tests {
         let b = tempfile::tempdir().unwrap();
         std::fs::write(b.path().join("a"), "bc").unwrap();
         assert_ne!(
-            fingerprint(a.path()).unwrap(),
-            fingerprint(b.path()).unwrap()
+            fingerprint(a.path(), false).unwrap(),
+            fingerprint(b.path(), false).unwrap()
         );
     }
 
@@ -426,7 +528,7 @@ mod tests {
             .map(|o| o.status.success())
             .unwrap_or(false);
         if ok {
-            assert!(fingerprint(d.path()).is_err());
+            assert!(fingerprint(d.path(), false).is_err());
         }
     }
 
@@ -448,8 +550,76 @@ mod tests {
         let c = run_script(d.path(), Op::Uninstall, true).unwrap();
         assert_eq!(c.exit_code, Some(0));
         assert_eq!(c.output.trim(), r#"["uninstall","--dry-run"]"#);
-        let before = fingerprint(d.path()).unwrap();
+        let before = fingerprint(d.path(), false).unwrap();
         std::fs::write(d.path().join("install.mjs"), "process.exit(3)").unwrap();
-        assert_ne!(fingerprint(d.path()).unwrap(), before);
+        assert_ne!(fingerprint(d.path(), false).unwrap(), before);
+    }
+
+    /// The stage holds exactly the hashed files, and a change of the source
+    /// after staging reaches neither the stage nor its fingerprint.
+    #[test]
+    fn stage_copies_the_hashed_tree_and_detaches_from_the_source() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("install.mjs"), "a").unwrap();
+        std::fs::create_dir(src.path().join("lib")).unwrap();
+        std::fs::write(src.path().join("lib/x.mjs"), "1").unwrap();
+        std::fs::create_dir(src.path().join(".git")).unwrap();
+        std::fs::write(src.path().join(".git/x.mjs"), "g").unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let dest = out.path().join("stage");
+        std::fs::create_dir(&dest).unwrap();
+        std::fs::write(dest.join("stale.txt"), "old").unwrap();
+
+        let fp = stage(src.path(), true, &dest).unwrap();
+        assert_eq!(fp, fingerprint(src.path(), true).unwrap());
+        assert_eq!(fp, fingerprint(&dest, false).unwrap());
+        assert!(!dest.join("stale.txt").exists() && !dest.join(".git").exists());
+        std::fs::write(src.path().join("lib/x.mjs"), "2").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("lib/x.mjs")).unwrap(),
+            "1"
+        );
+        assert_eq!(fingerprint(&dest, false).unwrap(), fp);
+
+        // Local source: .git is part of the package and of the stage.
+        let local = stage(src.path(), false, &dest).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join(".git/x.mjs")).unwrap(),
+            "g"
+        );
+        assert_eq!(local, fingerprint(&dest, false).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn root_junction_is_refused() {
+        let base = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::fs::write(target.path().join("install.mjs"), "a").unwrap();
+        let link = base.path().join("pkg");
+        let ok = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(target.path())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert!(ok, "mklink /J failed");
+        let err = fingerprint(&link, false).unwrap_err();
+        assert!(err.contains("is a link"), "{err}");
+        assert!(stage(&link, false, &base.path().join("stage")).is_err());
+    }
+
+    /// Two names that differ only in an unpaired surrogate must not share a
+    /// key (the lossy text of both is U+FFFD).
+    #[cfg(windows)]
+    #[test]
+    fn path_key_is_lossless() {
+        use std::os::windows::ffi::OsStringExt;
+        let a = std::ffi::OsString::from_wide(&[0xD800, u16::from(b'x')]);
+        let b = std::ffi::OsString::from_wide(&[0xDC00, u16::from(b'x')]);
+        assert_eq!(a.to_string_lossy(), b.to_string_lossy());
+        assert_ne!(path_key(Path::new(&a)), path_key(Path::new(&b)));
+        assert_eq!(path_key(Path::new(r"a\b")), path_key(Path::new("a/b")));
     }
 }
