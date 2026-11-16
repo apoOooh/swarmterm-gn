@@ -70,8 +70,14 @@ struct Caps {
 }
 
 impl Caps {
+    /// Hook install and Settings' "session hooks" need both flags.
     fn hooks(self) -> bool {
         self.no_daemon && self.hook_trust
+    }
+
+    /// A pane spawn needs only `--no-daemon`.
+    fn spawn(self) -> bool {
+        self.no_daemon
     }
 }
 
@@ -104,7 +110,7 @@ pub fn supported_for_spawn() -> Option<bool> {
     supported_with(&STATE, &DONE, SPAWN_WAIT, false, Instant::now, || {
         probe(SPAWN_PROBE_TIMEOUT)
     })
-    .map(|caps| caps.no_daemon)
+    .map(Caps::spawn)
 }
 
 fn supported_with<T: Copy>(
@@ -170,14 +176,13 @@ fn probe(timeout: Duration) -> Option<Caps> {
     eprintln!(
         "[codex] isolation probe: {} after {} ms",
         match &outcome {
-            Ok(_) => match verdict {
-                Some(caps) => format!(
+            Err(why) => format!("undecided ({why:?})"),
+            Ok(_) => verdict.map_or_else(String::new, |caps| {
+                format!(
                     "no-daemon={} hook-trust={}",
                     caps.no_daemon, caps.hook_trust
-                ),
-                None => "unsupported".to_string(),
-            },
-            Err(why) => format!("undecided ({why:?})"),
+                )
+            }),
         },
         started.elapsed().as_millis()
     );
@@ -243,26 +248,23 @@ pub fn spawn_isolation(verdict: Option<bool>) -> (bool, bool) {
     }
 }
 
-/// Byte length of the leading program token when it names Codex itself:
-/// `codex`, `codex.exe`/`.cmd`/`.ps1`, also with a path and in double
-/// quotes (SWA-105). Wrappers (`npx codex`, `cmd /c codex`) and panes without
-/// the `codex` agent id are deliberately not recognised: a wrapper's own
-/// arguments cannot be told apart from Codex's, and a misplaced flag would
-/// break the start (documented in the user guide's Known limits).
+/// Byte length up to the end of the leading program token (leading blanks
+/// included) when it is Codex looked up on PATH: `codex` or
+/// `codex.exe`/`.cmd`/`.ps1`, any case (SWA-105). Only PATH names count,
+/// because the capability probe runs the PATH Codex (`find_agent_binary`):
+/// a pane started by an explicit path may be another build that rejects
+/// `--no-daemon`, and a quoted path is not even a command in PowerShell.
+/// Paths, wrappers (`npx codex`) and panes without the `codex` agent id are
+/// left alone (user guide, Known limits).
 fn codex_program_len(command: &str) -> Option<usize> {
-    let (program, len) = if let Some(rest) = command.strip_prefix('"') {
-        let close = rest.find('"')?;
-        (&rest[..close], close + 2)
-    } else {
-        let end = command.find(char::is_whitespace).unwrap_or(command.len());
-        (&command[..end], end)
-    };
-    let name = program.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
-    let is_codex = ["", ".exe", ".cmd", ".ps1"]
+    let lead = command.len() - command.trim_start().len();
+    let rest = &command[lead..];
+    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let name = rest[..end].to_ascii_lowercase();
+    ["", ".exe", ".cmd", ".ps1"]
         .iter()
-        .any(|ext| name.strip_suffix(ext) == Some("codex"));
-    let tail = &command[len..];
-    (is_codex && (tail.is_empty() || tail.starts_with(char::is_whitespace))).then_some(len)
+        .any(|ext| name.strip_suffix(ext) == Some("codex"))
+        .then_some(lead + end)
 }
 
 pub fn isolated_command(command: &str, agent: Option<&str>, supported: bool) -> String {
@@ -291,13 +293,15 @@ pub fn with_mcp_url(command: &str, agent: Option<&str>, url: Option<&str>) -> St
                 .all(|c| c.is_ascii_alphanumeric() || ":/.".contains(c))
     };
     match (agent, url) {
-        (Some("codex"), Some(url)) if safe(url) => match command.strip_prefix("codex") {
-            Some(tail) if tail.is_empty() || tail.starts_with(' ') => format!(
-                "codex -c mcp_servers.swarmterm.url={url} \
+        (Some("codex"), Some(url)) if safe(url) => {
+            match codex_program_len(command).map(|len| command.split_at(len)) {
+                Some((program, tail)) => format!(
+                    "{program} -c mcp_servers.swarmterm.url={url} \
                  -c mcp_servers.swarmterm.bearer_token_env_var=SWARMTERM_SESSION{tail}"
-            ),
-            _ => command.into(),
-        },
+                ),
+                _ => command.into(),
+            }
+        }
         _ => command.into(),
     }
 }
@@ -701,34 +705,43 @@ mod tests {
                 hook_trust,
             };
             assert_eq!(caps.hooks(), no_daemon && hook_trust);
+            // Not `hooks()`: a Codex without the hook-trust flag must still
+            // start isolated.
+            assert_eq!(caps.spawn(), no_daemon);
         }
     }
 
-    /// SWA-105: a path, quotes or a Windows extension still name Codex.
+    /// SWA-105: Windows extensions and leading blanks still name the PATH
+    /// Codex; an explicit path is another binary than the probed one.
     #[test]
     fn isolates_codex_started_by_path() {
         let iso = |c: &str| isolated_command(c, Some("codex"), true);
         assert_eq!(iso("codex.exe resume x"), "codex.exe --no-daemon resume x");
         assert_eq!(iso("CODEX.CMD"), "CODEX.CMD --no-daemon");
-        assert_eq!(
-            iso(r"C:\tools\codex.exe resume x"),
-            r"C:\tools\codex.exe --no-daemon resume x"
-        );
-        assert_eq!(
-            iso(r#""C:\Program Files\Codex\codex.exe" resume x"#),
-            r#""C:\Program Files\Codex\codex.exe" --no-daemon resume x"#
-        );
-        assert_eq!(iso("/usr/bin/codex"), "/usr/bin/codex --no-daemon");
-        assert_eq!(
-            iso(r"C:\x\codex.exe --no-daemon"),
-            r"C:\x\codex.exe --no-daemon"
-        );
-        // Not recognised: wrappers, look-alikes, broken quotes, no agent id.
-        assert_eq!(iso("npx codex"), "npx codex");
-        assert_eq!(iso(r"C:\x\codex-helper.exe"), r"C:\x\codex-helper.exe");
-        assert_eq!(iso(r#""C:\x\codex.exe"#), r#""C:\x\codex.exe"#);
-        assert_eq!(iso(r#""codex"x"#), r#""codex"x"#);
+        assert_eq!(iso("  codex resume x"), "  codex --no-daemon resume x");
+        assert_eq!(iso("codex.exe --no-daemon"), "codex.exe --no-daemon");
+        // Not recognised: paths, quotes, wrappers, look-alikes, no agent id.
+        for line in [
+            r"C:\tools\codex.exe resume x",
+            r#""C:\Program Files\Codex\codex.exe" resume x"#,
+            r#"& "C:\x\codex.exe""#,
+            "/usr/bin/codex",
+            "npx codex",
+            "codex-helper.exe",
+            r#""codex"x"#,
+        ] {
+            assert_eq!(iso(line), line);
+        }
         assert_eq!(isolated_command("codex.exe", None, true), "codex.exe");
+        // The MCP pin reads the same program token.
+        let url = Some("http://127.0.0.1:1/mcp");
+        assert!(with_mcp_url("codex.exe resume x", Some("codex"), url)
+            .starts_with("codex.exe -c mcp_servers.swarmterm.url="));
+        assert!(with_mcp_url("codex.exe resume x", Some("codex"), url).ends_with(" resume x"));
+        assert_eq!(
+            with_mcp_url(r"C:\x\codex.exe", Some("codex"), url),
+            r"C:\x\codex.exe"
+        );
     }
 
     #[test]
