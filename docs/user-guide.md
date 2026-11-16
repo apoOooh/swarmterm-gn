@@ -659,9 +659,11 @@ The script never runs in your source folder: before every preview and run,
 Swarmterm copies the package into a folder of its own and runs it there, so a
 file the script writes next to itself lands in that copy, and an edit to the
 source while the script runs cannot reach it. The source folder itself must
-not be a link or junction, and contains no links. A local source counts its
-`.git` folder as part of the package; a very large one may exceed the size
-limit (256 MB, 20,000 files).
+not be a link or junction, contain no links, and must not overlap
+Swarmterm's own data folder. The copy leaves out the `.git` folder in the
+package root, so the script cannot rely on Git metadata or on files outside
+the package (for example `../shared`), and a file it writes next to itself
+is gone at the next preview. Limits: 256 MB and 20,000 files.
 
 Node.js must be installed. Without access to the source you get a message and
 nothing changes. If the package adds Codex hooks, approve them in Codex with

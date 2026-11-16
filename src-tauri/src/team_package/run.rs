@@ -85,25 +85,26 @@ fn check_root(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Every file below `root`, sorted by key. `.git` at the root is skipped
-/// only for our own checkout (`skip_git`): in a local source, `install.mjs`
-/// could import `./.git/x.mjs`, so there it is part of the package.
-fn collect(root: &Path, skip_git: bool) -> Result<Vec<Entry>, String> {
+/// Every file below `root`, sorted by key, without `.git` at the root. That
+/// folder is neither hashed nor staged: git rewrites it all the time (a
+/// false "changed" for a local working repo), and since node runs from the
+/// stage, `install.mjs` cannot import an unhashed `./.git/x.mjs` from there.
+fn collect(root: &Path) -> Result<Vec<Entry>, String> {
     check_root(root)?;
     let mut files = Vec::new();
-    walk(root, root, skip_git, &mut files)?;
+    walk(root, root, &mut files)?;
     files.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(files)
 }
 
-fn walk(root: &Path, dir: &Path, skip_git: bool, out: &mut Vec<Entry>) -> Result<(), String> {
+fn walk(root: &Path, dir: &Path, out: &mut Vec<Entry>) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
         // Only git's own metadata is skipped: node resolves imports from a
         // node_modules in the package, so it must be part of the hash.
-        if skip_git && dir == root && name == ".git" {
+        if dir == root && name == ".git" {
             continue;
         }
         let meta = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
@@ -114,7 +115,7 @@ fn walk(root: &Path, dir: &Path, skip_git: bool, out: &mut Vec<Entry>) -> Result
             ));
         }
         if meta.is_dir() {
-            walk(root, &entry.path(), skip_git, out)?;
+            walk(root, &entry.path(), out)?;
         } else if meta.is_file() {
             let rel = entry
                 .path()
@@ -172,8 +173,8 @@ fn hash_files(root: &Path, files: &[Entry], copy_to: Option<&Path>) -> Result<St
 /// Fingerprint of the tree below `root`. Links and junctions (also as the
 /// root) are refused rather than followed, so the tree cannot point the
 /// hash at one set of files while node resolves another.
-pub fn fingerprint(root: &Path, skip_git: bool) -> Result<String, String> {
-    let files = collect(root, skip_git)?;
+pub fn fingerprint(root: &Path) -> Result<String, String> {
+    let files = collect(root)?;
     hash_files(root, &files, None)
 }
 
@@ -181,8 +182,8 @@ pub fn fingerprint(root: &Path, skip_git: bool) -> Result<String, String> {
 /// of the copy. Node only ever runs from the copy: a local source folder
 /// can change at any time, also while node is loading, and the user
 /// confirmed one exact tree.
-pub fn stage(src: &Path, skip_git: bool, dest: &Path) -> Result<String, String> {
-    let files = collect(src, skip_git)?;
+pub fn stage(src: &Path, dest: &Path) -> Result<String, String> {
+    let files = collect(src)?;
     if std::fs::symlink_metadata(dest).is_ok() {
         std::fs::remove_dir_all(dest).map_err(|e| format!("could not reset the stage: {e}"))?;
     }
@@ -207,6 +208,28 @@ fn checkout_root(app: &AppHandle) -> Result<PathBuf, String> {
         .app_local_data_dir()
         .map(|d| d.join(CHECKOUT_DIR))
         .map_err(|e| e.to_string())
+}
+
+/// A local source must lie wholly outside our folder: one that contains the
+/// stage would list the stage's files and then delete them while staging,
+/// one inside our folder is a checkout or stage we reset ourselves.
+fn refuse_overlap(source: &Path, ours: &Path) -> Result<(), String> {
+    // Both canonical (ours is created first, the stage needs it anyway),
+    // so `\\?\` prefixes, short names and links compare alike; a missing
+    // source stays as typed and is reported as unreachable later.
+    // Case-insensitive like Windows paths.
+    std::fs::create_dir_all(ours).map_err(|e| e.to_string())?;
+    let norm = |p: &Path| {
+        std::fs::canonicalize(p)
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .to_lowercase()
+    };
+    let (s, o) = (PathBuf::from(norm(source)), PathBuf::from(norm(ours)));
+    if s.starts_with(&o) || o.starts_with(&s) {
+        return Err("The local folder overlaps Swarmterm's own team package folder.".into());
+    }
+    Ok(())
 }
 
 /// Where the package is copied before node runs; ours alone, emptied by
@@ -340,7 +363,10 @@ fn package_dir(app: &AppHandle, refresh: bool) -> Result<(PathBuf, bool, String)
     let (dir, is_git) = match source::parse(&raw)? {
         Source::Git(url) if refresh => (fetch(app, &url)?, true),
         Source::Git(_) => (checkout_root(app)?.join("src"), true),
-        Source::Local(p) => (p, false),
+        Source::Local(p) => {
+            refuse_overlap(&p, &checkout_root(app)?)?;
+            (p, false)
+        }
     };
     if !dir.join(source::SCRIPT).is_file() {
         return Err(if !dir.exists() {
@@ -405,9 +431,9 @@ pub async fn team_package_preview(
         // the user confirms the tree the dry run saw. A dry run that
         // changes the package (it must not write) invalidates the preview.
         let staged = stage_dir(&app)?;
-        let before = stage(&dir, is_git, &staged)?;
+        let before = stage(&dir, &staged)?;
         let c = run_script(&staged, op, dry)?;
-        if fingerprint(&staged, false)? != before {
+        if fingerprint(&staged)? != before {
             return Err(
                 "The package changed during the preview; its dry run must not write.".into(),
             );
@@ -438,7 +464,7 @@ pub async fn team_package_run(
         let (dir, is_git, source) = package_dir(&app, false)?;
         // A fresh copy: node runs from the exact bytes that were compared.
         let staged = stage_dir(&app)?;
-        let now = bound_fingerprint(op, &source, &stage(&dir, is_git, &staged)?);
+        let now = bound_fingerprint(op, &source, &stage(&dir, &staged)?);
         if now != fingerprint {
             return Err("changed-since-preview".into());
         }
@@ -459,20 +485,15 @@ mod tests {
         std::fs::write(d.path().join("install.mjs"), "a").unwrap();
         std::fs::create_dir(d.path().join("rules")).unwrap();
         std::fs::write(d.path().join("rules/x.md"), "1").unwrap();
-        let a = fingerprint(d.path(), true).unwrap();
-        assert_eq!(fingerprint(d.path(), false).unwrap(), a);
+        let a = fingerprint(d.path()).unwrap();
         std::fs::create_dir(d.path().join(".git")).unwrap();
         std::fs::write(d.path().join(".git/HEAD"), "x").unwrap();
-        // Our own checkout skips its .git; a local source hashes it, since
-        // install.mjs could import from there.
-        assert_eq!(fingerprint(d.path(), true).unwrap(), a);
-        assert_ne!(fingerprint(d.path(), false).unwrap(), a);
-        std::fs::remove_dir_all(d.path().join(".git")).unwrap();
+        assert_eq!(fingerprint(d.path()).unwrap(), a);
         std::fs::write(d.path().join("rules/x.md"), "2").unwrap();
-        let b = fingerprint(d.path(), false).unwrap();
+        let b = fingerprint(d.path()).unwrap();
         assert_ne!(a, b);
         std::fs::write(d.path().join("rules/y.md"), "").unwrap();
-        assert_ne!(fingerprint(d.path(), false).unwrap(), b);
+        assert_ne!(fingerprint(d.path()).unwrap(), b);
     }
 
     #[test]
@@ -509,8 +530,8 @@ mod tests {
         let b = tempfile::tempdir().unwrap();
         std::fs::write(b.path().join("a"), "bc").unwrap();
         assert_ne!(
-            fingerprint(a.path(), false).unwrap(),
-            fingerprint(b.path(), false).unwrap()
+            fingerprint(a.path()).unwrap(),
+            fingerprint(b.path()).unwrap()
         );
     }
 
@@ -528,7 +549,7 @@ mod tests {
             .map(|o| o.status.success())
             .unwrap_or(false);
         if ok {
-            assert!(fingerprint(d.path(), false).is_err());
+            assert!(fingerprint(d.path()).is_err());
         }
     }
 
@@ -550,9 +571,9 @@ mod tests {
         let c = run_script(d.path(), Op::Uninstall, true).unwrap();
         assert_eq!(c.exit_code, Some(0));
         assert_eq!(c.output.trim(), r#"["uninstall","--dry-run"]"#);
-        let before = fingerprint(d.path(), false).unwrap();
+        let before = fingerprint(d.path()).unwrap();
         std::fs::write(d.path().join("install.mjs"), "process.exit(3)").unwrap();
-        assert_ne!(fingerprint(d.path(), false).unwrap(), before);
+        assert_ne!(fingerprint(d.path()).unwrap(), before);
     }
 
     /// The stage holds exactly the hashed files, and a change of the source
@@ -570,24 +591,29 @@ mod tests {
         std::fs::create_dir(&dest).unwrap();
         std::fs::write(dest.join("stale.txt"), "old").unwrap();
 
-        let fp = stage(src.path(), true, &dest).unwrap();
-        assert_eq!(fp, fingerprint(src.path(), true).unwrap());
-        assert_eq!(fp, fingerprint(&dest, false).unwrap());
+        let fp = stage(src.path(), &dest).unwrap();
+        assert_eq!(fp, fingerprint(src.path()).unwrap());
+        assert_eq!(fp, fingerprint(&dest).unwrap());
         assert!(!dest.join("stale.txt").exists() && !dest.join(".git").exists());
         std::fs::write(src.path().join("lib/x.mjs"), "2").unwrap();
         assert_eq!(
             std::fs::read_to_string(dest.join("lib/x.mjs")).unwrap(),
             "1"
         );
-        assert_eq!(fingerprint(&dest, false).unwrap(), fp);
+        assert_eq!(fingerprint(&dest).unwrap(), fp);
+    }
 
-        // Local source: .git is part of the package and of the stage.
-        let local = stage(src.path(), false, &dest).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dest.join(".git/x.mjs")).unwrap(),
-            "g"
-        );
-        assert_eq!(local, fingerprint(&dest, false).unwrap());
+    #[test]
+    fn overlapping_sources_are_refused() {
+        let base = tempfile::tempdir().unwrap();
+        let ours = base.path().join("data").join(CHECKOUT_DIR);
+        std::fs::create_dir_all(ours.join("stage")).unwrap();
+        let other = base.path().join("pkg");
+        std::fs::create_dir(&other).unwrap();
+        assert!(refuse_overlap(&other, &ours).is_ok());
+        for bad in [base.path().to_path_buf(), ours.clone(), ours.join("stage")] {
+            assert!(refuse_overlap(&bad, &ours).is_err(), "{bad:?}");
+        }
     }
 
     #[cfg(windows)]
@@ -605,9 +631,9 @@ mod tests {
             .map(|o| o.status.success())
             .unwrap_or(false);
         assert!(ok, "mklink /J failed");
-        let err = fingerprint(&link, false).unwrap_err();
+        let err = fingerprint(&link).unwrap_err();
         assert!(err.contains("is a link"), "{err}");
-        assert!(stage(&link, false, &base.path().join("stage")).is_err());
+        assert!(stage(&link, &base.path().join("stage")).is_err());
     }
 
     /// Two names that differ only in an unpaired surrogate must not share a

@@ -323,8 +323,9 @@ kill-on-close job with a 120 s limit. Every writing run shows its `--dry-run`
 first. That preview already executes the newest fetched script, and honouring
 `--dry-run` is the package's job, so the source is trusted like any program
 the user runs; the confirmed run refuses unless a SHA-256 over the whole package tree
-(links refused, also as the root; a local source's `.git` included, since the
-script could import from it; paths hashed losslessly) still matches the
+(links refused, also as the root; paths hashed losslessly; the root `.git`
+is neither hashed nor copied, so the script cannot load unhashed files from
+it) still matches the
 preview, so a commit pushed or a file edited in between is not executed.
 Preview and run both execute a copy in an app-owned stage folder, written from
 the same bytes that were hashed: an edit to the source between the check and
