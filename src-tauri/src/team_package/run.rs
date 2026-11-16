@@ -36,38 +36,68 @@ fn take_busy() -> Result<BusyGuard, String> {
     Ok(BusyGuard)
 }
 
-// ---------- fingerprint ----------
+// ---------- fingerprint and staging ----------
 
-/// SHA-256 over every file below `root` (relative path + length + content,
-/// sorted), skipping only `.git` at the root. Links and
-/// junctions are refused rather than followed, so the tree cannot point the
-/// hash at one set of files while node resolves another.
-pub fn fingerprint(root: &Path) -> Result<String, String> {
-    let mut files = Vec::new();
-    walk(root, root, &mut files)?;
-    files.sort();
-    let mut hasher = Sha256::new();
-    let mut total = 0u64;
-    for rel in &files {
-        // Size from metadata first: a wrong folder with one huge file must
-        // be refused before it is read into memory.
-        let len = std::fs::metadata(root.join(rel))
-            .map_err(|e| format!("read {rel}: {e}"))?
-            .len();
-        total += len;
-        if total > MAX_BYTES {
-            return Err("The package folder is too large.".into());
-        }
-        let bytes = std::fs::read(root.join(rel)).map_err(|e| format!("read {rel}: {e}"))?;
-        hasher.update(rel.as_bytes());
-        hasher.update([0]);
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(&bytes);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
+/// One file of the package: its relative path as given to the copy, and the
+/// lossless key that is sorted and hashed.
+struct Entry {
+    rel: PathBuf,
+    key: Vec<u8>,
 }
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String> {
+/// Lossless bytes of a relative path with `/` as separator. Windows names
+/// are UTF-16 and may hold unpaired surrogates: a lossy string would map
+/// two different names onto the same U+FFFD text, so the UTF-16 units go
+/// into the key as they are.
+#[cfg(windows)]
+fn path_key(rel: &Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    rel.as_os_str()
+        .encode_wide()
+        .map(|u| {
+            if u == u16::from(b'\\') {
+                u16::from(b'/')
+            } else {
+                u
+            }
+        })
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+#[cfg(not(windows))]
+fn path_key(rel: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    rel.as_os_str().as_bytes().to_vec()
+}
+
+/// The root itself must be a plain folder: a junction or link as root would
+/// let the hash and node see whatever it points at when each one looks.
+fn check_root(root: &Path) -> Result<(), String> {
+    let meta = std::fs::symlink_metadata(root).map_err(|_| {
+        "unreachable: the source folder does not exist or is not readable.".to_string()
+    })?;
+    if meta.file_type().is_symlink() || is_reparse(&meta) {
+        return Err("The package folder is a link; use the folder it points to.".into());
+    }
+    if !meta.is_dir() {
+        return Err("The package source is not a folder.".into());
+    }
+    Ok(())
+}
+
+/// Every file below `root`, sorted by key, without `.git` at the root. That
+/// folder is neither hashed nor staged: git rewrites it all the time (a
+/// false "changed" for a local working repo), and since node runs from the
+/// stage, `install.mjs` cannot import an unhashed `./.git/x.mjs` from there.
+fn collect(root: &Path) -> Result<Vec<Entry>, String> {
+    check_root(root)?;
+    let mut files = Vec::new();
+    walk(root, root, &mut files)?;
+    files.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(files)
+}
+
+fn walk(root: &Path, dir: &Path, out: &mut Vec<Entry>) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -91,15 +121,74 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String> {
                 .path()
                 .strip_prefix(root)
                 .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .replace('\\', "/");
-            out.push(rel);
+                .to_path_buf();
+            let key = path_key(&rel);
+            out.push(Entry { rel, key });
             if out.len() > MAX_FILES {
                 return Err("The package folder has too many files.".into());
             }
         }
     }
     Ok(())
+}
+
+/// SHA-256 over the files (key + length + content, sorted). With `copy_to`
+/// every file is written there from the SAME bytes that went into the hash,
+/// so the copy is exactly what the fingerprint describes.
+fn hash_files(root: &Path, files: &[Entry], copy_to: Option<&Path>) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    let mut total = 0u64;
+    let show = |e: &Entry| e.rel.to_string_lossy().replace('\\', "/");
+    for e in files {
+        let path = root.join(&e.rel);
+        // Size from metadata first: a wrong folder with one huge file must
+        // be refused before it is read into memory.
+        let len = std::fs::metadata(&path)
+            .map_err(|err| format!("read {}: {err}", show(e)))?
+            .len();
+        if total + len > MAX_BYTES {
+            return Err("The package folder is too large.".into());
+        }
+        let bytes = std::fs::read(&path).map_err(|err| format!("read {}: {err}", show(e)))?;
+        // The file may have grown since the metadata call.
+        total += bytes.len() as u64;
+        if total > MAX_BYTES {
+            return Err("The package folder is too large.".into());
+        }
+        hasher.update((e.key.len() as u64).to_le_bytes());
+        hasher.update(&e.key);
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
+        if let Some(dest) = copy_to {
+            let target = dest.join(&e.rel);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+            std::fs::write(&target, &bytes).map_err(|err| format!("stage {}: {err}", show(e)))?;
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Fingerprint of the tree below `root`. Links and junctions (also as the
+/// root) are refused rather than followed, so the tree cannot point the
+/// hash at one set of files while node resolves another.
+pub fn fingerprint(root: &Path) -> Result<String, String> {
+    let files = collect(root)?;
+    hash_files(root, &files, None)
+}
+
+/// Copy the package into `dest` (emptied first) and return the fingerprint
+/// of the copy. Node only ever runs from the copy: a local source folder
+/// can change at any time, also while node is loading, and the user
+/// confirmed one exact tree.
+pub fn stage(src: &Path, dest: &Path) -> Result<String, String> {
+    let files = collect(src)?;
+    if std::fs::symlink_metadata(dest).is_ok() {
+        std::fs::remove_dir_all(dest).map_err(|e| format!("could not reset the stage: {e}"))?;
+    }
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    hash_files(src, &files, Some(dest))
 }
 
 #[cfg(windows)]
@@ -119,6 +208,34 @@ fn checkout_root(app: &AppHandle) -> Result<PathBuf, String> {
         .app_local_data_dir()
         .map(|d| d.join(CHECKOUT_DIR))
         .map_err(|e| e.to_string())
+}
+
+/// A local source must lie wholly outside our folder: one that contains the
+/// stage would list the stage's files and then delete them while staging,
+/// one inside our folder is a checkout or stage we reset ourselves.
+fn refuse_overlap(source: &Path, ours: &Path) -> Result<(), String> {
+    // Both canonical (ours is created first, the stage needs it anyway),
+    // so `\\?\` prefixes, short names and links compare alike; a missing
+    // source stays as typed and is reported as unreachable later.
+    // Case-insensitive like Windows paths.
+    std::fs::create_dir_all(ours).map_err(|e| e.to_string())?;
+    let norm = |p: &Path| {
+        std::fs::canonicalize(p)
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .to_lowercase()
+    };
+    let (s, o) = (PathBuf::from(norm(source)), PathBuf::from(norm(ours)));
+    if s.starts_with(&o) || o.starts_with(&s) {
+        return Err("The local folder overlaps Swarmterm's own team package folder.".into());
+    }
+    Ok(())
+}
+
+/// Where the package is copied before node runs; ours alone, emptied by
+/// every `stage`.
+fn stage_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(checkout_root(app)?.join("stage"))
 }
 
 fn save_source(app: &AppHandle, source: Option<String>) -> Result<(), String> {
@@ -246,7 +363,10 @@ fn package_dir(app: &AppHandle, refresh: bool) -> Result<(PathBuf, bool, String)
     let (dir, is_git) = match source::parse(&raw)? {
         Source::Git(url) if refresh => (fetch(app, &url)?, true),
         Source::Git(_) => (checkout_root(app)?.join("src"), true),
-        Source::Local(p) => (p, false),
+        Source::Local(p) => {
+            refuse_overlap(&p, &checkout_root(app)?)?;
+            (p, false)
+        }
     };
     if !dir.join(source::SCRIPT).is_file() {
         return Err(if !dir.exists() {
@@ -307,12 +427,13 @@ pub async fn team_package_preview(
         let _busy = busy;
         let (dir, is_git, source) = package_dir(&app, true)?;
         let dry = op.writes();
-        // Hashed BEFORE the dry run and compared after it: the user
-        // confirms the tree the dry run saw. A dry run that changes the
-        // package (it must not write) invalidates the preview.
-        let before = fingerprint(&dir)?;
-        let c = run_script(&dir, op, dry)?;
-        if fingerprint(&dir)? != before {
+        // Hashed while staging (before the dry run) and compared after it:
+        // the user confirms the tree the dry run saw. A dry run that
+        // changes the package (it must not write) invalidates the preview.
+        let staged = stage_dir(&app)?;
+        let before = stage(&dir, &staged)?;
+        let c = run_script(&staged, op, dry)?;
+        if fingerprint(&staged)? != before {
             return Err(
                 "The package changed during the preview; its dry run must not write.".into(),
             );
@@ -341,11 +462,13 @@ pub async fn team_package_run(
     tauri::async_runtime::spawn_blocking(move || {
         let _busy = busy; // see team_package_preview
         let (dir, is_git, source) = package_dir(&app, false)?;
-        let now = bound_fingerprint(op, &source, &self::fingerprint(&dir)?);
+        // A fresh copy: node runs from the exact bytes that were compared.
+        let staged = stage_dir(&app)?;
+        let now = bound_fingerprint(op, &source, &stage(&dir, &staged)?);
         if now != fingerprint {
             return Err("changed-since-preview".into());
         }
-        let c = run_script(&dir, op, false)?;
+        let c = run_script(&staged, op, false)?;
         Ok(outcome(op, false, &dir, is_git, now, c))
     })
     .await
@@ -451,5 +574,78 @@ mod tests {
         let before = fingerprint(d.path()).unwrap();
         std::fs::write(d.path().join("install.mjs"), "process.exit(3)").unwrap();
         assert_ne!(fingerprint(d.path()).unwrap(), before);
+    }
+
+    /// The stage holds exactly the hashed files, and a change of the source
+    /// after staging reaches neither the stage nor its fingerprint.
+    #[test]
+    fn stage_copies_the_hashed_tree_and_detaches_from_the_source() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("install.mjs"), "a").unwrap();
+        std::fs::create_dir(src.path().join("lib")).unwrap();
+        std::fs::write(src.path().join("lib/x.mjs"), "1").unwrap();
+        std::fs::create_dir(src.path().join(".git")).unwrap();
+        std::fs::write(src.path().join(".git/x.mjs"), "g").unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let dest = out.path().join("stage");
+        std::fs::create_dir(&dest).unwrap();
+        std::fs::write(dest.join("stale.txt"), "old").unwrap();
+
+        let fp = stage(src.path(), &dest).unwrap();
+        assert_eq!(fp, fingerprint(src.path()).unwrap());
+        assert_eq!(fp, fingerprint(&dest).unwrap());
+        assert!(!dest.join("stale.txt").exists() && !dest.join(".git").exists());
+        std::fs::write(src.path().join("lib/x.mjs"), "2").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("lib/x.mjs")).unwrap(),
+            "1"
+        );
+        assert_eq!(fingerprint(&dest).unwrap(), fp);
+    }
+
+    #[test]
+    fn overlapping_sources_are_refused() {
+        let base = tempfile::tempdir().unwrap();
+        let ours = base.path().join("data").join(CHECKOUT_DIR);
+        std::fs::create_dir_all(ours.join("stage")).unwrap();
+        let other = base.path().join("pkg");
+        std::fs::create_dir(&other).unwrap();
+        assert!(refuse_overlap(&other, &ours).is_ok());
+        for bad in [base.path().to_path_buf(), ours.clone(), ours.join("stage")] {
+            assert!(refuse_overlap(&bad, &ours).is_err(), "{bad:?}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn root_junction_is_refused() {
+        let base = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::fs::write(target.path().join("install.mjs"), "a").unwrap();
+        let link = base.path().join("pkg");
+        let ok = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(target.path())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert!(ok, "mklink /J failed");
+        let err = fingerprint(&link).unwrap_err();
+        assert!(err.contains("is a link"), "{err}");
+        assert!(stage(&link, &base.path().join("stage")).is_err());
+    }
+
+    /// Two names that differ only in an unpaired surrogate must not share a
+    /// key (the lossy text of both is U+FFFD).
+    #[cfg(windows)]
+    #[test]
+    fn path_key_is_lossless() {
+        use std::os::windows::ffi::OsStringExt;
+        let a = std::ffi::OsString::from_wide(&[0xD800, u16::from(b'x')]);
+        let b = std::ffi::OsString::from_wide(&[0xDC00, u16::from(b'x')]);
+        assert_eq!(a.to_string_lossy(), b.to_string_lossy());
+        assert_ne!(path_key(Path::new(&a)), path_key(Path::new(&b)));
+        assert_eq!(path_key(Path::new(r"a\b")), path_key(Path::new("a/b")));
     }
 }

@@ -13,6 +13,9 @@
   change shows a preview first and runs only after you confirm it. Lockable
   with the new policy value `DisableTeamPackage`; not available in the Corp
   edition.
+  The package runs from a copy in Swarmterm's own folder, so editing the
+  source during a run cannot change what runs; a source folder that is
+  itself a link or junction is refused.
 
 ### Fixed
 

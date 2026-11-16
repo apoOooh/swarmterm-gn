@@ -78,12 +78,26 @@ fn keep_tail(buf: &Arc<Mutex<Vec<u8>>>, mut src: impl Read, keep: usize) {
         }
         if let Ok(mut b) = buf.lock() {
             b.extend_from_slice(&chunk[..n]);
-            if b.len() > keep {
-                let drop = b.len() - keep;
-                b.drain(..drop);
-            }
+            trim_front(&mut b, keep);
         }
     }
+}
+
+/// Drop the front so at most `keep` bytes remain, cut on a UTF-8 boundary:
+/// a cut inside a multibyte sequence would leave its continuation bytes at
+/// the front, which the lossy decode turns into a leading U+FFFD.
+fn trim_front(b: &mut Vec<u8>, keep: usize) {
+    if b.len() <= keep {
+        return;
+    }
+    let mut drop = b.len() - keep;
+    // At most 3 continuation bytes follow a lead byte; anything longer is
+    // not UTF-8 anyway and stays as the lossy decode shows it.
+    let limit = (drop + 3).min(b.len());
+    while drop < limit && (0x80..=0xBF).contains(&b[drop]) {
+        drop += 1;
+    }
+    b.drain(..drop);
 }
 
 /// `env` is the complete environment the line runs with (the caller's env
@@ -201,6 +215,22 @@ pub fn run_captured(mut cmd: Command, timeout: Duration, keep: usize) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trim_front_cuts_on_a_utf8_boundary() {
+        // "aé€😀": 1 + 2 + 3 + 4 bytes; every cut inside a sequence moves
+        // forward to the next lead byte.
+        let src = "aé€😀".as_bytes().to_vec();
+        for keep in 0..=src.len() {
+            let mut b = src.clone();
+            trim_front(&mut b, keep);
+            let s = String::from_utf8(b.clone()).expect("cut inside a sequence");
+            assert!(b.len() <= keep && "aé€😀".ends_with(&s), "keep {keep}");
+        }
+        let mut short = b"abc".to_vec();
+        trim_front(&mut short, 10);
+        assert_eq!(short, b"abc");
+    }
 
     #[test]
     fn tail_keeps_last_lines_and_caps_length() {

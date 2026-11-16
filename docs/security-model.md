@@ -323,8 +323,13 @@ kill-on-close job with a 120 s limit. Every writing run shows its `--dry-run`
 first. That preview already executes the newest fetched script, and honouring
 `--dry-run` is the package's job, so the source is trusted like any program
 the user runs; the confirmed run refuses unless a SHA-256 over the whole package tree
-(links refused) still matches the preview, so a commit pushed or a file edited
-in between is not executed. Nothing runs on its own (no start-up run, no update
+(links refused, also as the root; paths hashed losslessly; the root `.git`
+is neither hashed nor copied, so the script cannot load unhashed files from
+it) still matches the
+preview, so a commit pushed or a file edited in between is not executed.
+Preview and run both execute a copy in an app-owned stage folder, written from
+the same bytes that were hashed: an edit to the source between the check and
+node's start, or while node loads modules, cannot change what runs. Nothing runs on its own (no start-up run, no update
 check), the commands answer only the main window, and no MCP or War Room path
 reaches them. Codex hooks the package adds still need the user's approval in
 Codex (`/hooks`). Lockable with `DisableTeamPackage`; locked in Corp.
