@@ -55,6 +55,19 @@ describe('deliverDictation', () => {
     expect(deps.write).toHaveBeenCalledTimes(1)
   })
 
+  it('separates a further dictation into a filled free-text field with a space (SWA-107)', async () => {
+    const filled = setup({ agentState: () => 'blocked', freeTextActive: () => true, freeTextFilled: () => true })
+    await deliverDictation(req, filled.deps)
+    expect(filled.calls).toContain('write:"\\u001b[200~ hi\\u001b[201~"')
+    const empty = setup({ agentState: () => 'blocked', freeTextActive: () => true, freeTextFilled: () => false })
+    await deliverDictation(req, empty.deps)
+    expect(empty.calls).toContain('write:"\\u001b[200~hi\\u001b[201~"')
+    // An ordinary prompt never gets the space, whatever the screen says.
+    const idle = setup({ freeTextFilled: () => true })
+    await deliverDictation(req, idle.deps)
+    expect(idle.calls).toContain('write:"\\u001b[200~hi\\u001b[201~"')
+  })
+
   it('reports target-gone for an unknown pane and for a rejected checked write', async () => {
     expect(await deliverDictation(req, setup({ draftInfo: () => undefined }).deps)).toEqual({
       ok: false,

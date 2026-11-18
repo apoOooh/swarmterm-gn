@@ -48,6 +48,12 @@
 //! other tool's input is used. File content never crosses the port. A nested
 //! `claude` inside the pane posts with the pane's bearer; its media and cwd
 //! count for the pane too (decision 2026-11-11).
+//!
+//! Choice dialogs (SWA-107): on `PermissionRequest` for `AskUserQuestion`
+//! the CLI keeps only the dialog's shape — per question the number of
+//! options and `multiSelect` (`ChoiceQuestion`) — so the renderer can tell
+//! the free-text row (numbered `options + 1`) from an option without
+//! reading its content. Question and option texts are never stored.
 
 pub mod adopt;
 pub mod claude_version;
@@ -116,6 +122,8 @@ pub struct HookInput {
 #[derive(Debug, Default)]
 pub struct ToolInput {
     pub file_path: Option<String>,
+    /// SWA-107: AskUserQuestion's questions, reduced to their shape.
+    pub questions: Option<Vec<ChoiceQuestion>>,
 }
 
 impl<'de> serde::Deserialize<'de> for ToolInput {
@@ -134,6 +142,8 @@ impl<'de> serde::Deserialize<'de> for ToolInput {
                 while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
                     if key == "file_path" && out.file_path.is_none() {
                         out.file_path = map.next_value::<MaybeString>()?.0;
+                    } else if key == "questions" && out.questions.is_none() {
+                        out.questions = map.next_value::<QuestionShapes>()?.0;
                     } else {
                         map.next_value::<serde::de::IgnoredAny>()?;
                     }
@@ -226,6 +236,285 @@ impl<'de> serde::Deserialize<'de> for MaybeString {
 
 fn lenient_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     <MaybeString as serde::Deserialize>::deserialize(d).map(|m| m.0)
+}
+
+/// SWA-107: one question of an AskUserQuestion dialog, reduced to what the
+/// renderer needs to find the free-text row: how many options it lists (the
+/// free-text row is numbered `options + 1`) and whether it is multi-select.
+/// Question, header and option texts are skipped by the deserialiser and
+/// never leave the pane.
+///
+/// Unknown keys are ignored (not refused like the rest of `HookBody`): a
+/// newer CLI adding a field must not cost the pane its blocked signal, and
+/// only the two known fields are ever re-serialised to the renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChoiceQuestion {
+    pub options: u8,
+    pub multi_select: bool,
+}
+
+/// Bounds of a dialog we act on. AskUserQuestion allows 1–4 questions with
+/// 2–4 options; a wider band tolerates schema drift, anything beyond it is
+/// not the dialog we know and yields no choice (old screen rule applies).
+const MAX_QUESTIONS: usize = 8;
+const MAX_OPTIONS: u8 = 9;
+
+/// Whether a choice shape is one the renderer may act on (CLI and server).
+pub fn valid_choice(qs: &[ChoiceQuestion]) -> bool {
+    !qs.is_empty()
+        && qs.len() <= MAX_QUESTIONS
+        && qs.iter().all(|q| (1..=MAX_OPTIONS).contains(&q.options))
+}
+
+/// The dialog shape of a PermissionRequest for AskUserQuestion (Claude Code
+/// fires it when the dialog opens, spike 2026-11-18), else `None`.
+pub fn choice_from_input(input: &HookInput) -> Option<Vec<ChoiceQuestion>> {
+    if input.hook_event_name != "PermissionRequest" {
+        return None;
+    }
+    // Any other permission request (Bash, Edit, ...) or a dialog shape we do
+    // not know sends an EMPTY choice: it ends a recorded shape, so a real
+    // permission prompt is never matched against a stale dialog.
+    if input.tool_name.as_deref() != Some("AskUserQuestion") {
+        return Some(Vec::new());
+    }
+    Some(
+        input
+            .tool_input
+            .questions
+            .clone()
+            .filter(|q| valid_choice(q))
+            .unwrap_or_default(),
+    )
+}
+
+/// `questions`: a list of objects; per object only the LENGTH of `options`
+/// and the bool `multiSelect` are kept. Any other shape degrades to `None`
+/// (no choice) instead of failing the parse the status signal depends on.
+struct QuestionShapes(Option<Vec<ChoiceQuestion>>);
+
+impl<'de> serde::Deserialize<'de> for QuestionShapes {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = QuestionShapes;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("any value")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<QuestionShapes, A::Error> {
+                let mut out = Vec::new();
+                let mut ok = true;
+                while let Some(q) = seq.next_element::<QuestionShape>()? {
+                    match q.0 {
+                        Some(q) if ok && out.len() < MAX_QUESTIONS => out.push(q),
+                        _ => ok = false,
+                    }
+                }
+                Ok(QuestionShapes(ok.then_some(out)))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<QuestionShapes, A::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(QuestionShapes(None))
+            }
+            fn visit_str<E>(self, _: &str) -> Result<QuestionShapes, E> {
+                Ok(QuestionShapes(None))
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<QuestionShapes, E> {
+                Ok(QuestionShapes(None))
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<QuestionShapes, E> {
+                Ok(QuestionShapes(None))
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<QuestionShapes, E> {
+                Ok(QuestionShapes(None))
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<QuestionShapes, E> {
+                Ok(QuestionShapes(None))
+            }
+            fn visit_unit<E>(self) -> Result<QuestionShapes, E> {
+                Ok(QuestionShapes(None))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+struct QuestionShape(Option<ChoiceQuestion>);
+
+impl<'de> serde::Deserialize<'de> for QuestionShape {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = QuestionShape;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("any value")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<QuestionShape, A::Error> {
+                let mut options: Option<usize> = None;
+                // Missing or non-bool = unknown layout: no shape (fail closed).
+                let mut multi: Option<bool> = None;
+                while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                    if key == "options" && options.is_none() {
+                        options = map.next_value::<SeqLen>()?.0;
+                    } else if key == "multiSelect" && multi.is_none() {
+                        multi = map.next_value::<MaybeBool>()?.0;
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(QuestionShape(options.zip(multi).and_then(|(n, multi)| {
+                    u8::try_from(n).ok().map(|options| ChoiceQuestion {
+                        options,
+                        multi_select: multi,
+                    })
+                })))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<QuestionShape, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(QuestionShape(None))
+            }
+            fn visit_str<E>(self, _: &str) -> Result<QuestionShape, E> {
+                Ok(QuestionShape(None))
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<QuestionShape, E> {
+                Ok(QuestionShape(None))
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<QuestionShape, E> {
+                Ok(QuestionShape(None))
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<QuestionShape, E> {
+                Ok(QuestionShape(None))
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<QuestionShape, E> {
+                Ok(QuestionShape(None))
+            }
+            fn visit_unit<E>(self) -> Result<QuestionShape, E> {
+                Ok(QuestionShape(None))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// Length of a JSON array (elements skipped), `None` for anything else.
+struct SeqLen(Option<usize>);
+
+impl<'de> serde::Deserialize<'de> for SeqLen {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = SeqLen;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("any value")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<SeqLen, A::Error> {
+                let mut n = 0usize;
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                    n += 1;
+                }
+                Ok(SeqLen(Some(n)))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<SeqLen, A::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(SeqLen(None))
+            }
+            fn visit_str<E>(self, _: &str) -> Result<SeqLen, E> {
+                Ok(SeqLen(None))
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<SeqLen, E> {
+                Ok(SeqLen(None))
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<SeqLen, E> {
+                Ok(SeqLen(None))
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<SeqLen, E> {
+                Ok(SeqLen(None))
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<SeqLen, E> {
+                Ok(SeqLen(None))
+            }
+            fn visit_unit<E>(self) -> Result<SeqLen, E> {
+                Ok(SeqLen(None))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// A bool, `None` for any other JSON value.
+struct MaybeBool(Option<bool>);
+
+impl<'de> serde::Deserialize<'de> for MaybeBool {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = MaybeBool;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("any value")
+            }
+            fn visit_bool<E>(self, v: bool) -> Result<MaybeBool, E> {
+                Ok(MaybeBool(Some(v)))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<MaybeBool, A::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(MaybeBool(None))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<MaybeBool, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(MaybeBool(None))
+            }
+            fn visit_str<E>(self, _: &str) -> Result<MaybeBool, E> {
+                Ok(MaybeBool(None))
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<MaybeBool, E> {
+                Ok(MaybeBool(None))
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<MaybeBool, E> {
+                Ok(MaybeBool(None))
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<MaybeBool, E> {
+                Ok(MaybeBool(None))
+            }
+            fn visit_unit<E>(self) -> Result<MaybeBool, E> {
+                Ok(MaybeBool(None))
+            }
+        }
+        d.deserialize_any(V)
+    }
 }
 
 /// Longest media path or cwd the CLI forwards (and `/hook` accepts).
@@ -372,6 +661,10 @@ pub struct AgentHookEvent {
     pub terminal_id: String,
     pub signal: Signal,
     pub at_ms: u64,
+    /// SWA-107: set only on the PermissionRequest that opens an
+    /// AskUserQuestion dialog (`valid_choice`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choice: Option<Vec<ChoiceQuestion>>,
 }
 
 /// Body of `POST /hook`: a state enum, optional session identity and turn
@@ -391,6 +684,9 @@ pub struct HookBody {
     /// The agent's current directory (`valid_cwd`), PostToolUse only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// SWA-107: shape of an open AskUserQuestion dialog (`choice_from_input`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<Vec<ChoiceQuestion>>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -560,12 +856,18 @@ pub fn hook_body(
     } else {
         (None, None)
     };
+    let choice = if agent_id == "claude-code" {
+        choice_from_input(input)
+    } else {
+        None
+    };
     Some(HookBody {
         signal,
         session,
         turn,
         media,
         cwd,
+        choice,
     })
 }
 
@@ -727,6 +1029,7 @@ mod tests {
             terminal_id: "t1".into(),
             signal: Signal::Blocked,
             at_ms: 42,
+            choice: None,
         };
         assert_eq!(
             serde_json::to_string(&ev).unwrap(),
@@ -793,6 +1096,7 @@ mod tests {
             turn: Some(mark),
             media: None,
             cwd: None,
+            choice: None,
         };
         let wire = serde_json::to_string(&body).unwrap();
         assert!(!wire.contains("Geheimer"));
@@ -869,6 +1173,7 @@ mod tests {
                 turn: None,
                 media: media_from_input(&i),
                 cwd: cwd_from_input(&i),
+                choice: None,
             };
             let wire = serde_json::to_string(&body).unwrap();
             assert!(!wire.contains("SECRET"), "{wire}");
@@ -967,6 +1272,7 @@ mod tests {
             turn: Some(s),
             media: None,
             cwd: None,
+            choice: None,
         })
         .unwrap();
         assert!(!wire.contains("Geheim"));
@@ -997,5 +1303,118 @@ mod tests {
         assert_eq!(codex_signal_for("Interrupt"), Some(Signal::Idle));
         assert_eq!(codex_signal_for("SessionStart"), Some(Signal::Forget));
         assert_eq!(codex_signal_for("PreToolUse"), None);
+    }
+
+    #[test]
+    fn ask_user_question_permission_request_yields_only_the_shape() {
+        let i: HookInput = serde_json::from_value(serde_json::json!({
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "AskUserQuestion",
+            "tool_input": {"questions": [
+                {"question": "GEHEIM?", "header": "H", "multiSelect": false,
+                 "options": [{"label": "Red", "description": "x"}, {"label": "Blue"}]},
+                {"question": "Q2", "multiSelect": true, "options": [{"label": "a"}, {"label": "b"}, {"label": "c"}]}
+            ]}
+        }))
+        .unwrap();
+        let c = choice_from_input(&i).unwrap();
+        assert_eq!(
+            c,
+            vec![
+                ChoiceQuestion {
+                    options: 2,
+                    multi_select: false
+                },
+                ChoiceQuestion {
+                    options: 3,
+                    multi_select: true
+                }
+            ]
+        );
+        let body = hook_body("claude-code", &i, None).unwrap();
+        assert_eq!(body.signal, Signal::Blocked);
+        let wire = serde_json::to_string(&body).unwrap();
+        assert!(!wire.contains("GEHEIM") && !wire.contains("Red"), "{wire}");
+        assert_eq!(
+            wire,
+            "{\"signal\":\"blocked\",\"choice\":[{\"options\":2,\"multiSelect\":false},{\"options\":3,\"multiSelect\":true}]}"
+        );
+        assert!(serde_json::from_str::<HookBody>(&wire).is_ok());
+    }
+
+    #[test]
+    fn choice_is_absent_for_other_events_tools_and_odd_shapes() {
+        let mk = |v: serde_json::Value| serde_json::from_value::<HookInput>(v).unwrap();
+        let qs = serde_json::json!({"questions": [{"options": [1, 2]}]});
+        // Another tool's permission request ends a shape: empty list.
+        let bash = mk(serde_json::json!({
+            "hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": qs
+        }));
+        assert_eq!(choice_from_input(&bash), Some(vec![]));
+        // Other events carry no choice at all.
+        for (ev, tool) in [
+            ("Notification", "AskUserQuestion"),
+            ("PreToolUse", "AskUserQuestion"),
+            ("PostToolUse", "AskUserQuestion"),
+        ] {
+            let i =
+                mk(serde_json::json!({"hook_event_name": ev, "tool_name": tool, "tool_input": qs}));
+            assert_eq!(choice_from_input(&i), None, "{ev} {tool}");
+        }
+        for odd in [
+            serde_json::json!({"questions": "x"}),
+            serde_json::json!({"questions": []}),
+            serde_json::json!({"questions": [{"options": "x"}]}),
+            serde_json::json!({"questions": [{"options": []}]}),
+            serde_json::json!({"questions": [{"label": "no options"}]}),
+            serde_json::json!({"questions": [{"options": [1, 2]}, 5]}),
+            serde_json::json!({"questions": [{"options": [0,1,2,3,4,5,6,7,8,9]}]}),
+            serde_json::json!(7),
+        ] {
+            let i = mk(serde_json::json!({
+                "hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion", "tool_input": odd
+            }));
+            assert_eq!(choice_from_input(&i), Some(vec![]), "{odd}");
+            // The status signal never breaks on an odd shape.
+            assert_eq!(
+                hook_body("claude-code", &i, None).unwrap().signal,
+                Signal::Blocked
+            );
+        }
+        // A missing or non-bool multiSelect is an unknown layout: no shape.
+        for q in [
+            serde_json::json!({"options": [1, 2], "multiSelect": "yes"}),
+            serde_json::json!({"options": [1, 2], "multiSelect": 1}),
+            serde_json::json!({"options": [1, 2]}),
+        ] {
+            let i = mk(serde_json::json!({
+                "hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": [q]}
+            }));
+            assert_eq!(choice_from_input(&i), Some(vec![]), "{q}");
+        }
+        // Unknown keys inside a choice are dropped, never forwarded.
+        let body: HookBody = serde_json::from_str(
+            "{\"signal\":\"blocked\",\"choice\":[{\"options\":2,\"multiSelect\":false,\"label\":\"x\"}]}",
+        )
+        .unwrap();
+        assert!(!serde_json::to_string(&body).unwrap().contains("label"));
+    }
+
+    #[test]
+    fn agent_hook_event_carries_a_choice_only_when_set() {
+        let ev = AgentHookEvent {
+            terminal_id: "t1".into(),
+            signal: Signal::Blocked,
+            at_ms: 1,
+            choice: Some(vec![ChoiceQuestion {
+                options: 2,
+                multi_select: false,
+            }]),
+        };
+        assert_eq!(
+            serde_json::to_string(&ev).unwrap(),
+            "{\"terminalId\":\"t1\",\"signal\":\"blocked\",\"atMs\":1,\"choice\":[{\"options\":2,\"multiSelect\":false}]}"
+        );
     }
 }

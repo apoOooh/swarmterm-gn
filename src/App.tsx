@@ -1090,7 +1090,7 @@ export default function App(): ReactElement {
   // no per-pane component has to own a listener — the registry decides whether
   // the pane's detector is one that understands hooks (Claude Code only).
   useEffect(() => {
-    const unlisten = onAgentHook((e) => noteAgentHook(e.terminalId, e.signal))
+    const unlisten = onAgentHook((e) => noteAgentHook(e.terminalId, e.signal, e.choice))
     return () => void unlisten.then((fn) => fn())
   }, [])
 
