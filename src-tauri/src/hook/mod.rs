@@ -270,16 +270,23 @@ pub fn valid_choice(qs: &[ChoiceQuestion]) -> bool {
 /// The dialog shape of a PermissionRequest for AskUserQuestion (Claude Code
 /// fires it when the dialog opens, spike 2026-11-18), else `None`.
 pub fn choice_from_input(input: &HookInput) -> Option<Vec<ChoiceQuestion>> {
-    if input.hook_event_name != "PermissionRequest"
-        || input.tool_name.as_deref() != Some("AskUserQuestion")
-    {
+    if input.hook_event_name != "PermissionRequest" {
         return None;
     }
-    input
-        .tool_input
-        .questions
-        .clone()
-        .filter(|q| valid_choice(q))
+    // Any other permission request (Bash, Edit, ...) or a dialog shape we do
+    // not know sends an EMPTY choice: it ends a recorded shape, so a real
+    // permission prompt is never matched against a stale dialog.
+    if input.tool_name.as_deref() != Some("AskUserQuestion") {
+        return Some(Vec::new());
+    }
+    Some(
+        input
+            .tool_input
+            .questions
+            .clone()
+            .filter(|q| valid_choice(q))
+            .unwrap_or_default(),
+    )
 }
 
 /// `questions`: a list of objects; per object only the LENGTH of `options`
@@ -357,17 +364,18 @@ impl<'de> serde::Deserialize<'de> for QuestionShape {
                 mut map: A,
             ) -> Result<QuestionShape, A::Error> {
                 let mut options: Option<usize> = None;
-                let mut multi = false;
+                // Missing or non-bool = unknown layout: no shape (fail closed).
+                let mut multi: Option<bool> = None;
                 while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
                     if key == "options" && options.is_none() {
                         options = map.next_value::<SeqLen>()?.0;
-                    } else if key == "multiSelect" {
-                        multi = map.next_value::<MaybeBool>()?.0.unwrap_or(false);
+                    } else if key == "multiSelect" && multi.is_none() {
+                        multi = map.next_value::<MaybeBool>()?.0;
                     } else {
                         map.next_value::<serde::de::IgnoredAny>()?;
                     }
                 }
-                Ok(QuestionShape(options.and_then(|n| {
+                Ok(QuestionShape(options.zip(multi).and_then(|(n, multi)| {
                     u8::try_from(n).ok().map(|options| ChoiceQuestion {
                         options,
                         multi_select: multi,
@@ -1338,9 +1346,14 @@ mod tests {
     fn choice_is_absent_for_other_events_tools_and_odd_shapes() {
         let mk = |v: serde_json::Value| serde_json::from_value::<HookInput>(v).unwrap();
         let qs = serde_json::json!({"questions": [{"options": [1, 2]}]});
-        // A real permission prompt, a PreToolUse, another tool: no choice.
+        // Another tool's permission request ends a shape: empty list.
+        let bash = mk(serde_json::json!({
+            "hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": qs
+        }));
+        assert_eq!(choice_from_input(&bash), Some(vec![]));
+        // Other events carry no choice at all.
         for (ev, tool) in [
-            ("PermissionRequest", "Bash"),
+            ("Notification", "AskUserQuestion"),
             ("PreToolUse", "AskUserQuestion"),
             ("PostToolUse", "AskUserQuestion"),
         ] {
@@ -1361,25 +1374,25 @@ mod tests {
             let i = mk(serde_json::json!({
                 "hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion", "tool_input": odd
             }));
-            assert_eq!(choice_from_input(&i), None, "{odd}");
+            assert_eq!(choice_from_input(&i), Some(vec![]), "{odd}");
             // The status signal never breaks on an odd shape.
             assert_eq!(
                 hook_body("claude-code", &i, None).unwrap().signal,
                 Signal::Blocked
             );
         }
-        // A non-bool multiSelect counts as single-select.
-        let i = mk(serde_json::json!({
-            "hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion",
-            "tool_input": {"questions": [{"options": [1, 2], "multiSelect": "yes"}]}
-        }));
-        assert_eq!(
-            choice_from_input(&i),
-            Some(vec![ChoiceQuestion {
-                options: 2,
-                multi_select: false
-            }])
-        );
+        // A missing or non-bool multiSelect is an unknown layout: no shape.
+        for q in [
+            serde_json::json!({"options": [1, 2], "multiSelect": "yes"}),
+            serde_json::json!({"options": [1, 2], "multiSelect": 1}),
+            serde_json::json!({"options": [1, 2]}),
+        ] {
+            let i = mk(serde_json::json!({
+                "hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": [q]}
+            }));
+            assert_eq!(choice_from_input(&i), Some(vec![]), "{q}");
+        }
         // Unknown keys inside a choice are dropped, never forwarded.
         let body: HookBody = serde_json::from_str(
             "{\"signal\":\"blocked\",\"choice\":[{\"options\":2,\"multiSelect\":false,\"label\":\"x\"}]}",

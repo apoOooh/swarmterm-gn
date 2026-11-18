@@ -99,6 +99,15 @@ describe('choiceFreeTextActive', () => {
       expect(choiceFreeTextActive(['Would you like to proceed?', ...filled('x')], one)).toBe(false)
     })
 
+    it('keeps the footer veto of a permission prompt without a separator (review 2)', () => {
+      const rows = ['Bash command', '  1. Yes', '  2. No', '❯ 3. No, and tell Claude what to do differently', 'Enter to select · Esc to cancel · Tab to amend · ctrl+e to explain']
+      expect(choiceFreeTextActive(rows, one)).toBe(false)
+    })
+
+    it('accepts a highlight indented by up to two blanks (review 2)', () => {
+      expect(choiceFreeTextActive(dialog(3).map((r) => r.replace('❯ 3.', ' ❯ 3.')), one)).toBe(true)
+    })
+
     it('does not count an indented "> 2." continuation row as a highlight (review)', () => {
       const rows = filled('see')
       const i = rows.findIndex((r) => r.startsWith('❯ 3.'))

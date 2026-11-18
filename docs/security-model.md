@@ -80,6 +80,15 @@ allow-listed for serving until the user opens it. The cwd lives in memory on
 the pane's entry and only widens where relative printed names are looked up.
 A nested agent session started inside the pane carries the same bearer, so its
 media path and cwd count for that pane too (decision 2026-11-11).
+SWA-107: on a `PermissionRequest` the body may also carry `choice` — for an
+AskUserQuestion dialog only the option count (1–9) and `multiSelect` per
+question, never question or option texts; for any other permission request
+an empty list. It decides whether dictation may go into the dialog's
+free-text row (renderer, `lib/choice-freetext.ts`) and fails closed: an
+unknown or invalid shape ends the recorded dialog, the screen veto for
+permission phrasing always applies, and unknown keys inside a choice entry
+are ignored rather than refused, so a newer hook cannot cost the pane its
+blocked signal.
 Exception: a pane that survived in the terminal host from a build before
 per-pane secrets keeps its id as bearer until it is respawned (logged as
 `no session secret in meta`).

@@ -14,9 +14,12 @@
  *
  * The caller hands in the visible screen rows (bottom of the buffer).
  */
-// The highlight marker sits in column 0; an indented continuation row of a
-// wrapped answer that happens to read "> 2." must not count (SWA-107).
-const SELECTED_OPTION = /^[❯>]\s*(\d+)\.\s*(.*)$/
+// The highlight marker sits at the left edge (at most two blanks); the
+// continuation rows of a wrapped answer are indented further (five blanks),
+// so one that happens to read "> 2." does not count (SWA-107).
+const SELECTED_OPTION = /^ {0,2}[❯>]\s*(\d+)\.\s*(.*)$/
+/** Indent of the continuation rows of a wrapped free-text answer. */
+const CONTINUATION = /^ {5,}\S/
 const FREE_TEXT_LABEL = /^type something\b/i
 
 /** Permission and approval phrasing from the Claude manifest's blockers;
@@ -56,13 +59,19 @@ export function choiceFreeTextActive(rows: readonly string[], choice?: readonly 
   // Exactly one highlighted option, or the layout is not the one we know.
   if (hits.length !== 1) return false
   const { i: at, m } = hits[0] as { i: number; m: RegExpExecArray }
-  // The selected row and its wrapped continuation (down to the separator)
-  // hold the user's own answer: phrasing there must not veto (SWA-107).
-  let end = at + 1
-  while (end < rows.length && !rows[end].trimStart().startsWith('─')) end++
-  const outside = lower.filter((_, i) => i < at || i >= end)
-  if (outside.some((r) => PERMISSION_MARKERS.some((mk) => r.includes(mk)))) return false
-  if (choice && choice.length > 0) {
+  const hookShape = !!choice && choice.length > 0
+  // With a hook-confirmed dialog the selected row and its indented
+  // continuation rows hold the user's own answer: phrasing there must not
+  // veto (SWA-107). Everything else — the question above, a footer below
+  // ("Tab to amend") — is always checked, also without a separator.
+  let end = at
+  if (hookShape) {
+    end = at + 1
+    while (end < rows.length && CONTINUATION.test(rows[end])) end++
+  }
+  const checked = lower.filter((_, i) => i < at || i >= end)
+  if (checked.some((r) => PERMISSION_MARKERS.some((mk) => r.includes(mk)))) return false
+  if (choice && hookShape) {
     if (choice.some((q) => q.multiSelect)) return false
     // Which question's tab is showing is not known; only when every
     // question has the same option count is "options + 1" the free-text row

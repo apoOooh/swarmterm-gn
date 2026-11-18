@@ -7,11 +7,12 @@ describe('nextChoice', () => {
   it('opens on a blocked edge with a shape', () => {
     expect(nextChoice(undefined, 'blocked', shape)).toEqual(shape)
   })
-  it('keeps the shape across a blocked edge without one', () => {
-    expect(nextChoice(shape, 'blocked', undefined)).toBe(shape)
+  it('keeps the shape across edges that carry none (Notification, background PostToolUse)', () => {
+    for (const s of ['blocked', 'working', 'idle'] as const) expect(nextChoice(shape, s, undefined)).toBe(shape)
   })
-  it('ends on every non-blocked edge', () => {
-    for (const s of ['working', 'idle', 'forget'] as const) expect(nextChoice(shape, s, shape)).toBeUndefined()
+  it('ends on another permission request (empty list) and on forget', () => {
+    expect(nextChoice(shape, 'blocked', [])).toBeUndefined()
+    expect(nextChoice(shape, 'forget', undefined)).toBeUndefined()
   })
   it('a new dialog replaces the old shape', () => {
     const next = [{ options: 3, multiSelect: false }]
