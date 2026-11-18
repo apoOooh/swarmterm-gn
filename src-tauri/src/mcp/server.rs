@@ -774,6 +774,9 @@ async fn hook_handler(
             terminal_id: terminal_id.clone(),
             signal: body.signal,
             at_ms: crate::warroom::now_ms(),
+            // SWA-107: re-validated like media and cwd; a bad shape is
+            // dropped and the blocked signal still lands.
+            choice: body.choice.clone().filter(|c| crate::hook::valid_choice(c)),
         },
     );
     // SessionEnd must drop the context chip NOW, not at the next launch's

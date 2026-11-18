@@ -19,6 +19,11 @@
 
 ### Fixed
 
+- Dictation into Claude Code choice dialogs (SWA-107): a second dictation
+  into the **Type something** field is now appended instead of being refused,
+  also for long answers that wrap. The field is recognised from the dialog
+  Claude Code reports through its hook, not from the field's text.
+
 - Codex panes (SWA-105) now get `--no-daemon` whenever Codex supports that
   flag, even if it lacks the hook-trust flag, and also when the start line
   runs `codex.exe`/`.cmd` or has leading blanks. Full paths and

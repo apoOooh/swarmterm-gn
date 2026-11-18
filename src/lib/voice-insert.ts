@@ -39,8 +39,8 @@ export function prepareDictationBody(text: string, bracketed: boolean, singleLin
  * this narrows the window rather than closing it — which is why submit is
  * off by default.
  *
- * SWA-96: the one blocked screen that takes text is a choice dialog with its
- * empty free-text row selected (`choiceFreeTextActive`); the caller reads it
+ * SWA-96/107: the one blocked screen that takes text is a choice dialog with
+ * its free-text row selected (`choiceFreeTextActive`); the caller reads it
  * from the screen. Submit stays off there: `shouldSubmitDictation` refuses
  * every blocked pane, so the user confirms the answer.
  */

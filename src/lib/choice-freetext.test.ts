@@ -57,4 +57,51 @@ describe('choiceFreeTextActive', () => {
     const rows = [...dialog(3), '❯ 1. Old']
     expect(choiceFreeTextActive(rows)).toBe(false)
   })
+
+  describe('with the hook-reported dialog shape (SWA-107)', () => {
+    const one = [{ options: 2, multiSelect: false }]
+    const filled = (text: string) => dialog(3).map((r) => r.replace('Type something.', text))
+
+    it('accepts the free-text row by number, filled or empty', () => {
+      expect(choiceFreeTextActive(dialog(3), one)).toBe(true)
+      expect(choiceFreeTextActive(filled('erstes diktat'), one)).toBe(true)
+    })
+
+    it('accepts a long answer that wraps over several rows', () => {
+      const rows = filled('erstes diktat ' + 'lang '.repeat(40))
+      const i = rows.findIndex((r) => r.startsWith('❯ 3.'))
+      rows.splice(i + 1, 0, '     lang lang lang lang lang lang')
+      expect(choiceFreeTextActive(rows, one)).toBe(true)
+    })
+
+    it('refuses an ordinary option, also one whose label looks like free text', () => {
+      expect(choiceFreeTextActive(dialog(1), one)).toBe(false)
+      expect(choiceFreeTextActive(dialog(2).map((r) => r.replace('2. Session', '2. Type something')), one)).toBe(false)
+    })
+
+    it('refuses "Chat about this" and numbers past the free-text row', () => {
+      const rows = dialog(3).map((r) => r.replace('❯ 3.', '  3.').replace('  4. Chat', '❯ 4. Chat'))
+      expect(choiceFreeTextActive(rows, one)).toBe(false)
+    })
+
+    it('refuses a number that is an ordinary option of another question', () => {
+      expect(choiceFreeTextActive(dialog(3), [...one, { options: 3, multiSelect: false }])).toBe(false)
+      expect(choiceFreeTextActive(dialog(3), [...one, { options: 2, multiSelect: false }])).toBe(true)
+    })
+
+    it('refuses multi-select dialogs', () => {
+      expect(choiceFreeTextActive(dialog(3), [{ options: 2, multiSelect: true }])).toBe(false)
+    })
+
+    it('keeps the permission veto, footer and single-highlight checks', () => {
+      expect(choiceFreeTextActive(['Do you want to proceed?', ...dialog(3)], one)).toBe(false)
+      expect(choiceFreeTextActive(dialog(3).slice(0, -1), one)).toBe(false)
+      expect(choiceFreeTextActive([...dialog(3), '❯ 1. Old'], one)).toBe(false)
+    })
+
+    it('falls back to the empty-field rule without a shape', () => {
+      expect(choiceFreeTextActive(filled('x'), [])).toBe(false)
+      expect(choiceFreeTextActive(filled('x'))).toBe(false)
+    })
+  })
 })

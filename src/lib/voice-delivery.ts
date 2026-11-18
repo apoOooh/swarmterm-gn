@@ -30,7 +30,7 @@ export interface DictationOutcome {
 export interface DictationDeps {
   draftInfo: (id: string) => { bracketed: boolean; composing: boolean } | undefined
   agentState: (id: string) => AgentEngineState | undefined
-  /** SWA-96: a choice dialog's empty free-text row is selected (screen read). */
+  /** SWA-96/107: a choice dialog's free-text row is selected (hook shape + screen). */
   freeTextActive: (id: string) => boolean
   write: (id: string, expectedSpawnId: string, data: string) => Promise<void>
   resetInput: (id: string) => void

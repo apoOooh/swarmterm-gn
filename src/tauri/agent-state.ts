@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { DisplayState } from '@/lib/agent-state/types'
+import type { ChoiceQuestion } from '@/lib/choice-freetext'
 
 /**
  * Push one pane's agent display state down to Rust (`commands::report_agent_state`),
@@ -23,6 +24,8 @@ export interface AgentHookEvent {
   terminalId: string
   signal: AgentHookSignal
   atMs: number
+  /** SWA-107: only on the PermissionRequest that opens an AskUserQuestion dialog. */
+  choice?: ChoiceQuestion[]
 }
 
 export const onAgentHook = (handler: (e: AgentHookEvent) => void): Promise<UnlistenFn> =>

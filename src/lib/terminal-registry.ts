@@ -75,7 +75,8 @@ import {
 } from '@/lib/terminal-input-client'
 import { AgentStateDetector, type DetectorDeps } from '@/lib/agent-state/detector'
 import { promptBoxDraftText, promptBoxHasDraft, type DraftRow } from '@/lib/prompt-draft'
-import { choiceFreeTextActive } from '@/lib/choice-freetext'
+import { choiceFreeTextActive, type ChoiceQuestion } from '@/lib/choice-freetext'
+import { nextChoice } from '@/lib/choice-hook'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { acceptsAgentHooks } from '@/lib/agent-state/hook-signal'
 import { useAgentStateStore } from '@/store/agent-state-store'
@@ -176,6 +177,9 @@ interface Entry {
    *  "same agent, keep the loop" from "different agent, rebuild it" without
    *  re-deriving the manifest from `entry.config` on every check. */
   detectorManifestId?: string
+  /** SWA-107: the open AskUserQuestion dialog's shape from Claude's hook
+   *  (`nextChoice`); memory only, dies with the entry. */
+  choice?: ChoiceQuestion[]
   /**
    * Clears the IME input segment's `committed` baseline and the textarea it
    * tracks. Exists on `Entry` — rather than staying a closure private to
@@ -1593,7 +1597,7 @@ export function paneChoiceFreeText(id: string): boolean {
   for (let y = Math.max(0, end - entry.term.rows); y < end; y++) {
     rows.push(buffer.getLine(y)?.translateToString(true) ?? '')
   }
-  return choiceFreeTextActive(rows)
+  return choiceFreeTextActive(rows, entry.choice)
 }
 
 /**
@@ -1836,9 +1840,10 @@ export function getTerminalAgentId(id: string): string | undefined {
  * pane keeps following its screen alone; plain Terminal panes have no
  * detector and fall through too.
  */
-export function noteAgentHook(id: string, signal: AgentHookSignal): void {
+export function noteAgentHook(id: string, signal: AgentHookSignal, choice?: ChoiceQuestion[]): void {
   const e = entries.get(id)
   if (!e || !acceptsAgentHooks(e.detectorManifestId)) return
+  e.choice = nextChoice(e.choice, signal, choice)
   e.detector?.noteHook(signal)
 }
 
