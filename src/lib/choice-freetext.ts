@@ -61,3 +61,17 @@ export function choiceFreeTextActive(rows: readonly string[], choice?: readonly 
   }
   return FREE_TEXT_LABEL.test(selected[0][1].trim())
 }
+
+/**
+ * SWA-107: whether the selected row already holds text, so a further
+ * dictation gets a separating space instead of being glued to the last word.
+ * Only decides that space — never whether text may be written (that is
+ * `choiceFreeTextActive`). Reads the selected row's first screen line; its
+ * own trailing space is not visible (xterm trims), so at worst two spaces.
+ */
+export function choiceFreeTextFilled(rows: readonly string[]): boolean {
+  const selected = rows.map((r) => SELECTED_OPTION.exec(r)).filter((m) => m !== null)
+  if (selected.length !== 1) return false
+  const content = selected[0][1].trim()
+  return content.length > 0 && !FREE_TEXT_LABEL.test(content)
+}

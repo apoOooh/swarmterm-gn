@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { choiceFreeTextActive } from './choice-freetext'
+import { choiceFreeTextActive, choiceFreeTextFilled } from './choice-freetext'
 
 const dialog = (selected: number) =>
   [
@@ -102,6 +102,14 @@ describe('choiceFreeTextActive', () => {
     it('falls back to the empty-field rule without a shape', () => {
       expect(choiceFreeTextActive(filled('x'), [])).toBe(false)
       expect(choiceFreeTextActive(filled('x'))).toBe(false)
+    })
+  })
+
+  describe('choiceFreeTextFilled', () => {
+    it('is false for the placeholder and true once the row holds text', () => {
+      expect(choiceFreeTextFilled(dialog(3))).toBe(false)
+      expect(choiceFreeTextFilled(dialog(3).map((r) => r.replace('Type something.', 'erstes')))).toBe(true)
+      expect(choiceFreeTextFilled([...dialog(3), '❯ 1. Old'])).toBe(false)
     })
   })
 })

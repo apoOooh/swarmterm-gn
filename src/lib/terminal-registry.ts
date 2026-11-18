@@ -75,7 +75,7 @@ import {
 } from '@/lib/terminal-input-client'
 import { AgentStateDetector, type DetectorDeps } from '@/lib/agent-state/detector'
 import { promptBoxDraftText, promptBoxHasDraft, type DraftRow } from '@/lib/prompt-draft'
-import { choiceFreeTextActive, type ChoiceQuestion } from '@/lib/choice-freetext'
+import { choiceFreeTextActive, choiceFreeTextFilled, type ChoiceQuestion } from '@/lib/choice-freetext'
 import { nextChoice } from '@/lib/choice-hook'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { acceptsAgentHooks } from '@/lib/agent-state/hook-signal'
@@ -1590,14 +1590,25 @@ export function paneHasPromptDraft(id: string): boolean {
  */
 export function paneChoiceFreeText(id: string): boolean {
   const entry = entries.get(id)
-  if (!entry || !entry.opened || entry.config.agentId !== 'claude-code') return false
+  const rows = choiceScreenRows(entry)
+  return !!entry && !!rows && choiceFreeTextActive(rows, entry.choice)
+}
+
+/** SWA-107: the selected free-text row already holds text (`choiceFreeTextFilled`). */
+export function paneChoiceFreeTextFilled(id: string): boolean {
+  const rows = choiceScreenRows(entries.get(id))
+  return !!rows && choiceFreeTextFilled(rows)
+}
+
+function choiceScreenRows(entry: Entry | undefined): string[] | undefined {
+  if (!entry || !entry.opened || entry.config.agentId !== 'claude-code') return undefined
   const buffer = entry.term.buffer.active
   const end = buffer.length
   const rows: string[] = []
   for (let y = Math.max(0, end - entry.term.rows); y < end; y++) {
     rows.push(buffer.getLine(y)?.translateToString(true) ?? '')
   }
-  return choiceFreeTextActive(rows, entry.choice)
+  return rows
 }
 
 /**
