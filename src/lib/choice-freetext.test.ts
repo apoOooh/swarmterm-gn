@@ -89,6 +89,23 @@ describe('choiceFreeTextActive', () => {
       expect(choiceFreeTextActive(dialog(3), [...one, { options: 2, multiSelect: false }])).toBe(true)
     })
 
+    it('refuses another tab Chat-about-this row when option counts differ (review)', () => {
+      const rows = dialog(3).map((r) => r.replace('❯ 3.', '  3.').replace('  4. Chat', '❯ 4. Chat'))
+      expect(choiceFreeTextActive(rows, [...one, { options: 3, multiSelect: false }])).toBe(false)
+    })
+
+    it('ignores approval phrasing inside the users own answer (review)', () => {
+      expect(choiceFreeTextActive(filled('would you like to keep the cache'), one)).toBe(true)
+      expect(choiceFreeTextActive(['Would you like to proceed?', ...filled('x')], one)).toBe(false)
+    })
+
+    it('does not count an indented "> 2." continuation row as a highlight (review)', () => {
+      const rows = filled('see')
+      const i = rows.findIndex((r) => r.startsWith('❯ 3.'))
+      rows.splice(i + 1, 0, '     > 2. item')
+      expect(choiceFreeTextActive(rows, one)).toBe(true)
+    })
+
     it('refuses multi-select dialogs', () => {
       expect(choiceFreeTextActive(dialog(3), [{ options: 2, multiSelect: true }])).toBe(false)
     })

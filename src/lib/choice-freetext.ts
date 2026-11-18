@@ -14,7 +14,9 @@
  *
  * The caller hands in the visible screen rows (bottom of the buffer).
  */
-const SELECTED_OPTION = /^\s*[❯>]\s*\d+\.\s*(.*)$/
+// The highlight marker sits in column 0; an indented continuation row of a
+// wrapped answer that happens to read "> 2." must not count (SWA-107).
+const SELECTED_OPTION = /^[❯>]\s*(\d+)\.\s*(.*)$/
 const FREE_TEXT_LABEL = /^type something\b/i
 
 /** Permission and approval phrasing from the Claude manifest's blockers;
@@ -50,16 +52,26 @@ export interface ChoiceQuestion {
 export function choiceFreeTextActive(rows: readonly string[], choice?: readonly ChoiceQuestion[]): boolean {
   const lower = rows.map((r) => r.toLowerCase())
   if (!lower.some((r) => r.includes('enter to select'))) return false
-  if (lower.some((r) => PERMISSION_MARKERS.some((m) => r.includes(m)))) return false
-  const selected = rows.map((r) => SELECTED_OPTION.exec(r)).filter((m) => m !== null)
+  const hits = rows.map((r, i) => ({ i, m: SELECTED_OPTION.exec(r) })).filter((h) => h.m !== null)
   // Exactly one highlighted option, or the layout is not the one we know.
-  if (selected.length !== 1) return false
+  if (hits.length !== 1) return false
+  const { i: at, m } = hits[0] as { i: number; m: RegExpExecArray }
+  // The selected row and its wrapped continuation (down to the separator)
+  // hold the user's own answer: phrasing there must not veto (SWA-107).
+  let end = at + 1
+  while (end < rows.length && !rows[end].trimStart().startsWith('─')) end++
+  const outside = lower.filter((_, i) => i < at || i >= end)
+  if (outside.some((r) => PERMISSION_MARKERS.some((mk) => r.includes(mk)))) return false
   if (choice && choice.length > 0) {
     if (choice.some((q) => q.multiSelect)) return false
-    const n = Number(/\d+/.exec(selected[0][0])?.[0])
-    return choice.some((q) => q.options + 1 === n) && choice.every((q) => n > q.options)
+    // Which question's tab is showing is not known; only when every
+    // question has the same option count is "options + 1" the free-text row
+    // on every tab (else it can be another tab's "Chat about this").
+    const options = choice[0].options
+    if (choice.some((q) => q.options !== options)) return false
+    return Number(m[1]) === options + 1
   }
-  return FREE_TEXT_LABEL.test(selected[0][1].trim())
+  return FREE_TEXT_LABEL.test(m[2].trim())
 }
 
 /**
@@ -72,6 +84,6 @@ export function choiceFreeTextActive(rows: readonly string[], choice?: readonly 
 export function choiceFreeTextFilled(rows: readonly string[]): boolean {
   const selected = rows.map((r) => SELECTED_OPTION.exec(r)).filter((m) => m !== null)
   if (selected.length !== 1) return false
-  const content = selected[0][1].trim()
+  const content = selected[0][2].trim()
   return content.length > 0 && !FREE_TEXT_LABEL.test(content)
 }

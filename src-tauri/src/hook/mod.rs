@@ -243,8 +243,12 @@ fn lenient_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Strin
 /// free-text row is numbered `options + 1`) and whether it is multi-select.
 /// Question, header and option texts are skipped by the deserialiser and
 /// never leave the pane.
+///
+/// Unknown keys are ignored (not refused like the rest of `HookBody`): a
+/// newer CLI adding a field must not cost the pane its blocked signal, and
+/// only the two known fields are ever re-serialised to the renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ChoiceQuestion {
     pub options: u8,
     pub multi_select: bool,
@@ -1376,11 +1380,12 @@ mod tests {
                 multi_select: false
             }])
         );
-        // The body refuses unknown keys inside a choice too.
-        assert!(serde_json::from_str::<HookBody>(
-            "{\"signal\":\"blocked\",\"choice\":[{\"options\":2,\"multiSelect\":false,\"label\":\"x\"}]}"
+        // Unknown keys inside a choice are dropped, never forwarded.
+        let body: HookBody = serde_json::from_str(
+            "{\"signal\":\"blocked\",\"choice\":[{\"options\":2,\"multiSelect\":false,\"label\":\"x\"}]}",
         )
-        .is_err());
+        .unwrap();
+        assert!(!serde_json::to_string(&body).unwrap().contains("label"));
     }
 
     #[test]

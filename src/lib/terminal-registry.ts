@@ -496,7 +496,16 @@ function refreshDetector(id: string, entry: Entry): void {
     },
     isPaneWatched: () =>
       document.hasFocus() && selectFocusedTerminalId(useAppStore.getState()) === id,
-    publish: (state, opts) => useAgentStateStore.getState().publish(id, state, opts),
+    publish: (state, opts) => {
+      // SWA-107: a dialog shape lives only as long as the pane stays blocked.
+      // Esc (no Stop hook) or any other way out ends it, so a later dialog
+      // is never matched against a stale shape.
+      if (state !== 'blocked') {
+        const e = entries.get(id)
+        if (e) e.choice = undefined
+      }
+      useAgentStateStore.getState().publish(id, state, opts)
+    },
     now: () => Date.now(),
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>)
@@ -1699,6 +1708,8 @@ export function retryTerminal(id: string): void {
   // And to the detector: it holds evidence (title/progress/pending-idle) from
   // the dead pty, which the new one hasn't produced.
   entry.detector?.reset()
+  // The dialog shape belonged to the dead pty too (SWA-107).
+  entry.choice = undefined
   safeFit(entry)
   entry.session.retry({ ...entry.config, cols: entry.term.cols, rows: entry.term.rows })
 }
@@ -1747,6 +1758,8 @@ export function respawnTerminal(id: string, config: AttachConfig): void {
   // And to the detector: it holds evidence (title/progress/pending-idle) from
   // the dead pty, which the new one hasn't produced.
   entry.detector?.reset()
+  // The dialog shape belonged to the dead pty too (SWA-107).
+  entry.choice = undefined
   safeFit(entry)
   entry.session.respawn({ ...entry.config, cols: entry.term.cols, rows: entry.term.rows })
 }

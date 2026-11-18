@@ -17,7 +17,7 @@ export type DictationRejection = 'target-busy'
 
 /** Bell copy for `target-busy`, shared by buzzkey and built-in dictation. */
 export const TARGET_BUSY_COPY =
-  'the pane waits for an answer — dictation only goes into an empty "Type something" field of a choice'
+  'the pane waits for an answer — dictation only goes into the selected "Type something" field of a choice'
 
 /**
  * Bytes for the body write. Without bracketed paste (a plain shell) a line
