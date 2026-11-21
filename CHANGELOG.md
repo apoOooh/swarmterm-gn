@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.30.0] - 2026-11-21
+
 ### Added
 
 - Status line (SWA-93): new **Custom** template for Claude Code and Codex.
