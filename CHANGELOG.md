@@ -22,7 +22,7 @@
 - Codex panes (SWA-108): the check whether Codex supports `--no-daemon` no
   longer fails when the app's PATH is very long, so Codex panes start with
   their own daemon instead of a shared one that could be gone. A failed check
-  now logs its exit code and a short error line.
+  now logs its exit code and a coarse error class (never the error text).
 
 - Dictation into Claude Code choice dialogs (SWA-107): a second dictation
   into the **Type something** field is now appended instead of being refused,

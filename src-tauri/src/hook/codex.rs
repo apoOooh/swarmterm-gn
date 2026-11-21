@@ -202,47 +202,66 @@ fn classify(outcome: &Result<String, Undecided>) -> Option<Caps> {
     }
 }
 
-/// PATH for the probe (SWA-108): the login PATH from the registry — the
-/// source `find_agent_binary` also searches — plus the binary's own folder.
-/// Not the app's inherited PATH: a dev app's is ~16k chars, and `codex.cmd`
-/// runs in cmd.exe, which cuts variables at 8191 chars, so the npm shim
-/// missed `node` and every probe ended undecided. An empty registry PATH
-/// falls back to the inherited one without Cargo build folders.
+/// Longest environment variable `cmd.exe` handles; `codex.cmd` (npm shim)
+/// runs in it and silently misses `node` behind a longer PATH (SWA-108).
+const CMD_VAR_LIMIT: usize = 8191;
+
+/// PATH for the probe (SWA-108). Normally the app's inherited PATH in its
+/// own order (a process-local node from nvm or a venv keeps working), minus
+/// Cargo build folders (only a dev app has them), plus the binary's folder
+/// and the registry login PATH — the source `find_agent_binary` searches.
+/// Only when that is still over cmd.exe's limit (a dev app's was ~16k
+/// chars, every probe ended undecided) it shrinks to binary folder + login
+/// PATH, which is what a fresh login would run the shim with.
 fn probe_path(login: &str, inherited: &str, binary: &std::path::Path) -> String {
-    let base = if login.trim_matches(';').trim().is_empty() {
-        crate::runtime_path::without_build_dirs(inherited)
-    } else {
-        login.to_string()
-    };
-    let dir = binary
+    let dir: Vec<String> = binary
         .parent()
         .map(|d| d.to_string_lossy().into_owned())
         .into_iter()
-        .collect::<Vec<_>>();
-    crate::runtime_path::append_missing(&base, &dir)
+        .collect();
+    let base = crate::runtime_path::without_build_dirs(inherited);
+    let full = crate::runtime_path::append_missing(
+        &crate::runtime_path::append_missing(&base, &dir),
+        &[login.to_string()],
+    );
+    if full.len() <= CMD_VAR_LIMIT {
+        return full;
+    }
+    let first = dir.first().cloned().unwrap_or_default();
+    crate::runtime_path::append_missing(&first, &[login.to_string()])
 }
 
-/// First stderr line of a failed probe, safe for the log: at most 200
-/// chars, and any token that looks like a path replaced, so neither the
-/// user name nor a PATH dump reaches the dev log.
-fn stderr_summary(stderr: &str) -> String {
-    let line = stderr
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("");
-    let redacted = line
-        .split_whitespace()
-        .map(|word| {
-            if word.contains('\\') || word.contains('/') || word.contains(":\\") {
-                "<path>"
-            } else {
-                word
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    redacted.chars().take(200).collect()
+/// What a failed probe's stderr says, as a fixed class. Only the class is
+/// logged, never stderr text: it can carry secrets (`KEY=...`), paths or
+/// user names in any shape, and no text filter catches all of them.
+#[derive(Debug, PartialEq)]
+enum StderrClass {
+    Empty,
+    /// cmd.exe could not find a program (`node` behind a cut PATH).
+    NotRecognized,
+    Other,
+}
+
+fn classify_stderr(stderr: &str) -> StderrClass {
+    if stderr.trim().is_empty() {
+        return StderrClass::Empty;
+    }
+    let lower = stderr.to_lowercase();
+    if lower.contains("is not recognized") || lower.contains("ist entweder falsch geschrieben") {
+        StderrClass::NotRecognized
+    } else {
+        StderrClass::Other
+    }
+}
+
+/// The log line for a failed probe: exit code, stderr length, class.
+fn exit_log_line(code: Option<i32>, stderr: &[u8], stderr_len: u64) -> String {
+    let class = match classify_stderr(&String::from_utf8_lossy(stderr)) {
+        StderrClass::Empty => "empty",
+        StderrClass::NotRecognized => "not-recognized",
+        StderrClass::Other => "other",
+    };
+    format!("[codex] isolation probe: exit {code:?}, stderr {stderr_len} bytes, class {class}")
 }
 
 fn probe_help(timeout: Duration) -> Result<String, Undecided> {
@@ -281,11 +300,8 @@ fn probe_help(timeout: Duration) -> Result<String, Undecided> {
                 if errors.seek(SeekFrom::Start(0)).is_ok() {
                     let _ = (&mut errors).take(4 * 1024).read_to_end(&mut bytes);
                 }
-                eprintln!(
-                    "[codex] isolation probe: exit {:?}, stderr: {}",
-                    status.code(),
-                    stderr_summary(&String::from_utf8_lossy(&bytes))
-                );
+                let len = errors.metadata().map(|m| m.len()).unwrap_or(0);
+                eprintln!("{}", exit_log_line(status.code(), &bytes, len));
                 return Err(Undecided::Exit);
             }
             Err(_) => return Err(Undecided::Exit),
@@ -976,39 +992,73 @@ mod tests {
     }
 
     #[test]
-    fn probe_path_is_the_login_path_plus_the_binary_folder() {
+    fn probe_path_keeps_a_short_inherited_path_first_and_dedups() {
         let binary = std::path::Path::new(r"C:\npm\codex.cmd");
-        let inherited = r"D:\r\target\debug\build\a-1\out;C:\huge";
+        // nvm's node only in the process PATH: stays, and stays first.
+        let inherited = r"C:\nvm\v22;C:\Windows";
         assert_eq!(
-            probe_path(r"C:\Windows;C:\nodejs", inherited, binary),
-            r"C:\Windows;C:\nodejs;C:\npm"
+            probe_path(r"C:\WINDOWS;C:\nodejs", inherited, binary),
+            r"C:\nvm\v22;C:\Windows;C:\npm;C:\nodejs"
         );
-        // Already listed: not added twice.
         assert_eq!(
-            probe_path(r"C:\npm;C:\nodejs", inherited, binary),
-            r"C:\npm;C:\nodejs"
+            probe_path(r"C:\npm\;C:\nvm\v22", r"C:\npm;C:\nvm\v22", binary),
+            r"C:\npm;C:\nvm\v22"
         );
     }
 
+    fn long_dev_path() -> String {
+        (0..150)
+            .map(|i| format!(r"D:\repo\src-tauri\target\debug\build\crate-{i:04}\out"))
+            .chain((0..300).map(|i| format!(r"C:\tools\some-long-folder-name-{i:04}")))
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
     #[test]
-    fn probe_path_without_registry_falls_back_to_the_trimmed_inherited_path() {
+    fn probe_path_over_the_cmd_limit_shrinks_to_binary_folder_and_login() {
         let binary = std::path::Path::new(r"C:\npm\codex.cmd");
-        let inherited = r"C:\nodejs;D:\r\target\debug\build\a-1\out;C:\Windows";
+        let inherited = long_dev_path();
+        let path = probe_path(r"C:\Windows;C:\nodejs", &inherited, binary);
+        assert_eq!(path, r"C:\npm;C:\Windows;C:\nodejs");
+        // Build folders alone are dropped before the limit is checked.
+        let short = r"C:\nodejs;D:\r\target\debug\build\a-1\out;C:\Windows";
         assert_eq!(
-            probe_path("", inherited, binary),
+            probe_path("", short, binary),
             r"C:\nodejs;C:\Windows;C:\npm"
         );
+        assert!(probe_path("", &inherited, binary).len() <= CMD_VAR_LIMIT);
     }
 
     #[test]
-    fn stderr_summary_keeps_one_short_line_without_paths() {
-        let text = "\n  'node' is not recognized as an internal command at C:\\npm\\codex.cmd\nsecond line";
-        assert_eq!(
-            stderr_summary(text),
-            "'node' is not recognized as an internal command at <path>"
-        );
-        assert_eq!(stderr_summary(&"a ".repeat(300)).chars().count(), 200);
-        assert_eq!(stderr_summary(""), "");
-        assert_eq!(stderr_summary("see /usr/bin/x"), "see <path>");
+    fn exit_log_names_a_class_and_never_stderr_text() {
+        let cases: [(&str, &str); 5] = [
+            (
+                "'node' is not recognized as an internal or external command",
+                "not-recognized",
+            ),
+            (
+                "Der Befehl \"node\" ist entweder falsch geschrieben oder",
+                "not-recognized",
+            ),
+            ("Error: OPENAI_API_KEY=sk-secretvalue123", "other"),
+            (
+                r"failed in C:\Company Internal Tools\bin and C:private-config.toml",
+                "other",
+            ),
+            ("  \n", "empty"),
+        ];
+        for (stderr, class) in cases {
+            let line = exit_log_line(Some(1), stderr.as_bytes(), stderr.len() as u64);
+            assert_eq!(
+                line,
+                format!(
+                    "[codex] isolation probe: exit Some(1), stderr {} bytes, class {class}",
+                    stderr.len()
+                )
+            );
+            for leak in ["sk-secret", "OPENAI", "Internal", "private-config", "node"] {
+                assert!(!line.contains(leak), "{leak} leaked: {line}");
+            }
+        }
     }
 }
