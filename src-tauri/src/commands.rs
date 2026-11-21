@@ -1679,7 +1679,11 @@ pub async fn run_routine_command(
         .admin_policy
         .check(crate::policy::Lock::RoutineCommands)?;
     crate::routine_cmd::validate(&command, &cwd, timeout_secs)?;
-    let env = state.env_policy_snapshot().inherited();
+    let mut env = state.env_policy_snapshot().inherited();
+    // Same PATH trim as a pane's (SWA-108): the line runs through cmd.exe.
+    if let Some(path) = env.get("PATH").map(crate::runtime_path::for_children) {
+        env.set("PATH", path);
+    }
     tauri::async_runtime::spawn_blocking(move || {
         crate::routine_cmd::run(
             &command,

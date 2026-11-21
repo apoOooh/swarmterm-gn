@@ -202,15 +202,85 @@ fn classify(outcome: &Result<String, Undecided>) -> Option<Caps> {
     }
 }
 
+/// Longest environment variable `cmd.exe` handles; `codex.cmd` (npm shim)
+/// runs in it and silently misses `node` behind a longer PATH (SWA-108).
+const CMD_VAR_LIMIT: usize = 8191;
+
+/// PATH for the probe (SWA-108). Normally the app's inherited PATH in its
+/// own order (a process-local node from nvm or a venv keeps working), minus
+/// Cargo build folders (only a dev app has them), plus the binary's folder
+/// and the registry login PATH — the source `find_agent_binary` searches.
+/// Only when that is still over cmd.exe's limit (a dev app's was ~16k
+/// chars, every probe ended undecided) it shrinks to binary folder + login
+/// PATH, which is what a fresh login would run the shim with.
+fn probe_path(login: &str, inherited: &str, binary: &std::path::Path) -> String {
+    let dir: Vec<String> = binary
+        .parent()
+        .map(|d| d.to_string_lossy().into_owned())
+        .into_iter()
+        .collect();
+    let base = crate::runtime_path::without_build_dirs(inherited);
+    let full = crate::runtime_path::append_missing(
+        &crate::runtime_path::append_missing(&base, &dir),
+        &[login.to_string()],
+    );
+    if full.len() <= CMD_VAR_LIMIT {
+        return full;
+    }
+    let first = dir.first().cloned().unwrap_or_default();
+    crate::runtime_path::append_missing(&first, &[login.to_string()])
+}
+
+/// What a failed probe's stderr says, as a fixed class. Only the class is
+/// logged, never stderr text: it can carry secrets (`KEY=...`), paths or
+/// user names in any shape, and no text filter catches all of them.
+#[derive(Debug, PartialEq)]
+enum StderrClass {
+    Empty,
+    /// cmd.exe could not find a program (`node` behind a cut PATH).
+    NotRecognized,
+    Other,
+}
+
+fn classify_stderr(stderr: &str) -> StderrClass {
+    if stderr.trim().is_empty() {
+        return StderrClass::Empty;
+    }
+    let lower = stderr.to_lowercase();
+    if lower.contains("is not recognized") || lower.contains("ist entweder falsch geschrieben") {
+        StderrClass::NotRecognized
+    } else {
+        StderrClass::Other
+    }
+}
+
+/// The log line for a failed probe: exit code, stderr length, class.
+fn exit_log_line(code: Option<i32>, stderr: &[u8], stderr_len: u64) -> String {
+    let class = match classify_stderr(&String::from_utf8_lossy(stderr)) {
+        StderrClass::Empty => "empty",
+        StderrClass::NotRecognized => "not-recognized",
+        StderrClass::Other => "other",
+    };
+    format!("[codex] isolation probe: exit {code:?}, stderr {stderr_len} bytes, class {class}")
+}
+
 fn probe_help(timeout: Duration) -> Result<String, Undecided> {
     let binary = crate::agents::find_agent_binary("codex").ok_or(Undecided::NoBinary)?;
     let mut output = tempfile::tempfile().map_err(|_| Undecided::Io)?;
     let stdout = output.try_clone().map_err(|_| Undecided::Io)?;
-    let mut command = crate::terminal_env::command(binary);
+    let mut errors = tempfile::tempfile().map_err(|_| Undecided::Io)?;
+    let stderr = errors.try_clone().map_err(|_| Undecided::Io)?;
+    let path = probe_path(
+        &crate::runtime_path::login(),
+        &std::env::var("PATH").unwrap_or_default(),
+        &binary,
+    );
+    let mut command = crate::terminal_env::command(&binary);
     command
         .arg("--help")
+        .env("PATH", path)
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(stderr)
         .stdout(stdout);
     #[cfg(windows)]
     {
@@ -222,7 +292,19 @@ fn probe_help(timeout: Duration) -> Result<String, Undecided> {
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return Err(Undecided::Exit),
+            Ok(Some(status)) => {
+                // Logged, so the next undecided says why (SWA-108: it took a
+                // measurement to see cmd.exe failing to find `node`).
+                use std::io::{Seek, SeekFrom};
+                let mut bytes = Vec::new();
+                if errors.seek(SeekFrom::Start(0)).is_ok() {
+                    let _ = (&mut errors).take(4 * 1024).read_to_end(&mut bytes);
+                }
+                let len = errors.metadata().map(|m| m.len()).unwrap_or(0);
+                eprintln!("{}", exit_log_line(status.code(), &bytes, len));
+                return Err(Undecided::Exit);
+            }
+            Err(_) => return Err(Undecided::Exit),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
                 let _ = child.kill();
@@ -907,5 +989,76 @@ mod tests {
             fs::read_to_string(dir.path().join("config.toml")).unwrap(),
             "[broken"
         );
+    }
+
+    #[test]
+    fn probe_path_keeps_a_short_inherited_path_first_and_dedups() {
+        let binary = std::path::Path::new(r"C:\npm\codex.cmd");
+        // nvm's node only in the process PATH: stays, and stays first.
+        let inherited = r"C:\nvm\v22;C:\Windows";
+        assert_eq!(
+            probe_path(r"C:\WINDOWS;C:\nodejs", inherited, binary),
+            r"C:\nvm\v22;C:\Windows;C:\npm;C:\nodejs"
+        );
+        assert_eq!(
+            probe_path(r"C:\npm\;C:\nvm\v22", r"C:\npm;C:\nvm\v22", binary),
+            r"C:\npm;C:\nvm\v22"
+        );
+    }
+
+    fn long_dev_path() -> String {
+        (0..150)
+            .map(|i| format!(r"D:\repo\src-tauri\target\debug\build\crate-{i:04}\out"))
+            .chain((0..300).map(|i| format!(r"C:\tools\some-long-folder-name-{i:04}")))
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    #[test]
+    fn probe_path_over_the_cmd_limit_shrinks_to_binary_folder_and_login() {
+        let binary = std::path::Path::new(r"C:\npm\codex.cmd");
+        let inherited = long_dev_path();
+        let path = probe_path(r"C:\Windows;C:\nodejs", &inherited, binary);
+        assert_eq!(path, r"C:\npm;C:\Windows;C:\nodejs");
+        // Build folders alone are dropped before the limit is checked.
+        let short = r"C:\nodejs;D:\r\target\debug\build\a-1\out;C:\Windows";
+        assert_eq!(
+            probe_path("", short, binary),
+            r"C:\nodejs;C:\Windows;C:\npm"
+        );
+        assert!(probe_path("", &inherited, binary).len() <= CMD_VAR_LIMIT);
+    }
+
+    #[test]
+    fn exit_log_names_a_class_and_never_stderr_text() {
+        let cases: [(&str, &str); 5] = [
+            (
+                "'node' is not recognized as an internal or external command",
+                "not-recognized",
+            ),
+            (
+                "Der Befehl \"node\" ist entweder falsch geschrieben oder",
+                "not-recognized",
+            ),
+            ("Error: OPENAI_API_KEY=sk-secretvalue123", "other"),
+            (
+                r"failed in C:\Company Internal Tools\bin and C:private-config.toml",
+                "other",
+            ),
+            ("  \n", "empty"),
+        ];
+        for (stderr, class) in cases {
+            let line = exit_log_line(Some(1), stderr.as_bytes(), stderr.len() as u64);
+            assert_eq!(
+                line,
+                format!(
+                    "[codex] isolation probe: exit Some(1), stderr {} bytes, class {class}",
+                    stderr.len()
+                )
+            );
+            for leak in ["sk-secret", "OPENAI", "Internal", "private-config", "node"] {
+                assert!(!line.contains(leak), "{leak} leaked: {line}");
+            }
+        }
     }
 }
