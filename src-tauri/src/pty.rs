@@ -1020,7 +1020,11 @@ fn plan_spawn(
     // The registry PATH as of now (SWA-83 V3): a CLI or Git installed while
     // Swarmterm runs is found in a new pane without an app restart. Only
     // appended, so whatever order the app's own PATH has keeps winning.
-    let path_now = crate::runtime_path::refreshed(env.get("PATH").unwrap_or_default());
+    // Dev builds also drop Cargo's build-script folders (SWA-108), or agent
+    // shims run by cmd.exe miss `node` behind a PATH over 8191 chars.
+    let path_now = crate::runtime_path::for_children(&crate::runtime_path::refreshed(
+        env.get("PATH").unwrap_or_default(),
+    ));
     env.set("PATH", path_now);
     // Claude Code runs hooks through Git Bash and finds it only via `git` on
     // PATH or the standard folders; tell it where ours is when it would not

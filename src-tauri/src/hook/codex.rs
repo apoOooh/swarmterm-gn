@@ -202,15 +202,66 @@ fn classify(outcome: &Result<String, Undecided>) -> Option<Caps> {
     }
 }
 
+/// PATH for the probe (SWA-108): the login PATH from the registry — the
+/// source `find_agent_binary` also searches — plus the binary's own folder.
+/// Not the app's inherited PATH: a dev app's is ~16k chars, and `codex.cmd`
+/// runs in cmd.exe, which cuts variables at 8191 chars, so the npm shim
+/// missed `node` and every probe ended undecided. An empty registry PATH
+/// falls back to the inherited one without Cargo build folders.
+fn probe_path(login: &str, inherited: &str, binary: &std::path::Path) -> String {
+    let base = if login.trim_matches(';').trim().is_empty() {
+        crate::runtime_path::without_build_dirs(inherited)
+    } else {
+        login.to_string()
+    };
+    let dir = binary
+        .parent()
+        .map(|d| d.to_string_lossy().into_owned())
+        .into_iter()
+        .collect::<Vec<_>>();
+    crate::runtime_path::append_missing(&base, &dir)
+}
+
+/// First stderr line of a failed probe, safe for the log: at most 200
+/// chars, and any token that looks like a path replaced, so neither the
+/// user name nor a PATH dump reaches the dev log.
+fn stderr_summary(stderr: &str) -> String {
+    let line = stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    let redacted = line
+        .split_whitespace()
+        .map(|word| {
+            if word.contains('\\') || word.contains('/') || word.contains(":\\") {
+                "<path>"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    redacted.chars().take(200).collect()
+}
+
 fn probe_help(timeout: Duration) -> Result<String, Undecided> {
     let binary = crate::agents::find_agent_binary("codex").ok_or(Undecided::NoBinary)?;
     let mut output = tempfile::tempfile().map_err(|_| Undecided::Io)?;
     let stdout = output.try_clone().map_err(|_| Undecided::Io)?;
-    let mut command = crate::terminal_env::command(binary);
+    let mut errors = tempfile::tempfile().map_err(|_| Undecided::Io)?;
+    let stderr = errors.try_clone().map_err(|_| Undecided::Io)?;
+    let path = probe_path(
+        &crate::runtime_path::login(),
+        &std::env::var("PATH").unwrap_or_default(),
+        &binary,
+    );
+    let mut command = crate::terminal_env::command(&binary);
     command
         .arg("--help")
+        .env("PATH", path)
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(stderr)
         .stdout(stdout);
     #[cfg(windows)]
     {
@@ -222,7 +273,22 @@ fn probe_help(timeout: Duration) -> Result<String, Undecided> {
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return Err(Undecided::Exit),
+            Ok(Some(status)) => {
+                // Logged, so the next undecided says why (SWA-108: it took a
+                // measurement to see cmd.exe failing to find `node`).
+                use std::io::{Seek, SeekFrom};
+                let mut bytes = Vec::new();
+                if errors.seek(SeekFrom::Start(0)).is_ok() {
+                    let _ = (&mut errors).take(4 * 1024).read_to_end(&mut bytes);
+                }
+                eprintln!(
+                    "[codex] isolation probe: exit {:?}, stderr: {}",
+                    status.code(),
+                    stderr_summary(&String::from_utf8_lossy(&bytes))
+                );
+                return Err(Undecided::Exit);
+            }
+            Err(_) => return Err(Undecided::Exit),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
                 let _ = child.kill();
@@ -907,5 +973,42 @@ mod tests {
             fs::read_to_string(dir.path().join("config.toml")).unwrap(),
             "[broken"
         );
+    }
+
+    #[test]
+    fn probe_path_is_the_login_path_plus_the_binary_folder() {
+        let binary = std::path::Path::new(r"C:\npm\codex.cmd");
+        let inherited = r"D:\r\target\debug\build\a-1\out;C:\huge";
+        assert_eq!(
+            probe_path(r"C:\Windows;C:\nodejs", inherited, binary),
+            r"C:\Windows;C:\nodejs;C:\npm"
+        );
+        // Already listed: not added twice.
+        assert_eq!(
+            probe_path(r"C:\npm;C:\nodejs", inherited, binary),
+            r"C:\npm;C:\nodejs"
+        );
+    }
+
+    #[test]
+    fn probe_path_without_registry_falls_back_to_the_trimmed_inherited_path() {
+        let binary = std::path::Path::new(r"C:\npm\codex.cmd");
+        let inherited = r"C:\nodejs;D:\r\target\debug\build\a-1\out;C:\Windows";
+        assert_eq!(
+            probe_path("", inherited, binary),
+            r"C:\nodejs;C:\Windows;C:\npm"
+        );
+    }
+
+    #[test]
+    fn stderr_summary_keeps_one_short_line_without_paths() {
+        let text = "\n  'node' is not recognized as an internal command at C:\\npm\\codex.cmd\nsecond line";
+        assert_eq!(
+            stderr_summary(text),
+            "'node' is not recognized as an internal command at <path>"
+        );
+        assert_eq!(stderr_summary(&"a ".repeat(300)).chars().count(), 200);
+        assert_eq!(stderr_summary(""), "");
+        assert_eq!(stderr_summary("see /usr/bin/x"), "see <path>");
     }
 }
