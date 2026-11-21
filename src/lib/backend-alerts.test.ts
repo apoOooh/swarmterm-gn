@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { addEntry, markTerminalRead, unreadCount } from './notification-center'
-import { INPUT_ALERT_ID, createInputDropThrottle, MCP_ALERT_ID, VOICE_ALERT_ID, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from './backend-alerts'
+import { CODEX_ISOLATION_ALERT_ID, INPUT_ALERT_ID, codexIsolationEntry, createInputDropThrottle, MCP_ALERT_ID, VOICE_ALERT_ID, inputDroppedEntry, mcpExitedEntry, voicePipeErrorEntry } from './backend-alerts'
 import { isInputQueueFull } from '@/tauri/terminal'
 
 describe('backend alerts', () => {
@@ -32,6 +32,13 @@ describe('backend alerts', () => {
     expect(e.kind).toBe('backend')
     expect(e.terminalId).toBe(INPUT_ALERT_ID)
     expect(e.detail).toContain('Claude')
+  })
+
+  it('files the Codex isolation warning under its own id, naming the pane', () => {
+    const e = codexIsolationEntry('Codex (GN)', 4)
+    expect(e.kind).toBe('backend')
+    expect(e.terminalId).toBe(CODEX_ISOLATION_ALERT_ID)
+    expect(e.detail).toContain('Codex (GN)')
   })
 
   it('recognises only the queue-full error', () => {

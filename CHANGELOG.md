@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [1.30.0] - 2026-11-21
+
+### Added
+
+- Status line (SWA-93): new **Custom** template for Claude Code and Codex.
+  Switch each part on or off and set the order with up/down buttons; Codex
+  offers only the items Swarmterm has tested with its version.
+- Settings → Terminal → Team package: fetch a team's rules, skills and command
+  guards for agent CLIs from an https Git URL or a local folder and install,
+  update, remove or check them with the package's own install script. Every
+  change shows a preview first and runs only after you confirm it. Lockable
+  with the new policy value `DisableTeamPackage`; not available in the Corp
+  edition.
+  The package runs from a copy in Swarmterm's own folder, so editing the
+  source during a run cannot change what runs; a source folder that is
+  itself a link or junction is refused.
+
+### Fixed
+
+- Codex panes (SWA-108): the check whether Codex supports `--no-daemon` no
+  longer fails when the app's PATH is very long, so Codex panes start with
+  their own daemon instead of a shared one that could be gone. A failed check
+  now logs its exit code and a coarse error class (never the error text).
+
+- Dictation into Claude Code choice dialogs (SWA-107): a second dictation
+  into the **Type something** field is now appended instead of being refused,
+  also for long answers that wrap. The field is recognised from the dialog
+  Claude Code reports through its hook, not from the field's text.
+
+- Codex panes (SWA-105) now get `--no-daemon` whenever Codex supports that
+  flag, even if it lacks the hook-trust flag, and also when the start line
+  runs `codex.exe`/`.cmd` or has leading blanks. Full paths and
+  wrappers such as `npx codex` are a documented known limit.
+- Codex panes no longer start without `--no-daemon` when the machine is busy
+  (SWA-102). The Codex version check is retried for each new pane instead of
+  remembering a slow or failed check, and if it still gets no answer the bell
+  says so.
+
 ## [1.29.1] - 2026-11-15
 
 - Security (SWA-86): the local MCP server now refuses every request without

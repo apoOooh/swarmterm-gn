@@ -25,7 +25,8 @@ import {
   isAnyTerminalFocused,
   resetTerminalInputSegment,
   setUserInputHandler,
-  paneChoiceFreeText
+  paneChoiceFreeText,
+  paneChoiceFreeTextFilled
 } from '@/lib/terminal-registry'
 import { SUBMIT_DELAY_MS } from '@/lib/war-room-delivery'
 import { useAppStore, selectFocusedTerminalId, visibleLeaves } from '@/store/app-store'
@@ -109,6 +110,7 @@ export function wireVoice(isSettingsOpen: () => boolean): () => void {
       draftInfo: getTerminalDraftInfo,
       agentState: (id) => useAgentStateStore.getState().byId[id]?.state,
       freeTextActive: paneChoiceFreeText,
+      freeTextFilled: paneChoiceFreeTextFilled,
       write: writeTerminalChecked,
       resetInput: resetTerminalInputSegment,
       markDraft: (id, now) => useTerminalTypingStore.getState().markDraft(id, now),

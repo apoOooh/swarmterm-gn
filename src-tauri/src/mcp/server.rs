@@ -774,6 +774,16 @@ async fn hook_handler(
             terminal_id: terminal_id.clone(),
             signal: body.signal,
             at_ms: crate::warroom::now_ms(),
+            // SWA-107: re-validated like media and cwd; a bad shape becomes
+            // the empty "no dialog" marker (fail closed: it ends any recorded
+            // shape) and the blocked signal still lands.
+            choice: body.choice.clone().map(|c| {
+                if crate::hook::valid_choice(&c) {
+                    c
+                } else {
+                    Vec::new()
+                }
+            }),
         },
     );
     // SessionEnd must drop the context chip NOW, not at the next launch's

@@ -1,6 +1,6 @@
 //! Own only the two Codex status-line fields, recording each original value.
 
-use crate::statusline::settings::{self, Preset};
+use crate::statusline::settings::{self, Preset, Slot};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -35,24 +35,38 @@ const DETAILED: &[&str] = &[
 ];
 
 /// Only 0.167 has been tested. A newer version is not evidence of support.
+/// Custom (SWA-93) takes the switched-on entries of `custom` in order, but
+/// only ids of the tested whitelist (`DETAILED`); anything else is dropped.
 pub fn items(
     version: Option<&str>,
     preset: Preset,
+    custom: &[Slot<String>],
     enabled: bool,
-) -> (&'static [&'static str], bool) {
+) -> (Vec<&'static str>, bool) {
     let tested = version.is_some_and(|v| {
         let parts: Vec<_> = v.split('.').collect();
         parts.len() == 3 && parts[0] == "0" && parts[1] == "167" && parts[2].parse::<u32>().is_ok()
     });
     let ids = if !enabled {
-        &[][..]
+        Vec::new()
     } else if !tested {
-        COMPACT
+        COMPACT.to_vec()
     } else {
         match preset {
-            Preset::Compact => COMPACT,
-            Preset::Extended => EXTENDED,
-            Preset::Detailed => DETAILED,
+            Preset::Compact => COMPACT.to_vec(),
+            Preset::Extended => EXTENDED.to_vec(),
+            Preset::Detailed => DETAILED.to_vec(),
+            Preset::Custom => {
+                let mut out: Vec<&'static str> = Vec::new();
+                for slot in custom.iter().filter(|s| s.on) {
+                    if let Some(id) = DETAILED.iter().find(|d| **d == slot.id) {
+                        if !out.contains(id) {
+                            out.push(id);
+                        }
+                    }
+                }
+                out
+            }
         }
     };
     (ids, tested)
@@ -219,6 +233,23 @@ pub struct Status {
     pub custom_fields: Vec<String>,
     pub version: Option<String>,
     pub notice: Option<String>,
+    /// The item ids this call wrote to `[tui] status_line` (apply only).
+    /// The UI shows these rather than its own preview, so an untested Codex
+    /// version (Compact fallback) or a Custom list with nothing on (empty =
+    /// hidden line) is never a silent difference.
+    pub written: Option<Vec<String>>,
+}
+
+/// Notice for what `items` actually picked when it differs from the choice.
+fn written_notice(preset: Preset, enabled: bool, tested: bool, ids: &[&str]) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    if !tested && preset != Preset::Compact {
+        return Some("Untested Codex version; Compact items written instead".into());
+    }
+    (preset == Preset::Custom && ids.is_empty())
+        .then(|| "No item switched on; Codex hides its status line".into())
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>, String> {
@@ -315,13 +346,14 @@ fn update_home(
     let path = home.join("config.toml");
     let source = read_optional(&path)?.unwrap_or_default();
     let owner = store.homes.get(&key);
-    let (_, known) = items(version.as_deref(), Preset::Compact, true);
+    let (_, known) = items(version.as_deref(), Preset::Compact, &[], true);
     let mut status = Status {
         codex_home: key.clone(),
         state: "unmanaged",
         custom_fields: Vec::new(),
         version,
         notice: (!known).then(|| "Untested Codex version; using Compact items".into()),
+        written: None,
     };
     if deferred(debug, owner, &source, home, exe) {
         status.state = "deferred";
@@ -448,7 +480,7 @@ pub fn enroll_default(app: &AppHandle) -> Result<(), String> {
 /// profiles removed from the account list since they were first managed).
 pub fn update(
     app: &AppHandle,
-    desired: Option<(Preset, bool, bool)>,
+    desired: Option<(Preset, &[Slot<String>], bool, bool)>,
     write: bool,
 ) -> Result<Vec<Status>, String> {
     let accounts = crate::accounts::list(app)?;
@@ -480,19 +512,30 @@ pub fn update(
             if !seen.insert(key) {
                 return Ok(None);
             }
-            let desired = desired.map(|(preset, colors, enabled)| {
-                (items(version.as_deref(), preset, enabled).0, colors)
+            let picked = desired.map(|(preset, custom, _, enabled)| {
+                let (ids, tested) = items(version.as_deref(), preset, custom, enabled);
+                let notice = written_notice(preset, enabled, tested, &ids);
+                (ids, notice)
             });
-            update_home(
+            let ids = picked.as_ref().map(|(ids, _)| ids.clone());
+            let mut status = update_home(
                 &store_path,
                 &home,
-                desired,
+                ids.as_deref().zip(desired.map(|d| d.2)),
                 write,
                 version.clone(),
                 cfg!(debug_assertions),
                 &exe,
-            )
-            .map(Some)
+            )?;
+            if write && status.state != "deferred" {
+                if let Some((ids, notice)) = picked {
+                    status.written = Some(ids.iter().map(|s| (*s).to_owned()).collect());
+                    if notice.is_some() {
+                        status.notice = notice;
+                    }
+                }
+            }
+            Ok(Some(status))
         })();
         match result {
             Ok(Some(s)) => statuses.push(s),
@@ -524,7 +567,13 @@ pub fn enroll(home: &Path) -> Result<(), String> {
         &data_file()?,
         home,
         Some((
-            items(version.as_deref(), preset, settings.codex_enabled).0,
+            &items(
+                version.as_deref(),
+                preset,
+                &settings.codex_items,
+                settings.codex_enabled,
+            )
+            .0[..],
             settings.codex_use_colors,
         )),
         true,
@@ -540,6 +589,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn custom_items_keep_order_and_only_whitelisted_ids() {
+        let slot = |id: &str, on| Slot {
+            id: id.to_string(),
+            on,
+        };
+        let list = [
+            slot("weekly-limit", true),
+            slot("rm -rf", true),
+            slot("git-branch", false),
+            slot("model-with-reasoning", true),
+            slot("weekly-limit", true),
+        ];
+        assert_eq!(
+            items(Some("0.167.0"), Preset::Custom, &list, true).0,
+            vec!["weekly-limit", "model-with-reasoning"]
+        );
+        assert_eq!(
+            items(Some("0.168.0"), Preset::Custom, &list, true).0,
+            COMPACT.to_vec()
+        );
+        assert!(items(Some("0.167.0"), Preset::Custom, &list, false)
+            .0
+            .is_empty());
+    }
+
+    #[test]
+    fn written_notice_names_every_silent_difference() {
+        // Untested version: anything but Compact falls back, and says so.
+        assert!(written_notice(Preset::Custom, true, false, COMPACT)
+            .is_some_and(|n| n.contains("Compact")));
+        assert!(written_notice(Preset::Compact, true, false, COMPACT).is_none());
+        // Custom with nothing on: the line disappears, and says so.
+        assert!(
+            written_notice(Preset::Custom, true, true, &[]).is_some_and(|n| n.contains("hides"))
+        );
+        assert!(written_notice(Preset::Custom, true, true, &["git-branch"]).is_none());
+        // Off is a deliberate choice, no notice.
+        assert!(written_notice(Preset::Custom, false, true, &[]).is_none());
+    }
+
+    #[test]
     fn version_whitelist_and_off_are_explicit() {
         for (version, preset, enabled, count, known) in [
             (Some("0.167.0"), Preset::Compact, true, 2, true),
@@ -549,7 +639,7 @@ mod tests {
             (None, Preset::Extended, true, 2, false),
             (None, Preset::Compact, false, 0, false),
         ] {
-            let (ids, tested) = items(version, preset, enabled);
+            let (ids, tested) = items(version, preset, &[], enabled);
             assert_eq!((ids.len(), tested), (count, known));
         }
     }

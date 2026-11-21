@@ -36,6 +36,12 @@ ignore = [
     # No pin-utils release fixes it; goes away with the portable-pty 0.9
     # upgrade (newer nix) together with the serial entry above.
     { id = "RUSTSEC-2026-0441", reason = "pin-utils: unmaintained, via nix 0.25 <- portable-pty 0.8 (unix-only, not built on Windows); revisit with portable-pty 0.9 upgrade" },
+    # Unmaintained (announced 2026-11), no vulnerability. chrono 0.4 is not a
+    # direct dependency: it comes only through rmcp 3.9 (and its schemars
+    # feature) for timestamp types in the MCP model. We parse no dates with it
+    # ourselves. Goes away when rmcp moves to jiff/time; revisit on the next
+    # rmcp upgrade.
+    { id = "RUSTSEC-2026-0543", reason = "chrono: unmaintained, via rmcp 3.9 (+ schemars); not used directly; revisit on the next rmcp upgrade" },
 ]
 
 [licenses]

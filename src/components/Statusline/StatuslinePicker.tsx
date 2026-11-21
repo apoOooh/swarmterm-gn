@@ -4,16 +4,20 @@ import { parseAnsi } from '@/lib/ansi-preview'
 import {
   CHOICES,
   SCHEMES,
+  SEGMENTS,
   choiceOf,
   vibranceApplies,
   type Choice,
   type StatuslineSettings
 } from '@/lib/statusline-presets'
+import { SegmentList } from './SegmentList'
 import { visualTheme } from '@/lib/theme-adapter'
 import { previewStatusline } from '@/tauri/statusline-presets'
 import { useAppearanceStore } from '@/store/appearance-store'
 import { useStatuslinePresetsStore } from '@/store/statusline-presets-store'
 import { useStatuslineStore } from '@/store/statusline-store'
+
+const SEGMENT_NAMES = Object.fromEntries(SEGMENTS.map((s) => [s.id, s]))
 
 /** Rows of the real renderer, drawn on the terminal background. */
 export function StatuslinePreview({
@@ -63,7 +67,7 @@ export function StatuslinePreview({
  * animation.
  */
 export function StatuslinePicker({ brief = false }: { brief?: boolean }): ReactElement {
-  const { settings, loaded, load, update, choose } = useStatuslinePresetsStore()
+  const { settings, loaded, saving, load, update, choose } = useStatuslinePresetsStore()
   const enabled = useStatuslineStore((s) => s.enabled)
   const style = useAppearanceStore((s) => s.style)
   const [columns, setColumns] = useState(brief ? 100 : 120)
@@ -102,9 +106,19 @@ export function StatuslinePicker({ brief = false }: { brief?: boolean }): ReactE
 
   return (
     <div className="space-y-4">
-      <div role="radiogroup" aria-label="Status line template" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div role="radiogroup" aria-label="Status line template" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {CHOICES.map((c) => card(c.id, c.label, c.text))}
       </div>
+
+      {choice === 'custom' && (
+        <SegmentList
+          label="Status line parts"
+          slots={settings.claudeSegments}
+          names={SEGMENT_NAMES}
+          disabled={saving}
+          onChange={(claudeSegments) => void update({ claudeSegments })}
+        />
+      )}
 
       {choice !== 'off' && <StatuslinePreview settings={settings} columns={columns} />}
 

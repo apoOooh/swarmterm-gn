@@ -390,13 +390,18 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_grandchild_holding_the_pipe_does_not_stall_the_probe() {
+        // Bounded against the grandchild's hang (~29 s), not the production
+        // PROBE_TIMEOUT: in a full parallel run under load, spawning cmd.exe
+        // alone took 5 s (SWA-100/SWA-103), so a 3 s deadline lost the
+        // answer. Half the hang still proves the pipe did not stall the call.
+        let hang_bound = Duration::from_secs(15);
         let started = Instant::now();
         let out = run_bounded(
             cmd("echo 2.1.200 (Claude Code)& start /b ping -n 30 127.0.0.1 >nul"),
-            PROBE_TIMEOUT,
+            hang_bound,
         );
         assert_eq!(out.as_deref().and_then(parse_version), Some((2, 1, 200)));
-        assert!(started.elapsed() < PROBE_TIMEOUT, "{:?}", started.elapsed());
+        assert!(started.elapsed() < hang_bound, "{:?}", started.elapsed());
 
         // Nothing useful printed: bounded by the deadline, not by the
         // grandchild's 30 s.
@@ -406,11 +411,7 @@ mod tests {
             Duration::from_millis(800),
         );
         assert_eq!(out, None);
-        assert!(
-            started.elapsed() < Duration::from_secs(3),
-            "{:?}",
-            started.elapsed()
-        );
+        assert!(started.elapsed() < hang_bound, "{:?}", started.elapsed());
     }
 
     #[cfg(windows)]
@@ -419,8 +420,11 @@ mod tests {
         let started = Instant::now();
         let out = run_bounded(cmd("ping -n 30 127.0.0.1 >nul"), Duration::from_millis(500));
         assert_eq!(out, None);
+        // Bounded against the hang (~29 s), not a tight wall clock: in a full
+        // parallel test run, spawning cmd.exe plus the job teardown alone took
+        // 5 s (SWA-100). Half the hang still proves the CLI was cut off.
         assert!(
-            started.elapsed() < Duration::from_secs(3),
+            started.elapsed() < Duration::from_secs(15),
             "{:?}",
             started.elapsed()
         );

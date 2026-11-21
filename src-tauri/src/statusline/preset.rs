@@ -11,7 +11,7 @@
 use super::breakdown::{cells, Bar};
 use super::layout::{pack, SEP_TEXT};
 use super::render::{ctx_color, ctx_info, format_tokens, CtxColor, McpState, StatusInput};
-use super::settings::{Preset, StatuslineSettings};
+use super::settings::{Preset, Segment, StatuslineSettings};
 use super::style::{palette, Palette, RESET};
 
 pub struct Frame<'a> {
@@ -116,18 +116,36 @@ fn window_seg(
 /// Model, effort (not in Compact), context as text (Compact) or bar, and the
 /// session cost (Detailed).
 fn model_seg(c: &Ctx, input: &StatusInput, preset: Preset, f: Form) -> String {
+    model_parts(
+        c,
+        input,
+        preset != Preset::Compact,
+        preset == Preset::Compact,
+        preset == Preset::Detailed,
+        f,
+    )
+}
+
+fn model_parts(
+    c: &Ctx,
+    input: &StatusInput,
+    effort: bool,
+    ctx_text: bool,
+    cost: bool,
+    f: Form,
+) -> String {
     let mut parts = Vec::new();
     if let Some(name) = input.model.as_ref().and_then(|m| m.display_name.as_deref()) {
         parts.push(c.paint(&c.p.label, name));
     }
-    if preset != Preset::Compact {
+    if effort {
         if let Some(e) = input.effort.as_ref().and_then(|e| e.level.as_deref()) {
             parts.push(c.paint(&c.p.label, e));
         }
     }
     match input.context_window.as_ref().and_then(ctx_info) {
         None => parts.push(c.paint(&c.p.dim, "ctx —")),
-        Some(x) if preset == Preset::Compact => parts.push(c.paint(
+        Some(x) if ctx_text => parts.push(c.paint(
             c.band(x.pct),
             &format!(
                 "ctx {}/{} {}%",
@@ -145,7 +163,7 @@ fn model_seg(c: &Ctx, input: &StatusInput, preset: Preset, f: Form) -> String {
             ));
         }
     }
-    if preset == Preset::Detailed {
+    if cost {
         if let Some(cost) = input.cost.as_ref().and_then(|c| c.total_cost_usd) {
             parts.push(c.paint(&c.p.label, &format!("(${cost:.2})")));
         }
@@ -194,7 +212,8 @@ fn branch_seg(c: &Ctx, branch: Option<&str>) -> Option<String> {
     ))
 }
 
-fn segments(c: &Ctx, fr: &Frame, preset: Preset, f: Form) -> Vec<String> {
+fn segments(c: &Ctx, fr: &Frame, s: &StatuslineSettings, f: Form) -> Vec<String> {
+    let preset = s.claude;
     let rl = fr.input.rate_limits.as_ref();
     let five = || window_seg(c, "5h", rl.and_then(|r| r.five_hour.as_ref()), fr.now, f);
     let seven = || window_seg(c, "7d", rl.and_then(|r| r.seven_day.as_ref()), fr.now, f);
@@ -221,6 +240,33 @@ fn segments(c: &Ctx, fr: &Frame, preset: Preset, f: Form) -> Vec<String> {
             if wide { branch_seg(c, fr.branch) } else { None },
             mcp_seg(c, fr.mcp),
         ],
+        // Effort and cost ride on the model segment (they mean nothing
+        // alone); token bars are rows of their own (`render`). The width rule
+        // is the templates': below 50 cells branch, cache and agents go.
+        Preset::Custom => {
+            let on = |id| s.claude_segments.iter().any(|x| x.id == id && x.on);
+            s.claude_segments
+                .iter()
+                .filter(|x| x.on)
+                .map(|x| match x.id {
+                    Segment::Mcp => mcp_seg(c, fr.mcp),
+                    Segment::Model => Some(model_parts(
+                        c,
+                        fr.input,
+                        on(Segment::Effort),
+                        false,
+                        on(Segment::Cost),
+                        f,
+                    )),
+                    Segment::FiveHour => five(),
+                    Segment::SevenDay => seven(),
+                    Segment::Branch if wide => branch_seg(c, fr.branch),
+                    Segment::Cache if wide => cache_seg(c, fr.input, fr.now, f),
+                    Segment::Agents if wide => agents_seg(c, fr.agents),
+                    _ => None,
+                })
+                .collect()
+        }
     };
     v.into_iter().flatten().collect()
 }
@@ -231,7 +277,7 @@ fn head(fr: &Frame, s: &StatuslineSettings, c: &Ctx, sep: &str) -> Vec<String> {
         &segments(
             c,
             fr,
-            s.claude,
+            s,
             Form {
                 bar: 8,
                 short: false,
@@ -247,7 +293,7 @@ fn head(fr: &Frame, s: &StatuslineSettings, c: &Ctx, sep: &str) -> Vec<String> {
         &segments(
             c,
             fr,
-            s.claude,
+            s,
             Form {
                 bar: 4,
                 short: true,
@@ -338,6 +384,19 @@ fn bar_rows(c: &Ctx, bars: &[Bar], sep: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// Whether the transcript must be read: token bars or subagents are shown.
+pub fn wants_transcript(s: &StatuslineSettings) -> bool {
+    wants_bars(s) || custom_on(s, Segment::Agents)
+}
+
+fn wants_bars(s: &StatuslineSettings) -> bool {
+    s.claude == Preset::Detailed || custom_on(s, Segment::TokenBars)
+}
+
+fn custom_on(s: &StatuslineSettings, id: Segment) -> bool {
+    s.claude == Preset::Custom && s.claude_segments.iter().any(|x| x.id == id && x.on)
+}
+
 /// The status rows for this frame.
 pub fn render(fr: &Frame, s: &StatuslineSettings) -> Vec<String> {
     let p = palette(
@@ -356,8 +415,12 @@ pub fn render(fr: &Frame, s: &StatuslineSettings) -> Vec<String> {
         SEP_TEXT.to_string()
     };
     let mut rows = head(fr, s, &c, &sep);
-    if s.claude == Preset::Detailed && !fr.bars.is_empty() {
-        rows.push(BLANK.to_string());
+    if wants_bars(s) && !fr.bars.is_empty() {
+        // The blank row only separates bars from a line above them; a Custom
+        // line with only token bars must not start with an empty row.
+        if !rows.is_empty() {
+            rows.push(BLANK.to_string());
+        }
         rows.extend(bar_rows(&c, fr.bars, &sep, fr.width));
     }
     rows
@@ -557,5 +620,96 @@ mod tests {
         assert_eq!(time_left(NOW + 240, NOW), "4m");
         assert_eq!(time_left(NOW + 7_000, NOW), "1h 56m");
         assert_eq!(time_left(NOW + 300_000, NOW), "3d 11h");
+    }
+
+    fn custom(list: &[(Segment, bool)], width: usize) -> Vec<String> {
+        let i = input();
+        let fr = Frame {
+            input: &i,
+            mcp: McpState::Connected,
+            branch: Some("dev"),
+            now: NOW,
+            width,
+            color: false,
+            agents: None,
+            bars: &[],
+        };
+        let segs: Vec<_> = list
+            .iter()
+            .map(|&(id, on)| crate::statusline::settings::Slot { id, on })
+            .collect();
+        render(
+            &fr,
+            &StatuslineSettings {
+                claude: Preset::Custom,
+                claude_segments: crate::statusline::settings::normalize_segments(&segs),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn custom_follows_order_and_switches() {
+        use Segment::*;
+        let r = custom(
+            &[
+                (Branch, true),
+                (Mcp, true),
+                (Model, true),
+                (FiveHour, false),
+            ],
+            200,
+        );
+        assert_eq!(r.len(), 1);
+        assert!(r[0].starts_with("⎇ dev | mcp ✓ | Opus 5.5 "), "{r:?}");
+        assert!(!r[0].contains("5h") && !r[0].contains("high") && !r[0].contains('$'));
+        let r = custom(&[(Model, true), (Effort, true), (Cost, true)], 200);
+        assert!(r[0].contains("high") && r[0].contains("($12.34)"), "{r:?}");
+    }
+
+    #[test]
+    fn custom_keeps_the_narrow_width_rule() {
+        use Segment::*;
+        let r = custom(&[(Branch, true), (Cache, true), (Mcp, true)], 40);
+        assert_eq!(r, vec!["mcp ✓"]);
+    }
+
+    #[test]
+    fn custom_with_nothing_on_renders_nothing() {
+        assert!(custom(&[], 200).is_empty());
+    }
+
+    /// Only token bars switched on: the bars start the output, no blank row
+    /// above them (it only separates bars from a line).
+    #[test]
+    fn custom_bars_only_has_no_leading_blank_row() {
+        let mut st = super::super::breakdown::State::default();
+        st.usage.insert("m".into(), [1_200, 30_000, 90_000, 4_000]);
+        let bars = super::super::breakdown::bars(&st);
+        let i = input();
+        let fr = Frame {
+            input: &i,
+            mcp: McpState::Absent,
+            branch: None,
+            now: NOW,
+            width: 200,
+            color: false,
+            agents: None,
+            bars: &bars,
+        };
+        let only_bars =
+            crate::statusline::settings::normalize_segments(&[crate::statusline::settings::Slot {
+                id: Segment::TokenBars,
+                on: true,
+            }]);
+        let s = StatuslineSettings {
+            claude: Preset::Custom,
+            claude_segments: only_bars,
+            ..Default::default()
+        };
+        let r = render(&fr, &s);
+        assert!(!r.is_empty(), "bars rendered");
+        assert_ne!(r[0], BLANK, "{r:?}");
+        assert!(!r.iter().any(|x| x == BLANK), "{r:?}");
     }
 }

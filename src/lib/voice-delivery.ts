@@ -30,8 +30,10 @@ export interface DictationOutcome {
 export interface DictationDeps {
   draftInfo: (id: string) => { bracketed: boolean; composing: boolean } | undefined
   agentState: (id: string) => AgentEngineState | undefined
-  /** SWA-96: a choice dialog's empty free-text row is selected (screen read). */
+  /** SWA-96/107: a choice dialog's free-text row is selected (hook shape + screen). */
   freeTextActive: (id: string) => boolean
+  /** SWA-107: the selected free-text row already holds text (screen read). */
+  freeTextFilled?: (id: string) => boolean
   write: (id: string, expectedSpawnId: string, data: string) => Promise<void>
   resetInput: (id: string) => void
   markDraft: (id: string, nowMs: number) => number
@@ -77,10 +79,14 @@ export async function deliverDictation(req: DictationRequest, deps: DictationDep
   // between sees a clean pane and pastes onto it. Order matters: IME baseline
   // first, then dirty. A failed write leaves a dirty flag without text, which
   // only holds room deliveries until the next Enter — harmless.
+  // SWA-107: a further dictation into a filled field continues the answer;
+  // without a space its first word would be glued to the last one.
+  const text =
+    viaFreeText && deps.freeTextFilled?.(req.terminalId) && !/^\s/.test(req.text) ? ` ${req.text}` : req.text
   deps.resetInput(req.terminalId)
   const stamp = deps.markDraft(req.terminalId, deps.now())
   try {
-    await deps.write(req.terminalId, req.expectedSpawnId, prepareDictationBody(req.text, bracketed, viaFreeText))
+    await deps.write(req.terminalId, req.expectedSpawnId, prepareDictationBody(text, bracketed, viaFreeText))
   } catch (e) {
     return { ok: false, reason: reasonOf(e) }
   }

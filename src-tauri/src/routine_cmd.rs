@@ -70,7 +70,7 @@ pub fn validate(command: &str, cwd: &str, timeout_secs: u64) -> Result<(), Strin
     Ok(())
 }
 
-fn keep_tail(buf: &Arc<Mutex<Vec<u8>>>, mut src: impl Read) {
+fn keep_tail(buf: &Arc<Mutex<Vec<u8>>>, mut src: impl Read, keep: usize) {
     let mut chunk = [0u8; 4096];
     while let Ok(n) = src.read(&mut chunk) {
         if n == 0 {
@@ -78,12 +78,26 @@ fn keep_tail(buf: &Arc<Mutex<Vec<u8>>>, mut src: impl Read) {
         }
         if let Ok(mut b) = buf.lock() {
             b.extend_from_slice(&chunk[..n]);
-            if b.len() > KEEP_BYTES {
-                let drop = b.len() - KEEP_BYTES;
-                b.drain(..drop);
-            }
+            trim_front(&mut b, keep);
         }
     }
+}
+
+/// Drop the front so at most `keep` bytes remain, cut on a UTF-8 boundary:
+/// a cut inside a multibyte sequence would leave its continuation bytes at
+/// the front, which the lossy decode turns into a leading U+FFFD.
+fn trim_front(b: &mut Vec<u8>, keep: usize) {
+    if b.len() <= keep {
+        return;
+    }
+    let mut drop = b.len() - keep;
+    // At most 3 continuation bytes follow a lead byte; anything longer is
+    // not UTF-8 anyway and stays as the lossy decode shows it.
+    let limit = (drop + 3).min(b.len());
+    while drop < limit && (0x80..=0xBF).contains(&b[drop]) {
+        drop += 1;
+    }
+    b.drain(..drop);
 }
 
 /// `env` is the complete environment the line runs with (the caller's env
@@ -95,7 +109,6 @@ pub fn run(
     timeout: Duration,
     env: &crate::terminal_env::EnvPlan,
 ) -> Result<CommandOutcome, String> {
-    let started = Instant::now();
     let mut cmd = Command::new("cmd.exe");
     #[cfg(windows)]
     {
@@ -103,7 +116,6 @@ pub fn run(
         // raw_arg: cmd's /s rule strips exactly the outer quotes, so the line
         // reaches cmd verbatim (Rust's argv quoting would mangle inner quotes).
         cmd.raw_arg(format!("/d /s /c \"{}\"", command.trim()));
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     #[cfg(not(windows))]
     {
@@ -112,8 +124,37 @@ pub fn run(
     }
     cmd.env_clear();
     cmd.envs(env.iter());
+    cmd.current_dir(cwd);
+    let c = run_captured(cmd, timeout, KEEP_BYTES)?;
+    Ok(CommandOutcome {
+        exit_code: c.exit_code,
+        timed_out: c.timed_out,
+        output: tail(&c.output),
+        duration_ms: c.duration_ms,
+    })
+}
+
+/// What `run_captured` saw: exit code (`None` = killed or no code), whether
+/// the time limit hit, and the last `keep` bytes of stdout+stderr.
+pub struct Captured {
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub output: String,
+    pub duration_ms: u64,
+}
+
+/// Run a prepared command (env and cwd already set by the caller) without a
+/// console window, inside a kill-on-close Job Object, with a time limit.
+/// Shared by command routines and the team package (SWA-98), so both get the
+/// same teardown of children left behind.
+pub fn run_captured(mut cmd: Command, timeout: Duration, keep: usize) -> Result<Captured, String> {
+    let started = Instant::now();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
     let mut child = cmd
-        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -137,7 +178,7 @@ pub fn run(
     .flatten()
     .map(|src| {
         let buf = buf.clone();
-        std::thread::spawn(move || keep_tail(&buf, src))
+        std::thread::spawn(move || keep_tail(&buf, src, keep))
     })
     .collect();
 
@@ -162,11 +203,11 @@ pub fn run(
     for r in readers {
         let _ = r.join();
     }
-    let text = String::from_utf8_lossy(&buf.lock().map_err(|e| e.to_string())?).into_owned();
-    Ok(CommandOutcome {
+    let output = String::from_utf8_lossy(&buf.lock().map_err(|e| e.to_string())?).into_owned();
+    Ok(Captured {
         exit_code: status.and_then(|s| s.code()),
         timed_out,
-        output: tail(&text),
+        output,
         duration_ms: started.elapsed().as_millis() as u64,
     })
 }
@@ -174,6 +215,22 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trim_front_cuts_on_a_utf8_boundary() {
+        // "aé€😀": 1 + 2 + 3 + 4 bytes; every cut inside a sequence moves
+        // forward to the next lead byte.
+        let src = "aé€😀".as_bytes().to_vec();
+        for keep in 0..=src.len() {
+            let mut b = src.clone();
+            trim_front(&mut b, keep);
+            let s = String::from_utf8(b.clone()).expect("cut inside a sequence");
+            assert!(b.len() <= keep && "aé€😀".ends_with(&s), "keep {keep}");
+        }
+        let mut short = b"abc".to_vec();
+        trim_front(&mut short, 10);
+        assert_eq!(short, b"abc");
+    }
 
     #[test]
     fn tail_keeps_last_lines_and_caps_length() {

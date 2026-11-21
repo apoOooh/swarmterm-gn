@@ -424,6 +424,7 @@ Every Claude Code pane gets a readout under its prompt. Pick how much it shows i
 
 - **Extended** — adds the effort level, a context bar, the git branch and your 5-hour and 7-day limits with the time until they reset.
 - **Detailed** — adds the session cost, the prompt cache, subagents, and bars for input, output and tool tokens. Values marked `≈` are estimates (subagent cost from a fixed price table, token shares from text length).
+- **Custom** — a list of every part (model and context, effort, session cost, 5h and 7d limits, prompt cache, subagents, token bars, git branch, MCP link). Tick the parts you want and use the up and down arrows to set their order; the preview follows at once. Effort and cost always sit next to the model, token bars are rows below the line, and the narrow-width rule below still applies. Codex offers Custom too, limited to the items Swarmterm has tested with your Codex version.
 - **Off** — no status line from Swarmterm.
 
 `mcp ✓` means Claude actually connected to Swarmterm — and therefore has the War Room and worktree tools; `…` never reached Swarmterm (tools missing), `✗` Swarmterm no longer answering. Context turns amber past 70 % and red past 90 %.
@@ -441,7 +442,7 @@ The pane header mirrors the percentage as a small `ctx 63%` chip (same amber / r
 A local dictation app (buzzkey) can type what you say straight into Swarmterm. Start dictating while a pane has the keyboard; the text lands in **that** pane even if you click another one while it transcribes.
 
 - Dictation arrives as a **draft**: it sits in the prompt and is never sent on its own. In a plain shell, line breaks and tabs become spaces, so nothing runs or completes.
-- A pane that waits for a permission answer gets nothing — dictation must never answer a prompt for you. The exception is a Claude Code choice dialog with its empty **Type something** row selected: the text goes into that field as one line (line breaks become spaces) and is never confirmed for you, even with auto-Enter. A row that already holds text is refused. If the pane was closed or restarted, the text is not redirected anywhere else. Either way the notification bell says why, and buzzkey keeps the text on the clipboard.
+- A pane that waits for a permission answer gets nothing — dictation must never answer a prompt for you. The exception is a Claude Code choice dialog with its **Type something** row selected: the text goes into that field as one line (line breaks become spaces) and is never confirmed for you, even with auto-Enter. You can dictate several times in a row; each dictation is appended to what the field already holds. Swarmterm recognises the field from the dialog Claude Code reports, so this works for long answers too; with an older Claude Code only an empty field is accepted. Dictation is refused while an ordinary option is selected (digits there would pick an option) and in multi-select dialogs. If the pane was closed or restarted, the text is not redirected anywhere else. Either way the notification bell says why, and buzzkey keeps the text on the clipboard.
 - With Settings, Welcome, the file editor, a search field or any dialog holding the keyboard, Swarmterm refuses rather than guesses.
 - **Talk to a pane by name or number:** start the dictation with "Pane 2: …" or "Pane Backend: …" (also "An Backend: …") and the text goes to that pane of the workspace in front, whichever pane has the keyboard. Numbers can be spoken as digits or words ("zwei", "two"). Your own pane names are matched first, then the titles. Names you gave are reliable; titles are not, since a program can set its own — a name that another pane also carries as its title is refused. While a pane is maximized, only that pane can be addressed. If a name fits more than one pane, or no pane, nothing is typed — Swarmterm never picks one for you — and buzzkey keeps the text on the clipboard. End the dictation with "… senden" (or "… send") to press Enter after the draft — only with **auto-Enter** allowed in Settings → Voice, in agent panes only and only if you did not type there meanwhile; plain shells always get a draft. Needs a buzzkey version that supports addressing.
 
@@ -637,6 +638,41 @@ On a managed computer your administrator can switch any of these abilities off (
 
 War Room abilities only work for panes you dragged into a room, worktree abilities only in workspaces with isolation enabled — and removing a pane from a room revokes its access instantly.
 
+## Team package
+
+A team package bundles shared rules, skills and command guards for agent CLIs
+(Claude Code, Codex and others) together with an `install.mjs` script in its
+root folder. Swarmterm brings no package of its own: you point it at yours in
+**Settings → Terminal → Team package**.
+
+1. Enter the source: an `https` Git URL or an absolute local folder, then
+   **Save**. SSH URLs, URLs with a user name or token, and network paths are
+   not accepted; private repositories use your system's Git credential helper.
+2. **Check** fetches the package and runs its `check`, which changes nothing.
+3. **Install…**, **Update…** and **Remove…** first show the script's
+   `--dry-run` preview, with the commit of a Git source. The preview already
+   runs the package's script, which is asked to change nothing; the real run
+   starts only when you click **Run**. Use only sources you trust. If the package changed after the preview (a new
+   commit, an edited file), the run is refused and you preview again.
+
+The script never runs in your source folder: before every preview and run,
+Swarmterm copies the package into a folder of its own and runs it there, so a
+file the script writes next to itself lands in that copy, and an edit to the
+source while the script runs cannot reach it. The source folder itself must
+not be a link or junction, contain no links, and must not overlap
+Swarmterm's own data folder. The copy leaves out the `.git` folder in the
+package root, so the script cannot rely on Git metadata or on files outside
+the package (for example `../shared`), and a file it writes next to itself
+is gone at the next preview. Limits: 256 MB and 20,000 files.
+
+Node.js must be installed. Without access to the source you get a message and
+nothing changes. If the package adds Codex hooks, approve them in Codex with
+`/hooks`; Swarmterm never does that for you. Changing or clearing the source
+discards Swarmterm's own copy of a Git source (a local folder is never
+touched); what the package installed stays until you run **Remove…**.
+An administrator can lock this feature (`DisableTeamPackage`); the Corp
+edition does not include it.
+
 ## Swarmterm MCP
 
 The top of **Settings → MCP** has one switch per agent and account for Swarmterm's own server (War Room, browser and worktree tools). On is the default. Off removes only Swarmterm's entry from that profile's configuration and keeps it from being written again; restart running panes afterwards. A server of your own that happens to be called `swarmterm` is never changed. **Details** shows the configuration file and the server address. For Claude Code and Codex the entry starts a small helper, `swarmterm.exe --mcp-stdio`, which forwards to the Swarmterm the pane runs in; in a terminal outside Swarmterm it offers no tools, so the agent shows no failed server there. An entry written by an older version is replaced at the next start.
@@ -716,6 +752,7 @@ On macOS the modifier is `⌘`, which deliberately leaves `Ctrl + B` to the term
 - **Terminal output, previews and unsaved editor buffers are transient.** Saved workspaces restore the pane layout and known agent conversations; they do not restore every running process or open file tab.
 - **Eight visual styles** — VS Code Dark Modern plus all seven Astera themes; terminal fonts remain a separate preference.
 - **War Room membership doesn't survive a pane restart** — re-drag the pane.
+- **Codex panes get `--no-daemon` only when the start line runs Codex directly**: `codex` or `codex.exe`/`.cmd` found on PATH, in a pane created as a Codex pane. A full path (Swarmterm checks only the Codex on PATH for the flag), a wrapper such as `npx codex` or `cmd /c codex`, or a plain terminal where you type `codex` yourself starts without it; add `--no-daemon` to such a line by hand if that Codex supports it.
 - **The preview column has no devtools, zoom, tabs, or per-terminal cookie isolation**, and a failed page shows the platform's own error view.
 - **Terminal search covers the visible scrollback only** — matches beyond xterm's own buffer, and search-and-replace, aren't available.
 - **Windows x64 only** — this fork does not support macOS or Linux releases.

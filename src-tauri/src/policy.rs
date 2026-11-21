@@ -50,6 +50,8 @@ pub struct AdminPolicy {
     /// Local UI-hang dumps (SWA-85): opt-in, lockable because a dump holds
     /// stack memory that may contain terminal text and session tokens.
     pub disable_hang_dumps: bool,
+    /// SWA-98: fetching and running a team package's install script.
+    pub disable_team_package: bool,
     /// `Some` = the environment filter is forced on with at least this mode.
     pub env_policy: Option<FilterMode>,
     /// Extra names that always pass the filter (admin's allow list).
@@ -77,6 +79,7 @@ const FLAGS: &[(&str, FlagField)] = &[
         &mut p.disable_prompt_resubmit_send
     }),
     ("DisableHangDumps", |p| &mut p.disable_hang_dumps),
+    ("DisableTeamPackage", |p| &mut p.disable_team_package),
 ];
 
 /// What `policy_get` returns: the policy plus the active value names, so the
@@ -147,6 +150,9 @@ impl Edition {
                 // A dump is process memory written to disk: Corp keeps
                 // only the stall log line (no content), never the dump.
                 disable_hang_dumps: true,
+                // SWA-98 (user decision 2026-11-15): no install scripts
+                // from a source chosen at runtime, like the companion.
+                disable_team_package: true,
                 env_policy: Some(FilterMode::Default),
                 ..Default::default()
             },
@@ -168,6 +174,7 @@ pub enum Lock {
     RoutineCommands,
     PreviewBrowser,
     HangDumps,
+    TeamPackage,
 }
 
 impl Lock {
@@ -183,6 +190,7 @@ impl Lock {
             Lock::RoutineCommands => "DisableRoutineCommands",
             Lock::PreviewBrowser => "DisablePreviewBrowser",
             Lock::HangDumps => "DisableHangDumps",
+            Lock::TeamPackage => "DisableTeamPackage",
         }
     }
 
@@ -198,6 +206,7 @@ impl Lock {
             Lock::RoutineCommands => "Command routines are",
             Lock::PreviewBrowser => "The web preview is",
             Lock::HangDumps => "Hang dumps are",
+            Lock::TeamPackage => "The team package is",
         }
     }
 }
@@ -355,6 +364,7 @@ impl AdminPolicy {
             Lock::RoutineCommands => self.disable_routine_commands,
             Lock::PreviewBrowser => self.disable_preview_browser,
             Lock::HangDumps => self.disable_hang_dumps,
+            Lock::TeamPackage => self.disable_team_package,
         }
     }
 
@@ -1491,6 +1501,7 @@ mod tests {
             Lock::WarRoomExecute,
             Lock::Companion,
             Lock::ModelDownload,
+            Lock::TeamPackage,
         ] {
             assert!(corp.is_locked(lock), "{lock:?}");
         }
@@ -1556,6 +1567,7 @@ mod tests {
                 "DisableModelDownload",
                 "DisablePromptResubmitSend",
                 "DisableHangDumps",
+                "DisableTeamPackage",
                 "EnvPolicy"
             ]
         );

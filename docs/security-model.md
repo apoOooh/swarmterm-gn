@@ -80,6 +80,15 @@ allow-listed for serving until the user opens it. The cwd lives in memory on
 the pane's entry and only widens where relative printed names are looked up.
 A nested agent session started inside the pane carries the same bearer, so its
 media path and cwd count for that pane too (decision 2026-11-11).
+SWA-107: on a `PermissionRequest` the body may also carry `choice` — for an
+AskUserQuestion dialog only the option count (1–9) and `multiSelect` per
+question, never question or option texts; for any other permission request
+an empty list. It decides whether dictation may go into the dialog's
+free-text row (renderer, `lib/choice-freetext.ts`) and fails closed: an
+unknown or invalid shape ends the recorded dialog, the screen veto for
+permission phrasing always applies, and unknown keys inside a choice entry
+are ignored rather than refused, so a newer hook cannot cost the pane its
+blocked signal.
 Exception: a pane that survived in the terminal host from a build before
 per-pane secrets keeps its id as bearer until it is respawned (logged as
 `no session secret in meta`).
@@ -309,6 +318,31 @@ SHA-256 must match before a staged install with rollback
 (`src-tauri/src/voice/companion/`). Speech models are checked against fixed
 SHA-256 hashes (`src-tauri/src/voice/speech/model.rs`).
 
+### Team package
+
+The team package runs a script from a source the user enters (an `https` Git
+URL or an absolute local folder), so its trust is the user's choice, like a
+command routine. Controls (`src-tauri/src/team_package/`): sources that git
+could read as an option or transport (`-…`, `ext::`, `file://`, SSH), URLs with
+credentials and network paths are refused; git runs with every transport but
+https disabled, no repository hooks and no prompts, into a folder owned by the
+app (a local source folder is never deleted). Only `node install.mjs
+<install|update|uninstall|check>` runs, through the environment filter, in a
+kill-on-close job with a 120 s limit. Every writing run shows its `--dry-run`
+first. That preview already executes the newest fetched script, and honouring
+`--dry-run` is the package's job, so the source is trusted like any program
+the user runs; the confirmed run refuses unless a SHA-256 over the whole package tree
+(links refused, also as the root; paths hashed losslessly; the root `.git`
+is neither hashed nor copied, so the script cannot load unhashed files from
+it) still matches the
+preview, so a commit pushed or a file edited in between is not executed.
+Preview and run both execute a copy in an app-owned stage folder, written from
+the same bytes that were hashed: an edit to the source between the check and
+node's start, or while node loads modules, cannot change what runs. Nothing runs on its own (no start-up run, no update
+check), the commands answer only the main window, and no MCP or War Room path
+reaches them. Codex hooks the package adds still need the user's approval in
+Codex (`/hooks`). Lockable with `DisableTeamPackage`; locked in Corp.
+
 ### Supply chain
 
 CI runs `cargo deny` (RustSec advisories, licence allow list, crate sources)
@@ -324,7 +358,7 @@ wins per value. The policy is read once at start and cannot be changed while
 the app runs. Each lock is enforced in the backend at the point of action
 (`src-tauri/src/policy.rs`): bypass launch lines, War Room execute,
 `worktree.spawn`, the MCP server and its enrollment, companion install and
-updates, speech-model downloads, command routines, the web preview, hang dumps, and a
+updates, speech-model downloads, command routines, the web preview, hang dumps, the team package, and a
 forced environment filter with an admin allow list. The renderer only greys out
 locked controls. Details: [admin-policy.md](admin-policy.md).
 
@@ -333,7 +367,7 @@ locked controls. Details: [admin-policy.md](admin-policy.md).
 The Swarmterm GN Corp build (Cargo feature `corp`, own identifier
 `com.apooooh.swarmterm.gn.corp`) compiles the locks `DisableBypassModes`,
 `DisableWarRoomExecute`, `DisableCompanion`, `DisableModelDownload`,
-`DisableHangDumps` and `EnvPolicy=default` into the binary (`policy::Edition::locks`). They are
+`DisableHangDumps`, `DisableTeamPackage` and `EnvPolicy=default` into the binary (`policy::Edition::locks`). They are
 combined with the registry policy, which can add locks but not lift these. The
 buzzkey download/installer and the speech-model download are compiled out, not
 only locked; the release workflow fails if their endpoints appear in the Corp

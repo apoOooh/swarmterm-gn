@@ -13,7 +13,7 @@ describe('edition details', () => {
   it('names the product and hides compiled-out features in corp', () => {
     expect(productName('standard')).toBe('Swarmterm GN')
     expect(productName('corp')).toBe('Swarmterm GN Corp')
-    expect(editionFeatures('standard')).toEqual({ companion: true, modelDownload: true })
-    expect(editionFeatures('corp')).toEqual({ companion: false, modelDownload: false })
+    expect(editionFeatures('standard')).toEqual({ companion: true, modelDownload: true, teamPackage: true })
+    expect(editionFeatures('corp')).toEqual({ companion: false, modelDownload: false, teamPackage: false })
   })
 })

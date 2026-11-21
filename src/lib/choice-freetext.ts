@@ -14,7 +14,12 @@
  *
  * The caller hands in the visible screen rows (bottom of the buffer).
  */
-const SELECTED_OPTION = /^\s*[❯>]\s*\d+\.\s*(.*)$/
+// The highlight marker sits at the left edge (at most two blanks); the
+// continuation rows of a wrapped answer are indented further (five blanks),
+// so one that happens to read "> 2." does not count (SWA-107).
+const SELECTED_OPTION = /^ {0,2}[❯>]\s*(\d+)\.\s*(.*)$/
+/** Indent of the continuation rows of a wrapped free-text answer. */
+const CONTINUATION = /^ {5,}\S/
 const FREE_TEXT_LABEL = /^type something\b/i
 
 /** Permission and approval phrasing from the Claude manifest's blockers;
@@ -28,12 +33,66 @@ const PERMISSION_MARKERS = [
   'ctrl+e to explain'
 ]
 
-export function choiceFreeTextActive(rows: readonly string[]): boolean {
+/**
+ * SWA-107: shape of the open AskUserQuestion dialog as Claude Code's
+ * PermissionRequest hook reported it (`hook/mod.rs::ChoiceQuestion`).
+ */
+export interface ChoiceQuestion {
+  options: number
+  multiSelect: boolean
+}
+
+/**
+ * With `choice` (hook-confirmed dialog) the free-text row is recognised by
+ * its NUMBER — `options + 1` — never by its content, so a filled field, a
+ * long answer wrapped over several rows or a second dictation all still
+ * count (SWA-107). The number must be unambiguous: if any question lists it
+ * as an ordinary option (several questions with different option counts),
+ * or any question is multi-select (other layout, not verified), the answer
+ * is false. Without `choice` (older Claude Code, hook missing) the SWA-96
+ * rule stands: only the empty "Type something" row.
+ */
+export function choiceFreeTextActive(rows: readonly string[], choice?: readonly ChoiceQuestion[]): boolean {
   const lower = rows.map((r) => r.toLowerCase())
   if (!lower.some((r) => r.includes('enter to select'))) return false
-  if (lower.some((r) => PERMISSION_MARKERS.some((m) => r.includes(m)))) return false
-  const selected = rows.map((r) => SELECTED_OPTION.exec(r)).filter((m) => m !== null)
+  const hits = rows.map((r, i) => ({ i, m: SELECTED_OPTION.exec(r) })).filter((h) => h.m !== null)
   // Exactly one highlighted option, or the layout is not the one we know.
+  if (hits.length !== 1) return false
+  const { i: at, m } = hits[0] as { i: number; m: RegExpExecArray }
+  const hookShape = !!choice && choice.length > 0
+  // With a hook-confirmed dialog the selected row and its indented
+  // continuation rows hold the user's own answer: phrasing there must not
+  // veto (SWA-107). Everything else — the question above, a footer below
+  // ("Tab to amend") — is always checked, also without a separator.
+  let end = at
+  if (hookShape) {
+    end = at + 1
+    while (end < rows.length && CONTINUATION.test(rows[end])) end++
+  }
+  const checked = lower.filter((_, i) => i < at || i >= end)
+  if (checked.some((r) => PERMISSION_MARKERS.some((mk) => r.includes(mk)))) return false
+  if (choice && hookShape) {
+    if (choice.some((q) => q.multiSelect)) return false
+    // Which question's tab is showing is not known; only when every
+    // question has the same option count is "options + 1" the free-text row
+    // on every tab (else it can be another tab's "Chat about this").
+    const options = choice[0].options
+    if (choice.some((q) => q.options !== options)) return false
+    return Number(m[1]) === options + 1
+  }
+  return FREE_TEXT_LABEL.test(m[2].trim())
+}
+
+/**
+ * SWA-107: whether the selected row already holds text, so a further
+ * dictation gets a separating space instead of being glued to the last word.
+ * Only decides that space — never whether text may be written (that is
+ * `choiceFreeTextActive`). Reads the selected row's first screen line; its
+ * own trailing space is not visible (xterm trims), so at worst two spaces.
+ */
+export function choiceFreeTextFilled(rows: readonly string[]): boolean {
+  const selected = rows.map((r) => SELECTED_OPTION.exec(r)).filter((m) => m !== null)
   if (selected.length !== 1) return false
-  return FREE_TEXT_LABEL.test(selected[0][1].trim())
+  const content = selected[0][2].trim()
+  return content.length > 0 && !FREE_TEXT_LABEL.test(content)
 }

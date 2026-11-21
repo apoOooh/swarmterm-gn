@@ -3,6 +3,15 @@
 Decisions made by the maintainer that every contributor follows. Newest
 first. Architecture decisions with longer reasoning live in [adr/](adr/).
 
+## 2026-11-15
+
+- **Team package (SWA-98).** Swarmterm ships no team rules and no source; the
+  user enters an `https` Git URL or a local folder and Swarmterm runs only the
+  package's `install.mjs` (install / update / uninstall / check), each writing
+  run after a `--dry-run` preview and confirmation. No SSH sources in the first
+  version. The Corp edition locks the feature (`DisableTeamPackage` built in),
+  like the companion download.
+
 ## 2026-11-11
 
 - **Status line templates (SWA-92).** The Claude status line offers

@@ -115,6 +115,46 @@ pub fn current() -> String {
     refreshed(&std::env::var("PATH").unwrap_or_default())
 }
 
+/// Only the registry PATH (machine, user, `.local\bin`), as a fresh login
+/// would see it — without anything the app inherited. Short by design: a
+/// `cmd.exe` child (npm shims) cuts environment variables at 8191 chars.
+pub fn login() -> String {
+    append_missing("", &live_additions())
+}
+
+/// Whether a PATH entry is a Cargo build-script output folder
+/// (`target\<profile>\build\<crate>-<hash>\...`). `cargo run`/`tauri dev`
+/// prepend one per native dependency, so a dev app's PATH grows past what
+/// `cmd.exe` handles (SWA-108: 114 of 154 entries, 16k chars).
+pub fn is_build_dir(entry: &str) -> bool {
+    let key = folder_key(entry);
+    let parts: Vec<&str> = key.split('\\').collect();
+    parts
+        .windows(3)
+        .any(|w| w[0] == "target" && !w[1].is_empty() && w[2] == "build")
+}
+
+/// `path` without Cargo build-script folders; every other entry keeps its
+/// place and spelling.
+pub fn without_build_dirs(path: &str) -> String {
+    path.split(';')
+        .filter(|entry| !is_build_dir(entry))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// The PATH a pane or routine inherits. Debug builds drop the build-script
+/// folders `tauri dev` adds (SWA-108): agent shims run through `cmd.exe`
+/// and fail to find `node` behind a PATH longer than 8191 chars. Release
+/// builds never see such entries and pass the PATH through untouched.
+pub fn for_children(path: &str) -> String {
+    if cfg!(debug_assertions) {
+        without_build_dirs(path)
+    } else {
+        path.to_string()
+    }
+}
+
 #[cfg(windows)]
 fn live_additions() -> Vec<String> {
     use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
@@ -252,5 +292,27 @@ mod tests {
         assert_eq!(with, vec!["M", "U", r"C:\Users\dev\.local\bin"]);
         let without = additions(None, Some("U".into()), Some(dir), &|_| false);
         assert_eq!(without, vec!["U"]);
+    }
+
+    #[test]
+    fn build_script_folders_are_dropped_and_the_rest_kept() {
+        let path = r"C:\venv\Scripts;D:\x\src-tauri\target\debug\build\ring-1a2b\out;C:\Windows;d:/y/TARGET/release/build/z;C:\target\build;C:\node";
+        assert_eq!(
+            without_build_dirs(path),
+            r"C:\venv\Scripts;C:\Windows;C:\target\build;C:\node"
+        );
+        assert!(!is_build_dir(r"C:\Program Files\nodejs"));
+        assert!(!is_build_dir(r"D:\x\target\debug"));
+    }
+
+    #[test]
+    fn children_lose_build_folders_only_in_debug_builds() {
+        let path = r"C:\a;D:\r\target\debug\build\c-1\out";
+        let expected = if cfg!(debug_assertions) {
+            r"C:\a"
+        } else {
+            path
+        };
+        assert_eq!(for_children(path), expected);
     }
 }

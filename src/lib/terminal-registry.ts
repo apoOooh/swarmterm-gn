@@ -75,7 +75,8 @@ import {
 } from '@/lib/terminal-input-client'
 import { AgentStateDetector, type DetectorDeps } from '@/lib/agent-state/detector'
 import { promptBoxDraftText, promptBoxHasDraft, type DraftRow } from '@/lib/prompt-draft'
-import { choiceFreeTextActive } from '@/lib/choice-freetext'
+import { choiceFreeTextActive, choiceFreeTextFilled, type ChoiceQuestion } from '@/lib/choice-freetext'
+import { nextChoice } from '@/lib/choice-hook'
 import { manifestForAgent } from '@/lib/agent-state/manifests'
 import { acceptsAgentHooks } from '@/lib/agent-state/hook-signal'
 import { useAgentStateStore } from '@/store/agent-state-store'
@@ -176,6 +177,9 @@ interface Entry {
    *  "same agent, keep the loop" from "different agent, rebuild it" without
    *  re-deriving the manifest from `entry.config` on every check. */
   detectorManifestId?: string
+  /** SWA-107: the open AskUserQuestion dialog's shape from Claude's hook
+   *  (`nextChoice`); memory only, dies with the entry. */
+  choice?: ChoiceQuestion[]
   /**
    * Clears the IME input segment's `committed` baseline and the textarea it
    * tracks. Exists on `Entry` — rather than staying a closure private to
@@ -492,7 +496,16 @@ function refreshDetector(id: string, entry: Entry): void {
     },
     isPaneWatched: () =>
       document.hasFocus() && selectFocusedTerminalId(useAppStore.getState()) === id,
-    publish: (state, opts) => useAgentStateStore.getState().publish(id, state, opts),
+    publish: (state, opts) => {
+      // SWA-107: a dialog shape lives only as long as the pane stays blocked.
+      // Esc (no Stop hook) or any other way out ends it, so a later dialog
+      // is never matched against a stale shape.
+      if (state !== 'blocked') {
+        const e = entries.get(id)
+        if (e) e.choice = undefined
+      }
+      useAgentStateStore.getState().publish(id, state, opts)
+    },
     now: () => Date.now(),
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>)
@@ -1586,14 +1599,25 @@ export function paneHasPromptDraft(id: string): boolean {
  */
 export function paneChoiceFreeText(id: string): boolean {
   const entry = entries.get(id)
-  if (!entry || !entry.opened || entry.config.agentId !== 'claude-code') return false
+  const rows = choiceScreenRows(entry)
+  return !!entry && !!rows && choiceFreeTextActive(rows, entry.choice)
+}
+
+/** SWA-107: the selected free-text row already holds text (`choiceFreeTextFilled`). */
+export function paneChoiceFreeTextFilled(id: string): boolean {
+  const rows = choiceScreenRows(entries.get(id))
+  return !!rows && choiceFreeTextFilled(rows)
+}
+
+function choiceScreenRows(entry: Entry | undefined): string[] | undefined {
+  if (!entry || !entry.opened || entry.config.agentId !== 'claude-code') return undefined
   const buffer = entry.term.buffer.active
   const end = buffer.length
   const rows: string[] = []
   for (let y = Math.max(0, end - entry.term.rows); y < end; y++) {
     rows.push(buffer.getLine(y)?.translateToString(true) ?? '')
   }
-  return choiceFreeTextActive(rows)
+  return rows
 }
 
 /**
@@ -1684,6 +1708,8 @@ export function retryTerminal(id: string): void {
   // And to the detector: it holds evidence (title/progress/pending-idle) from
   // the dead pty, which the new one hasn't produced.
   entry.detector?.reset()
+  // The dialog shape belonged to the dead pty too (SWA-107).
+  entry.choice = undefined
   safeFit(entry)
   entry.session.retry({ ...entry.config, cols: entry.term.cols, rows: entry.term.rows })
 }
@@ -1732,6 +1758,8 @@ export function respawnTerminal(id: string, config: AttachConfig): void {
   // And to the detector: it holds evidence (title/progress/pending-idle) from
   // the dead pty, which the new one hasn't produced.
   entry.detector?.reset()
+  // The dialog shape belonged to the dead pty too (SWA-107).
+  entry.choice = undefined
   safeFit(entry)
   entry.session.respawn({ ...entry.config, cols: entry.term.cols, rows: entry.term.rows })
 }
@@ -1836,9 +1864,10 @@ export function getTerminalAgentId(id: string): string | undefined {
  * pane keeps following its screen alone; plain Terminal panes have no
  * detector and fall through too.
  */
-export function noteAgentHook(id: string, signal: AgentHookSignal): void {
+export function noteAgentHook(id: string, signal: AgentHookSignal, choice?: ChoiceQuestion[]): void {
   const e = entries.get(id)
   if (!e || !acceptsAgentHooks(e.detectorManifestId)) return
+  e.choice = nextChoice(e.choice, signal, choice)
   e.detector?.noteHook(signal)
 }
 

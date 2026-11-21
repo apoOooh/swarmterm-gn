@@ -30,10 +30,10 @@ fn timeout_for(event: &str) -> u64 {
 /// Probe cache. A definite answer is kept for the process; a timed-out probe
 /// (cold disk, AV scan) is retried, but no more often than `RETRY_AFTER`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum ProbeState {
+enum ProbeState<T> {
     Unknown,
     Probing,
-    Known(bool),
+    Known(T),
     TimedOut(Instant),
 }
 
@@ -42,6 +42,47 @@ const RETRY_AFTER: Duration = Duration::from_secs(60);
 /// How long a caller waits for a probe another thread is running (the probe
 /// itself gives up after 3 s).
 const PROBE_WAIT: Duration = Duration::from_millis(3_500);
+
+/// `codex --help` deadline for the cached, UI-facing checks.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// A Codex pane spawn (SWA-102) runs on a blocking worker and must not start
+/// without `--no-daemon` just because the machine is busy: it probes with a
+/// longer deadline, waits as long for a running probe, and ignores the
+/// `RETRY_AFTER` throttle (that throttle exists for Settings/agent listing,
+/// not for a pane that would otherwise die at the shared daemon socket).
+const SPAWN_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Note: a spawn that waited out `SPAWN_WAIT` for another caller's probe and
+/// then found it timed out probes once more itself, so the worst case is
+/// about `SPAWN_WAIT + SPAWN_PROBE_TIMEOUT` (only on a machine where
+/// `codex --help` hangs; the pane then starts unisolated and warns).
+const SPAWN_WAIT: Duration = Duration::from_millis(10_500);
+
+/// What `codex --help` advertises (SWA-105). The two flags are separate
+/// features: `--no-daemon` keeps a pane off the shared daemon socket and is
+/// all a spawn needs, while hook install also needs
+/// `--dangerously-bypass-hook-trust`. One shared gate used to start a Codex
+/// that knew only `--no-daemon` without isolation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Caps {
+    no_daemon: bool,
+    hook_trust: bool,
+}
+
+impl Caps {
+    /// Hook install and Settings' "session hooks" need both flags.
+    fn hooks(self) -> bool {
+        self.no_daemon && self.hook_trust
+    }
+
+    /// A pane spawn needs only `--no-daemon`.
+    fn spawn(self) -> bool {
+        self.no_daemon
+    }
+}
+
+static STATE: Mutex<ProbeState<Caps>> = Mutex::new(ProbeState::Unknown);
+static DONE: Condvar = Condvar::new();
 
 /// Whether the installed Codex supports hook isolation. Warmed off-thread at
 /// startup (`setup::boot`), so pane spawns normally hit the cache. The lock is never
@@ -56,33 +97,47 @@ pub fn supported() -> bool {
 /// after `PROBE_WAIT`): Settings must not tell the user to update a Codex
 /// that merely started slowly.
 pub fn probe_supported() -> Option<bool> {
-    static STATE: Mutex<ProbeState> = Mutex::new(ProbeState::Unknown);
-    static DONE: Condvar = Condvar::new();
-    supported_with(&STATE, &DONE, PROBE_WAIT, Instant::now, probe)
+    supported_with(&STATE, &DONE, PROBE_WAIT, true, Instant::now, || {
+        probe(PROBE_TIMEOUT)
+    })
+    .map(Caps::hooks)
 }
 
-fn supported_with(
-    state: &Mutex<ProbeState>,
+/// For a Codex pane spawn only (blocking worker, never the UI thread): `None`
+/// means still undecided after `SPAWN_WAIT` / `SPAWN_PROBE_TIMEOUT`. Only
+/// `--no-daemon` counts here (SWA-105), not the hook-trust flag.
+pub fn supported_for_spawn() -> Option<bool> {
+    supported_with(&STATE, &DONE, SPAWN_WAIT, false, Instant::now, || {
+        probe(SPAWN_PROBE_TIMEOUT)
+    })
+    .map(Caps::spawn)
+}
+
+fn supported_with<T: Copy>(
+    state: &Mutex<ProbeState<T>>,
     done: &Condvar,
     wait: Duration,
+    honor_retry_after: bool,
     now: impl Fn() -> Instant,
-    probe: impl FnOnce() -> Option<bool>,
-) -> Option<bool> {
+    probe: impl FnOnce() -> Option<T>,
+) -> Option<T> {
     {
         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-        if *s == ProbeState::Probing {
+        if matches!(*s, ProbeState::Probing) {
             // A probe is running (normally the startup warm-up): wait for its
             // answer, bounded, so a pane spawned during startup still gets
             // hook isolation. The lock is released while waiting.
             s = done
-                .wait_timeout_while(s, wait, |st| *st == ProbeState::Probing)
+                .wait_timeout_while(s, wait, |st| matches!(st, ProbeState::Probing))
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
         }
         match *s {
             ProbeState::Known(known) => return Some(known),
             ProbeState::Probing => return None,
-            ProbeState::TimedOut(at) if now().saturating_duration_since(at) < RETRY_AFTER => {
+            ProbeState::TimedOut(at)
+                if honor_retry_after && now().saturating_duration_since(at) < RETRY_AFTER =>
+            {
                 return None
             }
             ProbeState::Unknown | ProbeState::TimedOut(_) => *s = ProbeState::Probing,
@@ -99,62 +154,210 @@ fn supported_with(
     result
 }
 
-/// `None` = undecided (timed out); retried after `RETRY_AFTER`.
-fn probe() -> Option<bool> {
-    let Some(binary) = crate::agents::find_agent_binary("codex") else {
-        return Some(false);
+/// Why a probe stayed undecided; logged, never shown with paths or output.
+#[derive(Debug, PartialEq)]
+enum Undecided {
+    NoBinary,
+    Io,
+    Spawn,
+    Exit,
+    Timeout,
+}
+
+/// `None` = undecided; retried (Settings after `RETRY_AFTER`, a pane spawn
+/// at once). Only a help text that was read in full and lacks a flag is a
+/// definite "no" — every other failure is transient (SWA-102: a nonzero exit
+/// or a busy temp dir under load used to pin `false` for the whole process,
+/// and every Codex pane then started without `--no-daemon`).
+fn probe(timeout: Duration) -> Option<Caps> {
+    let started = Instant::now();
+    let outcome = probe_help(timeout);
+    let verdict = classify(&outcome);
+    eprintln!(
+        "[codex] isolation probe: {} after {} ms",
+        match &outcome {
+            Err(why) => format!("undecided ({why:?})"),
+            Ok(_) => verdict.map_or_else(
+                || "unsupported".to_string(),
+                |caps| {
+                    format!(
+                        "no-daemon={} hook-trust={}",
+                        caps.no_daemon, caps.hook_trust
+                    )
+                }
+            ),
+        },
+        started.elapsed().as_millis()
+    );
+    verdict
+}
+
+fn classify(outcome: &Result<String, Undecided>) -> Option<Caps> {
+    match outcome {
+        Ok(help) => Some(Caps {
+            no_daemon: help.contains("--no-daemon"),
+            hook_trust: help.contains("--dangerously-bypass-hook-trust"),
+        }),
+        Err(_) => None,
+    }
+}
+
+/// Longest environment variable `cmd.exe` handles; `codex.cmd` (npm shim)
+/// runs in it and silently misses `node` behind a longer PATH (SWA-108).
+const CMD_VAR_LIMIT: usize = 8191;
+
+/// PATH for the probe (SWA-108). Normally the app's inherited PATH in its
+/// own order (a process-local node from nvm or a venv keeps working), minus
+/// Cargo build folders (only a dev app has them), plus the binary's folder
+/// and the registry login PATH — the source `find_agent_binary` searches.
+/// Only when that is still over cmd.exe's limit (a dev app's was ~16k
+/// chars, every probe ended undecided) it shrinks to binary folder + login
+/// PATH, which is what a fresh login would run the shim with.
+fn probe_path(login: &str, inherited: &str, binary: &std::path::Path) -> String {
+    let dir: Vec<String> = binary
+        .parent()
+        .map(|d| d.to_string_lossy().into_owned())
+        .into_iter()
+        .collect();
+    let base = crate::runtime_path::without_build_dirs(inherited);
+    let full = crate::runtime_path::append_missing(
+        &crate::runtime_path::append_missing(&base, &dir),
+        &[login.to_string()],
+    );
+    if full.len() <= CMD_VAR_LIMIT {
+        return full;
+    }
+    let first = dir.first().cloned().unwrap_or_default();
+    crate::runtime_path::append_missing(&first, &[login.to_string()])
+}
+
+/// What a failed probe's stderr says, as a fixed class. Only the class is
+/// logged, never stderr text: it can carry secrets (`KEY=...`), paths or
+/// user names in any shape, and no text filter catches all of them.
+#[derive(Debug, PartialEq)]
+enum StderrClass {
+    Empty,
+    /// cmd.exe could not find a program (`node` behind a cut PATH).
+    NotRecognized,
+    Other,
+}
+
+fn classify_stderr(stderr: &str) -> StderrClass {
+    if stderr.trim().is_empty() {
+        return StderrClass::Empty;
+    }
+    let lower = stderr.to_lowercase();
+    if lower.contains("is not recognized") || lower.contains("ist entweder falsch geschrieben") {
+        StderrClass::NotRecognized
+    } else {
+        StderrClass::Other
+    }
+}
+
+/// The log line for a failed probe: exit code, stderr length, class.
+fn exit_log_line(code: Option<i32>, stderr: &[u8], stderr_len: u64) -> String {
+    let class = match classify_stderr(&String::from_utf8_lossy(stderr)) {
+        StderrClass::Empty => "empty",
+        StderrClass::NotRecognized => "not-recognized",
+        StderrClass::Other => "other",
     };
-    let Ok(mut output) = tempfile::tempfile() else {
-        return Some(false);
-    };
-    let Ok(stdout) = output.try_clone() else {
-        return Some(false);
-    };
-    let mut command = crate::terminal_env::command(binary);
+    format!("[codex] isolation probe: exit {code:?}, stderr {stderr_len} bytes, class {class}")
+}
+
+fn probe_help(timeout: Duration) -> Result<String, Undecided> {
+    let binary = crate::agents::find_agent_binary("codex").ok_or(Undecided::NoBinary)?;
+    let mut output = tempfile::tempfile().map_err(|_| Undecided::Io)?;
+    let stdout = output.try_clone().map_err(|_| Undecided::Io)?;
+    let mut errors = tempfile::tempfile().map_err(|_| Undecided::Io)?;
+    let stderr = errors.try_clone().map_err(|_| Undecided::Io)?;
+    let path = probe_path(
+        &crate::runtime_path::login(),
+        &std::env::var("PATH").unwrap_or_default(),
+        &binary,
+    );
+    let mut command = crate::terminal_env::command(&binary);
     command
         .arg("--help")
+        .env("PATH", path)
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(stderr)
         .stdout(stdout);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    let Ok(mut child) = command.spawn() else {
-        return Some(false);
-    };
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut child = command.spawn().map_err(|_| Undecided::Spawn)?;
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return Some(false),
+            Ok(Some(status)) => {
+                // Logged, so the next undecided says why (SWA-108: it took a
+                // measurement to see cmd.exe failing to find `node`).
+                use std::io::{Seek, SeekFrom};
+                let mut bytes = Vec::new();
+                if errors.seek(SeekFrom::Start(0)).is_ok() {
+                    let _ = (&mut errors).take(4 * 1024).read_to_end(&mut bytes);
+                }
+                let len = errors.metadata().map(|m| m.len()).unwrap_or(0);
+                eprintln!("{}", exit_log_line(status.code(), &bytes, len));
+                return Err(Undecided::Exit);
+            }
+            Err(_) => return Err(Undecided::Exit),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return Err(Undecided::Timeout);
             }
         }
     }
     use std::io::{Seek, SeekFrom};
-    if output.seek(SeekFrom::Start(0)).is_err() {
-        return Some(false);
-    }
+    output.seek(SeekFrom::Start(0)).map_err(|_| Undecided::Io)?;
     let mut help = String::new();
-    if output.take(64 * 1024).read_to_string(&mut help).is_err() {
-        return Some(false);
+    output
+        .take(64 * 1024)
+        .read_to_string(&mut help)
+        .map_err(|_| Undecided::Io)?;
+    Ok(help)
+}
+
+/// Spawn verdict → (add `--no-daemon`, warn the user). Undecided starts
+/// without the flag so a Codex too old for it still runs (user decision
+/// 2026-11-16), but is reported instead of failing silently.
+pub fn spawn_isolation(verdict: Option<bool>) -> (bool, bool) {
+    match verdict {
+        Some(supported) => (supported, false),
+        None => (false, true),
     }
-    Some(help.contains("--no-daemon") && help.contains("--dangerously-bypass-hook-trust"))
+}
+
+/// Byte length up to the end of the leading program token (leading blanks
+/// included) when it is Codex looked up on PATH: `codex` or
+/// `codex.exe`/`.cmd`, any case (SWA-105). Only PATH names count,
+/// because the capability probe runs the PATH Codex (`find_agent_binary`):
+/// a pane started by an explicit path may be another build that rejects
+/// `--no-daemon`, and a quoted path is not even a command in PowerShell.
+/// Paths, wrappers (`npx codex`) and panes without the `codex` agent id are
+/// left alone (user guide, Known limits).
+fn codex_program_len(command: &str) -> Option<usize> {
+    let lead = command.len() - command.trim_start().len();
+    let rest = &command[lead..];
+    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let name = rest[..end].to_ascii_lowercase();
+    ["", ".exe", ".cmd"]
+        .iter()
+        .any(|ext| name.strip_suffix(ext) == Some("codex"))
+        .then_some(lead + end)
 }
 
 pub fn isolated_command(command: &str, agent: Option<&str>, supported: bool) -> String {
     if supported && agent == Some("codex") {
-        if let Some(tail) = command.strip_prefix("codex") {
-            if (tail.is_empty() || tail.starts_with(' '))
-                && !tail.split_whitespace().any(|arg| arg == "--no-daemon")
-            {
-                return format!("codex --no-daemon{tail}");
+        if let Some(len) = codex_program_len(command) {
+            let (program, tail) = command.split_at(len);
+            if !tail.split_whitespace().any(|arg| arg == "--no-daemon") {
+                return format!("{program} --no-daemon{tail}");
             }
         }
     }
@@ -175,13 +378,15 @@ pub fn with_mcp_url(command: &str, agent: Option<&str>, url: Option<&str>) -> St
                 .all(|c| c.is_ascii_alphanumeric() || ":/.".contains(c))
     };
     match (agent, url) {
-        (Some("codex"), Some(url)) if safe(url) => match command.strip_prefix("codex") {
-            Some(tail) if tail.is_empty() || tail.starts_with(' ') => format!(
-                "codex -c mcp_servers.swarmterm.url={url} \
+        (Some("codex"), Some(url)) if safe(url) => {
+            match codex_program_len(command).map(|len| command.split_at(len)) {
+                Some((program, tail)) => format!(
+                    "{program} -c mcp_servers.swarmterm.url={url} \
                  -c mcp_servers.swarmterm.bearer_token_env_var=SWARMTERM_SESSION{tail}"
-            ),
-            _ => command.into(),
-        },
+                ),
+                _ => command.into(),
+            }
+        }
         _ => command.into(),
     }
 }
@@ -395,7 +600,14 @@ mod tests {
             }
         };
         assert_eq!(
-            supported_with(&state, &Condvar::new(), Duration::ZERO, || t0, probe(None)),
+            supported_with(
+                &state,
+                &Condvar::new(),
+                Duration::ZERO,
+                true,
+                || t0,
+                probe(None)
+            ),
             None
         );
         assert_eq!(*state.lock().unwrap(), ProbeState::TimedOut(t0));
@@ -405,6 +617,7 @@ mod tests {
                 &state,
                 &Condvar::new(),
                 Duration::ZERO,
+                true,
                 || t0 + Duration::from_secs(30),
                 probe(Some(true))
             ),
@@ -417,6 +630,7 @@ mod tests {
                 &state,
                 &Condvar::new(),
                 Duration::ZERO,
+                true,
                 || t0 + RETRY_AFTER,
                 probe(Some(true))
             ),
@@ -428,6 +642,7 @@ mod tests {
                 &state,
                 &Condvar::new(),
                 Duration::ZERO,
+                true,
                 || t0 + RETRY_AFTER * 10,
                 probe(Some(false))
             ),
@@ -449,6 +664,7 @@ mod tests {
             &shared.0,
             &shared.1,
             Duration::from_secs(3),
+            true,
             Instant::now,
             || panic!("must not probe while another probe runs"),
         );
@@ -458,12 +674,13 @@ mod tests {
 
     #[test]
     fn wait_for_a_running_probe_is_bounded() {
-        let state = Mutex::new(ProbeState::Probing);
+        let state = Mutex::new(ProbeState::<bool>::Probing);
         let start = Instant::now();
         let got = supported_with(
             &state,
             &Condvar::new(),
             Duration::from_millis(30),
+            true,
             Instant::now,
             || panic!("must not probe"),
         );
@@ -473,16 +690,143 @@ mod tests {
 
     #[test]
     fn panicking_probe_does_not_leave_state_probing() {
-        let state = Mutex::new(ProbeState::Unknown);
+        let state = Mutex::new(ProbeState::<bool>::Unknown);
         let got = supported_with(
             &state,
             &Condvar::new(),
             Duration::from_millis(30),
+            true,
             Instant::now,
             || panic!("probe blew up"),
         );
         assert_eq!(got, None);
         assert!(matches!(*state.lock().unwrap(), ProbeState::TimedOut(_)));
+    }
+    /// SWA-102: only a fully read help text decides; every failure retries.
+    #[test]
+    fn only_a_read_help_text_is_a_definite_answer() {
+        let caps = |no_daemon, hook_trust| {
+            Some(Caps {
+                no_daemon,
+                hook_trust,
+            })
+        };
+        let both = "--no-daemon --dangerously-bypass-hook-trust".to_string();
+        assert_eq!(classify(&Ok(both)), caps(true, true));
+        assert_eq!(classify(&Ok("--no-daemon".into())), caps(true, false));
+        assert_eq!(
+            classify(&Ok("--dangerously-bypass-hook-trust".into())),
+            caps(false, true)
+        );
+        assert_eq!(classify(&Ok("--help".into())), caps(false, false));
+        for why in [
+            Undecided::NoBinary,
+            Undecided::Io,
+            Undecided::Spawn,
+            Undecided::Exit,
+            Undecided::Timeout,
+        ] {
+            assert_eq!(classify(&Err(why)), None);
+        }
+    }
+
+    /// SWA-102: a pane spawn right after a timed-out probe probes again
+    /// instead of starting Codex without `--no-daemon` for `RETRY_AFTER`.
+    #[test]
+    fn spawn_ignores_the_retry_throttle_and_caches_the_answer() {
+        let state = Mutex::new(ProbeState::Unknown);
+        let t0 = Instant::now();
+        let cv = Condvar::new();
+        assert_eq!(
+            supported_with(&state, &cv, Duration::ZERO, true, || t0, || None),
+            None
+        );
+        // Settings within the throttle: no new probe.
+        assert_eq!(
+            supported_with(
+                &state,
+                &cv,
+                Duration::ZERO,
+                true,
+                || t0,
+                || panic!("throttled")
+            ),
+            None
+        );
+        // A spawn at the same instant probes and its answer sticks.
+        assert_eq!(
+            supported_with(&state, &cv, Duration::ZERO, false, || t0, || Some(true)),
+            Some(true)
+        );
+        assert_eq!(
+            supported_with(
+                &state,
+                &cv,
+                Duration::ZERO,
+                true,
+                || t0,
+                || panic!("cached")
+            ),
+            Some(true)
+        );
+    }
+
+    /// SWA-102 user decision (2026-11-16): still undecided after the spawn
+    /// deadline = start without the flag, but warn; never claim support.
+    #[test]
+    fn undecided_spawn_starts_unisolated_and_warns() {
+        assert_eq!(spawn_isolation(None), (false, true));
+        assert_eq!(spawn_isolation(Some(true)), (true, false));
+        assert_eq!(spawn_isolation(Some(false)), (false, false));
+    }
+
+    #[test]
+    /// SWA-105: the spawn gate needs only `--no-daemon`; hooks need both.
+    fn spawn_and_hooks_read_their_own_capability() {
+        for (no_daemon, hook_trust) in [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let caps = Caps {
+                no_daemon,
+                hook_trust,
+            };
+            assert_eq!(caps.hooks(), no_daemon && hook_trust);
+            // Not `hooks()`: a Codex without the hook-trust flag must still
+            // start isolated.
+            assert_eq!(caps.spawn(), no_daemon);
+        }
+    }
+
+    /// SWA-105: Windows extensions and leading blanks still name the PATH
+    /// Codex; an explicit path is another binary than the probed one.
+    #[test]
+    fn isolates_only_path_lookup_codex() {
+        let iso = |c: &str| isolated_command(c, Some("codex"), true);
+        assert_eq!(iso("codex.exe resume x"), "codex.exe --no-daemon resume x");
+        assert_eq!(iso("CODEX.CMD"), "CODEX.CMD --no-daemon");
+        assert_eq!(iso("  codex resume x"), "  codex --no-daemon resume x");
+        assert_eq!(iso("codex.exe --no-daemon"), "codex.exe --no-daemon");
+        // Not recognised: paths, quotes, wrappers, look-alikes, no agent id.
+        for line in [
+            r"C:\tools\codex.exe resume x",
+            r#""C:\Program Files\Codex\codex.exe" resume x"#,
+            r#"& "C:\x\codex.exe""#,
+            "/usr/bin/codex",
+            "npx codex",
+            "codex-helper.exe",
+            r#""codex"x"#,
+        ] {
+            assert_eq!(iso(line), line);
+        }
+        assert_eq!(isolated_command("codex.exe", None, true), "codex.exe");
+        // The MCP pin reads the same program token.
+        let url = Some("http://127.0.0.1:1/mcp");
+        assert!(with_mcp_url("codex.exe resume x", Some("codex"), url)
+            .starts_with("codex.exe -c mcp_servers.swarmterm.url="));
+        assert!(with_mcp_url("codex.exe resume x", Some("codex"), url).ends_with(" resume x"));
+        assert_eq!(
+            with_mcp_url(r"C:\x\codex.exe", Some("codex"), url),
+            r"C:\x\codex.exe"
+        );
     }
 
     #[test]
@@ -645,5 +989,76 @@ mod tests {
             fs::read_to_string(dir.path().join("config.toml")).unwrap(),
             "[broken"
         );
+    }
+
+    #[test]
+    fn probe_path_keeps_a_short_inherited_path_first_and_dedups() {
+        let binary = std::path::Path::new(r"C:\npm\codex.cmd");
+        // nvm's node only in the process PATH: stays, and stays first.
+        let inherited = r"C:\nvm\v22;C:\Windows";
+        assert_eq!(
+            probe_path(r"C:\WINDOWS;C:\nodejs", inherited, binary),
+            r"C:\nvm\v22;C:\Windows;C:\npm;C:\nodejs"
+        );
+        assert_eq!(
+            probe_path(r"C:\npm\;C:\nvm\v22", r"C:\npm;C:\nvm\v22", binary),
+            r"C:\npm;C:\nvm\v22"
+        );
+    }
+
+    fn long_dev_path() -> String {
+        (0..150)
+            .map(|i| format!(r"D:\repo\src-tauri\target\debug\build\crate-{i:04}\out"))
+            .chain((0..300).map(|i| format!(r"C:\tools\some-long-folder-name-{i:04}")))
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    #[test]
+    fn probe_path_over_the_cmd_limit_shrinks_to_binary_folder_and_login() {
+        let binary = std::path::Path::new(r"C:\npm\codex.cmd");
+        let inherited = long_dev_path();
+        let path = probe_path(r"C:\Windows;C:\nodejs", &inherited, binary);
+        assert_eq!(path, r"C:\npm;C:\Windows;C:\nodejs");
+        // Build folders alone are dropped before the limit is checked.
+        let short = r"C:\nodejs;D:\r\target\debug\build\a-1\out;C:\Windows";
+        assert_eq!(
+            probe_path("", short, binary),
+            r"C:\nodejs;C:\Windows;C:\npm"
+        );
+        assert!(probe_path("", &inherited, binary).len() <= CMD_VAR_LIMIT);
+    }
+
+    #[test]
+    fn exit_log_names_a_class_and_never_stderr_text() {
+        let cases: [(&str, &str); 5] = [
+            (
+                "'node' is not recognized as an internal or external command",
+                "not-recognized",
+            ),
+            (
+                "Der Befehl \"node\" ist entweder falsch geschrieben oder",
+                "not-recognized",
+            ),
+            ("Error: OPENAI_API_KEY=sk-secretvalue123", "other"),
+            (
+                r"failed in C:\Company Internal Tools\bin and C:private-config.toml",
+                "other",
+            ),
+            ("  \n", "empty"),
+        ];
+        for (stderr, class) in cases {
+            let line = exit_log_line(Some(1), stderr.as_bytes(), stderr.len() as u64);
+            assert_eq!(
+                line,
+                format!(
+                    "[codex] isolation probe: exit Some(1), stderr {} bytes, class {class}",
+                    stderr.len()
+                )
+            );
+            for leak in ["sk-secret", "OPENAI", "Internal", "private-config", "node"] {
+                assert!(!line.contains(leak), "{leak} leaked: {line}");
+            }
+        }
     }
 }

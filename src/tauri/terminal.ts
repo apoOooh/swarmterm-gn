@@ -141,6 +141,10 @@ export function setInputDroppedHandler(handler: ((id: string) => void) | undefin
   hostDropListener ??= listen<string>('pty:input-dropped', (e) => inputDropped?.(e.payload))
 }
 
+/** SWA-102: a Codex pane started without `--no-daemon` (probe undecided). */
+export const onCodexIsolationUnavailable = (handler: (terminalId: string) => void): Promise<() => void> =>
+  listen<string>('codex:isolation-unavailable', (e) => handler(e.payload))
+
 /**
  * Enqueue input for a pty. Never rejects: callers fire and forget. A full
  * input queue (the pane stopped reading) is reported through the registered
